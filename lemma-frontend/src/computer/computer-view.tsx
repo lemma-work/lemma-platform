@@ -12,6 +12,7 @@ import {
 import { live } from "@/usage/queries";
 import { Logins } from "./logins-view";
 import { Screen } from "./screen";
+import { screenSay } from "./machine";
 import { useWorkspaceStatus } from "./queries";
 import { startupProgress } from "./startup";
 import { WorkspaceStartup } from "./startup-view";
@@ -146,6 +147,9 @@ export function ComputerView({ podId, conversationId, visible }: {
     const [openFile, setOpenFile] = useState<string | null>(null);
     const [wake, setWake] = useState(false);
     const [noise, setNoise] = useState(false);
+    /* The browser is the view; its files and the sites it is signed in to
+       open beside it when asked, rather than stacking under the screen. */
+    const [drawer, setDrawer] = useState<"files" | "logins" | null>(null);
 
     /* The conversation's directory is where this opens, but only until
        somebody navigates: `at` staying null would send a reader back to the
@@ -170,6 +174,7 @@ export function ComputerView({ podId, conversationId, visible }: {
        needed. */
     const browser = useBrowser(visible && first !== undefined && !first.sleeping);
     const state = machineState(first, browser.data, listing.isPending);
+    const say = screenSay(state, browser.data);
 
     const all = listing.data?.pages.flatMap((page) => page.entries ?? []) ?? [];
     const shown = ordered(noise ? all : all.filter((entry) => !isNoise(entry)));
@@ -207,7 +212,16 @@ export function ComputerView({ podId, conversationId, visible }: {
             {/* The screen first, because that is what a computer is from the
                 outside, and the state is said once — on it — rather than
                 repeated in a badge beside it. */}
-            <header className="computer-head">
+            <header className="cbar">
+                <span className={"cbar__dot cbar__dot--" + state} aria-hidden="true" />
+                <span className="cbar__state">{say.headline}</span>
+                <span className="cbar__note">{say.note}</span>
+                <span className="cbar__spacer" />
+                <button className="cbar__button" aria-pressed={drawer === "logins"} onClick={() => setDrawer(was => was === "logins" ? null : "logins")}>Signed-in sites</button>
+                <button className="cbar__button" aria-pressed={drawer === "files"} onClick={() => setDrawer(was => was === "files" ? null : "files")}>Files</button>
+            </header>
+            <div className={"cbody" + (drawer ? " cbody--drawer" : "")}>
+            <div className="cstage">
                 <Screen
                     state={state}
                     browser={browser.data}
@@ -216,17 +230,11 @@ export function ComputerView({ podId, conversationId, visible }: {
                     busy={tab.busy}
                     onWake={() => setWake(true)}
                     onOpenTab={tab.open}
+                    fill
                 />
-                <div className="computer-intro">
-                    <h1>Your computer</h1>
-                    <p>Everything you ask for runs on this computer and its browser. Your saved logins stay here.</p>
-                </div>
-            </header>
-
-            {/* Between the machine and its files, because that is what it is
-                about: the browser on the screen above is the one holding these,
-                and they outlive a suspend along with its profile. */}
-            <Logins visible={visible} />
+            </div>
+            {drawer === "logins" && <aside className="cdrawer" aria-label="Signed-in sites"><Logins visible={visible} /></aside>}
+            {drawer === "files" && <aside className="cdrawer cdrawer--files" aria-label="Files">
 
             <nav className="computer-path" aria-label="Where you are">
                 {/* Back means the last step taken, not one level of path. With
@@ -346,6 +354,8 @@ export function ComputerView({ podId, conversationId, visible }: {
                     )}
                 </>
             )}
+            </aside>}
+            </div>
         </section>
     );
 }

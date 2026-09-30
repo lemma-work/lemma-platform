@@ -26,8 +26,14 @@ export function ConversationPane({
     onOpenApp,
     onOpenFile,
     onOpenTable,
+    emptyHint,
+    placeholder,
 }: {
     pod: Pod;
+    /** The same override the live pane takes, for the same places. */
+    emptyHint?: { title: string; body: string };
+    /** What the box says before anything is typed. Defaults to the space's bot. */
+    placeholder?: string;
     conversationId?: string | null;
     /** The ways onto the stage. The live pane has always had them and this one
      *  had none, so every card in the only mode that opens without a session
@@ -111,7 +117,7 @@ export function ConversationPane({
                 error={error ?? (conversation.isError ? "Could not read this conversation." : null)}
                 loading={conversation.isPending && conversationId !== NEW_CONVERSATION}
                 onReload={conversation.isError ? () => void conversation.refetch() : undefined}
-                emptyTitle={conversationId === NEW_CONVERSATION ? "What should " + pod.teammate.name + " work on?" : "Nothing said in here yet"}
+                emptyTitle={emptyHint?.title ?? (conversationId === NEW_CONVERSATION ? "What should " + pod.teammate.name + " work on?" : "Nothing said in here yet")}
                 podId={pod.id}
                 /* The live pane hands this down and this one did not, which
                    meant every card keyed to a conversation — a paused sign-in
@@ -130,11 +136,11 @@ export function ConversationPane({
                 onOpenApp={onOpenApp}
                 onOpenFile={onOpenFile}
                 onOpenTable={onOpenTable}
-                emptyBody="Send a message to start a new conversation."
+                emptyBody={emptyHint?.body ?? "Send a message to start a new conversation."}
             />
             <InteractionDock interaction={waitingOn} teammate={pod.teammate.name} onResolve={resolve} />
             <Composer
-                placeholder={"Talk to " + pod.name + "…"}
+                placeholder={placeholder ?? "Ask " + (pod.teammate?.name || pod.name) + "…"}
                 note={waitingOn || isLandingPreview() ? undefined : pod.waiting || undefined}
                 busy={false}
                 canStop={false}

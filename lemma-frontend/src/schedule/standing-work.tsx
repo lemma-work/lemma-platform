@@ -1,13 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { source, type Member } from "@/data";
+import { lemma } from "@/session/client";
+import { useMe } from "@/session/use-me";
 import { isForbidden } from "@/session/auth-state";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, RefreshIcon } from "@/ui/icons";
 import {
     useCreateSchedule, useRetryRun, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules,
 } from "./queries";
 import {
-    CADENCES, SCHEDULE_EDIT, agoOf, blankDraft, canRetry, draftProblems, healthOf, may,
+    CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may,
     type ScheduleDraft, type StandingJob,
 } from "./schedules";
 
@@ -28,8 +32,23 @@ import {
  *  Flat rows on a divider, like the agents list and the connector catalogue. A
  *  standing job is a line in a CV, not a card.
  */
-export function StandingWork({ podId, teammate }: { podId: string; teammate: string }) {
+/** Where a firing's own work lives: a workflow run opens as a page, an agent
+ *  firing opens the conversation the agent ran in. */
+export interface OpenTarget {
+    onOpenRun?: (runId: string, label: string) => void;
+    onOpenConversation?: (id: string) => void;
+}
+
+export function StandingWork({ podId, teammate, members = [], orgId = null, onOpenRun, onOpenConversation }: {
+    podId: string;
+    teammate: string;
+    /** For naming who a schedule belongs to. */
+    members?: Member[];
+    /** For finding your own accounts when copying a webhook schedule. */
+    orgId?: string | null;
+} & OpenTarget) {
     const schedules = useSchedules(podId);
+    const me = useMe();
     const [opened, setOpened] = useState<string | null>(null);
     const [writing, setWriting] = useState(false);
 
@@ -54,21 +73,40 @@ export function StandingWork({ podId, teammate }: { podId: string; teammate: str
                 </p>
             )}
 
-            {jobs.length > 0 && (
-                <div className="sched-list">
-                    {/* Keyed by position as well as id: a payload can carry
-                        more than one row with no id, and two of them would
-                        otherwise share a key. */}
-                    {jobs.map((job, at) => (
-                        <Row
-                            key={job.id || "unreadable-" + at}
-                            podId={podId}
-                            job={job}
-                            open={opened === job.id && Boolean(job.id)}
-                            onOpen={() => setOpened(opened === job.id ? null : job.id)}
-                        />
-                    ))}
-                </div>
+            {/* Yours first: what you can pause, share, and are answerable
+                for. Then what others have shared — each runs as them, so the
+                way to get one for yourself is a copy of your own. */}
+            {[
+                { key: "mine", title: "Yours", rows: jobs.filter((job) => !job.ownerId || job.ownerId === me) },
+                { key: "space", title: "Shared in the space", rows: jobs.filter((job) => job.ownerId && job.ownerId !== me) },
+            ].filter((group) => group.rows.length > 0).map((group) => (
+                <section key={group.key} className="sched-group">
+                    {jobs.some((job) => job.ownerId && job.ownerId !== me) && <h3 className="sched-group__title">{group.title}</h3>}
+                    <div className="sched-list">
+                        {/* Keyed by position as well as id: a payload can carry
+                            more than one row with no id, and two of them would
+                            otherwise share a key. */}
+                        {group.rows.map((job, at) => (
+                            <Row
+                                key={job.id || "unreadable-" + at}
+                                podId={podId}
+                                job={job}
+                                mine={!job.ownerId || job.ownerId === me}
+                                owner={members.find((member) => member.userId && member.userId === job.ownerId)?.name ?? null}
+                                orgId={orgId}
+                                open={opened === job.id && Boolean(job.id)}
+                                onOpen={() => setOpened(opened === job.id ? null : job.id)}
+                                onOpenRun={onOpenRun}
+                                onOpenConversation={onOpenConversation}
+                            />
+                        ))}
+                    </div>
+                </section>
+            ))}
+            {schedules.isSuccess && (
+                <p className="sched-privacy">
+                    Personal schedules are private to whoever made them. Share one with the space and others can set up their own copy — it still runs as you.
+                </p>
             )}
 
             {writing ? (
@@ -86,12 +124,15 @@ export function StandingWork({ podId, teammate }: { podId: string; teammate: str
 
 /* ── one standing job ───────────────────────────────────────────────── */
 
-function Row({ podId, job, open, onOpen }: {
+function Row({ podId, job, mine, owner, orgId, open, onOpen, onOpenRun, onOpenConversation }: {
     podId: string;
     job: StandingJob;
+    mine: boolean;
+    owner: string | null;
+    orgId: string | null;
     open: boolean;
     onOpen: () => void;
-}) {
+} & OpenTarget) {
     const health = healthOf(job);
     /* One mutation per row rather than one for the list, so a slow pause on
        one schedule does not put every other row's button into its pending
@@ -116,6 +157,10 @@ function Row({ podId, job, open, onOpen }: {
                 <span className="sched-row__body">
                     <span className="sched-row__title">
                         <strong>{job.title}</strong>
+                        <em className="sched-tag sched-tag--scope" data-scope={job.scope} title={SCOPE_NOTE[job.scope]}>{SCOPE_LABEL[job.scope]}</em>
+                        {job.needsSetup && <em className="sched-tag sched-tag--setup">needs setup</em>}
+                        {!mine && <em className="sched-tag sched-tag--owner">by {owner ?? "someone else"}</em>}
+                        {mine && job.visibility === "POD" && job.kind !== "DATASTORE" && <em className="sched-tag sched-tag--owner">shared</em>}
                         {job.filter && <em className="sched-tag" title={job.filter}>filtered</em>}
                         {!job.active && <em className="sched-tag">paused</em>}
                     </span>
@@ -155,14 +200,21 @@ function Row({ podId, job, open, onOpen }: {
             </button>
 
             <div className="sched-row__acts">
-                <button
-                    className="btn"
-                    disabled={!may(job, SCHEDULE_EDIT) || active.isPending}
-                    title={may(job, SCHEDULE_EDIT) ? undefined : "You may read this schedule, not change it."}
-                    onClick={() => active.mutate({ id: job.id, active: !job.active })}
-                >
-                    {active.isPending ? "…" : job.active ? "Pause" : "Resume"}
-                </button>
+                {mine ? (
+                    <>
+                        {job.kind !== "DATASTORE" && <ShareToggle podId={podId} job={job} />}
+                        <button
+                            className="btn"
+                            disabled={!may(job, SCHEDULE_EDIT) || active.isPending}
+                            title={may(job, SCHEDULE_EDIT) ? undefined : "You may read this schedule, not change it."}
+                            onClick={() => active.mutate({ id: job.id, active: !job.active })}
+                        >
+                            {active.isPending ? "…" : job.active ? "Pause" : "Resume"}
+                        </button>
+                    </>
+                ) : (
+                    <CopyForMe podId={podId} job={job} orgId={orgId} />
+                )}
             </div>
 
             {active.isError && (
@@ -171,14 +223,89 @@ function Row({ podId, job, open, onOpen }: {
                 </p>
             )}
 
-            {open && <Runs podId={podId} job={job} />}
+            {open && <Runs podId={podId} job={job} onOpenRun={onOpenRun} onOpenConversation={onOpenConversation} />}
         </div>
+    );
+}
+
+/* ── sharing, and a copy of your own ───────────────────────────────── */
+
+function ShareToggle({ podId, job }: { podId: string; job: StandingJob }) {
+    const cache = useQueryClient();
+    const shared = job.visibility === "POD";
+    const flip = useMutation({
+        mutationFn: () => lemma(podId).schedules.update(job.id, { visibility: shared ? "PERSONAL" : "POD" }),
+        onSuccess: () => void cache.invalidateQueries({ queryKey: ["schedules", podId] }),
+    });
+    const sample = source.label === "sample";
+    return (
+        <button
+            className="btn btn--quiet"
+            disabled={sample || !may(job, SCHEDULE_EDIT) || flip.isPending}
+            title={shared
+                ? "Only you will see it. It keeps running as you."
+                : "Everyone in the space can see it and set up their own copy. It still runs as you."}
+            onClick={() => flip.mutate()}
+        >
+            {flip.isPending ? "…" : shared ? "Make private" : "Share with space"}
+        </button>
+    );
+}
+
+function CopyForMe({ podId, job, orgId }: { podId: string; job: StandingJob; orgId: string | null }) {
+    const cache = useQueryClient();
+    const sample = source.label === "sample";
+    const need = copyNeedOf(job);
+    const [picking, setPicking] = useState(false);
+    const [accountId, setAccountId] = useState("");
+    const accounts = useQuery({
+        queryKey: ["connector-accounts", orgId],
+        enabled: picking && Boolean(orgId) && !sample,
+        queryFn: () => source.listAccounts(orgId!),
+        staleTime: 60_000,
+    });
+    const usable = (accounts.data ?? []).filter((account) => account.usable);
+    const chosen = accountId || usable[0]?.id || "";
+    const copy = useMutation({
+        mutationFn: () => lemma(podId).request("POST", "/pods/" + podId + "/schedules", { body: copyRequest(job, chosen || undefined) }),
+        onSuccess: () => { setPicking(false); void cache.invalidateQueries({ queryKey: ["schedules", podId] }); },
+    });
+    if (need === "not-needed") return <span className="sched-row__aside" title="A table change runs as whoever owns the row, so everyone already has it.">Runs for everyone’s rows</span>;
+    if (need === "impossible") return null;
+    if (need === "account" && picking) {
+        return (
+            <span className="sched-copy">
+                {accounts.isPending ? <small>Finding your accounts…</small>
+                    : usable.length === 0 ? <small>Connect an account of your own first.</small>
+                    : (
+                        <select value={chosen} onChange={(event) => setAccountId(event.target.value)} aria-label="Your account">
+                            {usable.map((account) => <option key={account.id} value={account.id}>{account.label || account.ref || account.connectorId}</option>)}
+                        </select>
+                    )}
+                <button className="btn" disabled={!chosen || copy.isPending} onClick={() => copy.mutate()}>{copy.isPending ? "…" : "Set up"}</button>
+                <button className="btn btn--quiet" onClick={() => setPicking(false)}>Cancel</button>
+                {copy.isError && <small className="sched-copy__error">{copy.error instanceof Error ? copy.error.message : "Couldn’t set it up."}</small>}
+            </span>
+        );
+    }
+    return (
+        <span className="sched-copy">
+            <button
+                className="btn"
+                disabled={sample || copy.isPending}
+                title={sample ? "Sign in to set up your own." : "A personal copy that runs as you" + (need === "account" ? ", with your own account." : ".")}
+                onClick={() => (need === "account" ? setPicking(true) : copy.mutate())}
+            >
+                {copy.isPending ? "…" : copy.isSuccess ? "Set up ✓" : "Set up my own"}
+            </button>
+            {copy.isError && <small className="sched-copy__error">{copy.error instanceof Error ? copy.error.message : "Couldn’t set it up."}</small>}
+        </span>
     );
 }
 
 /* ── its firings ────────────────────────────────────────────────────── */
 
-function Runs({ podId, job }: { podId: string; job: StandingJob }) {
+function Runs({ podId, job, onOpenRun, onOpenConversation }: { podId: string; job: StandingJob } & OpenTarget) {
     const runs = useScheduleRuns(podId, job.id);
     const retry = useRetryRun(podId, job.id);
     const mayRetry = may(job, SCHEDULE_EDIT);
@@ -208,6 +335,16 @@ function Runs({ podId, job }: { podId: string; job: StandingJob }) {
                     </span>
                     <span className="sched-run__error">{run.error}</span>
                     <span className="sched-run__at">{agoOf(run.at)}</span>
+                    {run.targetRunId && run.targetKind === "workflow" && onOpenRun && (
+                        <button className="btn btn--small" onClick={() => onOpenRun(run.targetRunId, job.target.label || job.title)}>
+                            Open run
+                        </button>
+                    )}
+                    {run.targetRunId && run.targetKind === "agent" && onOpenConversation && (
+                        <button className="btn btn--small" onClick={() => onOpenConversation(run.targetRunId)}>
+                            Conversation
+                        </button>
+                    )}
                     {canRetry(run) && (
                         <button
                             className="btn btn--small"

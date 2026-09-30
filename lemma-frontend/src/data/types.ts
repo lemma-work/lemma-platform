@@ -24,6 +24,9 @@ export interface Member {
     /** What this member is allowed to do, in a person's words. */
     can: string;
     iconUrl?: string | null;
+    /** The account behind the membership — what a run or a schedule names as
+     *  its owner (`user_id`), which is not the membership id above. */
+    userId?: string;
 }
 
 /** Who answers in a pod. Its own name and face, not the product's. */
@@ -184,7 +187,16 @@ export interface Pod {
  *  only one that carries a composer. */
 /** `status` is the datastore's processing status for a file (PENDING,
  *  PROCESSING, COMPLETED, FAILED, …); absent for tables and sample rows. */
-export interface LibraryItem { id: string; name: string; kind: "file" | "folder" | "table"; path: string; updated: string; detail: string; status?: string }
+export interface LibraryItem {
+    id: string; name: string; kind: "file" | "folder" | "table"; path: string; updated: string; detail: string; status?: string;
+    /** Who can open it: `PERSONAL`, `POD`, `RESTRICTED` or `PUBLIC`, as the
+     *  datastore records it. Absent where the source does not say. */
+    visibility?: string;
+    /** A table with row-level security: everyone opens it, each sees only
+     *  their own rows. */
+    rls?: boolean;
+    owner?: string | null;
+}
 export interface ResourcePage<T> { items: T[]; next?: string | null }
 
 /** A link that works without a Lemma account.
@@ -206,12 +218,23 @@ export interface SharedLink {
     maxHits: number;
 }
 
+/** A view of the space's own contents, filtered by kind. */
+export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "settings";
+
 export type Tab =
+    | { id: string; kind: "space"; label: string; view: SpaceView }
+    /** One workflow run: every step, what it waits on, and where it went. */
+    | { id: string; kind: "run"; label: string; runId: string }
+    | { id: string; kind: "workflow"; label: string; name: string }
+    /** One bot's page: who it is and your conversation with it. */
+    | { id: string; kind: "bot"; label: string; name: string }
+    /** A bot waiting on you to sign in to a site, opened beside the thread. */
+    | { id: string; kind: "signin"; label: string; conversationId: string; toolCallId: string; host: string }
     | { id: "apps"; kind: "apps"; label: string }
     | { id: "library"; kind: "library"; label: string }
     | { id: string; kind: "table"; label: string; name: string }
     | { id: "conversation"; kind: "conversation"; label: string }
-    | { id: string; kind: "app"; label: string; url: string; status: string }
+    | { id: string; kind: "app"; label: string; url: string; status: string; visibility?: string; updated?: string }
     | { id: "profile"; kind: "profile"; label: string }
     /** The agents behind this teammate: the one answering you, and the ones it
      *  hands work to. In the strip rather than opened on demand, because
@@ -263,6 +286,11 @@ export interface ConversationRef {
      *  carries. Its front door is that resource, so the recent panel leaves it
      *  out — see `unbound`. */
     boundTo?: string | null;
+    /** Where it came from — a channel, a schedule, a workflow run, a doc — as
+     *  the backend recorded it on the conversation. */
+    /** The bot answering it, by uuid — only on lists that span every bot. */
+    agentId?: string | null;
+    origin?: import("@/thread/conversation-origin").ConversationOrigin;
 }
 
 /** One page of a teammate's conversations, most recently active first.
@@ -350,6 +378,10 @@ export interface PodSource {
     /** Mint a public link to one document. Ask for a lifetime and a number of
      *  opens; the platform decides what it will actually allow. */
     shareFile(podId: string, path: string, options?: { expiresSeconds?: number; maxHits?: number }): Promise<SharedLink>;
+    /** The public links to one document that still work, newest first. */
+    fileLinks(podId: string, path: string): Promise<SharedLink[]>;
+    /** Turn a public link off now. False when it was already dead. */
+    revokeFileLink(podId: string, code: string): Promise<boolean>;
     tableColumns(podId: string, name: string): Promise<{ name: string; system?: boolean }[]>;
     /** How many rows the table actually has, or `null` when it will not say.
      *
@@ -573,7 +605,9 @@ export interface PodSource {
     /** Any page, for the one place that shows every conversation. `search`
      *  keeps titles containing it (case-insensitive), matched by the server so
      *  it reaches conversations no page has loaded yet. */
-    listConversationsPage(podId: string, cursor?: string | null, search?: string): Promise<ConversationPage>;
+    /** `everyone`: conversations with every bot here, not only the space's
+     *  own — the full list rather than the sidebar's. */
+    listConversationsPage(podId: string, cursor?: string | null, search?: string, everyone?: boolean): Promise<ConversationPage>;
     /** The call threads hanging off one conversation.
      *
      *  A call runs in a conversation of its own, parented to whatever was

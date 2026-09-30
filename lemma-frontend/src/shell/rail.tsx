@@ -50,7 +50,7 @@ export function Rail({ pods, activeId, onPick, onHire, orgId, compact = false }:
         <div className="rail__list">
             {(compact ? pods : filtered).map(pod => <button key={pod.id} className="rail__pod" aria-current={pod.id === activeId ? "page" : undefined} onClick={() => onPick(pod.id)} title={pod.name} aria-label={pod.name}
                 onMouseEnter={() => warm(pod)} onMouseLeave={() => clearTimeout(intent.current)} onFocus={() => warm(pod)} onBlur={() => clearTimeout(intent.current)}>
-                <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={30} still={still} /><span className="rail__name">{pod.name}</span>
+                <Mark seed={pod.id} name={pod.name} icon={pod.iconUrl} size={24} still={still} /><span className="rail__name">{pod.name}</span>
             </button>)}
             {!compact && filtered.length === 0 && <div className="rail__empty">{pods.length ? "No matches." : "Nothing here yet."}</div>}
         </div>

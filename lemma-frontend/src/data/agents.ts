@@ -34,6 +34,9 @@ export const MAX_INSTRUCTION = 60_000;
 export interface AgentRow {
     /** The row name — the identifier every call is keyed by, never the label. */
     name: string;
+    /** The uuid. A conversation names its agent by this alone (`agent_id`),
+     *  so it is how a chat is matched back to the bot answering it. */
+    id: string;
     label: string;
     /** The one the person is actually talking to. It is not a subordinate, and
      *  a list that draws it like one is lying about who is answering. */
@@ -128,6 +131,7 @@ export function readAgentRow(raw: unknown): AgentRow {
     const description = text(item.description);
     return {
         name,
+        id: text(item.id),
         label: name ? displayAgentName(name, kind) : "Unreadable agent",
         front,
         blurb: name

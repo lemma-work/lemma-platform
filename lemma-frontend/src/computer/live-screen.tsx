@@ -153,6 +153,11 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
             rfb.viewOnly = mode === "view";
             rfb.scaleViewport = true;
             rfb.background = "transparent";
+            /* Text on a web page is what people read here, and noVNC's default
+               JPEG quality (6) smears it. Highest quality, light compression:
+               more bytes, but a page that is legible. */
+            rfb.qualityLevel = 9;
+            rfb.compressionLevel = 2;
             rfb.addEventListener("connect", () => {
                 if (stopped) return;
                 attempt = 0;

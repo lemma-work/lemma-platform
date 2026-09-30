@@ -43,3 +43,10 @@ export const ORG = "organization";
  *  learns your work", and from the rail onward it is mostly just a name. */
 export const AI_MATE = "AI " + MATE;
 export const AI_MATES = AI_MATE + "s";
+
+/** A pod is a space, one in view at a time, and the agents in it
+ *  are its bots. One line each, so the words can change without a hunt. */
+export const SPACE = "space";
+export const SPACES = "Spaces";
+export const BOT = "bot";
+export const BOTS = "Bots";

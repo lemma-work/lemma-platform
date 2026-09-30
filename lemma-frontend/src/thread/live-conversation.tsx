@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAssistantSession } from "lemma-sdk/react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
-import { NEW_CONVERSATION, saidAboutSending } from "@/data";
+import { NEW_CONVERSATION, saidAboutSending, source } from "@/data";
+import { initialsOf } from "@/data/agent-names";
 import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
@@ -46,9 +47,29 @@ export function LiveConversation({
     onVoice,
     callError,
     callRefresh,
+    createWith,
+    emptyHint,
+    placeholder,
+    autoSend,
+    onAutoSent,
 }: {
     pod: Pod;
     conversationId: string | null;
+    /** Extra fields for the conversation this pane creates on first send.
+     *  A doc's conversation carries its title, standing instructions and the
+     *  resource metadata it is found by, and it still only comes into being
+     *  when somebody says something. */
+    createWith?: Record<string, unknown>;
+    /** What an empty conversation says, when the place it is shown in knows
+     *  better than the generic "what should it work on". */
+    emptyHint?: { title: string; body: string };
+    /** What the box says before anything is typed. Defaults to the space's bot. */
+    placeholder?: string;
+    /** A message handed over from somewhere else — Home, a bot's page — to
+     *  send as soon as this pane is up. Sent here rather than there, so the
+     *  pane that shows the conversation is the one holding its stream. */
+    autoSend?: { text: string; id: number } | null;
+    onAutoSent?: () => void;
     /** Text a framed widget or app asked the app to put in the composer.
      *  Arrives as a prop rather than through a ref because opening a new
      *  conversation remounts this component, and the ask has to survive that
@@ -67,6 +88,10 @@ export function LiveConversation({
     callRefresh?: string;
 }) {
     const client = useMemo(() => lemma(pod.id), [pod.id]);
+    /* Who is answering. A conversation names its bot by `agent_id`, and a new
+       one about to be made names it in `createWith`; either way the reply is
+       that bot's, not the space's own. */
+    const bots = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
     const queryClient = useQueryClient();
     const [sending, setSending] = useState(false);
     const sendingRef = useRef(false);
@@ -224,6 +249,14 @@ export function LiveConversation({
     useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
 
     const state = stateOf(session.status);
+    const agentId = (session.conversation as { agent_id?: string | null } | null)?.agent_id ?? null;
+    const agentName = typeof createWith?.agent_name === "string" ? createWith.agent_name : null;
+    const bot = (bots.data ?? []).find((row) => !row.front && ((agentId && row.id === agentId) || (!agentId && agentName && row.name === agentName))) ?? null;
+    const teammate = useMemo(
+        () => (bot ? { name: bot.label, initials: initialsOf(bot.label), iconUrl: bot.iconUrl } : pod.teammate),
+        [bot, pod.teammate],
+    );
+    const speakerSeed = bot ? pod.id + ":" + bot.name : pod.id;
 
     /* After a server restart: the conversation's status, its messages, and --
        if the run is still going -- its stream, read again. Forced, because the
@@ -419,13 +452,13 @@ export function LiveConversation({
                 /* Usually a race lost to delivery -- the teammate took it in
                    between the tray being drawn and the click -- but only a 409
                    says so. Refetching shows it wherever it now belongs. */
-                if (mounted.current) setSendError(withdrawFailure(problem, pod.teammate.name));
+                if (mounted.current) setSendError(withdrawFailure(problem, teammate.name));
                 void loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
             } finally {
                 withdrawing.current.delete(messageId);
             }
         },
-        [client, pod.id, pod.teammate.name, session.conversationId, loadMessages],
+        [client, pod.id, teammate.name, session.conversationId, loadMessages],
     );
 
     const send = useCallback(
@@ -457,7 +490,7 @@ export function LiveConversation({
                        for. Omitting the field is the only payload that means
                        "the pod's own assistant". */
                     create: async () => {
-                        const made = await client.conversations.create({ pod_id: pod.id });
+                        const made = await client.conversations.create({ pod_id: pod.id, ...createWith } as Parameters<typeof client.conversations.create>[0]);
                         /* A folder chosen while composing is parked in the
                            desktop shell. Adopted here, before the session
                            learns the id and before the first run reads it. */
@@ -522,8 +555,20 @@ export function LiveConversation({
                 if (mounted.current) setSending(false);
             }
         },
-        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, running, steer],
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, running, steer, createWith],
     );
+
+    /* A handed-over message goes once, the first time this pane sees it. The
+       hand-over is cleared first, so a remount cannot send it twice. */
+    const autoSentId = useRef<number | null>(null);
+    useEffect(() => {
+        if (!autoSend || autoSentId.current === autoSend.id) return;
+        autoSentId.current = autoSend.id;
+        onAutoSent?.();
+        send(autoSend.text).catch(() => {
+            /* Said on screen by the send itself. */
+        });
+    }, [autoSend, send, onAutoSent]);
 
     const resolve = useCallback(
         async (approvalId: string, decision: ApprovalDecision, response?: Record<string, unknown>) => {
@@ -597,22 +642,23 @@ export function LiveConversation({
         <>
             <Transcript
                 turns={turns}
-                teammate={pod.teammate}
+                teammate={teammate}
+                speakerSeed={speakerSeed}
                 streaming={streaming}
                 state={state}
                 error={error}
                 loading={historyLoading}
                 onReload={loadError ? () => setLoadAttempt(attempt => attempt + 1) : stuck && error === stuckMessage ? reloadStuck : undefined}
                 reloadLabel={loadError ? "Retry" : "Reload conversation"}
-                emptyTitle={
+                emptyTitle={emptyHint?.title ?? (
                     conversationId === NEW_CONVERSATION || !session.conversationId
-                        ? "What should " + pod.teammate.name + " work on?"
-                        : "This conversation is empty"
+                        ? "What should " + teammate.name + " work on?"
+                        : "This conversation is empty")
                 }
-                emptyBody={
+                emptyBody={emptyHint?.body ?? (
                     conversationId === NEW_CONVERSATION || !session.conversationId
                         ? "Send a message to start a new conversation."
-                        : "Send a message to start the conversation."
+                        : "Send a message to start the conversation.")
                 }
                 podId={pod.id}
                 conversationId={session.conversationId}
@@ -630,7 +676,7 @@ export function LiveConversation({
             />
             <InteractionDock
                 interaction={waitingOn}
-                teammate={pod.teammate.name}
+                teammate={teammate.name}
                 onResolve={resolve}
                 /* Not while the status is still unknown, which reads as idle
                    for a moment after load and would flash "Expired". */
@@ -638,7 +684,7 @@ export function LiveConversation({
             />
             <FolderChip folder={folder} />
             <Composer
-                placeholder={"Talk to " + pod.name + "…"}
+                placeholder={placeholder ?? "Ask " + (teammate.name || pod.name) + "…"}
                 note={
                     /* Nothing, when the pause is on the shelf directly above
                        this line. The note existed to point at a card somewhere
@@ -675,7 +721,7 @@ export function LiveConversation({
                 queuedNote={
                     queued.length === 0
                         ? undefined
-                        : pod.teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
+                        : teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
                 }
                 onWithdraw={id => void withdraw(id)}
                 fill={fill}

@@ -39,9 +39,14 @@ import { readShape, type FlowStep, type WorkflowShape } from "./shape";
  *  this product does not want to build, and it would throw away the reason —
  *  the conversation is where "why does this branch on 5000" keeps its answer.
  */
-export function WorkflowsView({ podId, teammate, onDiscuss }: {
+export function WorkflowsView({ podId, teammate, onDiscuss, onOpenRun, agentNames }: {
     podId: string;
     teammate: string;
+    /** Open a run as its own page. Without it a run opens in place. */
+    onOpenRun?: (runId: string, workflowName: string) => void;
+    /** The agents that exist here, so a workflow aimed at one that does not
+     *  can say it needs setting up. Unknown when absent. */
+    agentNames?: string[];
     /** Open the conversation bound to a workflow. Handed back rather than
      *  navigated to, because the shell owns which conversation is in front —
      *  the same wiring `onDiscussAgent` goes through. */
@@ -74,7 +79,7 @@ export function WorkflowsView({ podId, teammate, onDiscuss }: {
                 name={openFlow}
                 teammate={teammate}
                 onBack={() => setOpenFlow(null)}
-                onOpenRun={setOpenRun}
+                onOpenRun={onOpenRun ? (runId) => onOpenRun(runId, openFlow) : setOpenRun}
                 onDiscuss={onDiscuss}
             />
         );
@@ -105,6 +110,13 @@ export function WorkflowsView({ podId, teammate, onDiscuss }: {
                                     {/* Only when it is off. An "active" tag on
                                         every row is a tag that says nothing. */}
                                     {!flow.active && <i className="wf-tag">paused</i>}
+                                    <i className="wf-tag wf-tag--scope" data-scope={flow.perPerson ? "person" : "space"}
+                                        title={flow.perPerson ? "Runs separately for each person, as them" : "Runs once for the whole space"}>
+                                        {flow.perPerson ? "Each person" : "Admin"}
+                                    </i>
+                                    {missingOf(flow, agentNames).length > 0 && (
+                                        <i className="wf-tag wf-tag--setup" title={"Aimed at " + missingOf(flow, agentNames).join(", ") + ", which is not here"}>needs setup</i>
+                                    )}
                                 </span>
                                 <small>{flow.description || sayShape(flow)}</small>
                             </span>
@@ -123,6 +135,15 @@ export function WorkflowsView({ podId, teammate, onDiscuss }: {
             )}
         </div>
     );
+}
+
+/** The agents a workflow hands work to that this space does not have. */
+function missingOf(flow: WorkflowRow, agentNames?: string[]): string[] {
+    if (!agentNames) return [];
+    return flow.targets
+        .filter((one) => one.startsWith("agent:"))
+        .map((one) => one.slice("agent:".length))
+        .filter((name) => name && name !== "POD_DEFAULT" && !agentNames.includes(name));
 }
 
 /** What a workflow is made of, when its author wrote no description.
@@ -261,7 +282,7 @@ function RunsPane({ podId, flow, name, teammate, onBack, onOpenRun, onDiscuss }:
  *  is something that *did*, and colouring these by a status they do not have
  *  would be inventing one. So the marks are hollow and the tones are gone.
  */
-function Shape({ query, teammate, onDiscuss }: {
+export function Shape({ query, teammate, onDiscuss }: {
     /* The query rather than the shape, because three of the four things this
        draws are states the shape cannot be in: still arriving, refused, and
        came back unreadable. A `shape | null` prop collapses all three into one
@@ -379,7 +400,7 @@ function Step({ step }: { step: FlowStep }) {
 
 /* ── one run ───────────────────────────────────────────────────────── */
 
-function RunPane({ podId, runId, workflowName, onBack }: {
+export function RunPane({ podId, runId, workflowName, onBack }: {
     podId: string;
     runId: string;
     workflowName: string;

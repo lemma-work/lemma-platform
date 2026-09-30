@@ -370,7 +370,7 @@ function Block({ title, meta, children }: { title: string; meta?: string; childr
 
 /* ── editing ───────────────────────────────────────────────────────── */
 
-function Editor({ podId, detail, onDone }: { podId: string; detail: AgentDetail; onDone: () => void }) {
+export function Editor({ podId, detail, onDone }: { podId: string; detail: AgentDetail; onDone: () => void }) {
     const cache = useQueryClient();
     /* What the server holds, re-read on every render: the PATCH diff is
        against the *current* saved state, so a field somebody never touched is
@@ -456,7 +456,7 @@ function Editor({ podId, detail, onDone }: { podId: string; detail: AgentDetail;
 }
 
 /** Named, and it says what breaks rather than asking "are you sure?". */
-function ConfirmRemove({ detail, lost, busy, problem, onCancel, onConfirm }: {
+export function ConfirmRemove({ detail, lost, busy, problem, onCancel, onConfirm }: {
     detail: AgentDetail;
     lost: { platform: string; handle: string }[];
     busy: boolean;
