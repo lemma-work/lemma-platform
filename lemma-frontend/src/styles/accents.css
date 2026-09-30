@@ -84,10 +84,12 @@
 
 /* ── Coral ── */
 :root[data-accent="coral"] {
-    --accent: #dd5238;
-    --on-accent: #1b1a18;  /* 4.42:1 on --accent */
-    --accent-soft: rgb(221 82 56 / 0.09);
-    --accent-line: rgb(221 82 56 / 0.26);
+    /* Deep enough for light text: primary controls set 13-14px labels on it,
+       and dark text on the brighter coral stopped at 4.42:1. */
+    --accent: #d54024;
+    --on-accent: #fffefa;  /* 4.54:1 on --accent; 4.58:1 as text on white */
+    --accent-soft: rgb(213 64 36 / 0.09);
+    --accent-line: rgb(213 64 36 / 0.26);
     --canvas: #f6f4ef;
     --paper: #fffefb;
     --chrome: #eeece4;
@@ -246,10 +248,12 @@
 
 /* ── Amber ── */
 :root[data-accent="amber"] {
-    --accent: #b06f12;
-    --on-accent: #1b1a18;  /* 4.25:1 on --accent */
-    --accent-soft: rgb(176 111 18 / 0.09);
-    --accent-line: rgb(176 111 18 / 0.26);
+    /* Deep enough for light text, for the same reason as Coral: dark text
+       on the brighter amber stopped at 4.25:1. */
+    --accent: #a56811;
+    --on-accent: #fffefa;  /* 4.54:1 on --accent; 4.58:1 as text on white */
+    --accent-soft: rgb(165 104 17 / 0.09);
+    --accent-line: rgb(165 104 17 / 0.26);
     --canvas: #f6f5ef;
     --paper: #fffefb;
     --chrome: #eeece3;
@@ -470,20 +474,26 @@
     --r-lg: 4px;
     --r-xl: 6px;
     --r-mark: 3px;
+    --r-face: 14%;
 }
 
+/* Soft is the app as designed, and the default. */
 :root[data-corners="soft"] {
-    --r-sm: 7px;
-    --r-md: 10px;
-    --r-lg: 14px;
-    --r-xl: 20px;
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-xl: 24px;
     --r-mark: 8px;
+    --r-face: 28%;
 }
 
+/* Round rounds a teammate's face further but stops short of a circle: a
+   circle is a person, and the rail holds both. */
 :root[data-corners="round"] {
-    --r-sm: 10px;
-    --r-md: 14px;
-    --r-lg: 20px;
-    --r-xl: 28px;
+    --r-sm: 12px;
+    --r-md: 16px;
+    --r-lg: 22px;
+    --r-xl: 30px;
     --r-mark: 9999px;
+    --r-face: 40%;
 }
