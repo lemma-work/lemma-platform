@@ -269,6 +269,24 @@ def fetch_alerts(repo: str, pr: int) -> List[_JSON]:
         raise
 
 
+def stale_alerts(alerts: Sequence[_JSON], merge_sha: str) -> List[_JSON]:
+    """Alerts whose latest instance was computed on a different merge commit.
+
+    The alert endpoint answers for the pull request's ref, which moves on
+    every push; a rerun of this job for an older commit would otherwise list a
+    newer push's findings against this commit's diff.
+    """
+    return [
+        alert
+        for alert in alerts
+        if _field(alert, "most_recent_instance", "commit_sha") not in (None, merge_sha)
+    ]
+
+
+def current_head(repo: str, pr: int) -> str:
+    return _gh(["--jq", ".head.sha", f"repos/{repo}/pulls/{pr}"]).strip()
+
+
 def upsert_sticky(repo: str, pr: int, body: str, create: bool) -> None:
     existing = [
         comment
@@ -324,6 +342,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument(
+        "--merge-sha",
+        help="the merge commit the analyses ran on; alerts from any other are stale",
+    )
+    parser.add_argument(
         "--diff",
         required=True,
         type=Path,
@@ -368,11 +390,24 @@ def main(argv: Sequence[str]) -> int:
         }
 
     alerts = fetch_alerts(args.repo, args.pr) if ran else []
+    if args.merge_sha and stale_alerts(alerts, args.merge_sha):
+        print(
+            "::notice::The pull request's alerts are from a newer push than "
+            f"{args.merge_sha[:7]}; that run's comment will report them."
+        )
+        return 0
     findings = select_findings(alerts, changed, load_allowlist(args.allow))
     body = render_comment(findings, args.head_sha, incomplete)
 
     if args.dry_run:
         print(body)
+        return 0
+    # A push that landed while this ran makes this run's view the older one.
+    if current_head(args.repo, args.pr) != args.head_sha:
+        print(
+            f"::notice::#{args.pr} moved past {args.head_sha[:7]}; leaving the "
+            "comment to the newer run."
+        )
         return 0
     upsert_sticky(args.repo, args.pr, body, create=ran or bool(incomplete))
     if findings:

@@ -199,6 +199,7 @@ jobs:
           --repo "$GITHUB_REPOSITORY"
           --pr "$PR_NUMBER"
           --head-sha "$HEAD_SHA"
+          --merge-sha "$GITHUB_SHA"
           --diff "$RUNNER_TEMP/pr.diff"
           --drifted "$RUNNER_TEMP/drifted.txt"
           --analysis "python=$PYTHON_RESULT"

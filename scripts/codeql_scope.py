@@ -39,13 +39,23 @@ def parse_unified_diff(lines: Iterable[str]) -> ChangedLines:
     """
     changed: ChangedLines = {}
     current = ""
+    # `+++ ` names a file only in a file's header, before its first hunk. Inside
+    # a hunk it is an added line that happens to start with `++`, and taking it
+    # for a header would drop every later hunk in the file.
+    in_header = True
     for raw in lines:
         line = raw.rstrip("\n")
-        if line.startswith("+++ "):
-            target = line[4:]
+        if line.startswith("diff --git "):
+            in_header = True
+            current = ""
+            continue
+        if in_header and line.startswith("+++ "):
+            target = unquote_path(line[4:])
             current = target[2:] if target.startswith("b/") else ""
             continue
         match = _HUNK.match(line)
+        if match:
+            in_header = False
         if not match or not current:
             continue
         start = int(match.group(1))
@@ -53,6 +63,19 @@ def parse_unified_diff(lines: Iterable[str]) -> ChangedLines:
         if length > 0:
             changed.setdefault(current, []).append((start, start + length - 1))
     return changed
+
+
+def unquote_path(path: str) -> str:
+    """Git's quoted form of a path, as the file's name.
+
+    With `core.quotePath` (the default), a path with non-ASCII bytes or
+    special characters is written in double quotes with C-style escapes --
+    `"b/caf\\303\\251.py"` -- and the escaped bytes are UTF-8.
+    """
+    if len(path) < 2 or not (path.startswith('"') and path.endswith('"')):
+        return path
+    escaped = path[1:-1].encode("ascii", "backslashreplace")
+    return escaped.decode("unicode_escape").encode("latin-1").decode("utf-8", "replace")
 
 
 def format_ranges(changed: ChangedLines) -> List[str]:

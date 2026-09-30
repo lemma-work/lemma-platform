@@ -21,8 +21,9 @@ from codeql_pr_comment import (  # noqa: E402
     inline_candidates,
     render_comment,
     select_findings,
+    stale_alerts,
 )
-from codeql_scope import parse_unified_diff  # noqa: E402
+from codeql_scope import parse_unified_diff, unquote_path  # noqa: E402
 
 DIFF = """\
 diff --git a/app/api.py b/app/api.py
@@ -146,3 +147,39 @@ def test_no_inline_comment_where_main_moved_the_file_under_the_pull_request() ->
     changed = parse_unified_diff(DIFF.splitlines())
     findings = select_findings([alert(1, "app/api.py", 11)], changed, [])
     assert inline_candidates(findings, set(), {"app/api.py"}) == []
+
+
+def test_an_added_line_starting_with_plus_plus_is_not_a_file_header() -> None:
+    diff = """diff --git a/web/count.js b/web/count.js
+--- a/web/count.js
++++ b/web/count.js
+@@ -1,0 +2 @@
++++ counter;
+@@ -5,0 +7,2 @@
++one
++two
+"""
+    assert parse_unified_diff(diff.splitlines()) == {"web/count.js": [(2, 2), (7, 8)]}
+
+
+def test_a_quoted_utf8_path_is_kept() -> None:
+    assert unquote_path('"b/caf\\303\\251.py"') == "b/café.py"
+    assert unquote_path("b/plain.py") == "b/plain.py"
+    diff = """diff --git "a/caf\\303\\251.py" "b/caf\\303\\251.py"
+--- "a/caf\\303\\251.py"
++++ "b/caf\\303\\251.py"
+@@ -1 +1 @@
++x
+"""
+    assert parse_unified_diff(diff.splitlines()) == {"café.py": [(1, 1)]}
+
+
+def test_alerts_from_another_merge_commit_are_stale() -> None:
+    fresh = alert(1, "app/api.py", 12)
+    fresh["most_recent_instance"]["commit_sha"] = "merge-a"  # type: ignore[index]
+    newer = alert(2, "app/api.py", 13)
+    newer["most_recent_instance"]["commit_sha"] = "merge-b"  # type: ignore[index]
+    assert stale_alerts([fresh], "merge-a") == []
+    assert stale_alerts([fresh, newer], "merge-a") == [newer]
+    # An alert without a recorded commit is not evidence of staleness.
+    assert stale_alerts([alert(3, "app/api.py", 14)], "merge-a") == []
