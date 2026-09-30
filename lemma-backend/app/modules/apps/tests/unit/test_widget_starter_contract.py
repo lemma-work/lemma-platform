@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from app.core.html_document import wrap_html_fragment
 from app.core.widget_html_validation import validate_widget_html
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
 ASSET_ROOT = REPO_ROOT / "lemma-skills" / "lemma-widget" / "assets"
+KIT_ROOT = REPO_ROOT / "lemma-backend" / "app" / "core" / "widget_kit"
+_SCRIPT = re.compile(r"<script\b[^>]*>(.*?)</script>", re.IGNORECASE | re.DOTALL)
 
 # The shared preamble every example pastes in. It is not a template — it carries
 # no placeholders — so it is checked separately from the fragments.
@@ -197,3 +203,26 @@ def test_chart_examples_carry_a_table_view_and_a_hover_layer():
         assert "w-sr" in content, name
         assert "<table>" in content, name
         assert "mousemove" in content, name
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node to parse JavaScript")
+def test_every_example_script_and_the_kit_parse(tmp_path):
+    # The markup checks above cannot see a script that does not parse, and one
+    # that does not parse leaves its widget on "Loading…" for good. Three
+    # examples shipped that way when their loaders were cut out by hand.
+    sources = {
+        f"{example.name}#{index}": body
+        for example in sorted(ASSET_ROOT.glob("*.html"))
+        for index, body in enumerate(_SCRIPT.findall(example.read_text()))
+    }
+    sources.update({kit.name: kit.read_text() for kit in sorted(KIT_ROOT.glob("*.js"))})
+    broken = {}
+    for name, body in sources.items():
+        script = tmp_path / (re.sub(r"[^a-z0-9]+", "-", name.lower()) + ".js")
+        script.write_text(body)
+        result = subprocess.run(
+            ["node", "--check", str(script)], capture_output=True, text=True
+        )
+        if result.returncode:
+            broken[name] = result.stderr.strip().splitlines()[-1:]
+    assert not broken, broken

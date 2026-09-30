@@ -359,6 +359,8 @@ def test_widget_contract_requires_api_url_identifier():
         """
     )
     assert any("apiUrl" in issue for issue in issues)
+    # An incomplete loader is also pointed at the page kit that replaces it.
+    assert any("lemma.client()" in issue for issue in issues)
 
 
 def test_widget_contract_quotes_back_what_arrived_instead_of_markup():

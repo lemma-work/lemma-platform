@@ -101,8 +101,6 @@
     async function boot() {
       try {
         var client = await lemma.client();
-          notice("This view can't load pod data in this browser."); return;
-        }
         // Grouped in SQL rather than counted over a page of records:
         // `records.list` serves at most one capped page, so counting what came
         // back would report a slice of the table as if it were the whole of it.

@@ -28,6 +28,8 @@
         return "<tr>" + columns.map(function (c) { return "<td>" + L.esc(fmt(c.format)(r[c.key])) + "</td>"; }).join("") + "</tr>";
       }).join("") + "</tbody></table></div>";
   }
+  // An empty result is a normal answer, not an error: say so instead of drawing axes around nothing.
+  function empty(el) { el.innerHTML = '<p class="lk-empty">Nothing to show.</p>'; return el; }
   function text(format, value) { return typeof value === "number" || !isNaN(Number(value)) ? fmt(format)(value) : L.esc(value); }
 
   L.stats = function (target, items) {
@@ -51,6 +53,7 @@
 
   L.bars = function (target, rows, o) {
     var el = node(target);
+    if (!rows || !rows.length) return empty(el);
     var top = o.top || 8;
     var shown = rows.slice(0, top);
     var rest = rows.slice(top).reduce(function (a, r) { return a + (Number(r[o.value]) || 0); }, 0);
@@ -77,6 +80,7 @@
 
   L.line = function (target, rows, o) {
     var el = node(target);
+    if (!rows || !rows.length) return empty(el);
     var keys = [].concat(o.y);
     var names = keys.map(function (k, i) { return (o.names && o.names[i]) || k; });
     var W = 600, H = 180, P = { l: 8, r: 64, t: 12, b: 22 };
@@ -121,6 +125,7 @@
 
   L.scatter = function (target, rows, o) {
     var el = node(target);
+    if (!rows || !rows.length) return empty(el);
     var W = 600, H = 260, P = { l: 8, r: 16, t: 24, b: 22 };
     var xs = rows.map(function (r) { return Number(r[o.x]) || 0; }), ys = rows.map(function (r) { return Number(r[o.y]) || 0; });
     var span = function (v) { var a = Math.min.apply(null, v.concat([0])), b = Math.max.apply(null, v) || 1; return [a, b - a || 1]; };

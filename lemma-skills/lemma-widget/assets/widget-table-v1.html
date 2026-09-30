@@ -167,8 +167,6 @@
     async function boot() {
       try {
         client = await lemma.client();
-          notice("This view can't load pod data in this browser."); return;
-        }
         var counts = await client.datastore.query(
           "select __STATUS_FIELD__ as group_key, count(*) as group_count" +
           " from __TABLE_NAME__ group by __STATUS_FIELD__ order by group_count desc"

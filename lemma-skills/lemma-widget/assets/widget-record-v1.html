@@ -127,8 +127,6 @@
     async function boot() {
       try {
         var client = await lemma.client();
-          notice("This view can't load pod data in this browser."); return;
-        }
         render(await client.records.get("__TABLE_NAME__", "__RECORD_ID__"));
       } catch (error) { fail(error && error.message); }
     }
