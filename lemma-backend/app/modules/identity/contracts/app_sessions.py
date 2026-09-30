@@ -3,14 +3,24 @@
 import asyncio
 import time
 from uuid import UUID
+from urllib.parse import urlsplit, urlunsplit
 from starlette.types import Scope
 
 from supertokens_python.recipe.session.asyncio import get_session_information
 
+from app.core.config import settings
+from app.modules.identity.config import identity_settings
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     _assert_local_user_can_authenticate,
 )
 from app.modules.identity.services.auth_abuse import client_ip
+
+
+def app_sign_in_url() -> str:
+    """The configured browser portal, including its sign-in base path."""
+    origin = urlsplit(settings.auth_frontend_url)
+    path = origin.path.rstrip("/") or identity_settings.auth_website_base_path
+    return urlunsplit((origin.scheme, origin.netloc, path, origin.query, ""))
 
 
 def browser_client_ip(scope: Scope) -> str:

@@ -74,7 +74,7 @@ async def test_private_app_browser_direct_and_workspace(
     monkeypatch.setattr(
         settings,
         "auth_frontend_url",
-        f"{workspace_origin}/public/sdk/private-app-test-login",
+        str(workspace_origin),
     )
     monkeypatch.setattr(settings, "app_api_via_app_origin", False)
     middleware = test_app.middleware_stack
@@ -122,12 +122,22 @@ async def test_private_app_browser_direct_and_workspace(
 
     route_count = len(test_app.router.routes)
     test_app.add_api_route("/public/sdk/private-app-test-workspace", workspace_page)
-    test_app.add_api_route(
-        "/public/sdk/private-app-test-login", lambda: HTMLResponse("<h1>Sign in</h1>")
-    )
+
+    async def browser_hosts(scope, receive, send):
+        # The workspace portal is a separate service, outside the API's global
+        # authentication middleware. Keep its real /auth URL in this fixture.
+        if (
+            scope["type"] == "http"
+            and scope["path"] == "/auth"
+            and (b"host", f"workspace.example.test:{port}".encode()) in scope["headers"]
+        ):
+            await HTMLResponse("<h1>Sign in</h1>")(scope, receive, send)
+            return
+        await test_app(scope, receive, send)
+
     server = uvicorn.Server(
         uvicorn.Config(
-            test_app,
+            browser_hosts,
             lifespan="off",
             ssl_certfile=str(cert),
             ssl_keyfile=str(key),

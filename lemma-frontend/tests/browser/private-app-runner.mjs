@@ -38,6 +38,7 @@ try {
         await signIn.waitFor({ timeout: 15_000 });
         const link = new URL(await signIn.getAttribute("href"));
         assert.equal(link.origin, config.workspaceOrigin);
+        assert.equal(link.pathname, "/auth");
         const returnUrl = link.searchParams.get("redirect_uri");
         assert.equal(returnUrl, config.origin + "/deep/path?mode=study#section");
         await signIn.click();
@@ -54,6 +55,7 @@ try {
         await signIn.waitFor({ timeout: 15_000 });
         const link = new URL(await signIn.getAttribute("href"));
         assert.equal(link.origin, config.workspaceOrigin);
+        assert.equal(link.pathname, "/auth");
         assert.equal(link.searchParams.get("redirect_uri"), config.workspace || config.origin + "/deep/path?mode=study#section");
         assert.equal((await view.locator("body").innerText()).includes("PRIVATE_APP_CONTENT"), false);
     } else if (["blocked-cookies", "service-down"].includes(config.mode)) {

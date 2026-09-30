@@ -18277,6 +18277,11 @@ var LemmaClient = (() => {
   function accessTransport(options) {
     return new HttpClient(options.apiUrl, new AuthManager(options.apiUrl, options.authUrl), { timeoutMs: 1e4, maxRetries: 0 });
   }
+  function signInUrlForApp(authUrl, redirectUri) {
+    const url = new URL(authUrl);
+    if (url.pathname === "/") url.pathname = "/auth";
+    return buildAuthUrl(url.href, { redirectUri });
+  }
   async function refreshMainSession() {
     let timer;
     const deadline = new Promise((_, reject) => {
@@ -18325,7 +18330,7 @@ var LemmaClient = (() => {
       };
       void authorize(http, requestId, appOrigin, abort.signal).then(
         (result) => respond({ code: result.code }),
-        (error) => respond({ error: failureKind(error), signInUrl: buildAuthUrl(options.authUrl, { redirectUri: window.location.href }) })
+        (error) => respond({ error: failureKind(error), signInUrl: signInUrlForApp(options.authUrl, window.location.href) })
       ).finally(() => {
         inFlight--;
       });
@@ -18394,7 +18399,7 @@ var LemmaClient = (() => {
       retry.hidden = kind === "signed-out";
       if (kind === "signed-out") {
         const candidate = signInUrl && new URL(signInUrl, options.authUrl);
-        signIn.href = candidate && candidate.origin === new URL(options.authUrl).origin ? candidate.href : buildAuthUrl(options.authUrl, { redirectUri: window.location.href });
+        signIn.href = candidate && candidate.origin === new URL(options.authUrl).origin ? candidate.href : signInUrlForApp(options.authUrl, window.location.href);
         signIn.target = window.parent === window ? "_self" : "_top";
         signIn.hidden = false;
       }

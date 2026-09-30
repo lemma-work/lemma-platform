@@ -5,6 +5,7 @@ from html import escape
 from urllib.parse import urlsplit
 
 from app.core.config import settings
+from app.modules.identity.contracts.app_sessions import app_sign_in_url
 
 
 def render_app_access_page() -> str:
@@ -12,7 +13,7 @@ def render_app_access_page() -> str:
     config = json.dumps(
         {
             "apiUrl": settings.api_url,
-            "authUrl": settings.auth_frontend_url,
+            "authUrl": app_sign_in_url(),
             "parentOrigin": f"{frontend.scheme}://{frontend.netloc}",
         }
     ).replace("<", "\\u003c")

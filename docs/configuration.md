@@ -462,6 +462,7 @@ origins, not internal service names. Apps that pods publish are served at
 API_URL=https://api.example.com
 FRONTEND_URL=https://app.example.com
 AUTH_FRONTEND_URL=https://app.example.com
+AUTH_WEBSITE_BASE_PATH=/auth
 APP_BASE_DOMAIN=apps.example.com
 SUPERTOKENS_CORE_URL=http://supertokens:3567
 
@@ -489,7 +490,9 @@ existing wildcard app-host routing, including ingress rewrites to
 required. Keep `API_URL`, `FRONTEND_URL`, `AUTH_FRONTEND_URL` and `APP_BASE_DOMAIN`
 consistent with the public HTTPS origins. Credentialed CORS must permit the
 workspace and app origins, and the login return allowlist must permit those
-app origins. Verify the configured login page accepts the `redirect_uri` query
+app origins. The bootstrap combines the auth origin with
+`AUTH_WEBSITE_BASE_PATH`; an explicit path in `AUTH_FRONTEND_URL` is treated as
+the complete portal URL. Verify the configured login page accepts the `redirect_uri` query
 parameter and returns to the original app path, query and fragment.
 
 Requests expire after five minutes and redemption codes after 60 seconds.

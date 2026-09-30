@@ -79,9 +79,34 @@ describe("app access frame", () => {
     await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(expect.objectContaining({ error: "signed-out" }), options.appOrigin));
     const destination = new URL(reply.mock.calls[0][0].signInUrl);
     expect(destination.origin).toBe(new URL(options.authUrl).origin);
+    expect(destination.pathname).toBe("/auth");
     expect(destination.searchParams.get("redirect_uri")).toBe(window.location.href);
     expect(Session.attemptRefreshingSession).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the auth portal when the workspace auth setting is an origin", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ message: "Sign in" }), { status: 401, headers: { "Content-Type": "application/json" } }));
+    const frame = document.querySelector("iframe")!;
+    const reply = vi.spyOn(frame.contentWindow!, "postMessage");
+    cleanups.push(registerAppAccessFrame(frame, { ...options, authUrl: "https://workspace.example.test" }));
+    send(frame);
+    await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+    const destination = new URL(reply.mock.calls[0][0].signInUrl);
+    expect(destination.pathname).toBe("/auth");
+    expect(destination.searchParams.get("redirect_uri")).toBe(window.location.href);
+  });
+
+  it("offers the auth portal from a signed-out direct app navigation", async () => {
+    document.body.innerHTML = '<p id="app-access-status"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button>';
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ request_id: requestId })))
+      .mockResolvedValue(new Response(JSON.stringify({ message: "Sign in" }), { status: 401, headers: { "Content-Type": "application/json" } }));
+    await startAppAccess({ ...options, authUrl: "https://workspace.example.test", parentOrigin: "https://workspace.example.test" });
+    const destination = new URL((document.getElementById("app-access-sign-in") as HTMLAnchorElement).href);
+    expect(destination.pathname).toBe("/auth");
+    expect(destination.searchParams.get("redirect_uri")).toBe(window.location.href);
+    expect(document.getElementById("app-access-sign-in")?.hidden).toBe(false);
   });
 
   it("shows an actionable error when session refresh stops answering", async () => {

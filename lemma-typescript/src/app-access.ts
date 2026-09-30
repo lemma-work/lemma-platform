@@ -39,6 +39,14 @@ function accessTransport(options: AppAccessOptions): HttpClient {
   return new HttpClient(options.apiUrl, new AuthManager(options.apiUrl, options.authUrl), { timeoutMs: 10_000, maxRetries: 0 });
 }
 
+function signInUrlForApp(authUrl: string, redirectUri: string): string {
+  const url = new URL(authUrl);
+  // Hosted settings may name the portal's origin. Its sign-in screen lives
+  // under /auth; an explicit configured portal path is already complete.
+  if (url.pathname === "/") url.pathname = "/auth";
+  return buildAuthUrl(url.href, { redirectUri });
+}
+
 async function refreshMainSession(): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
@@ -89,7 +97,7 @@ export function registerAppAccessFrame(frame: HTMLIFrameElement, options: AppAcc
     };
     void authorize(http, requestId, appOrigin, abort.signal).then(
       result => respond({ code: result.code }),
-      error => respond({ error: failureKind(error), signInUrl: buildAuthUrl(options.authUrl, { redirectUri: window.location.href }) }),
+      error => respond({ error: failureKind(error), signInUrl: signInUrlForApp(options.authUrl, window.location.href) }),
     ).finally(() => { inFlight--; });
   };
   window.addEventListener("message", listener);
@@ -149,7 +157,7 @@ export async function startAppAccess(options: AppAccessBootstrapOptions): Promis
       // Parent replies are accepted only from the configured workspace, and
       // the link must still belong to the configured authentication service.
       const candidate = signInUrl && new URL(signInUrl, options.authUrl);
-      signIn.href = candidate && candidate.origin === new URL(options.authUrl).origin ? candidate.href : buildAuthUrl(options.authUrl, { redirectUri: window.location.href });
+      signIn.href = candidate && candidate.origin === new URL(options.authUrl).origin ? candidate.href : signInUrlForApp(options.authUrl, window.location.href);
       signIn.target = window.parent === window ? "_self" : "_top";
       signIn.hidden = false;
     }
