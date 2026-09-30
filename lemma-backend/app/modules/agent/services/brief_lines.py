@@ -93,12 +93,30 @@ def _with_budget(framing: str, *, unattended: bool) -> str:
         limits.append(f"{steps} steps")
     if seconds > 0:
         limits.append(f"{int(seconds // 60)} minutes")
+    backstop = (
+        f"As a backstop, past roughly {' or '.join(limits)} this run pauses "
+        "and asks a person whether to carry on, and you will be told before you "
+        "are near it."
+    )
+    if unattended:
+        return (
+            f"{framing}\n"
+            "- Take the time the work needs; a long run that returns the thing "
+            f"asked for is a good outcome. {backstop}"
+        )
+    # Attended: somebody is looking at the screen until this reply lands. The
+    # time goes on extra steps -- a check that re-derives what a tool already
+    # reported, a render to confirm markup that was just read back -- far more
+    # than on the work, so this names those rather than setting a clock the
+    # model would race.
     return (
         f"{framing}\n"
-        "- Take the time the work needs; a long run that returns the thing "
-        f"asked for is a good outcome. As a backstop, past roughly "
-        f"{' or '.join(limits)} this run pauses and asks a person whether to "
-        "carry on, and you will be told before you are near it."
+        "- A person is waiting for this reply. Do the smallest thing that fully "
+        "answers it: act on what a tool already told you instead of checking it "
+        "again, verify what you wrote by reading it back rather than rendering "
+        "or screenshotting it, and do not load a skill for something this brief "
+        "or the conversation already explains. Work that is genuinely large "
+        f"still gets the time it needs. {backstop}"
     )
 
 

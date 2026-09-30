@@ -79,5 +79,8 @@ class AgentContext(BaseModel):
     # prompt. Built once per run by the runner; harness-neutral so it just rides
     # along on the context.
     context_brief: str | None = None
+    # The text of the doc this conversation is attached to, rendered as a prompt
+    # section; read fresh each run because the doc changes between turns.
+    attached_document: str | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

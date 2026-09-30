@@ -26,6 +26,9 @@ from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
+from app.modules.agent.services.attached_document_brief import (
+    build_attached_document_section,
+)
 from app.modules.agent.services.brief_lines import run_source_of
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
@@ -151,6 +154,21 @@ async def build_run_context(
             exc_info=True,
         )
         ctx.context_brief = _CONTEXT_BRIEF_UNAVAILABLE
+    try:
+        ctx.attached_document = await build_attached_document_section(
+            uow_factory,
+            conversation=conversation,
+            pod_id=conversation.pod_id,
+            user_id=user_id,
+        )
+    # Same survivable failures as the brief: without the section the agent
+    # reads the doc itself, which is slower but not wrong.
+    except DomainError, SQLAlchemyError, OSError, TimeoutError:
+        logger.warning(
+            "agent.run.attached_document_unavailable.degraded",
+            conversation_id=str(conversation.id),
+            exc_info=True,
+        )
     # How image-returning tools answer on this run. Settled before the
     # toolset is built, because the assembler needs it: `view_image` is
     # offered whenever the mode can answer at all, and withholding it on

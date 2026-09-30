@@ -87,6 +87,27 @@ def _load_runtime_env() -> None:
                 os.environ.setdefault(key, value)
 
 
+_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high"})
+
+
+def _reasoning_effort_setting() -> dict[str, str]:
+    """The deployment's chosen reasoning effort, when it chose one.
+
+    A thinking model left at its provider default thinks at length before every
+    step of a turn, and a turn is many steps: the time a person waits is
+    mostly that. Unset keeps the provider default.
+    """
+    effort = (os.getenv("LEMMA_OPENAI_REASONING_EFFORT") or "").strip().lower()
+    if not effort:
+        return {}
+    if effort not in _REASONING_EFFORTS:
+        raise DomainError(
+            "LEMMA_OPENAI_REASONING_EFFORT must be one of "
+            + ", ".join(sorted(_REASONING_EFFORTS))
+        )
+    return {"openai_reasoning_effort": effort}
+
+
 def _openai_compat_vision_model_names() -> set[str]:
     """Model names the operator declared as image-capable for the system
     OpenAI-compatible profile (``LEMMA_OPENAI_VISION_MODEL_NAMES``).
@@ -231,7 +252,10 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
             # which a strict endpoint rejects outright.
             # `_UsageOnlyStreamOptionsChatModel` keeps that half off the wire --
             # see its docstring for why the two halves have to be separated.
-            model_settings={"openai_continuous_usage_stats": True},
+            model_settings={
+                "openai_continuous_usage_stats": True,
+                **_reasoning_effort_setting(),
+            },
         ),
         credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),
     )

@@ -1,9 +1,15 @@
 ---
 name: lemma-widget
-description: "Create lightweight inline Lemma widgets for conversations via display_resource(type=\"WIDGET\"): self-contained HTML/CSS/JS for metrics, lists, comparisons, timelines, record details, previews, and charts, optionally powered by live pod data through the browser Lemma SDK. Use an app, not a widget, when the UI needs React, routing, or substantial application state."
+description: "Create lightweight inline Lemma widgets for conversations via display_resource(type=\"WIDGET\"): self-contained HTML/CSS/JS for metrics, lists, comparisons, timelines, record details, previews, and charts, optionally powered by live pod data through the browser Lemma SDK. Use an app, not a widget, when the UI needs React, routing, or substantial application state. Not for a ```lemma-widget block written into a doc or page: that needs no skill, and the doc conversation says how."
 ---
 
 # Lemma Widget
+
+> **Writing a ```lemma-widget block into a doc or page?** Stop here — this skill
+> is not for that. A doc block is a different contract: plain HTML with its data
+> baked in, no SDK, no `display_resource`, no loading states, no height cap. The
+> conversation attached to the doc states the whole of it; follow that, write the
+> block with `pod_edit_file`, and do not render or screenshot it to check.
 
 A widget is the default way to **show an answer that is more than short prose**.
 Use `display_resource(type="WIDGET")` whenever the useful result has structure or

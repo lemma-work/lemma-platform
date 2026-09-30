@@ -86,6 +86,9 @@ def test_pod_toolset_exposes_exactly_these_tools():
         "pod_list_files",
         "pod_read_file",
         "pod_write_file",
+        # Part of a file, in place: the way a doc is edited, rather than a
+        # download, a rewrite and an upload through the workspace.
+        "pod_edit_file",
         # No `pod_upload_file`. Copying a sandbox file into pod files needs a
         # sandbox, and an agent with one has `lemma files upload` already --
         # while POD is implied by a folder or table grant, so an agent can hold

@@ -12,6 +12,8 @@ returns is reachable by whoever the agent shows it to.
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from pydantic_ai import BinaryContent, ToolReturn
 from pydantic_ai.tools import RunContext
 
@@ -27,7 +29,9 @@ from app.modules.agent.services.agent_memory_brief import invalidate_memory_brie
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
 from app.modules.agent.tools.pod.models import (
+    FileEdit,
     GetFileUrlRequest,
+    PodEditFileRequest,
     PodListFilesRequest,
     PodReadFileRequest,
     PodWriteFileRequest,
@@ -96,6 +100,31 @@ async def _after_memory_write(
     }
 
 
+class _StoredFile(Protocol):
+    """What a write reports back: where the file now lives and how big it is."""
+
+    path: str
+    size_bytes: int
+
+
+async def _overwrite(
+    services: PodServices,
+    resolved_path: str,
+    content_bytes: bytes,
+    description: str | None,
+) -> _StoredFile:
+    update_entity = DatastoreFileUpdateEntity(
+        path=resolved_path, content=content_bytes, description=description
+    )
+    plan = await services.file.resolve_update_file(
+        services.ctx.pod_id, update_entity, services.ctx
+    )
+    await services.file.write_update_storage(plan, update_entity)
+    updated = await services.file.persist_update_file(plan)
+    await services.file.finalize_update_file(plan, updated)
+    return updated
+
+
 async def pod_write_file(
     ctx: RunContext[BaseAgentContext],
     request: PodWriteFileRequest,
@@ -143,17 +172,9 @@ async def pod_write_file(
                         "overwrite=true to replace it."
                     ),
                 }
-            update_entity = DatastoreFileUpdateEntity(
-                path=resolved_path,
-                content=content_bytes,
-                description=request.description,
+            updated = await _overwrite(
+                services, resolved_path, content_bytes, request.description
             )
-            plan = await services.file.resolve_update_file(
-                services.ctx.pod_id, update_entity, services.ctx
-            )
-            await services.file.write_update_storage(plan, update_entity)
-            updated = await services.file.persist_update_file(plan)
-            await services.file.finalize_update_file(plan, updated)
             return {
                 "success": True,
                 "path": to_me_path(updated.path, services.ctx.user_id),
@@ -169,6 +190,77 @@ async def pod_write_file(
 
     return await run_pod_tool(
         ctx.deps, tool_name="pod_write_file", args=request.model_dump(), op=op
+    )
+
+
+def _apply_edits(text: str, edits: list[FileEdit]) -> tuple[str, int] | str:
+    """Apply the replacements in order, or say which one could not be placed."""
+    replaced = 0
+    for number, edit in enumerate(edits, start=1):
+        count = text.count(edit.old_text)
+        if count == 0:
+            return (
+                f"Edit {number}: `old_text` is not in the file. Copy it exactly "
+                "from the file, including whitespace; nothing was changed."
+            )
+        if count > 1 and not edit.replace_all:
+            return (
+                f"Edit {number}: `old_text` appears {count} times. Include a "
+                "neighbouring line to make it unique, or set replace_all; "
+                "nothing was changed."
+            )
+        text = text.replace(edit.old_text, edit.new_text)
+        replaced += count
+    return text, replaced
+
+
+async def pod_edit_file(
+    ctx: RunContext[BaseAgentContext],
+    request: PodEditFileRequest,
+) -> JsonObject:
+    """Change part of an existing pod text file by exact-text replacement.
+
+    The way to edit a doc, a page or any file you did not just write: name the
+    text to replace and what goes there, and the rest of the file is kept byte
+    for byte. Every edit is placed before anything is written, so either all of
+    them land or none do. No need to download the file or rewrite it whole.
+    """
+
+    async def op(services: PodServices) -> JsonObject:
+        resolved_path = resolve_pod_path(ctx.deps, request.path)
+        entity, content = await services.file.download_file_content_by_path(
+            services.ctx.pod_id, resolved_path, services.ctx
+        )
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return {
+                "success": False,
+                "path": resolved_path,
+                "error": "This file is not text; it cannot be edited in place.",
+            }
+        applied = _apply_edits(text, request.edits)
+        if isinstance(applied, str):
+            return {"success": False, "path": resolved_path, "error": applied}
+        new_text, replaced = applied
+        updated = await _overwrite(
+            services, entity.path, new_text.encode("utf-8"), None
+        )
+        return {
+            "success": True,
+            "path": to_me_path(updated.path, services.ctx.user_id),
+            "size_bytes": updated.size_bytes,
+            "replacements": replaced,
+            **await _after_memory_write(
+                services,
+                agent_name=ctx.deps.agent_name,
+                stored_path=updated.path,
+                content_length=len(new_text),
+            ),
+        }
+
+    return await run_pod_tool(
+        ctx.deps, tool_name="pod_edit_file", args=request.model_dump(), op=op
     )
 
 

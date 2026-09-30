@@ -338,9 +338,14 @@ async def _build_lemma_harness_tooling(
         capabilities.append(open_notifications)
 
     if enable_prompt_caching:
+        pod_id = getattr(ctx, "pod_id", None)
         capabilities.append(
             _caching_capability_cls(
-                conversation_id=ctx.conversation_id, protocol=protocol
+                conversation_id=ctx.conversation_id,
+                protocol=protocol,
+                affinity_key=(
+                    f"{pod_id}:{getattr(ctx, 'agent_name', None)}" if pod_id else None
+                ),
             )
         )
 
