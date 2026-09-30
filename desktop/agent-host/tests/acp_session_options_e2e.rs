@@ -15,8 +15,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(unix)]
 use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
-use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver, AgentHomes};
+#[cfg(unix)]
+use lemma_agent_host::acp::AgentHomes;
+use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use lemma_agent_host::adapters::{AdapterSpec, ResolvedAdapter};
 use lemma_agent_host::permissions::PermissionGate;
 use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec};
@@ -339,13 +342,16 @@ async fn lemmas_cli_goes_first_on_the_agents_path() {
     assert!(std::env::split_paths(&path).count() > 1, "{path}");
 }
 
+#[cfg(unix)]
 const MARKER: &str = "PERSONAL_MARKER";
 
+#[cfg(unix)]
 fn write(path: &Path, contents: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, contents).unwrap();
 }
 
+#[cfg(unix)]
 /// A home with the person's own instructions, MCP servers and settings for
 /// every agent, each carrying `MARKER`.
 fn personal_home(home: &Path) {
@@ -371,6 +377,7 @@ fn personal_home(home: &Path) {
     );
 }
 
+#[cfg(unix)]
 /// Every file under `folder`, not following links out of it.
 fn files_under(folder: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
