@@ -20,35 +20,32 @@ For visual changes, inspect 1440, 1024, 768 and 375px widths, light/dark themes,
 and reduced motion. Run the checks listed in [README.md](README.md); authenticated
 flows also need a live session. Design checks: `npm run check:design`.
 
-The embedded hero opens on Conversation without a separate demo header, footer,
-or passive waiting summary below the composer. Keep the space for the workspace;
-full-screen access lives beside the tour steps.
+The landing page is for a founder or a small team deciding whether to try
+it. Its art direction is Anthropic's calm (warm ground, a serif for big type,
+a lot of air), Linear's precision (real screens at one scale, the live
+workspace on a dark band) and PostHog's wit (the cast, used sparingly). It
+runs: the claim over a looping film, where it answers, Kit's live space, how it
+works, the apps it builds, who sees what, how it learns, trust, open source,
+and one way in.
 
-The embedded workspace takes the wheel only after a click. Until then a clear
-layer over it lets the page scroll, with a "Click to explore" hint on hover
-(always shown on touch). Once clicked, the frame is ringed; leaving it, clicking
-outside, or scrolling it mostly out of view hands scrolling back to the page.
-
-Touching the embedded workspace pauses the tour only for the current step.
-Scrolling into another step, or choosing one, restores that step's planned
-screen: conversation, tabs, dialogs, sidebar and the open app's first view.
-The workspace sidebar is open while hiring and collapsed for every later step.
-
-The landing runs: the teammate everyone shares (hero and tour), "Everyone
-asks. Each sees their part." (shared record and access, one section), "It
-builds what the job needs", channels once, how it runs, open source. Tour step 03 opens the Launch studio app; step 04
-opens About at what Kit remembers. Headlines lead with what only this product
-shows — a team-owned teammate, the tools it builds, each person's own view —
-not with "hire", "learns how you work" or "use it where you already are",
-which other products own.
-
-The four work examples follow Kit's Thursday launch: channel request, mobile
-follow-up, Launch studio review, and a scheduled readiness check. Messaging uses
-one phone-framed conversation; the surrounding copy names both supported channels.
-
-All four work tabs share one sage stage, explanation column, framed preview, and
-fixed stage height per breakpoint. Marketing copy describes all Lemma teammates;
-named teammates appear only within examples.
+- The headline is "Hire an AI teammate. Give it a space." The line under it
+  says what the space is — the docs, lists and apps for its job, where your
+  people work with it — so "space" never stands alone.
+- The hero film shows adults at work, never children, and fills only the
+  right of the hero so the words sit on clean ground. It plays forward and back
+  so it never seams; with reduced motion it stays on its poster.
+- The live workspace is the real sample at `/demo/landing`, put on a screen by
+  the Try buttons under it. It takes the wheel only after a click: until then a
+  clear layer lets the page scroll, with "Click to look around". Once clicked
+  the frame is ringed; leaving it, clicking outside, or scrolling it mostly out
+  of view hands scrolling back to the page. Nothing follows the scroll.
+- Every other picture is a real screen from the sample workspace, captured at
+  2x by `scripts/capture-landing-shots.mjs` into `public/landing/`. When the
+  product changes, run the script; never edit or draw the images.
+- The cast appears in four places only: Kit on the live workspace, the three
+  steps, the open-source picture and the closing line-up.
+- Claims stay inside what the code does ("approvals where a person should
+  decide", not "approvals on everything").
 
 Appearance includes Chat text size: Small (14px), Default (15px), and Large
 (17px), with a live preview and a browser-local preference restored before paint.

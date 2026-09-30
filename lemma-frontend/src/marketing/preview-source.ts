@@ -53,6 +53,25 @@ function notesOf(id: string): { path: string; gloss: string; daysAgo: number; te
     return [{ path: "/memory/working-notes.md", gloss: teammateFor(id).learned, daysAgo: 6, text: "# Working notes\n\n" + teammateFor(id).learned + "\n" }];
 }
 
+/** A correction and the note it becomes, in a teammate's sample
+ *  conversation: somebody tells it how things work now, it says so, and the
+ *  write under the reply is what draws "Kit noted this". Kit's is specific
+ *  because the landing shows it; the others reuse their first note. */
+function notedIn(id: string) {
+    const note = notesOf(id)[0];
+    const told = id === "kit"
+        ? { ask: "From now on the readiness check runs Thursdays at 9, not Fridays.", reply: "Got it. Readiness checks run Thursdays at 09:00 from now on." }
+        : { ask: "Keep this in mind for next time: " + note.gloss.charAt(0).toLowerCase() + note.gloss.slice(1) + ".", reply: "Noted. I’ll work that way from now on." };
+    return [
+        { id: id + "-told", role: "user", kind: "TEXT", sequence: 4, text: told.ask },
+        { id: id + "-ack", role: "assistant", kind: "TEXT", sequence: 5, text: told.reply },
+        { id: id + "-note", role: "assistant", kind: "TOOL_CALL", sequence: 6, tool_name: "pod_write_file", tool_call_id: id + "-note-call",
+            tool_args: { path: note.path, description: note.gloss, content: note.text, overwrite: true } },
+        { id: id + "-note-back", role: "assistant", kind: "TOOL_RETURN", sequence: 7, tool_call_id: id + "-note-call",
+            tool_result: { success: true, path: note.path, created: false } },
+    ];
+}
+
 /** Isolated fictional work; production and general QA fixtures stay separate. */
 export const previewSource: PodSource = {
     ...fixtureSource,
@@ -93,6 +112,9 @@ export const previewSource: PodSource = {
             { id: id + "-1", role: "user", kind: "TEXT", sequence: 1, text: person.ask },
             { id: id + "-2", role: "assistant", kind: "TEXT", sequence: 2, text: person.reply },
             { id: id + "-widget", role: "assistant", kind: "TOOL_CALL", sequence: 3, tool_name: "display_resource", tool_args: { type: "WIDGET", content: conversationWidget(id) } },
+            /* The note it keeps while it works, so the "noted" line under the
+               reply is the real one, drawn from this write. */
+            ...notedIn(id),
         ] } satisfies Conversation;
     },
     async listLibrary(id, kind, directory) {

@@ -1,16 +1,74 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CharacterPuppet } from "@/shell/character-puppet";
 import { WorkspaceLoading } from "@/shell/workspace-loading";
-import { INITIAL_TOUR, TOUR_STEPS, tourReducer } from "./tour-state";
 import s from "./landing.module.css";
 
-/** The tour controls the actual Acme workspace in a separate sample document. */
+/** The loop behind the headline: a work campus in a better future, where
+ *  people and their teammates get on with the job together. Rendered with
+ *  Gemini Omni from the cast's character sheets and played forward and back
+ *  over a stretch where nobody moves far, so it never seams. It fills the
+ *  right of the hero only, so the words sit on clean ground and the
+ *  characters stay solid. */
+const FILM = { mp4: "/landing/hero-campus.mp4", webm: "/landing/hero-campus.webm", poster: "/landing/hero-campus-poster.webp" };
+
+/** The claim, over that world. */
 export function Hero() {
-    const [{ step, mode }, dispatch] = useReducer(tourReducer, INITIAL_TOUR);
+    /* Still, for anyone who asked for less motion: the poster, and no play. */
+    const film = useRef<HTMLVideoElement>(null);
+    useEffect(() => {
+        const video = film.current;
+        if (!video) return;
+        const calm = window.matchMedia("(prefers-reduced-motion: reduce)");
+        const apply = () => { if (calm.matches) video.pause(); else void video.play().catch(() => undefined); };
+        apply();
+        calm.addEventListener("change", apply);
+        return () => calm.removeEventListener("change", apply);
+    }, []);
+
+    return (
+        <section className={s.hero}>
+            <video ref={film} className={s.heroFilm} muted loop playsInline preload="auto" poster={FILM.poster} aria-hidden="true">
+                <source src={FILM.webm} type="video/webm" />
+                <source src={FILM.mp4} type="video/mp4" />
+            </video>
+            <div className={s.heroWash} aria-hidden="true" />
+            <div className={s.wrap}>
+                <div className={s.heroText}>
+                    <p className={s.label}>Open source</p>
+                    <h1 className={s.heroHeadline}><span>Hire an AI teammate.</span><span>Give it a space.</span></h1>
+                    <p className={s.heroIntro}>
+                        The space is where it keeps the docs, lists and apps for its job, and where your people work with it.
+                    </p>
+                    <div className={s.ctas}>
+                        <Link className={s.primary} href="/t">Get started free</Link>
+                        <Link className={s.textLink} href="/contact">Talk to us →</Link>
+                    </div>
+                </div>
+            </div>
+        </section>
+    );
+}
+
+/* ── The live workspace ─────────────────────────────────────────────────
+   The actual Acme sample, in its own document, on a dark band. The buttons
+   under it put it on a screen worth seeing; clicking into it hands it the
+   mouse. Nothing here follows the scroll. */
+
+const TRIES: { step: number; label: string }[] = [
+    { step: -1, label: "Ask Kit something" },
+    { step: 2, label: "Open Launch studio" },
+    { step: 1, label: "See who’s in" },
+    { step: 3, label: "Read what Kit remembers" },
+    { step: 4, label: "Connect a channel" },
+];
+
+export function TryIt() {
+    const [step, setStep] = useState(-1);
     const [near, setNear] = useState(false);
+    const [greeting, setGreeting] = useState(0);
     const [ready, setReady] = useState(false);
     // A frame that never says it is ready is still shown eventually: its
     // own error is more use to a visitor than a placeholder that never ends.
@@ -19,16 +77,12 @@ export function Hero() {
         const timer = window.setTimeout(() => setWaitedOut(true), 12_000);
         return () => window.clearTimeout(timer);
     }, []);
-    const frame = useRef<HTMLElement | null>(null);
-    const stage = useRef<HTMLDivElement>(null);
     const viewport = useRef<HTMLDivElement>(null);
     const demo = useRef<HTMLIFrameElement>(null);
-    const grown = useRef(false);
-    const [isGrown, setIsGrown] = useState(false);
-    const current = useRef({ step, mode });
-    current.current = { step, mode };
+    const current = useRef(step);
+    current.current = step;
 
-    function showStep(index: number) {
+    function show(index: number) {
         demo.current?.contentWindow?.postMessage({ type: "lemma-tour:step", step: index }, window.location.origin);
     }
 
@@ -37,38 +91,28 @@ export function Hero() {
             if (event.origin !== window.location.origin || event.source !== demo.current?.contentWindow) return;
             if (event.data?.type === "lemma-tour:ready") {
                 setReady(true);
-                if (current.current.mode === "guided") showStep(current.current.step);
+                show(current.current);
             }
-            if (event.data?.type === "lemma-tour:interact") dispatch({ type: "explore" });
         };
         window.addEventListener("message", read);
         // The frame announces itself once; if that happened before this
-        // listener existed, the tour would never drive it on scroll.
+        // listener existed, ask again.
         demo.current?.contentWindow?.postMessage({ type: "lemma-tour:hello" }, window.location.origin);
         return () => window.removeEventListener("message", read);
     }, []);
 
-    useEffect(() => {
-        if (mode === "guided" && ready) showStep(step);
-    }, [step, mode, ready]);
-
-    /* The workspace scrolls inside itself (the profile, the app), and a frame
-       takes every wheel event over it, so a visitor scrolling the page would
-       get stuck scrolling the demo instead. Until they click into it, a clear
-       layer sits on top and the wheel reaches the page. Clicking hands the
-       demo the wheel and rings the frame; leaving it, clicking elsewhere or
-       scrolling it away hands the wheel back. */
+    /* The workspace scrolls inside itself, and a frame takes every wheel
+       event over it, so a visitor scrolling the page would get stuck in the
+       demo. Until they click into it, a clear layer on top lets the wheel
+       reach the page. Clicking hands the demo the mouse and rings the frame;
+       leaving it, clicking elsewhere or scrolling it away hands it back. */
     const [engaged, setEngaged] = useState(false);
-    function engage() {
-        setEngaged(true);
-        dispatch({ type: "explore" });
-    }
     useEffect(() => {
         const node = viewport.current;
         if (!node) return;
         const outside = (event: PointerEvent) => { if (!node.contains(event.target as Node)) setEngaged(false); };
         // Keyboard visitors reach the frame by Tab, which never touches the layer.
-        const blur = () => window.setTimeout(() => { if (document.activeElement === demo.current) engage(); });
+        const blur = () => window.setTimeout(() => { if (document.activeElement === demo.current) setEngaged(true); });
         const seen = new IntersectionObserver(([entry]) => { if (entry.intersectionRatio < 0.4) setEngaged(false); }, { threshold: [0.4] });
         document.addEventListener("pointerdown", outside);
         window.addEventListener("blur", blur);
@@ -85,7 +129,7 @@ export function Hero() {
         if (!node) return;
         const resize = () => {
             const width = node.clientWidth;
-            const natural = width >= 560 ? Math.max(900, width) : width;
+            const natural = width >= 560 ? Math.max(1180, width) : width;
             node.style.setProperty("--preview-width", natural + "px");
             node.style.setProperty("--preview-scale", String(width / natural));
         };
@@ -95,95 +139,51 @@ export function Hero() {
         return () => observer.disconnect();
     }, []);
 
-    // Only the background and composition move. Text geometry stays fixed;
-    // scroll progress is written directly, without rendering the React tree.
-    useEffect(() => {
-        const node = stage.current;
-        const field = frame.current;
-        if (!node || !field) return;
-        const compact = matchMedia("(max-width: 1180px), (max-height: 680px), (prefers-reduced-motion: reduce)");
-        let raf = 0;
-        function read() {
-            raf = 0;
-            const run = node!.offsetHeight - innerHeight;
-            const through = compact.matches || run <= 0 ? 0 : Math.min(1, Math.max(0, -node!.getBoundingClientRect().top / run));
-            const grow = Math.min(1, through / 0.18);
-            field!.style.setProperty("--grow", String(grow));
-            const nextGrown = grow > 0.5;
-            if (nextGrown !== grown.current) {
-                grown.current = nextGrown;
-                setIsGrown(nextGrown);
-            }
-            const into = (through - 0.2) / 0.8;
-            if (!compact.matches) dispatch({ type: "scroll", step: into < 0 ? -1 : Math.min(TOUR_STEPS.length - 1, Math.floor(into * TOUR_STEPS.length)) });
-        }
-        function schedule() {
-            if (!raf && !document.hidden) raf = requestAnimationFrame(read);
-        }
-        function visibility() {
-            cancelAnimationFrame(raf);
-            raf = 0;
-            if (!document.hidden) read();
-        }
-        read();
-        window.addEventListener("scroll", schedule, { passive: true });
-        window.addEventListener("resize", schedule);
-        document.addEventListener("visibilitychange", visibility);
-        compact.addEventListener("change", read);
-        return () => {
-            cancelAnimationFrame(raf);
-            window.removeEventListener("scroll", schedule);
-            window.removeEventListener("resize", schedule);
-            document.removeEventListener("visibilitychange", visibility);
-            compact.removeEventListener("change", read);
-        };
-    }, []);
-
-
-    function goToStep(index: number) {
-        dispatch({ type: "step", step: index });
-        showStep(index);
-        const node = stage.current;
-        if (!node || matchMedia("(max-width: 1180px), (max-height: 680px), (prefers-reduced-motion: reduce)").matches) return;
-        const run = node.offsetHeight - innerHeight;
-        window.scrollTo({ top: node.getBoundingClientRect().top + scrollY + run * (0.2 + (index + 0.3) * 0.8 / TOUR_STEPS.length), behavior: "instant" });
+    function go(index: number) {
+        setStep(index);
+        if (ready) show(index);
     }
 
-    return <div ref={stage} className={s.heroStage}>
-        <section ref={frame} className={`${s.heroField} ${s.toneViolet}`} data-grown={isGrown || undefined}
-            onPointerEnter={() => setNear(true)} onPointerLeave={() => setNear(false)}>
-            <div className={s.heroLede} inert={isGrown}>
-                <p className={s.heroEyebrow}>AI TEAMMATES FOR ONGOING WORK</p>
-                <h1 className={s.heroHeadline}>The teammate your whole team shares.</h1>
-                <p className={s.heroIntro}>It builds the tables, apps and workflows the job needs, and answers each person within what they’re allowed to see.</p>
-                <div className={s.heroActions}>
-                    <Link className={s.primary} href="/t">Get started</Link>
-                    <a className={s.secondary} href="#examples">Explore an example <span aria-hidden="true">↓</span></a>
+    return (
+        <section className={s.band} id="try" aria-labelledby="try-title"
+            onPointerEnter={() => { setNear(true); setGreeting(count => count + 1); }}
+            onPointerLeave={() => setNear(false)}>
+            <div className={s.wrap} style={{ position: "relative" }}>
+                <div className={s.head}>
+                    <div>
+                        <p className={s.label}>Live · sample data</p>
+                        <h2 id="try-title" className={s.title}>This is Kit’s space.<br />Go on, click around.</h2>
+                    </div>
+                    <p className={s.body}>
+                        Kit runs launches at Acme, a company we made up. The workspace is the real product: ask it something,
+                        open the app it built, read what it has learned.
+                    </p>
                 </div>
-            </div>
-            <div className={s.field}>
-                <div className={s.productFrame} data-engaged={engaged || undefined}>
-                    <div className={s.productViewport} ref={viewport} data-revealed={ready || waitedOut || undefined}
-                        onPointerLeave={event => { if (event.pointerType === "mouse") setEngaged(false); }}>
-                        <iframe ref={demo} src="/demo/landing" title="Explore Kit’s space" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" />
-                        {/* The workspace's own loading shape, drawn by this page so it is
-                            there on first paint, until the frame has something to show. */}
-                        <div className={s.productPoster} aria-hidden="true" inert><WorkspaceLoading /></div>
-                        {!engaged && <div className={s.productShield} aria-hidden="true" onClick={engage}><span>Click to explore</span></div>}
+                <div className={s.stage}>
+                    <div className={s.stageKit} aria-hidden="true">
+                        <CharacterPuppet character="loop" size={132} greeting={greeting} mood={near ? "delighted" : "idle"} />
+                    </div>
+                    <div className={s.productFrame} data-engaged={engaged || undefined}>
+                        <div className={s.productViewport} ref={viewport} data-revealed={ready || waitedOut || undefined}
+                            onPointerLeave={event => { if (event.pointerType === "mouse") setEngaged(false); }}>
+                            <iframe ref={demo} src="/demo/landing" title="Kit’s space, with sample data" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" loading="lazy" />
+                            {/* The workspace's own loading shape, drawn by this page so it is
+                                there on first paint, until the frame has something to show. */}
+                            <div className={s.productPoster} aria-hidden="true" inert><WorkspaceLoading /></div>
+                            {!engaged && <div className={s.productShield} aria-hidden="true" onClick={() => setEngaged(true)}><span>Click to look around</span></div>}
+                        </div>
                     </div>
                 </div>
+                <div className={s.tries} role="group" aria-label="Show part of Kit’s space">
+                    {TRIES.map(one => (
+                        <button key={one.step} type="button" className={one.step === step ? s.tryOn : s.try}
+                            aria-pressed={one.step === step} onClick={() => go(one.step)}>
+                            <em>Try</em>{one.label}
+                        </button>
+                    ))}
+                    <a className={s.tryFull} href="/demo/landing" target="_blank" rel="noopener noreferrer">Open it full screen ↗</a>
+                </div>
             </div>
-            <div className={s.tourCopy} inert={!isGrown}>
-                <p className={s.tourEyebrow}>{mode === "exploring" ? "EXPLORE AT YOUR PACE" : "MEET YOUR TEAMMATE"}</p>
-                <ol className={s.beats}>{TOUR_STEPS.map((beat, index) => <li key={beat.name}>
-                    <button type="button" className={index === step ? s.beatOn : s.beat} aria-current={index === step ? "step" : undefined} onClick={() => goToStep(index)}>
-                        <span className={s.beatNumber}>0{index + 1}</span><span><b>{beat.name}</b><span>{beat.says}</span></span>
-                    </button>
-                </li>)}</ol>
-                <a className={s.tourSkip} href="/demo/landing" target="_blank" rel="noopener noreferrer">Open workspace full screen ↗</a>
-            </div>
-            <div className={s.knot}><CharacterPuppet character="loop" size={280} greeting={0} mood={near ? "delighted" : "idle"} label="Kit, your launch producer" /></div>
         </section>
-        <ol className={s.storySummary}>{TOUR_STEPS.map((beat, index) => <li key={beat.name}><button onClick={() => { goToStep(index); viewport.current?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" }); }} aria-label={`Show ${beat.name}`}><span>0{index + 1}</span><div><b>{beat.name}</b><p>{beat.says}</p></div></button></li>)}</ol>
-    </div>;
+    );
 }
