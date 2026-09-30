@@ -18,6 +18,7 @@ from app.modules.identity.infrastructure.mobile_number_claims import (
     acquire_mobile_number_claim_lock,
     get_other_mobile_number_owner_id,
 )
+from app.modules.identity.infrastructure.chat_account_policy import chat_account_clause
 from app.modules.identity.infrastructure.models import User
 from app.core.helpers.identifiers import normalize_mobile_digits
 
@@ -148,9 +149,7 @@ class UserRepository(UserRepositoryPort):
         stmt = select(User.id).where(
             User.mobile_number.isnot(None),
             func.regexp_replace(User.mobile_number, r"\D", "", "g").in_(digits),
-            User.is_active.is_(True),
-            User.is_deleted.is_(False),
-            User.is_verified.is_(True),
+            chat_account_clause(),
         )
         stmt = stmt.where(
             User.mobile_verified_at.isnot(None)
