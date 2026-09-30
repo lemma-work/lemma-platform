@@ -34,7 +34,7 @@ test("it speaks of the teammate by name, and names the category only where it is
             assert.doesNotMatch(said, /\bteammates?\b/i, stop.id + " should use the name: " + said);
         }
     }
-    assert.match(stops[0].title, /^Hazel is an AI teammate/);
+    assert.match(stops[0].title, /^Hazel is an AI teammate\. This is its space\.$/);
     assert.ok(stops.filter((stop) => (stop.title + stop.line).includes("Hazel")).length >= 5);
     assert.match(stops.find((stop) => stop.id === "rail")!.line, /Acme/);
 });

@@ -2,8 +2,8 @@
  *  each stop pointing at the real control on screen rather than a drawing of
  *  it, so what is learned is the app itself.
  *
- *  The words echo the landing page's beats (give it a job, let your people
- *  in, it builds what the job needs, reach it where you work) so somebody who
+ *  The words echo the landing page ("Hire an AI teammate. Give it a space.",
+ *  give it a job, let your people in, the tools the job needs) so somebody who
  *  arrives from there hears the same story told about their own screen. One
  *  sentence per stop: every extra one is a stop somebody skips.
  *
@@ -36,8 +36,8 @@ export function tourStops({ name, org }: { name: string; org: string }): Stop[] 
     return [
         {
             id: "welcome", target: null, area: "none", side: "center",
-            title: name + " is an AI teammate your whole team shares",
-            line: "Give it work in plain words; it builds what the job needs and keeps it here, where your team works too.",
+            title: name + " is an AI teammate. This is its space.",
+            line: "Give it work in a sentence; what it makes stays here, and everyone you let in works on it too.",
         },
         {
             id: "rail", target: "rail", area: "sidebar", side: "right",
@@ -62,7 +62,7 @@ export function tourStops({ name, org }: { name: string; org: string }): Stop[] 
         {
             id: "share", target: "share", area: "stage", side: "below",
             title: "Let your people in",
-            line: "Invite the people who need " + name + ", and choose what each of them can see.",
+            line: "Add the people " + name + " works with; each of them sees their part.",
         },
         {
             id: "about", target: "about", area: "sidebar", side: "right",

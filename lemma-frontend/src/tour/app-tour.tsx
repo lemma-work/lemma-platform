@@ -233,7 +233,11 @@ export function AppTour({ stops, onPrepare, onClose }: {
                         <CloseIcon size={15} />
                     </button>
                 )}
-                <h2 id="tour-title" className="tour__title">{stop.title}</h2>
+                <h2 id="tour-title" className="tour__title">
+                    {/* A sentence to a line, the way the landing's headline
+                        sets "Hire an AI teammate. Give it a space." */}
+                    {stop.title.split(/(?<=\.)\s+/).map((sentence) => <span key={sentence} className="tour__title-line">{sentence}</span>)}
+                </h2>
                 <p id="tour-line" className="tour__line">{stop.line}</p>
                 <div className="tour__foot">
                     {stop.id === "welcome" ? (

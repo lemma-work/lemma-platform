@@ -74,6 +74,9 @@
     padding-right: 0;
     font-size: var(--t-lead);
 }
+.tour__title-line {
+    display: block;
+}
 .tour__line {
     margin: 8px 0 0;
     font-size: 14px;
