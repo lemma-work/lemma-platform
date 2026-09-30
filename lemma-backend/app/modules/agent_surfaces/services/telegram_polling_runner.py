@@ -78,8 +78,10 @@ class TelegramPollingReceiverRunner:
                 "deleteWebhook",
                 {"drop_pending_updates": False},
             )
-            if self._candidate.surface_ids:
-                offset = await _load_telegram_offset(self._candidate.key)
+            # Every candidate, the shared system bot included: its key is a
+            # fingerprint of its own token like any other, and without a stored
+            # offset a restart re-reads whatever Telegram still holds.
+            offset = await _load_telegram_offset(self._candidate.key)
 
             while True:
                 try:
@@ -148,13 +150,12 @@ class TelegramPollingReceiverRunner:
         )
         if isinstance(update_id, int):
             offset = update_id + 1
-            if self._candidate.surface_ids:
-                # After the publish, not before. Stored first, a crash between
-                # the two meant the restart resumed past an update that had
-                # never been published, and nothing ever replayed it. Stored
-                # last, the same crash replays it and the durable inbox --
-                # keyed on the update id -- treats the second as a duplicate.
-                await _store_telegram_offset(self._candidate.key, offset)
+            # After the publish, not before. Stored first, a crash between the
+            # two meant the restart resumed past an update that had never been
+            # published, and nothing ever replayed it. Stored last, the same
+            # crash replays it and the durable inbox -- keyed on the update id
+            # -- treats the second as a duplicate.
+            await _store_telegram_offset(self._candidate.key, offset)
         return offset
 
     async def _recover(

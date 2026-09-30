@@ -20,6 +20,11 @@ export type ResourceKind = "table" | "file" | "app" | "workflow" | "agent" | "fu
  *  waiting for whoever adds the next one. */
 export const RESOURCE_KEY = "lemma_resource";
 
+/** The exact path of the file a conversation is attached to. The backend reads
+ *  that file into every run, so the agent starts with the doc in front of it
+ *  instead of spending a step to open it. */
+export const ATTACHED_FILE_KEY = "lemma_attached_file";
+
 /** What a resource is called in metadata.
  *
  *  Lowercased, because it is an identity rather than a label: a table looked up

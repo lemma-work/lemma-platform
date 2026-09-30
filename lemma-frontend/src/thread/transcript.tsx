@@ -126,6 +126,7 @@ function Reply({ teammate, seed, at, children }: { seed: string; teammate: Perso
 export function Transcript({
     turns,
     teammate,
+    speakerSeed,
     streaming,
     state,
     error,
@@ -150,6 +151,8 @@ export function Transcript({
 }: {
     turns: Turn[];
     teammate: Persona;
+    /** The seed the speaker's face is drawn from; the pod's own by default. */
+    speakerSeed?: string;
     streaming: Streaming | null;
     state: "idle" | "running" | "waiting" | "failed";
     error: string | null;
@@ -233,7 +236,7 @@ export function Transcript({
 
                 {display === "empty" && (
                     <div className="quiet">
-                        <Mark seed={podId} name={teammate.name} icon={teammate.iconUrl} size={44} greeting={1} />
+                        <Mark seed={speakerSeed ?? podId} name={teammate.name} icon={teammate.iconUrl} size={44} greeting={1} />
                         <h2>{emptyTitle}</h2>
                         <p>{emptyBody}</p>
                     </div>
@@ -270,7 +273,7 @@ export function Transcript({
 
                                 {(notes.length > 0 || turn.items.length > 0 || merging) && (
                                     <Reply
-                                        seed={podId}
+                                        seed={speakerSeed ?? podId}
                                         teammate={teammate}
                                         at={spoke?.kind === "text" ? spoke.at : undefined}
                                     >
@@ -353,7 +356,7 @@ export function Transcript({
                     })}
 
                     {live && mergeInto < 0 && streaming && (
-                        <Reply seed={podId} teammate={teammate}>
+                        <Reply seed={speakerSeed ?? podId} teammate={teammate}>
                             <Notes
                                 notes={liveNote(streaming)}
                                 live={!streaming.text}
@@ -369,7 +372,10 @@ export function Transcript({
                     )}
                 </div>
 
-                {state === "running" && !loading && !streaming?.text && (
+                {/* Only before the reply exists. Once it does, its own "Working"
+                    chip says this, and a second line under it saying it again,
+                    at a different indent, is the thread arguing with itself. */}
+                {state === "running" && !loading && !streaming && (
                     <div className="working">
                         <span className="working__dot" />
                         {teammate.name} is working…

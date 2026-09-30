@@ -50,9 +50,9 @@ pub struct AiProfile {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmailConfig {
-    /// `none`, `resend` or `smtp`. `none` keeps mail in the local spool the
-    /// backend writes to disk, which is what an install has before anyone
-    /// sets this up.
+    /// `none`, `resend` or `smtp`. `none` sends no mail at all -- the backend
+    /// says so where it would have promised one -- which is what an install
+    /// has before anyone sets this up.
     #[serde(default = "default_email_provider")]
     pub provider: String,
     #[serde(default)]

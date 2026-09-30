@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
+from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -113,6 +114,51 @@ async def say_privately(
         message=message,
         metadata=metadata,
     )
+
+
+#: What "done" sounds like. Both completion paths used to say nothing at all:
+#: the only sign of success was the replayed request coming back answered, and
+#: `replay_onboarding` has several raises that dead-letter after their retries
+#: -- so a failure there left somebody who had just proved their email with no
+#: acknowledgement and no answer, and nothing to tell that apart from being
+#: ignored. The confirmation is cheap and it is sent before the replay, so the
+#: flow is never silent even when the replay is.
+READY_MESSAGE = "You're all set. Picking up your message now."
+
+
+def ready_message(invited_pod_name: str | None = None) -> str:
+    """The confirmation, plus the one thing it never said.
+
+    An account made here has a single login method and it is passwordless.
+    Everything on the web that a person would reach for first -- a password,
+    "forgot password", Continue with Google -- is refused for exactly that
+    reason, and the only door that opens is a code sent to this same address.
+    Nobody was ever told that, so signing up on WhatsApp and then trying the
+    website looked like an account that did not work.
+
+    Composed rather than folded into `READY_MESSAGE` so the constant stays the
+    literal confirmation sentence that the recovery test matches on, and so the
+    URL is read when the message is sent rather than when the module is
+    imported.
+    """
+    joined = f"You were invited to {invited_pod_name}, and you're in it now.\n\n"
+    return (
+        f"{joined if invited_pod_name else ''}{READY_MESSAGE}\n\n"
+        f"To use Lemma on the web, go to {settings.frontend_url.rstrip('/')}/login "
+        "and enter this same email address. We'll send you a sign-in code -- "
+        "there's no password to remember."
+    )
+
+
+#: What somebody is told when signup could only go on to an email code this
+#: installation cannot send (Lemma Desktop, unless its owner set up email).
+#: Asking for an address that no code will ever reach is worse than saying so;
+#: the way in that does work is a profile number the bot can match.
+NO_EMAIL_SIGNUP_MESSAGE = (
+    "I don't recognise this number. If you have a Lemma account here, add this "
+    "number to your profile (Settings → Profile) and share your contact again. "
+    "Otherwise ask the person who runs this Lemma to invite you."
+)
 
 
 def initial_prompt_for(step: str) -> str:

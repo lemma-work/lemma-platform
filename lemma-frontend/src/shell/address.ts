@@ -1,4 +1,5 @@
 import type { Tab } from "@/data";
+import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
 
 /** The one segment every workspace URL hangs off. */
@@ -78,7 +79,18 @@ export function readAddress(pathname: string): Address {
             /* A third segment or nothing. `/conversation/a/b` names no
                conversation this app can open, so it names none at all. */
             return rest.length > 2 ? here(null) : here("conversation", { conversationId: at(1) });
+        /* A space's own lists. `apps` is the Apps list now; the old apps pane
+           it used to name is not reachable from anywhere in this app. */
+        case "home":
+        case "chats":
+        case "all":
+        case "pages":
         case "apps":
+        case "tables":
+        case "files":
+        case "workflows":
+        case "settings":
+            return rest.length > 1 ? here(null) : here("space:" + rest[0]);
         case "library":
         case "history":
         case "computer":
@@ -87,6 +99,12 @@ export function readAddress(pathname: string): Address {
             return rest.length > 2 ? here(null) : here("profile", { agentName: at(1) });
         case "table":
             return rest.length === 2 && rest[1] ? here("table:" + rest[1]) : here(null);
+        case "bot":
+            return rest.length === 2 && rest[1] ? here("bot:" + rest[1]) : here(null);
+        case "run":
+            return rest.length === 2 && rest[1] ? here("run:" + rest[1]) : here(null);
+        case "workflow":
+            return rest.length === 2 && rest[1] ? here("workflow:" + rest[1]) : here(null);
         case "app":
             return rest.length === 2 && rest[1] ? here("app:" + rest[1]) : here(null);
         case "record":
@@ -124,13 +142,17 @@ function tailOf(address: Address): string[] {
                 : ["conversation"];
         case "profile":
             return address.agentName ? ["profile", encodeURIComponent(address.agentName)] : ["profile"];
-        case "apps":
+        case "space":
+            return rest ? [rest] : [];
         case "library":
         case "history":
         case "computer":
             return [kind];
         case "table":
         case "app":
+        case "bot":
+        case "run":
+        case "workflow":
             return [kind, encodeURIComponent(rest)];
         case "record": {
             /* The row id may itself carry a colon, so the table name is taken
@@ -165,13 +187,25 @@ export function tabFromId(tabId: string): Tab | null {
     if (tabId === "history") return { id: "history", kind: "history", label: "History" };
     if (tabId === "computer") return { id: "computer", kind: "computer", label: "Computer" };
 
+    if (tabId.startsWith("workflow:")) {
+        const name = tabId.slice("workflow:".length);
+        return name ? { id: tabId, kind: "workflow", label: name, name } : null;
+    }
+    if (tabId.startsWith("run:")) {
+        const runId = tabId.slice("run:".length);
+        return runId ? { id: tabId, kind: "run", label: "Workflow run", runId } : null;
+    }
+    if (tabId.startsWith("bot:")) {
+        const name = tabId.slice("bot:".length);
+        return name ? { id: tabId, kind: "bot", label: readableName(name), name } : null;
+    }
     if (tabId.startsWith("table:")) {
         const name = tabId.slice("table:".length);
         return name ? { id: tabId, kind: "table", label: readableName(name), name } : null;
     }
     if (tabId.startsWith("file:")) {
         const path = tabId.slice("file:".length);
-        const label = path.split("/").filter(Boolean).pop() ?? path;
+        const label = docTitle(path);
         return path ? { id: tabId, kind: "file", label, path } : null;
     }
     if (tabId.startsWith("record:")) {
@@ -182,4 +216,19 @@ export function tabFromId(tabId: string): Tab | null {
         return { id: tabId, kind: "record", label: readableName(table) + " row", table, recordId: rest.slice(split + 1) };
     }
     return null;
+}
+
+/** Whether going from one address to the next is a move worth a Back.
+ *
+ *  A different space or a different view is. So is a different conversation
+ *  or bot profile — but only between two that both exist: a new chat getting
+ *  its id is the same place becoming nameable. And an address that named no
+ *  view (a bare `/t` or `/t/{pod}`) being filled in is the app answering, not
+ *  moving. */
+export function isNewPlace(from: Address, to: Address): boolean {
+    if (!from.podId || !from.tabId) return false;
+    if (from.podId !== to.podId) return true;
+    if (from.tabId !== to.tabId) return true;
+    if (from.conversationId && to.conversationId && from.conversationId !== to.conversationId) return true;
+    return Boolean(from.agentName && to.agentName && from.agentName !== to.agentName);
 }

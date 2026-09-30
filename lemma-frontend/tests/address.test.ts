@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NOWHERE, readAddress, tabFromId, writeAddress, type Address } from "../src/shell/address.ts";
+import { NOWHERE, isNewPlace, readAddress, tabFromId, writeAddress, type Address } from "../src/shell/address.ts";
 
 /** The grammar has one obligation above all the others: a URL this app wrote
  *  must be a URL this app can read back. Everything below either asserts that
@@ -19,7 +19,19 @@ const PLACES: [Address, string][] = [
     [at(null), "/t/" + POD],
     [at("conversation"), "/t/" + POD + "/conversation"],
     [at("conversation", { conversationId: "c_17" }), "/t/" + POD + "/conversation/c_17"],
-    [at("apps"), "/t/" + POD + "/apps"],
+    // A space's own lists. `/apps` is the Apps list.
+    [at("space:all"), "/t/" + POD + "/all"],
+    [at("space:pages"), "/t/" + POD + "/pages"],
+    [at("space:apps"), "/t/" + POD + "/apps"],
+    [at("space:tables"), "/t/" + POD + "/tables"],
+    [at("space:files"), "/t/" + POD + "/files"],
+    [at("bot:invoice_filer"), "/t/" + POD + "/bot/invoice_filer"],
+    [at("space:workflows"), "/t/" + POD + "/workflows"],
+    [at("space:home"), "/t/" + POD + "/home"],
+    [at("space:chats"), "/t/" + POD + "/chats"],
+    [at("run:run_42"), "/t/" + POD + "/run/run_42"],
+    [at("workflow:budget-sign-off"), "/t/" + POD + "/workflow/budget-sign-off"],
+    [at("space:settings"), "/t/" + POD + "/settings"],
     [at("library"), "/t/" + POD + "/library"],
     [at("history"), "/t/" + POD + "/history"],
     [at("computer"), "/t/" + POD + "/computer"],
@@ -124,7 +136,7 @@ test("a table, a file, a row, the history and the computer rebuild from the URL 
         id: "table:invoices", kind: "table", label: "Invoices", name: "invoices",
     });
     assert.deepEqual(tabFromId("file:/me/notes.md"), {
-        id: "file:/me/notes.md", kind: "file", label: "notes.md", path: "/me/notes.md",
+        id: "file:/me/notes.md", kind: "file", label: "Notes", path: "/me/notes.md",
     });
     assert.deepEqual(tabFromId("record:invoices:7"), {
         id: "record:invoices:7", kind: "record", label: "Invoices row", table: "invoices", recordId: "7",
@@ -136,7 +148,7 @@ test("the labels a rebuilt tab carries are the ones the shell would have given i
     // the same tab opened from a link and from the library is two tabs with
     // two names.
     assert.equal(tabFromId("table:launch_plan")?.label, "Launch Plan");
-    assert.equal(tabFromId("file:/a/b/report.pdf")?.label, "report.pdf");
+    assert.equal(tabFromId("file:/a/b/report.pdf")?.label, "Report");
     assert.equal(tabFromId("record:launch_plan:9")?.label, "Launch Plan row");
 });
 
@@ -155,4 +167,24 @@ test("a malformed id rebuilds nothing", () => {
     assert.equal(tabFromId("record:invoices"), null);
     assert.equal(tabFromId("record::7"), null);
     assert.equal(tabFromId("record:invoices:"), null);
+});
+
+const placeAt = (address: Partial<Address>) => readAddress(writeAddress({ ...NOWHERE, podId: POD, ...address }));
+
+test("a move to a different view is a place Back returns to", () => {
+    assert.equal(isNewPlace(placeAt({ tabId: "space:pages" }), placeAt({ tabId: "file:/pages/a.md" })), true);
+    assert.equal(isNewPlace(placeAt({ tabId: "space:home" }), placeAt({ tabId: "run:r1" })), true);
+});
+
+test("a move between two existing conversations is a place too", () => {
+    assert.equal(isNewPlace(placeAt({ tabId: "conversation", conversationId: "a" }), placeAt({ tabId: "conversation", conversationId: "b" })), true);
+});
+
+test("a new conversation getting its id replaces rather than pushes", () => {
+    assert.equal(isNewPlace(placeAt({ tabId: "conversation" }), placeAt({ tabId: "conversation", conversationId: "b" })), false);
+});
+
+test("a bare space address filled in with the restored view replaces", () => {
+    assert.equal(isNewPlace(readAddress("/t/" + POD), placeAt({ tabId: "space:home" })), false);
+    assert.equal(isNewPlace(readAddress("/t"), placeAt({ tabId: "space:home" })), false);
 });

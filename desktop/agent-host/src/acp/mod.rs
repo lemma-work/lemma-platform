@@ -29,6 +29,7 @@ use crate::adapters::ResolvedAdapter;
 use crate::permissions::{AlwaysAllowOffer, AlwaysAllowScope, PermissionDecision, PermissionGate};
 use crate::protocol::{ConfigOption, EventType, JsonMap, RunSpec, RunState};
 
+mod claude_settings;
 mod driver;
 mod options;
 mod outcome;
@@ -39,6 +40,7 @@ mod session_setup;
 mod steering;
 mod supervision;
 
+pub(crate) use claude_settings::{claude_config_dir, claude_sign_in};
 pub use driver::*;
 pub(crate) use options::*;
 pub use outcome::*;

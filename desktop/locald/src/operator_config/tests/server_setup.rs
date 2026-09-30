@@ -173,7 +173,7 @@ fn email(provider: &str) -> Value {
 }
 
 #[test]
-fn mail_stays_in_the_local_spool_until_it_is_set_up() {
+fn no_mail_server_is_named_until_one_is_set_up() {
     let (_root, store) = store_with(Default::default(), Default::default(), Default::default());
     let snapshot = store.snapshot().unwrap();
     assert_eq!(snapshot["config"]["email"]["provider"], "none");

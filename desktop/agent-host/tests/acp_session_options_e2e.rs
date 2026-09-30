@@ -4,15 +4,17 @@
 //! is sent and the environment it was started in. The switches themselves are
 //! verified against each adapter's source in `acp::session_options`; this holds
 //! the host to delivering them: Claude Code's in the session's `_meta` (on a
-//! new session and a resumed one alike), Codex's and `OpenCode`'s in the
-//! process environment, and nothing of the kind when the person chose the
-//! agent's own skills and settings.
+//! new session and a resumed one alike), and nothing of the kind when the
+//! person chose Claude Code's own skills and settings. Codex and `OpenCode`
+//! get no personal-setup switches at all, only Lemma's web-tool overrides.
+//! Every agent still has Lemma's MCP server, sign-in and instructions.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
 use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use lemma_agent_host::adapters::{AdapterSpec, ResolvedAdapter};
 use lemma_agent_host::permissions::PermissionGate;
@@ -229,7 +231,7 @@ async fn claude_code_with_its_own_settings_keeps_them() {
 }
 
 #[tokio::test]
-async fn codex_gets_its_switches_merged_into_the_pinned_config() {
+async fn codex_keeps_the_persons_setup_and_the_pinned_config() {
     let directory = TempDir::new().unwrap();
     let log = directory.path().join("codex.jsonl");
     let pinned = BTreeMap::from([(
@@ -256,47 +258,36 @@ async fn codex_gets_its_switches_merged_into_the_pinned_config() {
         json!(false),
         "the pinned adapter's own overrides are kept"
     );
-    assert_eq!(config["features"]["hooks"], json!(false));
+    // Nothing of the person's own setup is switched off.
+    assert!(config.get("features").is_none(), "{config}");
+    assert!(config.get("skills").is_none(), "{config}");
     assert_eq!(config["web_search"], json!("disabled"));
     // Codex's own prompt carries the instructions, as before.
     assert!(prompts(&traffic)[0].contains("You are Lemma's agent."));
 }
 
+/// `OpenCode` loads the person's own skills and config whichever way the
+/// own-settings switch is set: only Claude Code reads it.
 #[tokio::test]
-async fn opencode_is_started_with_its_own_skills_left_out() {
+async fn opencode_keeps_the_persons_own_setup_either_way() {
     let directory = TempDir::new().unwrap();
-    let log = directory.path().join("opencode.jsonl");
-    let run = request(
-        adapter("opencode", &log, BTreeMap::new()),
-        directory.path().join("cwd"),
-        false,
-        Value::Null,
-    );
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
-
-    let traffic = read_traffic(&log);
-    let environment = recorded_environment(&traffic);
-    assert_eq!(environment["OPENCODE_DISABLE_EXTERNAL_SKILLS"], json!("1"));
-    assert_eq!(environment["OPENCODE_DISABLE_CLAUDE_CODE"], json!("1"));
-    let overlay: Value =
-        serde_json::from_str(environment["OPENCODE_CONFIG_CONTENT"].as_str().unwrap()).unwrap();
-    assert_eq!(overlay["permission"]["skill"], json!("deny"));
-
-    // And with its own settings, exactly as before.
-    let own = directory.path().join("own.jsonl");
-    let run = request(
-        adapter("opencode", &own, BTreeMap::new()),
-        directory.path().join("cwd-own"),
-        true,
-        Value::Null,
-    );
-    AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
-    let traffic = read_traffic(&own);
-    let environment = recorded_environment(&traffic);
-    assert!(
-        !environment.keys().any(|name| name.starts_with("OPENCODE_")),
-        "{environment:?}"
-    );
+    for own in [false, true] {
+        let log = directory.path().join(format!("opencode-{own}.jsonl"));
+        let run = request(
+            adapter("opencode", &log, BTreeMap::new()),
+            directory.path().join(format!("cwd-{own}")),
+            own,
+            Value::Null,
+        );
+        AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+        let traffic = read_traffic(&log);
+        let environment = recorded_environment(&traffic);
+        assert!(
+            !environment.keys().any(|name| name.starts_with("OPENCODE_")),
+            "own_settings={own}: {environment:?}"
+        );
+        assert!(prompts(&traffic)[0].contains("You are Lemma's agent."));
+    }
 }
 
 /// Lemma's own `lemma`, when the run names one this Mac accepts, is the one
@@ -333,4 +324,79 @@ async fn lemmas_cli_goes_first_on_the_agents_path() {
     assert_eq!(first, std::fs::canonicalize(&cli).unwrap().join("bin"));
     // Behind it, the adapter's own wiring, which is how the agent is found.
     assert!(std::env::split_paths(&path).count() > 1, "{path}");
+}
+
+/// What each agent's run is given when the person has not chosen their own
+/// setup: Lemma's MCP server, Lemma's sign-in and Lemma's instructions. Codex
+/// and `OpenCode` stay in the person's own config folders, as they are.
+#[tokio::test]
+async fn each_agent_keeps_lemmas_server_sign_in_and_instructions() {
+    let directory = TempDir::new().unwrap();
+    let lemma = BTreeMap::from([
+        ("LEMMA_TOKEN".to_owned(), "run-token".to_owned()),
+        ("LEMMA_BASE_URL".to_owned(), "http://127.0.0.1:1".to_owned()),
+    ]);
+
+    for agent in ["codex", "claude-code", "opencode"] {
+        let log = directory.path().join(format!("{agent}.jsonl"));
+        let mut run = request(
+            adapter(agent, &log, BTreeMap::new()),
+            directory.path().join(format!("cwd-{agent}")),
+            false,
+            Value::Null,
+        );
+        run.agent_environment.clone_from(&lemma);
+        run.mcp_server = Some(McpServer::Stdio(McpServerStdio::new(
+            "lemma",
+            PathBuf::from("lemma-agent-host"),
+        )));
+        AcpDriver.run(run, Arc::new(Quiet)).await.unwrap();
+
+        let traffic = read_traffic(&log);
+        let environment = recorded_environment(&traffic);
+        assert_eq!(environment["LEMMA_TOKEN"], json!("run-token"), "{agent}");
+        assert_eq!(
+            environment["LEMMA_BASE_URL"],
+            json!("http://127.0.0.1:1"),
+            "{agent}"
+        );
+        let session = sessions(&traffic)[0];
+        let servers = session["params"]["mcpServers"].as_array().unwrap();
+        assert!(
+            servers.iter().any(|server| server["name"] == "lemma"),
+            "{agent}: {session}"
+        );
+
+        if agent == "claude-code" {
+            let meta = &session["params"]["_meta"];
+            assert_eq!(
+                meta["systemPrompt"],
+                json!({ "append": "You are Lemma's agent." })
+            );
+            let options = &meta["claudeCode"]["options"];
+            assert_eq!(options["settingSources"], json!(["project", "local"]));
+            assert_eq!(options["strictMcpConfig"], json!(true));
+            assert_eq!(options["plugins"], json!([]));
+        } else {
+            // The person's own config folder, with Lemma's instructions on top.
+            for folder in ["CODEX_HOME", "XDG_CONFIG_HOME"] {
+                assert_eq!(
+                    environment.get(folder).and_then(Value::as_str),
+                    std::env::var(folder).ok().as_deref(),
+                    "{agent}: {folder} is the host's own"
+                );
+            }
+            assert!(
+                prompts(&traffic)[0].contains("You are Lemma's agent."),
+                "{agent}: {traffic:?}"
+            );
+            // And none of the switches that would hide the person's setup.
+            assert!(
+                !environment
+                    .keys()
+                    .any(|name| name.starts_with("OPENCODE_") || name == "CODEX_CONFIG"),
+                "{agent}: {environment:?}"
+            );
+        }
+    }
 }

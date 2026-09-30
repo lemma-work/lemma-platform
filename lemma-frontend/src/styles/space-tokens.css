@@ -1,0 +1,138 @@
+/* The app's appearance: ChatGPT Space's restraint on Lemma's structure.
+
+   Loaded last so it wins over `tokens.css` and every `accents.css` palette.
+   The selectors carry `[data-accent]` because the appearance script always
+   sets one; at equal specificity the later file wins.
+
+   The ground is screen white, not paper. Neutrals are true greys, one accent
+   is near-black ink for primary actions, and depth is a hairline plus a soft
+   shadow rather than a stack of lit edges. Teammate marks keep their own
+   colours: identity still does not move with the theme. */
+:root,
+:root[data-accent] {
+    --paper: #ffffff;
+    --canvas: #ffffff;
+    --chrome: #f9f9f9;
+    --wash-a: #f4f4f4;
+    --wash-b: #fafafa;
+    --ink: #0d0d0d;
+    --ink-2: #5d5d5d;
+    --ink-3: #8f8f8f;
+    --line: rgb(0 0 0 / 0.06);
+    --line-2: rgb(0 0 0 / 0.10);
+    --accent: #0d0d0d;
+    --on-accent: #ffffff;
+    --brand: #0d0d0d;
+    --accent-soft: rgb(0 0 0 / 0.05);
+    --accent-line: rgb(0 0 0 / 0.14);
+    --info: #0169cc;
+    --select: rgb(1 105 204 / 0.16);
+    --bubble: #f4f4f4;
+
+    --ui: var(--font-ui, "Inter"), ui-sans-serif, -apple-system, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+    --serif: var(--ui);
+
+    --depth-well: inset 0 0 0 1px rgb(0 0 0 / 0.08);
+    --depth-rest: 0 0 0 1px rgb(0 0 0 / 0.06), 0 1px 2px rgb(0 0 0 / 0.04);
+    --depth-raise: 0 0 0 1px rgb(0 0 0 / 0.06), 0 8px 24px rgb(0 0 0 / 0.08), 0 2px 6px rgb(0 0 0 / 0.04);
+    --edge-lit: inset 0 0 0 0 transparent;
+    --edge-dark: inset 0 0 0 0 transparent;
+    --shadow-object: 0 0 0 1px rgb(0 0 0 / 0.06), 0 6px 16px rgb(0 0 0 / 0.06);
+
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-xl: 24px;
+
+    --side-w: 260px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]),
+    :root:not([data-theme="light"])[data-accent] {
+        --paper: #212121;
+        --canvas: #212121;
+        --chrome: #181818;
+        --wash-a: #2f2f2f;
+        --wash-b: #262626;
+        --ink: #ececec;
+        --ink-2: #b4b4b4;
+        --ink-3: #8f8f8f;
+        --line: rgb(255 255 255 / 0.07);
+        --line-2: rgb(255 255 255 / 0.12);
+        --accent: #ececec;
+        --on-accent: #0d0d0d;
+        --brand: #ececec;
+        --accent-soft: rgb(255 255 255 / 0.07);
+        --accent-line: rgb(255 255 255 / 0.18);
+        --info: #48aaff;
+        --select: rgb(72 170 255 / 0.24);
+        --bubble: #303030;
+        --depth-well: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+        --depth-rest: 0 0 0 1px rgb(255 255 255 / 0.07);
+        --depth-raise: 0 0 0 1px rgb(255 255 255 / 0.08), 0 8px 24px rgb(0 0 0 / 0.4);
+        --shadow-object: 0 0 0 1px rgb(255 255 255 / 0.07), 0 6px 16px rgb(0 0 0 / 0.35);
+    }
+}
+
+:root[data-theme="dark"],
+:root[data-theme="dark"][data-accent] {
+    --paper: #212121;
+    --canvas: #212121;
+    --chrome: #181818;
+    --wash-a: #2f2f2f;
+    --wash-b: #262626;
+    --ink: #ececec;
+    --ink-2: #b4b4b4;
+    --ink-3: #8f8f8f;
+    --line: rgb(255 255 255 / 0.07);
+    --line-2: rgb(255 255 255 / 0.12);
+    --accent: #ececec;
+    --on-accent: #0d0d0d;
+    --brand: #ececec;
+    --accent-soft: rgb(255 255 255 / 0.07);
+    --accent-line: rgb(255 255 255 / 0.18);
+    --info: #48aaff;
+    --select: rgb(72 170 255 / 0.24);
+    --bubble: #303030;
+    --depth-well: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+    --depth-rest: 0 0 0 1px rgb(255 255 255 / 0.07);
+    --depth-raise: 0 0 0 1px rgb(255 255 255 / 0.08), 0 8px 24px rgb(0 0 0 / 0.4);
+    --shadow-object: 0 0 0 1px rgb(255 255 255 / 0.07), 0 6px 16px rgb(0 0 0 / 0.35);
+}
+
+/* Named here so the rules in space.css never carry a literal colour. */
+:root,
+:root[data-accent] {
+    /* How a run, a step or a schedule is doing — the status palette, not a
+       second one. */
+    --tone-good: var(--ok);
+    --tone-bad: var(--bad);
+    --tone-waiting: var(--warn);
+    --tone-going: var(--info);
+    --tone-gone: var(--ink-3);
+    /* The three dots of the mark: identity, which does not move with the theme. */
+    --brand-dot-1: #e85ad8;
+    --brand-dot-2: #2ed3e6;
+    --brand-dot-3: #1a73ff;
+    /* What kind of thing a row is, at a glance. */
+    --glyph-page: #1a73ff;
+    --glyph-app: #9b51e0;
+    --glyph-table: #12a150;
+    --glyph-file: #e85ad8;
+    /* A table that filters rows per person. */
+    --rls-ink: #0f7a3d;
+    /* Something live: a computer awake, a browser in use. */
+    --live: #12a150;
+    /* The sandbox screen is a device, dark in both appearances. */
+    --screen-ground: #0e0f12;
+    --screen-ink: #ffffff;
+}
+:root[data-theme="dark"] {
+    --rls-ink: #6ecf9c;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --rls-ink: #6ecf9c;
+    }
+}

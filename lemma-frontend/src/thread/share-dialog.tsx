@@ -70,15 +70,19 @@ export function ShareDialog({
     path,
     name,
     appUrl,
+    startWith = "pod",
     onClose,
 }: {
     podId: string;
     path: string;
     name: string;
     appUrl?: string;
+    /** Which answer is already chosen: a sheet that asked "Create a public
+       link" has had that question answered. */
+    startWith?: "pod" | "anyone";
     onClose: () => void;
 }) {
-    const [audience, setAudience] = useState<"pod" | "anyone">("pod");
+    const [audience, setAudience] = useState<"pod" | "anyone">(startWith);
     const [life, setLife] = useState(10800);
     const [opens, setOpens] = useState(50);
     const [link, setLink] = useState<SharedLink | null>(null);

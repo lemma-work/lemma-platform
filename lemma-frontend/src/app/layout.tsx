@@ -1,5 +1,5 @@
 import Script from 'next/script';
-import { DM_Mono, Newsreader, Schibsted_Grotesk } from "next/font/google";
+import { DM_Mono, Inter, Newsreader } from "next/font/google";
 import "@/styles/site.css";
 import { Analytics } from "@/site/analytics";
 import { publicSiteUrl } from "@/site/seo/site-url";
@@ -18,6 +18,9 @@ import "@/styles/workflows.css";
 import "@/styles/computer.css";
 import "@/styles/tool-cards.css";
 import "@/styles/document.css";
+import "@/styles/space-tokens.css";
+import "@/styles/space.css";
+import "@/styles/space-mobile.css";
 
 export const metadata: Metadata = { metadataBase: new URL(publicSiteUrl()), title: {default: 'Lemma', template: '%s | Lemma'}, description: 'Your teammates and the work they are doing.', manifest: '/manifest.webmanifest', alternates: {types: {'application/rss+xml':'/feed.xml'}} };
 
@@ -36,7 +39,7 @@ const themeScript = `(function(){try{var d=document.documentElement,s=localStora
    are the ones the link asked for; `--font-*` is what `tokens.css` and the
    page stylesheets name, because `next/font` gives each face a family name of
    its own rather than the one people know it by. */
-const ui = Schibsted_Grotesk({ subsets: ["latin"], style: ["normal", "italic"], weight: "variable", variable: "--font-ui", display: "swap" });
+const ui = Inter({ subsets: ["latin"], style: ["normal", "italic"], weight: "variable", variable: "--font-ui", display: "swap" });
 const serif = Newsreader({ subsets: ["latin"], style: ["normal", "italic"], weight: "variable", axes: ["opsz"], variable: "--font-serif", display: "swap" });
 const mono = DM_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono", display: "swap" });
 

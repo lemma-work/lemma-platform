@@ -74,6 +74,14 @@ const SHOUTED = new Set([
     "uuid", "eta", "poc", "roi", "saas", "b2b", "b2c", "cta", "kpi", "okr",
 ]);
 
+/** A word that is an acronym, in capitals; null when it is an ordinary word. */
+export function asAcronym(word: string): string | null {
+    const lower = word.toLowerCase();
+    if (SHOUTED.has(lower)) return lower.toUpperCase();
+    if (lower.length <= 4 && !/[aeiouy]/.test(lower) && /^[a-z]+$/.test(lower)) return lower.toUpperCase();
+    return null;
+}
+
 export function readableName(name: string): string {
     const words = String(name ?? "").split(/[_\-\s]+/).filter(Boolean);
     if (words.length === 0) return String(name ?? "");

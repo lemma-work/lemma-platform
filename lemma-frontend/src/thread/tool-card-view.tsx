@@ -27,6 +27,7 @@ import { source } from "@/data";
 import { live } from "@/usage/queries";
 import { Modal } from "@/shell/modal";
 import { SignInPane } from "@/computer/sign-in-pane";
+import { requestSignIn } from "@/computer/sign-in-bridge";
 import { useConversationDirectory, useFileBody } from "@/computer/queries";
 import { clockOf } from "./turns";
 import {
@@ -913,7 +914,9 @@ function SignInCard({ ask, conversationId, toolCallId }: { ask: SignInAsk; conve
                                 <p className="toolcard__fine">
                                     Sign in to {ask.host} in the browser on your computer.
                                 </p>
-                                <button className="btn btn--primary toolcard__go" onClick={() => setSigningIn(true)}>
+                                <button className="btn btn--primary toolcard__go" onClick={() => {
+                                    if (!requestSignIn({ conversationId: conversationId!, toolCallId: toolCallId!, host: ask.host })) setSigningIn(true);
+                                }}>
                                     Sign in to {ask.host}
                                 </button>
                             </>

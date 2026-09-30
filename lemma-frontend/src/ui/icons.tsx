@@ -29,6 +29,8 @@ export {
     Trash as DeleteIcon, ArrowsLeftRight as MoveIcon,
     // A password field's reveal toggle: the open eye shows it, the struck one hides it.
     Eye as ShowIcon, EyeSlash as HideIcon,
+    // The space's home, and the presentation starter on it.
+    House as HomeIcon, PresentationChart as SlidesIcon, Play as PlayIcon,
 } from "@phosphor-icons/react";
 
 export function LemmaLogo({ compact = false }: { compact?: boolean }) {
