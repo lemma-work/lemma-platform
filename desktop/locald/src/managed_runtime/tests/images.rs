@@ -267,17 +267,25 @@ fn record(
     record
 }
 
-/// Someone who has never fetched a sandbox image is never sent one unasked.
+/// A fresh install fetches its sandbox images on its first start, once.
 ///
-/// A person using only the coding agents has no pod workload to sandbox;
-/// fetching on their start is the several hundred megabytes that
-/// `announce_sandbox_images` exists to not spend.
+/// Nearly every conversation needs the sandbox -- the browser a coding agent
+/// drives runs there too -- so the download starts behind the workspace
+/// rather than at the first Wake up. An unreadable record reads as never
+/// fetched, and still fetches only once.
 #[test]
-fn a_computer_that_never_fetched_the_images_is_not_sent_them() {
+fn a_fresh_install_fetches_its_images_on_first_start_once() {
     let (_root, controller) = test_controller();
 
-    assert!(!controller.claim_unasked_sandbox_image_fetch());
+    assert!(controller.claim_unasked_sandbox_image_fetch());
+    assert!(
+        !controller.claim_unasked_sandbox_image_fetch(),
+        "a second start of the same release fetched again"
+    );
+
+    let (_root, controller) = test_controller();
     fs::write(&controller.prepared_images, b"not json").unwrap();
+    assert!(controller.claim_unasked_sandbox_image_fetch());
     assert!(!controller.claim_unasked_sandbox_image_fetch());
 }
 

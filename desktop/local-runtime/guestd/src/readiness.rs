@@ -92,8 +92,8 @@ pub(crate) fn callback_failure_message(last_error: Option<&str>, guest_egress_ok
     let egress = if guest_egress_ok {
         "the guest's own network is working, so this is the route back to this computer"
     } else {
-        "the guest cannot resolve names either, so its network is unavailable rather than \
-         just this route"
+        "the guest cannot look up names (DNS) either, so its network is unavailable rather \
+         than just this route; a VPN or DNS filter on this computer is a common cause"
     };
     format!("sandbox cannot reach the Lemma API callback: {cause}. {egress}.")
 }
