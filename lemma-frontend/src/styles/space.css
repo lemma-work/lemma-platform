@@ -385,7 +385,7 @@
     padding: 2px 6px;
     margin: 0 -6px;
     border: 0;
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
     background: none;
     color: var(--ink-3);
     font: inherit;
@@ -435,7 +435,7 @@
 }
 .snav__bot .mark,
 .snav__space .mark {
-    border-radius: 7px;
+    border-radius: calc(var(--r-sm) - 1px);
 }
 
 /* ── All, and each kind on its own ──────────────────────────────────── */
@@ -580,7 +580,7 @@
     width: 40px;
     height: 40px;
     flex: none;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     box-shadow: inset 0 0 0 1px var(--line-2);
     color: var(--glyph-page);
 }
@@ -636,7 +636,7 @@
     display: inline-grid;
     place-items: center;
     flex: none;
-    border-radius: 7px;
+    border-radius: calc(var(--r-sm) - 1px);
     font-weight: 500;
     line-height: 1;
     object-fit: cover;
@@ -804,7 +804,7 @@
     height: min(620px, calc(100% - 32px));
     display: flex;
     flex-direction: column;
-    border-radius: 22px;
+    border-radius: calc(var(--r-xl) - 2px);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2), 0 24px 60px rgb(0 0 0 / 0.10), 0 4px 14px rgb(0 0 0 / 0.05);
     overflow: hidden;
@@ -965,7 +965,7 @@
     align-items: center;
     row-gap: 2px;
     padding: 10px 8px 6px;
-    border-radius: 18px;
+    border-radius: calc(var(--r-lg) + 2px);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2), 0 1px 3px rgb(0 0 0 / 0.04);
 }
@@ -982,8 +982,8 @@
     margin-right: auto;
 }
 .fchat .composer__send {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
 }
 .fchat .composer__send:disabled {
     background: var(--line-2);
@@ -1036,8 +1036,8 @@
     padding: 0 16px;
     border: 0;
     border-radius: 999px;
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
     font: inherit;
     font-size: 13.5px;
     cursor: pointer;
@@ -1216,7 +1216,7 @@
     align-items: center;
     gap: 6px;
     padding: 8px 8px 8px 12px;
-    border-radius: 12px;
+    border-radius: var(--r-md);
     background: var(--wash-b);
 }
 .ssheet__live-text {
@@ -1267,8 +1267,8 @@
     color: var(--ink);
 }
 .ssheet__done {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
 }
 
 /* Beside a list, a doc is a narrower column: less air around it. */
@@ -1345,7 +1345,7 @@
 }
 .main {
     margin: 8px 8px 8px 0;
-    border-radius: 16px;
+    border-radius: var(--r-lg);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgb(0 0 0 / 0.03);
     overflow: hidden;
@@ -1460,14 +1460,14 @@ samp,
     padding: 8px 24px 20px;
 }
 .split .composer__box {
-    border-radius: 26px;
+    border-radius: calc(var(--r-xl) + 2px);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
 }
 .split .composer__send,
 .fchat .composer__send {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
 }
 .split .composer__send:disabled {
     background: var(--line-2);
@@ -1491,7 +1491,7 @@ samp,
 }
 .msg--you .msg__body {
     background: var(--bubble);
-    border-radius: 22px;
+    border-radius: calc(var(--r-xl) - 2px);
     padding: 10px 18px;
     font-size: 15.5px;
     line-height: 1.55;
@@ -1525,8 +1525,12 @@ samp,
 }
 
 /* Chats in the sidebar: one line, no glyph, the way ChatGPT lists them. */
+/* A chat has no icon, but its title starts where the places' names do —
+   past the icon column (row inset 10 + icon 18 + gap 10) — so the sidebar
+   has one edge for words and one for glyphs, not a title under every icon. */
 .snav__chat {
     height: 34px;
+    padding-left: 38px;
     color: var(--ink);
 }
 .snav__chat span {
@@ -1611,7 +1615,7 @@ samp,
     height: 20px;
     margin-left: 8px;
     padding: 0 7px;
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
     background: rgb(18 161 80 / 0.10);
     color: var(--rls-ink);
     font: 500 11px var(--ui);
@@ -2024,8 +2028,8 @@ samp,
     color: var(--ink);
 }
 .sbar__primary {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
 }
 .sbar__quiet:disabled,
 .sbar__primary:disabled {
@@ -2112,7 +2116,7 @@ samp,
     padding: 24px 24px 16px;
 }
 .botview__head .mark {
-    border-radius: 12px;
+    border-radius: var(--r-md);
 }
 .botview__who {
     min-width: 0;
@@ -2168,12 +2172,12 @@ samp,
     padding: 8px 24px 20px;
 }
 .botview__thread .composer__box {
-    border-radius: 26px;
+    border-radius: calc(var(--r-xl) + 2px);
     box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
 }
 .botview__thread .composer__send {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
 }
 .botview__thread .composer__send:disabled {
     background: var(--line-2);
@@ -2379,8 +2383,8 @@ samp,
     padding: 0 18px;
     border: 0;
     border-radius: 999px;
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
     font: inherit;
     font-size: 14px;
     cursor: pointer;
@@ -2420,7 +2424,7 @@ samp,
     margin: -18px 0 24px;
 }
 .snav__mate .mark {
-    border-radius: 7px;
+    border-radius: calc(var(--r-sm) - 1px);
 }
 
 /* Settings, tightened: a smaller title, a narrower list, the section
@@ -2636,7 +2640,7 @@ samp,
     padding: 8px 24px 24px;
 }
 .home__chat .composer__box {
-    border-radius: 26px;
+    border-radius: calc(var(--r-xl) + 2px);
     box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
 }
 
@@ -3008,7 +3012,7 @@ samp,
 }
 .agentlist__row .mark {
     flex: none;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
 }
 .agentlist__row:hover .agentlist__title b {
     text-decoration: underline;
@@ -3093,7 +3097,7 @@ samp,
 }
 .agentpage__head > .mark {
     flex: none;
-    border-radius: 18px;
+    border-radius: calc(var(--r-lg) + 2px);
 }
 .agentpage__who {
     flex: 1;
@@ -3193,7 +3197,7 @@ samp,
     padding: 0;
 }
 .agentpage__ask .composer__box {
-    border-radius: 22px;
+    border-radius: calc(var(--r-xl) - 2px);
     box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
 }
 .agentpage__card {
@@ -3691,7 +3695,7 @@ samp,
     place-items: center;
     width: 28px;
     height: 28px;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     background: var(--wash-b);
     color: var(--ink-2);
 }
@@ -3815,7 +3819,7 @@ samp,
 }
 .rtree__arm-label code {
     padding: 1px 6px;
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
     background: var(--wash-b);
     font-size: 11.5px;
     color: var(--ink-2);
@@ -4100,7 +4104,7 @@ samp,
     place-items: center;
     width: 36px;
     height: 36px;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     background: color-mix(in srgb, var(--tone-going) 9%, var(--paper));
     color: var(--tone-going);
 }
@@ -4196,7 +4200,7 @@ samp,
 .wfpage__tile {
     width: 56px;
     height: 56px;
-    border-radius: 16px;
+    border-radius: var(--r-lg);
 }
 .wfpage__who {
     flex: 1;
@@ -4217,12 +4221,12 @@ samp,
     color: var(--ink-2);
 }
 .agentpage__btn--primary {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
     box-shadow: none;
 }
 .agentpage__btn--primary:hover {
-    background: color-mix(in srgb, var(--ink) 85%, transparent);
+    background: color-mix(in srgb, var(--accent) 85%, transparent);
 }
 .agentpage__btn:disabled {
     opacity: 0.45;
@@ -4326,7 +4330,7 @@ samp,
     height: 36px;
     padding: 0 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: var(--paper);
     color: var(--ink);
@@ -4464,7 +4468,7 @@ samp,
     max-width: 180px;
     padding: 0 8px;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: var(--paper);
     color: var(--ink);
@@ -4487,7 +4491,7 @@ samp,
     align-items: flex-end;
     gap: 8px;
     padding: 8px 8px 8px 18px;
-    border-radius: 24px;
+    border-radius: var(--r-xl);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
 }
@@ -4520,8 +4524,8 @@ samp,
     height: 36px;
     border: 0;
     border-radius: 50%;
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
     cursor: pointer;
 }
 .askbox__send:disabled {
@@ -4554,7 +4558,7 @@ samp,
     gap: 2px;
     min-height: 0;
     padding: 5px 5px 5px 6px;
-    border-radius: 22px;
+    border-radius: calc(var(--r-xl) - 2px);
 }
 .fchat .composer__input {
     order: 0;
@@ -4690,7 +4694,7 @@ samp,
     place-items: center;
     width: 32px;
     height: 32px;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     background: var(--wash-b);
     color: var(--ink-2);
 }
@@ -4744,7 +4748,7 @@ samp,
 }
 .writing-marker {
     padding: 2px 8px;
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
     background: var(--accent-soft);
     color: var(--ink-2);
     font-style: italic;
@@ -4759,7 +4763,7 @@ samp,
     max-height: 340px;
     overflow-y: auto;
     padding: 6px;
-    border-radius: 16px;
+    border-radius: var(--r-lg);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2), 0 16px 40px rgb(0 0 0 / 0.12);
 }
@@ -4775,7 +4779,7 @@ samp,
     width: 100%;
     padding: 7px 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     background: transparent;
     color: var(--ink);
     font: inherit;
@@ -4792,7 +4796,7 @@ samp,
     place-items: center;
     width: 26px;
     height: 26px;
-    border-radius: 7px;
+    border-radius: calc(var(--r-sm) - 1px);
     box-shadow: inset 0 0 0 1px var(--line-2);
     color: var(--ink-2);
 }
@@ -4851,8 +4855,8 @@ samp,
     padding: 0 14px;
     border: 0;
     border-radius: 999px;
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
     font: inherit;
     font-size: 13px;
     cursor: pointer;
@@ -4931,14 +4935,14 @@ samp,
     flex-direction: column;
     min-width: 180px;
     padding: 2px;
-    border-radius: 14px;
+    border-radius: calc(var(--r-lg) - 2px);
 }
 .seltool:has(.seltool__menu) {
-    border-radius: 16px;
+    border-radius: var(--r-lg);
 }
 .seltool__menu button {
     justify-content: flex-start;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
 }
 .seltool__menu button[aria-checked="true"] {
     background: var(--wash-b);
@@ -4958,7 +4962,7 @@ samp,
     width: 22px;
     height: 24px;
     border: 0;
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
     background: transparent;
     color: inherit;
     cursor: pointer;
@@ -4968,7 +4972,7 @@ samp,
     place-items: center;
     width: 18px;
     height: 24px;
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
     font-size: 12px;
     letter-spacing: -2px;
     cursor: grab;
@@ -5069,7 +5073,7 @@ samp,
 }
 .cthread {
     padding: 12px;
-    border-radius: 14px;
+    border-radius: calc(var(--r-lg) - 2px);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: var(--paper);
     cursor: pointer;
@@ -5193,7 +5197,7 @@ samp,
     min-height: 56px;
     padding: 8px 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: var(--paper);
     color: var(--ink);
@@ -5213,7 +5217,7 @@ samp,
     right: 0;
     top: 60px;
     padding: 4px;
-    border-radius: 12px;
+    border-radius: var(--r-md);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2), 0 10px 28px rgb(0 0 0 / 0.12);
 }
@@ -5224,7 +5228,7 @@ samp,
     width: 100%;
     padding: 6px 8px;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     background: transparent;
     color: var(--ink);
     font: inherit;
@@ -5394,7 +5398,7 @@ samp,
     place-items: center;
     width: 20px;
     height: 26px;
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
     font-size: 12px;
     letter-spacing: -2px;
     cursor: grab;
@@ -5448,8 +5452,8 @@ samp,
     padding: 0 14px;
     border: 0;
     border-radius: 999px;
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
     font: inherit;
     font-size: 13px;
     cursor: pointer;
@@ -5460,7 +5464,7 @@ samp,
     min-height: 180px;
     padding: 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: var(--wash-b);
     color: var(--ink);
@@ -5542,7 +5546,7 @@ samp,
     height: 32px;
     padding: 0 10px;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: var(--paper);
     color: var(--ink);
@@ -5587,7 +5591,7 @@ samp,
     max-width: 100%;
     padding: 0 8px;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     box-shadow: inset 0 0 0 1px var(--line-2);
     background: var(--paper);
     color: var(--ink);
@@ -5613,8 +5617,8 @@ samp,
     cursor: pointer;
 }
 .vbuild__chips button[aria-pressed="true"] {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
     box-shadow: none;
 }
 .vbuild__chips small {
@@ -5751,7 +5755,7 @@ samp,
     gap: 6px;
     margin: 10px 0 0;
     padding: 7px 10px;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     background: var(--wash-b);
     font-size: 12.5px;
     line-height: 1.4;
@@ -5832,7 +5836,7 @@ samp,
     min-height: 118px;
     padding: 16px;
     border: 0;
-    border-radius: 16px;
+    border-radius: var(--r-lg);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2), 0 2px 8px rgb(0 0 0 / 0.03);
     color: var(--ink);
@@ -5863,7 +5867,7 @@ samp,
     width: 34px;
     height: 34px;
     margin-bottom: 10px;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     background: var(--accent-soft);
     color: var(--accent);
 }
@@ -5890,7 +5894,7 @@ samp,
     min-width: 0;
     padding: 0;
     border: 0;
-    border-radius: 16px;
+    border-radius: var(--r-lg);
     background: var(--paper);
     box-shadow: 0 0 0 1px var(--line-2);
     color: var(--ink);
@@ -5954,7 +5958,7 @@ samp,
     margin: 18px 0;
     padding: 14px 18px;
     border: 0;
-    border-radius: 14px;
+    border-radius: calc(var(--r-lg) - 2px);
     background: var(--wash-b);
     color: var(--ink);
     font-style: normal;
@@ -6090,15 +6094,15 @@ samp,
     cursor: pointer;
 }
 .access__tools button[aria-selected="true"] {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
     box-shadow: none;
 }
 .access__card {
     display: grid;
     gap: 10px;
     padding: 14px;
-    border-radius: 14px;
+    border-radius: calc(var(--r-lg) - 2px);
     box-shadow: inset 0 0 0 1px var(--line-2);
 }
 .access__head {
@@ -6126,7 +6130,7 @@ samp,
 .access__text {
     margin: 0;
     padding: 12px;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     background: var(--wash-b);
     font: inherit;
     font-size: 13px;
@@ -6206,7 +6210,7 @@ samp,
     gap: 8px;
     margin: 0 0 16px;
     padding: 10px 12px;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     background: var(--wash-b);
     color: var(--ink);
     font-size: 13.5px;
@@ -6262,7 +6266,7 @@ samp,
     min-height: 40px;
     padding: 0;
     border: 0;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     justify-content: center;
 }
 .shell--collapsed .allowance--compact:hover {
@@ -6328,8 +6332,8 @@ samp,
     background: var(--line-2);
 }
 .trail__mark {
-    width: 26px;
-    height: 26px;
+    width: 24px;
+    height: 24px;
     fill: var(--brand-bars);
 }
 .trail__rule {
@@ -6346,17 +6350,21 @@ samp,
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     padding: 2px 0;
     scrollbar-width: none;
 }
 .trail__list::-webkit-scrollbar {
     display: none;
 }
+/* Only the alpha of a mask counts, so the ink token is just "opaque". */
+.trail__list--more {
+    mask-image: linear-gradient(to bottom, var(--ink) calc(100% - 28px), transparent);
+}
 .trail__mate {
     position: relative;
     width: 100%;
-    height: 46px;
+    height: 40px;
     flex: none;
     display: grid;
     place-items: center;
@@ -6364,6 +6372,13 @@ samp,
     border: 0;
     background: none;
     cursor: pointer;
+}
+.trail__slot {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
 }
 /* The bar at the rail's edge: a notch on hover, a stripe for the one open. */
 .trail__mate::before {
@@ -6382,47 +6397,47 @@ samp,
     height: 10px;
 }
 .trail__mate[aria-current="page"]::before {
-    height: 22px;
+    height: 20px;
 }
 .trail__mate .tface {
-    transition: transform 160ms var(--ease-out);
+    transition: transform 160ms var(--ease-out), opacity 160ms var(--ease-out);
 }
 .trail__mate:hover .tface {
     transform: translateY(-1px);
 }
-.trail__mate[aria-current="page"] .tface {
-    box-shadow: 0 0 0 2px var(--chrome), 0 0 0 3.5px var(--ink);
+/* The one open is the one in full colour; the rest step back until pointed
+   at. Only while one is open — zoomed out to every teammate, none is where
+   you are, so none recedes. The face fades and not the button, so a badge
+   saying one needs you keeps its full weight. */
+.trail__list:has([aria-current="page"]) .trail__mate:not([aria-current="page"]) .tface {
+    opacity: 0.5;
+}
+.trail__list:has([aria-current="page"]) .trail__mate:hover .tface,
+.trail__list:has([aria-current="page"]) .trail__mate:focus-visible .tface {
+    opacity: 1;
 }
 .trail__badge {
     position: absolute;
-    right: 9px;
-    bottom: 1px;
-    width: 12px;
-    height: 12px;
+    right: -3px;
+    bottom: -3px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     background: var(--warn);
     box-shadow: 0 0 0 2px var(--chrome);
 }
-.trail__add {
-    width: 40px;
-    height: 40px;
-    flex: none;
-    display: grid;
-    place-items: center;
-    margin-top: 2px;
-    border: 1.5px dashed var(--line-2);
-    border-radius: var(--r-md);
-    background: transparent;
-    color: var(--ink-2);
-    cursor: pointer;
+/* Hiring is one more slot in the same column, shaped like the faces but
+   empty: a quiet glyph until pointed at, not a filled tile that outweighs
+   the faces it follows. */
+.trail__plus {
+    border-radius: var(--r-face);
+    color: var(--ink-3);
 }
-.trail__add:hover {
-    background: var(--accent-soft);
+.trail__add:hover .trail__plus {
+    background: var(--wash-b);
     color: var(--ink);
 }
-.trail__add[aria-current="page"] {
-    border-style: solid;
-    border-color: var(--ink);
+.trail__add[aria-current="page"] .trail__plus {
     background: var(--line-2);
     color: var(--ink);
 }
@@ -6435,9 +6450,9 @@ samp,
     gap: 8px;
 }
 .trail .human-profile {
-    width: 40px;
-    height: 40px;
-    min-height: 40px;
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
     padding: 0;
     justify-content: center;
     border-radius: 50%;
@@ -6447,12 +6462,12 @@ samp,
     display: none;
 }
 .trail .allowance--compact {
-    width: 40px;
-    height: 40px;
-    min-height: 40px;
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
     padding: 0;
     border: 0;
-    border-radius: 10px;
+    border-radius: calc(var(--r-md) - 2px);
     justify-content: center;
 }
 /* Drawn over the page rather than inside the rail, which scrolls and would
@@ -6489,7 +6504,7 @@ samp,
     display: inline-grid;
     place-items: center;
     flex: none;
-    border-radius: 28%;
+    border-radius: var(--r-face);
     overflow: hidden;
 }
 /* An agent: its initial on a plain tile — not a face, because it is not
@@ -6498,7 +6513,7 @@ samp,
     display: inline-grid;
     place-items: center;
     flex: none;
-    border-radius: 28%;
+    border-radius: var(--r-face);
     background: var(--wash-a);
     box-shadow: inset 0 0 0 1px var(--line);
     color: var(--ink-2);
@@ -6511,7 +6526,8 @@ samp,
     min-width: 0;
     display: flex;
     flex-direction: column;
-    padding: 10px 8px 12px 0;
+    /* The rail's own top, so the name sits level with the mark beside it. */
+    padding: 12px 8px 12px 0;
     overflow: hidden;
 }
 /* Collapsed on a desk, the column is gone rather than squeezed — and out of
@@ -6525,15 +6541,15 @@ samp,
     align-items: center;
     gap: 2px;
     flex: none;
+    height: 40px;
 }
 .side__mate {
     flex: 1;
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 10px;
-    min-height: 52px;
-    padding: 6px 8px;
+    height: 36px;
+    padding: 0 10px;
     border: 0;
     border-radius: var(--r-md);
     background: transparent;
@@ -6548,24 +6564,12 @@ samp,
 .side__mate[aria-current="page"] {
     background: var(--line-2);
 }
-.side__mate-text {
-    display: flex;
-    flex-direction: column;
+.side__mate-name {
     min-width: 0;
-    line-height: 1.3;
-}
-.side__mate-text > span,
-.side__mate-text > small {
+    font-size: 15px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-.side__mate-text > span {
-    font-size: 15px;
-}
-.side__mate-text > small {
-    font-size: 12.5px;
-    color: var(--ink-3);
 }
 .side__head .sidebar-toggle {
     flex: none;
@@ -6574,8 +6578,28 @@ samp,
 .side__head .side__search {
     display: none;
 }
+/* Home lands level with the first face on the rail: the rail's mark (40),
+   the rule and its gaps (17) and the list's inset (2), less the difference
+   between a 36px row and a 40px face slot. At the foot, no inset of its own,
+   so Settings ends where the rail's avatar does and the two share a line.
+   The places get room to breathe; chats sit well below them, a list you
+   scan rather than a continuation of the places. */
 .side__space .snav {
-    padding: 10px 0 8px;
+    padding: 21px 0 0;
+    gap: 36px;
+}
+.side__space .snav__group {
+    gap: 2px;
+}
+/* The avatar's height, so the two share a centre as well as a floor. */
+.side__space .snav__foot .side__item {
+    height: 32px;
+}
+/* A section's name is a heading over the words, so it sits on the same edge
+   they do. */
+.side__space .snav__label {
+    padding: 0 10px 4px 38px;
+    font-size: 12.5px;
 }
 
 /* The breadcrumb climbs: organization, teammate, what is open. Not
@@ -6585,7 +6609,7 @@ samp,
     padding: 2px 6px;
     margin: 0 -6px;
     border: 0;
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
     background: none;
     color: var(--ink-3);
     font: inherit;
@@ -6603,7 +6627,7 @@ samp,
     min-width: 0;
 }
 .crumb .tface {
-    border-radius: 6px;
+    border-radius: calc(var(--r-sm) - 2px);
 }
 .crumb__search {
     width: 32px;
@@ -6625,8 +6649,8 @@ samp,
     flex: none;
 }
 .pill-button {
-    background: var(--ink);
-    color: var(--paper);
+    background: var(--accent);
+    color: var(--on-accent);
 }
 .pill-button:hover:not(:disabled) {
     opacity: 0.86;
@@ -6938,7 +6962,7 @@ samp,
     height: 24px;
     display: grid;
     place-items: center;
-    border-radius: 7px;
+    border-radius: calc(var(--r-sm) - 1px);
     background: var(--wash-a);
     color: var(--ink-2);
     font-size: 12px;
@@ -7092,7 +7116,7 @@ samp,
     flex: none;
     padding: 0;
     border: 0;
-    border-radius: 28%;
+    border-radius: var(--r-face);
     background: none;
     cursor: pointer;
 }

@@ -190,12 +190,13 @@
        still the right answer for a dialog, which really is above the page. */
     --shadow-object: 4px 10px 16px rgb(32 33 31 / 0.13), 1px 2px 4px rgb(32 33 31 / 0.08);
 
-    /* Corner scale — overridden by [data-corners]. */
-    --r-sm: 7px;
-    --r-md: 10px;
-    --r-lg: 14px;
-    --r-xl: 20px;
+    /* Corner scale — overridden by [data-corners]. These are Soft's. */
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-xl: 24px;
     --r-mark: 8px;
+    --r-face: 28%;
 
     --side-w: 176px;
     --gutter: 48px;

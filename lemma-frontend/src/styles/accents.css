@@ -470,20 +470,26 @@
     --r-lg: 4px;
     --r-xl: 6px;
     --r-mark: 3px;
+    --r-face: 14%;
 }
 
+/* Soft is the app as designed, and the default. */
 :root[data-corners="soft"] {
-    --r-sm: 7px;
-    --r-md: 10px;
-    --r-lg: 14px;
-    --r-xl: 20px;
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 16px;
+    --r-xl: 24px;
     --r-mark: 8px;
+    --r-face: 28%;
 }
 
+/* Round rounds a teammate's face further but stops short of a circle: a
+   circle is a person, and the rail holds both. */
 :root[data-corners="round"] {
-    --r-sm: 10px;
-    --r-md: 14px;
-    --r-lg: 20px;
-    --r-xl: 28px;
+    --r-sm: 12px;
+    --r-md: 16px;
+    --r-lg: 22px;
+    --r-xl: 30px;
     --r-mark: 9999px;
+    --r-face: 40%;
 }
