@@ -1,9 +1,9 @@
 import { key } from "@/session/storage";
 import { NEW_CONVERSATION } from "./types";
 import type { Conversation, FileContent, Invitation, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
-import { displayAgentName } from "./agent-names";
+import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
-import { agentChanges, agentRows, readAgentDetail, type AgentDraft } from "./agents";
+import { agentChanges, agentRows, answeringAs, readAgentDetail, type AgentDraft } from "./agents";
 import {
     createRequest,
     readRun,
@@ -101,12 +101,18 @@ const MEMBERS: Member[] = [
 /** Public links minted in the sample, so the share sheet can list them. */
 const SAMPLE_LINKS: { path: string; link: SharedLink }[] = [];
 
+/** What a sample pod's own agent answers as: the pod's name, as in live. */
+function samplePodName(podId: string): string | null {
+    return PODS.find((pod) => pod.id === podId)?.name ?? null;
+}
+
 const PODS: Pod[] = [
     {
         id: "marketing",
         orgId: "acme",
         name: "Marketing",
         iconUrl: "/teammates/loop-v1.png",
+        description: "Plans launches, drafts the announcements, and brings anything public to Priya first.",
         teammate: { name: "Marketing", initials: "MA", iconUrl: "/teammates/loop-v1.png" },
         subtitle: "with Priya and you",
         members: MEMBERS,
@@ -117,6 +123,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "Personal",
         iconUrl: "/teammates/pleat-v1.png",
+        description: "Keeps your notes, errands and reminders in one place.",
         teammate: { name: "Personal", initials: "PE", iconUrl: "/teammates/pleat-v1.png" },
         subtitle: "just you",
         members: MEMBERS,
@@ -127,6 +134,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "panini",
         iconUrl: "/teammates/frame-v1.png",
+        description: "Answers lunch orders from the team channel and keeps the tab.",
         teammate: { name: "panini", initials: "PA", iconUrl: "/teammates/frame-v1.png" },
         subtitle: "just you",
         members: MEMBERS,
@@ -137,6 +145,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "sidekick",
         iconUrl: "🖥️",
+        description: "Pairs on code: reads the repository, runs the checks, drafts the change.",
         teammate: { name: "sidekick", initials: "SI", iconUrl: "🖥️" },
         subtitle: "just you",
         members: MEMBERS,
@@ -147,6 +156,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "roundtable",
         iconUrl: "🪑",
+        description: "Runs the weekly review: collects updates, writes the notes, chases the actions.",
         teammate: { name: "roundtable", initials: "RO", iconUrl: "🪑" },
         subtitle: "just you",
         members: MEMBERS,
@@ -157,6 +167,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "Lemma Design",
         iconUrl: null,
+        description: "Keeps the design system, the brand kit and every screen that uses them.",
         teammate: { name: "Lemma Design", initials: "LE", iconUrl: null },
         subtitle: "just you",
         members: MEMBERS,
@@ -167,6 +178,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "lemma-motion",
         iconUrl: null,
+        description: "Cuts short product films from recordings and a brief.",
         teammate: { name: "lemma-motion", initials: "LE", iconUrl: null },
         subtitle: "just you",
         members: MEMBERS,
@@ -177,6 +189,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "Nachiketa",
         iconUrl: null,
+        description: "Researches a question until the sources agree, and says when they do not.",
         teammate: { name: "Nachiketa", initials: "NA", iconUrl: null },
         subtitle: "just you",
         members: MEMBERS,
@@ -187,6 +200,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "memory-bench",
         iconUrl: "💭",
+        description: "Scores how well memory holds up across long conversations.",
         teammate: { name: "memory-bench", initials: "ME", iconUrl: "💭" },
         subtitle: "just you",
         members: MEMBERS,
@@ -197,6 +211,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "launch-craft-library",
         iconUrl: null,
+        description: "Collects launch pages worth learning from, with notes on why.",
         teammate: { name: "launch-craft-library", initials: "LA", iconUrl: null },
         subtitle: "just you",
         members: MEMBERS,
@@ -207,6 +222,7 @@ const PODS: Pod[] = [
         orgId: "acme",
         name: "ap-desk",
         iconUrl: "💼",
+        description: "Files invoices against the right supplier and flags what does not match.",
         teammate: { name: "ap-desk", initials: "AP", iconUrl: "💼" },
         subtitle: "just you",
         members: MEMBERS,
@@ -2107,6 +2123,7 @@ export const fixtureSource: PodSource = {
             orgId,
             name,
             iconUrl: null,
+            ...(description?.trim() ? { description: description.trim() } : {}),
             teammate: { name, initials: name.slice(0, 2).toUpperCase(), iconUrl: null },
             subtitle: description?.trim() || "just you",
             members: [],
@@ -2161,6 +2178,14 @@ export const fixtureSource: PodSource = {
         const wore = pod.teammate.name === pod.name;
         pod.name = clean;
         if (wore) pod.teammate = { ...pod.teammate, name: clean, initials: clean.slice(0, 2).toUpperCase() };
+    },
+    async describePod(podId: string, description: string) {
+        await wait(220);
+        const pod = PODS.find((candidate) => candidate.id === podId);
+        if (!pod) return;
+        const clean = description.trim();
+        if (clean) pod.description = clean;
+        else delete pod.description;
     },
     async uploadIcon(file: File) {
         await wait(200);
@@ -2586,15 +2611,15 @@ export const fixtureSource: PodSource = {
             })),
         };
     },
-    async listAgents() {
+    async listAgents(podId: string) {
         await wait(70);
-        return agentRows({ items: AGENTS });
+        return answeringAs(agentRows({ items: AGENTS }), samplePodName(podId));
     },
-    async getAgent(_podId: string, name: string) {
+    async getAgent(podId: string, name: string) {
         await wait(60);
         const found = AGENTS.find((agent) => agent.name === name);
         if (!found) throw new Error("No agent called " + name + " here.");
-        return readAgentDetail(found);
+        return answeringAs([readAgentDetail(found)], samplePodName(podId))[0];
     },
     /* Real, in memory, for the same reason hiring is: an edit is the one part
        of this view with a dirty state, a validation path and a refusal in it,
@@ -2620,9 +2645,12 @@ export const fixtureSource: PodSource = {
        retry and create each have a pending state, a refusal and a row that
        changes underneath them, and none of the four can be judged from a
        screenshot of a control nobody may press. Until the page reloads. */
-    async listSchedules() {
+    async listSchedules(podId: string) {
         await wait(90);
-        return readSchedules(SCHEDULES);
+        const teammate = samplePodName(podId);
+        return readSchedules(SCHEDULES).map((job) => (teammate && job.target.kind === "agent" && isPodDefaultAgent(job.target.name)
+            ? { ...job, target: { ...job.target, label: teammate } }
+            : job));
     },
     async listScheduleRuns(_podId: string, scheduleId: string) {
         await wait(140);
@@ -2688,15 +2716,18 @@ export const fixtureSource: PodSource = {
         SCHEDULES = [...SCHEDULES, made];
         return readSchedule(made);
     },
-    async scheduleTargets() {
+    async scheduleTargets(podId: string) {
         await wait(70);
+        const teammate = samplePodName(podId);
         return [
             ...AGENTS.map((raw) => raw as { name?: string; kind?: string })
                 .filter((agent) => Boolean(agent.name))
                 .map((agent) => ({
                     kind: "agent" as const,
                     name: agent.name as string,
-                    label: displayAgentName(agent.name as string, agent.kind),
+                    label: teammate && isPodDefaultAgent(agent.name, agent.kind)
+                        ? teammate
+                        : displayAgentName(agent.name as string, agent.kind),
                 })),
             { kind: "workflow" as const, name: "press_triage", label: "Press triage" },
             { kind: "workflow" as const, name: "launch_digest", label: "Launch digest" },

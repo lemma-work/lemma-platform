@@ -11,9 +11,9 @@ import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
 import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
-import { MinimizeIcon, ChevronUpIcon, LemmaLogo, SidebarIcon, MenuIcon, PlusIcon, SearchIcon, LinkIcon } from "@/ui/icons";
+import { MinimizeIcon, ChevronUpIcon, SidebarIcon, MenuIcon, PlusIcon, SearchIcon, LinkIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION } from "@/data";
 import { DocSpace, isDoc } from "@/docs/doc-space";
@@ -21,18 +21,22 @@ import { CommentsButton } from "@/docpages/comments/button";
 import { DocAskContext } from "@/docs/doc-ask";
 import { AllView } from "@/space/all-view";
 import { SpaceNav } from "@/space/space-nav";
-import { SpaceSwitcher } from "@/space/space-switcher";
 import { ShareSheet, type ShareSubject } from "@/space/share-sheet";
 import { SIGN_IN_EVENT, type SignInRequest } from "@/computer/sign-in-bridge";
 import { SignInPane } from "@/computer/sign-in-pane";
 import { AgentPage } from "@/space/agent-page";
 import { WorkflowPage } from "@/space/workflow-page";
-import { displayAgentName } from "@/data/agent-names";
+import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
 import { SettingsPage, type SettingsSection as SpaceSettingsSection } from "@/space/settings-page";
 import { WorkflowsPage } from "@/space/workflows-page";
 import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
 import { RunPage } from "@/space/run-page";
+import { AboutPage, isAboutSection, type AboutSection } from "@/space/about-page";
+import { TeammateRail } from "@/space/teammate-rail";
+import { TeammatesPage } from "@/space/teammates-page";
+import { TeammateFace } from "@/space/teammate-face";
+import { owedByPod } from "@/space/teammates";
 import type { SpaceView } from "@/data";
 import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
 import type { FileContent, Tab } from "@/data";
@@ -44,14 +48,13 @@ import { AI_MATE, NEW_MATE } from "@/copy";
 import { makePage } from "@/docpages/templates";
 import { renamePage } from "@/docpages/rename";
 import { moveComments } from "@/docpages/comments/store";
-import { NOWHERE, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
+import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
-import { Rail } from "./rail";
 import { Mark } from "./mark";
 import { Surfaces } from "./surfaces";
 import { Notifications } from "./notifications";
-import { WaitingInbox } from "@/workflow/waiting-inbox";
+import { WaitingInbox, gather } from "@/workflow/waiting-inbox";
 import { SearchPalette } from "@/search/palette";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
 import { AddPeople } from "./add-people";
@@ -62,7 +65,6 @@ import { HiringView, type FirstMove } from "@/stage/hiring";
 import { ArrivalView } from "@/org/arrival-view";
 import { ConversationPane } from "@/thread/conversation";
 import { LiveConversation } from "@/thread/live-conversation";
-import { ProfilePane } from "@/stage/profile";
 import { History } from "@/thread/history";
 import { AllConversations } from "@/thread/all-conversations";
 import { refreshConversationLists } from "@/thread/conversation-list";
@@ -88,6 +90,10 @@ import { AppFrameView } from "@/desktop/app-frame";
  *  stylesheet; the wait and the animation have to be one number or the row
  *  either vanishes mid-collapse or sits there finished. */
 const TAB_CLOSE_MS = 180;
+
+/* Layout effects run on the client only; on the server this is the plain
+   effect, which does nothing there either. */
+const useBeforePaint = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const ORG_KEY = key("org");
 const TAB_KEY = key("tabs");
@@ -121,7 +127,7 @@ function readJson<T>(key: string, fallback: T): T {
     }
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["settings", "Settings"]] as [SpaceView, string][])
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
@@ -130,18 +136,32 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const pathname = usePathname();
     const incoming = useSearchParams();
     const [orgId, setOrgId] = useState<string | null>(() => incoming.get("org") ?? readJson<string | null>(ORG_KEY, null));
-    const [entrySection] = useState(() => incoming.get("section") ?? undefined);
     /** Where the address bar says you are. `address.ts` has the grammar and
      *  the reasoning; what matters here is that reading it through
      *  `usePathname` makes Back and Forward work for nothing, because the
      *  shell derives from the URL rather than keeping a second copy of it. */
     const address = useMemo(() => readAddress(pathname), [pathname]);
-    const podId = preview ? previewPod : address.podId;
+    /** Zoomed out: every teammate at once, and no space open. The tour keeps
+     *  its own copy, because it never touches the address bar. */
+    const [previewTeam, setPreviewTeam] = useState(false);
+    const atTeam = preview ? previewTeam : Boolean(address.team);
+    const podId = atTeam ? null : preview ? previewPod : address.podId;
     const goToPod = useCallback((id: string | null) => {
-        if (preview) { setPreviewPod(id); return; }
+        if (preview) { setPreviewTeam(false); setPreviewPod(id); return; }
         // Native history integrates with Next and preserves the mounted workspace layout.
         window.history.pushState(null, "", writeAddress({ ...NOWHERE, podId: id }));
     }, [preview]);
+    /** The teammate just zoomed out of, so its card on the Teammates page
+     *  can say where you were. */
+    const [leftFrom, setLeftFrom] = useState<string | null>(null);
+    const goToTeam = useCallback((from: string | null) => {
+        setLeftFrom(from);
+        if (preview) { setPreviewTeam(true); return; }
+        window.history.pushState(null, "", writeAddress(TEAMMATES));
+    }, [preview]);
+    /** Where a card was pressed, so the space it opens grows out of it. */
+    const zoomFrom = useRef<DOMRect | null>(null);
+    const mainRef = useRef<HTMLElement>(null);
     const [selection, setSelection] = useState<{ id: string | null; generation: number }>({ id: null, generation: 0 });
     const conversationId = selection.id;
     /** Words handed to the Chat tab to send, and the bot to start the
@@ -271,6 +291,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        one other door into that sheet is mounted beside the people dialog,
        which is here for the same reason. */
     const [reaching, setReaching] = useState(() => incoming.get('reach') === '1');
+    /** Which part of About a link asked for. Counted, so asking for the same
+     *  section twice scrolls to it twice. An old `?section=` still lands. */
+    const [aboutSection, setAboutSection] = useState<{ at: AboutSection | null; id: number }>(() => {
+        const asked = incoming.get("section");
+        return { at: isAboutSection(asked) ? asked : null, id: 0 };
+    });
 
     // Only the explicitly labelled, isolated product-tour document accepts this prop.
     // These are the same UI states reached by the shell's own buttons. Each step
@@ -279,7 +305,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     // teammate is hired, leaving the space to what the step is about.
     useEffect(() => {
         if (!preview || demoStep === undefined) return;
+        setPreviewTeam(false);
         setPreviewPod("kit");
+        setAboutSection((was) => ({ at: demoStep === 2 ? "skills" : null, id: was.id + 1 }));
         setSelection(previous => previous.id === null ? previous : { id: null, generation: previous.generation + 1 });
         setSettings(null);
         setSearching(false);
@@ -348,6 +376,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         staleTime: 5 * 60_000,
     });
 
+    /* What each teammate is waiting on you for: the queue the inbox beside
+       the bell reads, under the same key, so the rail's badges and the
+       Teammates page cost nothing it was not already fetching. Not in the
+       tour, whose teammates say what they are waiting on in their own words. */
+    const waiting = useQuery({
+        queryKey: ["workflow-waiting", (pods.data ?? []).map((one) => one.id).join(",")],
+        queryFn: () => gather(pods.data ?? [], source.label === "sample"),
+        enabled: !preview && (pods.data?.length ?? 0) > 0,
+        staleTime: 60_000,
+    });
+    const owed = useMemo(() => owedByPod(waiting.data?.rows ?? []), [waiting.data]);
+
     /* Changing teammate drops the conversation you were reading — unless the
        address named one, which is exactly what a link to a conversation is.
        Read from `window.location` rather than from `address`, so this stays an
@@ -358,7 +398,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         setSelection(previous => ({ id: named, generation: previous.generation + 1 }));
     }, [podId]);
 
-    const access = podAccess(podId, pods.data, linkedPod, activeOrgId ? lastPods[activeOrgId] ?? null : null);
+    /* Zoomed out, nobody is chosen — not even the one a bare `/t` would open. */
+    const access = atTeam
+        ? { state: "ready" as const, pod: null }
+        : podAccess(podId, pods.data, linkedPod, activeOrgId ? lastPods[activeOrgId] ?? null : null);
     const listedPod = access.pod;
     const stranger = access.state === "denied" ? podId : null;
     /* Keyed by the pod's own organization, not the active one: a link into
@@ -448,10 +491,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         return at < 0 ? [...base, ...extras] : [...base.slice(0, at), ...extras, ...base.slice(at)];
     }, [podTabs.data, pod, extraTabs]);
 
-    /* There is no profile page: an address or a search result that
-       still asks for it lands on the space's settings. */
+    /* The old profile is About now: an address or a search result that
+       still asks for it lands on the teammate's own page. */
     const rawTabId = (pod && tabs[pod.id]) || "space:home";
-    const activeTabId = rawTabId === "profile" ? "space:settings" : rawTabId;
+    const activeTabId = rawTabId === "profile" ? "space:about" : rawTabId;
     const activeTab: Tab | undefined = allTabs.find((tab) => tab.id === activeTabId) ?? allTabs[0];
 
     /* The list you were last on in each space, which is where anything you
@@ -506,10 +549,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         : activeTab?.kind === "record" ? { kind: "table", name: activeTab.table, label: readableName(activeTab.table) }
         : null;
     const [shareOpen, setShareOpen] = useState(false);
-    /* Which part of the space's settings page to land on: Workflows opens
-       there scrolled to its section. */
-    const [profileSection] = useState<string | undefined>(undefined);
-    const [settingsSection, setSettingsSection] = useState<SpaceSettingsSection>("general");
+    const [settingsSection, setSettingsSection] = useState<SpaceSettingsSection>("agents");
     const shareSubject: ShareSubject = !chatResource ? { kind: "space" }
         : chatResource.kind === "file" ? { kind: "file", path: chatResource.name, label: chatResource.label }
         : { kind: chatResource.kind === "app" ? "app" : "table", label: chatResource.label };
@@ -625,18 +665,28 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        somebody glanced back at the conversation. */
     const [openAgentName, setOpenAgentName] = useState<string | null>(null);
 
+    const openAbout = useCallback((at: AboutSection | null) => {
+        if (!pod) return;
+        setAboutSection((was) => ({ at, id: was.id + 1 }));
+        setExpandedTab(null);
+        setPeekedTab(null);
+        setTabs((previous) => ({ ...previous, [pod.id]: "space:about" }));
+    }, [pod]);
+
     /* Agents are a section of the teammate's profile rather than a view of
        their own — a tab per teammate for a list most pods have three rows of
        was a lot of permanent furniture. So this lands on the profile and names
        which agent to open there. */
     const openAgent = useCallback(
         (name: string) => {
+            /* The space's own agent is the teammate, and its page is About. */
+            if (isPodDefaultAgent(name)) { openAbout(null); return; }
             setOpenAgentName(name);
             /* A bot opens as its own page: who it is, a box to ask it, and
                what it is made of beside that. */
             openTab({ id: "bot:" + name, kind: "bot", label: displayAgentName(name), name });
         },
-        [openTab],
+        [openTab, openAbout],
     );
 
     const openRun = useCallback(
@@ -829,7 +879,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         if (rebuilt) openTab(rebuilt);
         /* Only a tab that will exist: one that never arrives would hold the
            mirror still for good. */
-        if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:settings" : wanted;
+        if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
     }, [pathname, address, pod, allTabs, openTab, selection.id, setConversationId, preview]);
 
     /** The address bar, kept in step with where you actually are.
@@ -998,6 +1048,27 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const [visitedLibraries, setVisitedLibraries] = useState<Record<string, boolean>>({});
     useEffect(() => { if (pod && (activeTab?.kind === "library" || rightTab?.kind === "library")) setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind, rightTab?.kind]);
 
+    /* Zooming in: the space grows out of the card that was pressed, and its
+       sidebar slides in beside it. Once, on arrival — not on every change of
+       view inside the space. */
+    useBeforePaint(() => {
+        const from = zoomFrom.current;
+        if (!from || atTeam || !pod) return;
+        zoomFrom.current = null;
+        const main = mainRef.current;
+        if (!main || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+        const box = main.getBoundingClientRect();
+        main.style.transformOrigin = `${from.left + from.width / 2 - box.left}px ${from.top + from.height / 2 - box.top}px`;
+        main.animate(
+            [{ transform: "scale(0.9)", opacity: 0 }, { transform: "none", opacity: 1 }],
+            { duration: 320, easing: "cubic-bezier(.2,.8,.2,1)" },
+        );
+        document.querySelector(".side__space")?.animate(
+            [{ transform: "translateX(-12px)", opacity: 0 }, { transform: "none", opacity: 1 }],
+            { duration: 260, easing: "cubic-bezier(.2,.8,.2,1)" },
+        );
+    }, [atTeam, pod?.id]);
+
     if (orgs.isPending) {
         return <WorkspaceLoading />;
     }
@@ -1052,9 +1123,13 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const focusedView = !rightTab && (activeTab?.kind === "apps" || activeTab?.kind === "app" || activeTab?.kind === "file" || activeTab?.kind === "profile" || activeTab?.kind === "library" || activeTab?.kind === "table" || activeTab?.kind === "record" || activeTab?.kind === "computer");
     const compactView = focusedView || headerHidden;
     const activeKey = pod && activeTab ? pod.id + "|" + activeTab.id : "";
+    /* The teammate's own column beside the rail: whenever one is open, even
+       while it is still arriving, so the rail does not jump sideways. Not
+       while hiring, which is about somebody new rather than the one behind it. */
+    const spaceOpen = !atTeam && !stranger && !hiring && Boolean(pod ?? podId);
 
     return (
-        <div className={`shell${collapsed ? " shell--collapsed" : ""}${mobileOpen ? " shell--mobile-open" : ""}${sidebarHidden ? " shell--hidden" : ""}`}>
+        <div className={`shell${collapsed ? " shell--collapsed" : ""}${mobileOpen ? " shell--mobile-open" : ""}${sidebarHidden ? " shell--hidden" : ""}${spaceOpen ? "" : " shell--rail-only"}`}>
             {searching && pod && (
                 <SearchPalette
                     podId={pod.id}
@@ -1068,7 +1143,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         openRecord,
                         openApp: (name) => pickTab("app:" + name),
                         openAgent,
-                        openProfile: () => pickTab("profile"),
+                        openProfile: () => openAbout(null),
                         discuss: (kind, name) => {
                             void (async () => {
                                 const id = await discussion.open(kind, name);
@@ -1084,60 +1159,78 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             {!preview && <ReconnectStrip />}
             {mobileOpen && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
             <aside className="side" id="app-sidebar" aria-label="Workspace navigation">
-                <div className="side__brand"><LemmaLogo compact={collapsed && !mobileOpen} />{pod && !(collapsed && !mobileOpen) && <button className="icon-button side__search" title="Search (⌘K)" aria-label="Search" onClick={() => { setSearching(true); setMobileOpen(false); }}><SearchIcon size={18} /></button>}<button className="icon-button sidebar-toggle" title={collapsed ? "Expand sidebar (⌘\\)" : "Collapse sidebar (⌘\\)"} aria-label={mobileOpen ? "Close navigation" : collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} aria-controls="app-sidebar" onClick={() => { if (mobileOpen) setMobileOpen(false); else { setSidebarHidden(false); setCollapsed(v => !v); } }}><SidebarIcon size={19} /></button></div>
-                <SpaceSwitcher
-                    compact={collapsed && !mobileOpen}
-                    space={stranger ? null : pod ?? null}
-                    spaces={pods.data ?? []}
-                    orgs={orgs.data ?? []}
-                    orgId={activeOrgId}
-                    onSpace={(id) => { goToPod(id); setConversationId(null); setSettings(null); setHiring(false); setMobileOpen(false); }}
-                    onOrg={(id) => { setOrgId(id); goToPod(null); setConversationId(null); }}
-                    onNewSpace={() => { setSettings(null); setHiring(true); setMobileOpen(false); }}
-                    onSettings={() => { setSettingsSection("general"); pickTab("space:settings"); setMobileOpen(false); }}
-                />
-                {pod && !stranger ? (
-                    <SpaceNav
-                        compact={collapsed && !mobileOpen}
-                        pod={pod}
-                        activeId={activeTab?.id ?? "space:home"}
-                        recents={((pod && extraTabs[pod.id]) || []).slice().reverse()}
-                        onPick={(id) => { pickTab(id); setMobileOpen(false); }}
-                        onWorkflows={() => { pickTab("space:workflows"); setMobileOpen(false); }}
-                        onSettings={() => { setSettingsSection("general"); pickTab("space:settings"); setMobileOpen(false); }}
-                        openChatId={openConversationId}
-                        onOpenChat={(id) => { setConversationId(id); pickTab("conversation"); setMobileOpen(false); }}
-                    />
-                ) : <Rail
-                    compact={collapsed && !mobileOpen}
+                <TeammateRail
                     pods={pods.data ?? []}
-                    /* Nothing is highlighted while the door is up: `pod` is a
-                       stand-in there, and marking it would say you are in a
-                       teammate you are looking at from outside. */
-                    activeId={stranger ? null : pod?.id ?? null}
+                    activeId={atTeam || stranger || hiring ? null : pod?.id ?? podId}
+                    atTeam={atTeam && !hiring}
+                    hiring={hiring}
+                    owed={owed}
+                    orgName={activeOrg?.name ?? "this organization"}
+                    onTeam={() => {
+                        setHiring(false);
+                        setSettings(null);
+                        setMobileOpen(false);
+                        if (!atTeam) goToTeam(pod?.id ?? null);
+                    }}
                     onPick={(id) => {
-                        goToPod(id);
-                        setConversationId(null);
                         setSettings(null);
                         setHiring(false);
                         setMobileOpen(false);
+                        /* Its own face, from inside its space, is the way home. */
+                        if (!atTeam && id === pod?.id) { pickTab("space:home"); return; }
+                        goToPod(id);
+                        setConversationId(null);
                     }}
-                    onHire={() => { setSettings(null); setHiring(true); setMobileOpen(false); }}
-                    orgId={activeOrgId}
-                />}
-                <div className="side__foot">
-                    {/* Above the account, because it is about the account — and
-                        silent unless the allowance is close or spent. */}
-                    <AllowanceNote
-                        orgId={activeOrgId}
-                        compact={collapsed && !mobileOpen}
-                        onOpenPlan={() => { setSettings("plan"); setMobileOpen(false); }}
-                    />
-                    <HumanProfile compact={collapsed && !mobileOpen} onOpen={() => { setSettings("account"); setMobileOpen(false); }} />
-                </div>
+                    onHire={activeOrgId ? () => { setSettings(null); setHiring(true); setMobileOpen(false); } : null}
+                    foot={<>
+                        {/* Above the account, because it is about the account — and
+                            silent unless the allowance is close or spent. */}
+                        <AllowanceNote orgId={activeOrgId} compact onOpenPlan={() => { setSettings("plan"); setMobileOpen(false); }} />
+                        <HumanProfile compact onOpen={() => { setSettings("account"); setMobileOpen(false); }} />
+                    </>}
+                />
+                {spaceOpen && (
+                    <div className="side__space" role="group" aria-label={(pod?.name ?? "This teammate") + "’s space"}>
+                        {pod && <>
+                            <div className="side__head">
+                                {/* The top of a space is whose it is. Its face opens
+                                    the teammate itself; switching is the rail's. */}
+                                <button className="side__mate" aria-current={activeTab?.id === "space:about" ? "page" : undefined}
+                                    title={"About " + pod.name} onClick={() => { openAbout(null); setMobileOpen(false); }}>
+                                    <TeammateFace pod={pod} size={36} />
+                                    <span className="side__mate-text">
+                                        <span>{pod.name}</span>
+                                        {pod.description && <small>{pod.description}</small>}
+                                    </span>
+                                </button>
+                                {/* On a phone the toolbar is already full; the
+                                    drawer has space for it. */}
+                                <button className="icon-button side__search" title="Search" aria-label="Search"
+                                    onClick={() => { setSearching(true); setMobileOpen(false); }}>
+                                    <SearchIcon size={18} />
+                                </button>
+                                <button className="icon-button sidebar-toggle" title={mobileOpen ? "Close navigation" : "Collapse sidebar (⌘\\)"}
+                                    aria-label={mobileOpen ? "Close navigation" : "Collapse sidebar"} aria-controls="app-sidebar"
+                                    onClick={() => { if (mobileOpen) setMobileOpen(false); else { setSidebarHidden(false); setCollapsed(true); } }}>
+                                    <SidebarIcon size={19} />
+                                </button>
+                            </div>
+                            <SpaceNav
+                                pod={pod}
+                                activeId={activeTab?.id ?? "space:home"}
+                                recents={((pod && extraTabs[pod.id]) || []).slice().reverse()}
+                                onPick={(id) => { pickTab(id); setMobileOpen(false); }}
+                                onWorkflows={() => { pickTab("space:workflows"); setMobileOpen(false); }}
+                                onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); setMobileOpen(false); }}
+                                openChatId={openConversationId}
+                                onOpenChat={(id) => { setConversationId(id); pickTab("conversation"); setMobileOpen(false); }}
+                            />
+                        </>}
+                    </div>
+                )}
             </aside>
 
-            <main className="main" inert={mobileOpen}>
+            <main className="main" inert={mobileOpen} ref={mainRef}>
                 {sidebarHidden && <button className="desktop-nav-toggle icon-button" aria-label="Show sidebar" title="Show sidebar" onClick={() => { setSidebarHidden(false); setCollapsed(false); }}><SidebarIcon size={21} /></button>}
                 <button className="mobile-nav-toggle icon-button" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar" onClick={() => setMobileOpen(true)}><MenuIcon size={22} /></button>
                 {settings && <SettingsModal
@@ -1170,6 +1263,28 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             }}
                         />
                     </div>
+                )}
+                {atTeam && !hiring && !huddle.expanded && (
+                    <TeammatesPage
+                        pods={pods.data ?? []}
+                        pending={pods.isPending}
+                        failed={pods.isError}
+                        onRetry={() => void pods.refetch()}
+                        owed={owed}
+                        orgName={activeOrg?.name ?? "this organization"}
+                        orgs={orgs.data ?? []}
+                        orgId={activeOrgId}
+                        cameFrom={leftFrom}
+                        lead={
+                            <button className="icon-button crumb__menu" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar" onClick={() => setMobileOpen(true)}>
+                                <MenuIcon size={20} />
+                            </button>
+                        }
+                        tools={!preview && <WaitingInbox pods={pods.data ?? []} />}
+                        onOpen={(id, from) => { zoomFrom.current = from; goToPod(id); setConversationId(null); }}
+                        onHire={activeOrgId ? () => { setSettings(null); setHiring(true); } : null}
+                        onPickOrg={(id) => { setLeftFrom(null); setOrgId(id); }}
+                    />
                 )}
                 {stranger && (
                     <div className="settings-view">
@@ -1238,7 +1353,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         ["--field" as string]: pressSlot(identityGenes(pod.id).tone).field,
                         ["--field-ink" as string]: pressSlot(identityGenes(pod.id).tone).ink,
                     } : undefined}
-                    hidden={Boolean(hiring || huddle.expanded || stranger)}
+                    hidden={Boolean(hiring || huddle.expanded || stranger || atTeam)}
                 >
                 {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
                     access.state === "error" || access.state === "missing" ? (
@@ -1369,7 +1484,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             stage is named here, the way Space's breadcrumb does. */}
                         {/* A hidden sidebar comes back from here, the first thing in
                             the row — not from a button floating under it. */}
-                        {sidebarHidden && (
+                        {(sidebarHidden || collapsed) && (
                             <button className="icon-button crumb__side" aria-label="Show sidebar" title="Show sidebar (⌘\)"
                                 onClick={() => { setSidebarHidden(false); setCollapsed(false); }}>
                                 <SidebarIcon size={18} />
@@ -1381,7 +1496,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             <MenuIcon size={20} />
                         </button>
                         <div className="crumb">
-                            <span className="crumb__space">{pod.name}</span>
+                            {/* Up one altitude: every teammate in the organization. */}
+                            <button type="button" className="crumb__up crumb__org" title="All teammates" onClick={() => goToTeam(pod.id)}>
+                                {activeOrg?.name ?? "Teammates"}
+                            </button>
+                            <span className="crumb__sep crumb__sep--org">/</span>
+                            <button type="button" className="crumb__up crumb__mate" onClick={() => pickTab("space:home")}>
+                                <TeammateFace pod={pod} size={18} />{pod.name}
+                            </button>
                             <span className="crumb__sep">/</span>
                             {cameFrom && <>
                                 <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom.id)}>{cameFrom.label}</button>
@@ -1401,6 +1523,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 }} />}
                             {expanded && <button className="icon-button" title="Return to sidebar" aria-label="Return to sidebar" onClick={toggleExpanded}><MinimizeIcon size={18} /></button>}
                             {activeTab?.kind === "file" && isDoc(activeTab.path) && !/^\/me(\/|$)/.test(activeTab.path) && <CommentsButton path={activeTab.path} />}
+                            <button className="icon-button crumb__search" title="Search (⌘K)" aria-label="Search" onClick={() => setSearching(true)}>
+                                <SearchIcon size={18} />
+                            </button>
                             <button className="share-pill" onClick={() => setShareOpen(true)} title={"Share " + (chatResource?.label ?? pod.name)}>Share</button>
                             {/* The header row is gone, as it is in Space; what it
                                 carried that is still owed to you lives here. */}
@@ -1410,7 +1535,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
                         <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "") + (chat.open && chatResource ? " body--chat" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
                             {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
-                            {pod && !stranger && !isVisible("conversation") && activeTab?.kind !== "profile" && activeTab?.kind !== "bot" && activeTab?.id !== "space:home" && (
+                            {pod && !stranger && !isVisible("conversation") && activeTab?.kind !== "profile" && activeTab?.kind !== "bot" && activeTab?.id !== "space:home" && activeTab?.id !== "space:about" && (
                                 <FloatingChat
                                     pod={pod}
                                     resource={chatResource}
@@ -1514,7 +1639,24 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             pods={pods.data ?? []}
                                             onNewPage={newPage}
                                             onOpenRun={openRun}
+                                            onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
+                                            onAbout={() => openAbout(null)}
                                             onAsk={(text) => startChat(text)}
+                                        />
+                                    ) : tab.view === "about" ? (
+                                        <AboutPage
+                                            pod={pod}
+                                            orgId={activeOrgId}
+                                            orgName={activeOrg?.name ?? "this organization"}
+                                            section={aboutSection.at}
+                                            request={aboutSection.id}
+                                            onAsk={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
+                                            onOpenAgent={openAgent}
+                                            onAskFor={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }}
+                                            onOpenRun={openRun}
+                                            onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
+                                            onFile={(path) => openFile(path, "space:about")}
+                                            onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); }}
                                         />
                                     ) : tab.view === "chats" ? (
                                         <ChatsPage
@@ -1533,11 +1675,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             orgName={activeOrg?.name ?? "this organization"}
                                             section={settingsSection}
                                             onSection={setSettingsSection}
-                                            onOpenBot={openAgent}
-                                            onOpenRun={openRun}
-                                            onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
-                                            onFile={(path) => openFile(path, "space:settings")}
-                                            onAskFor={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }}
+                                            onAbout={() => openAbout(null)}
                                         />
                                     ) : <AllView
                                         podId={pod.id}
@@ -1612,10 +1750,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         pod={pod}
                                         name={tab.name}
                                         live={source.label === "live"}
-                                        onBack={() => { setSettingsSection("bots"); pickTab("space:settings"); }}
+                                        onBack={() => openAbout("agents")}
                                         onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                         onAsk={startChat}
-                                        onOpenSchedules={() => { setSettingsSection("schedules"); pickTab("space:settings"); }}
+                                        onOpenSchedules={() => openAbout("schedules")}
                                         onOpenWorkflows={() => pickTab("space:workflows")}
                                     />
                                 </div>
@@ -1647,46 +1785,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     />
                                 </div>
                             ))}
-                            {isVisible("profile") && (<div className="pane" {...paneProps("profile")}>
-                                <ProfilePane
-                                    key={preview ? pod.id + "|" + demoRevision : pod.id}
-                                    initialSection={preview && demoStep === 2 ? "skills" : profileSection ?? entrySection}
-                                    openAgentName={openAgentName}
-                                    onOpenAgentName={setOpenAgentName}
-                                    /* Same path a widget's compose request
-                                       takes: land on the conversation and put
-                                       the words in the box, rather than
-                                       sending them. What gets asked for is
-                                       still the person's to edit or drop. */
-                                    onAskFor={(text) => {
-                                        pickTab("conversation");
-                                        asks.current += 1;
-                                        setFill({ text, id: asks.current, podId: pod.id });
-                                    }}
-                                    pod={pod}
-                                    orgName={activeOrg?.name ?? "this organization"}
-                                    others={(pods.data ?? []).filter((other) => other.id !== pod.id)}
-                                    onOpenTab={pickTab}
-                                    onPickPod={(id) => {
-                                        goToPod(id);
-                                        setConversationId(null);
-                                    }}
-                                    onMessage={() => pickTab("conversation")}
-                                    onAddPeople={() => setAddingPeople(true)}
-                                    onDiscussAgent={(name) => {
-                                        void (async () => {
-                                            const id = await discussion.open("agent", name);
-                                            if (id) { setConversationId(id); pickTab("conversation"); }
-                                        })();
-                                    }}
-                                    onDiscussWorkflow={(name) => {
-                                        void (async () => {
-                                            const id = await discussion.open("workflow", name);
-                                            if (id) { setConversationId(id); pickTab("conversation"); }
-                                        })();
-                                    }}
-                                />
-                            </div>)}
                             {/* Mounted only while it is in front, the way the
                                 profile is: the list is a request per pod, and
                                 a pane kept alive behind every conversation

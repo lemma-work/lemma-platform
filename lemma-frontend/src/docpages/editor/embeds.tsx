@@ -114,7 +114,7 @@ function WidgetView({ node, updateAttributes, editor, selected }: ReactNodeViewP
                     <EmbedPreview title="Embedded HTML" html={code} />
                 </div>
             ) : (
-                <p className="pblock__empty" contentEditable={false}>An empty HTML block. Edit it, or ask {tools?.botName ?? "the bot"} to draw something here.</p>
+                <p className="pblock__empty" contentEditable={false}>An empty HTML block. Edit it, or {tools?.botName ? "ask " + tools.botName + " to draw something here" : "ask for something to be drawn here"}.</p>
             )}
         </NodeViewWrapper>
     );

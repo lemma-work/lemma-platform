@@ -1,0 +1,100 @@
+"use client";
+
+import { useState, type ReactNode, type SyntheticEvent } from "react";
+import type { Pod } from "@/data";
+import { MATES, NEW_MATE } from "@/copy";
+import { PlusIcon } from "@/ui/icons";
+import { TeammateFace } from "./teammate-face";
+import { needsYou, railLine, type Owed } from "./teammates";
+
+type Tip = { top: number; left: number; name: string; line: string };
+
+/** The rail: who. Every teammate you are in, as its face, and the same at
+ *  both altitudes — above them the way out to every teammate at once, below
+ *  them the way to hire another.
+ *
+ *  Faces only, so it can stay narrow beside the space it opens. A name
+ *  arrives on hover or focus, in a tip placed over the page rather than
+ *  inside the rail: the list scrolls, and anything drawn inside a scroller is
+ *  clipped at its edge. */
+export function TeammateRail({ pods, activeId, atTeam, hiring = false, owed, orgName, onTeam, onPick, onHire, foot }: {
+    pods: Pod[];
+    /** The teammate whose space is open, if one is. */
+    activeId: string | null;
+    /** Zoomed out, on the page with every teammate. */
+    atTeam: boolean;
+    /** Hiring somebody new: the one place none of the faces is where you are. */
+    hiring?: boolean;
+    owed: ReadonlyMap<string, Owed>;
+    orgName: string;
+    onTeam: () => void;
+    onPick: (podId: string) => void;
+    /** Null until there is an organization to hire into. */
+    onHire: (() => void) | null;
+    /** The account, and the allowance when it is worth a word. */
+    foot?: ReactNode;
+}) {
+    const [tip, setTip] = useState<Tip | null>(null);
+    const show = (name: string, line: string) => (event: SyntheticEvent<HTMLElement>) => {
+        const box = event.currentTarget.getBoundingClientRect();
+        setTip({ top: box.top + box.height / 2, left: box.right + 10, name, line });
+    };
+    const hide = () => setTip(null);
+    const hint = (name: string, line: string) => ({
+        onMouseEnter: show(name, line),
+        onFocus: show(name, line),
+        onMouseLeave: hide,
+        onBlur: hide,
+    });
+
+    return (
+        <nav className="trail" aria-label={MATES}>
+            <button
+                className="trail__home"
+                aria-current={atTeam ? "page" : undefined}
+                aria-label={"All " + MATES.toLowerCase() + " in " + orgName}
+                onClick={() => { hide(); onTeam(); }}
+                {...hint(MATES, orgName)}
+            >
+                {/* Lemma's own mark, the three rising bars of the app icon. */}
+                <svg className="trail__mark" viewBox="0 0 32 32" aria-hidden="true">
+                    <rect x="4" y="19" width="5" height="10" rx="1.5" />
+                    <rect x="13" y="12" width="5" height="17" rx="1.5" />
+                    <rect x="22" y="3" width="5" height="26" rx="1.5" />
+                </svg>
+            </button>
+            <span className="trail__rule" aria-hidden="true" />
+            <div className="trail__list" onScroll={hide}>
+                {pods.map((pod) => {
+                    const line = railLine(pod, owed);
+                    const needs = needsYou(pod, owed);
+                    return (
+                        <button
+                            key={pod.id}
+                            className="trail__mate"
+                            aria-current={pod.id === activeId ? "page" : undefined}
+                            aria-label={pod.name + (needs && line ? " — " + line : "")}
+                            onClick={() => { hide(); onPick(pod.id); }}
+                            {...hint(pod.name, line)}
+                        >
+                            <TeammateFace pod={pod} size={40} />
+                            {needs && <span className="trail__badge" aria-hidden="true" />}
+                        </button>
+                    );
+                })}
+            </div>
+            {onHire && (
+                <button className="trail__add" aria-label={NEW_MATE} aria-current={hiring ? "page" : undefined} onClick={() => { hide(); onHire(); }} {...hint(NEW_MATE, "")}>
+                    <PlusIcon size={18} />
+                </button>
+            )}
+            <div className="trail__foot">{foot}</div>
+            {tip && (
+                <span className="trail__tip" role="tooltip" style={{ top: tip.top, left: tip.left }}>
+                    {tip.name}
+                    {tip.line && <small>{tip.line}</small>}
+                </span>
+            )}
+        </nav>
+    );
+}

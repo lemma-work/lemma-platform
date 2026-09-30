@@ -247,7 +247,7 @@
     .settings__row {
         flex-wrap: wrap;
     }
-    .botlist__row {
+    .agentlist__row {
         gap: 12px;
     }
     .sched-row__acts {
@@ -446,3 +446,79 @@
     }
 }
 
+
+/* ── The rail and the teammate's space, on a phone ──────────────────────
+   One drawer holding both columns: the faces, and the open teammate's
+   places beside them. Collapsing is a desk idea; in the drawer the column
+   is always there. */
+@media (max-width: 767px) {
+    .shell,
+    .shell--collapsed,
+    .shell--rail-only {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .side,
+    .shell--collapsed .side {
+        width: min(340px, 90vw);
+    }
+    .shell--rail-only .side {
+        width: auto;
+    }
+    .side__space,
+    .shell--collapsed .side__space {
+        width: auto;
+        flex: 1;
+        visibility: visible;
+        padding: 12px 10px 12px 0;
+    }
+    .trail {
+        padding-top: 14px;
+    }
+    .crumb__up,
+    .crumb__sep--org,
+    .crumb__side,
+    .crumb__search {
+        display: none;
+    }
+    .side__head .side__search {
+        display: grid;
+        flex: none;
+    }
+    .team__column {
+        padding: 8px 16px 40px;
+    }
+    .team__head {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+    .team__head h1 {
+        font-size: 24px;
+    }
+    .team__grid {
+        grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+        gap: 12px;
+    }
+    .tcard__stage {
+        height: 128px;
+    }
+    .tcard--new {
+        min-height: 200px;
+    }
+    .aboutpage__column {
+        padding: 24px 16px 48px;
+    }
+    .aboutpage__hero {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    .aboutpage__who h1 {
+        font-size: 28px;
+    }
+    .settings__elsewhere {
+        display: none;
+    }
+}

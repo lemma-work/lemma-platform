@@ -19,6 +19,12 @@ import { useQuery } from "@tanstack/react-query";
 
 export interface CommentBot { key: string; label: string; iconUrl: string | null; seed: string }
 
+/** Who an @mention reaches first: the teammate, whose agent leads the list.
+ *  Said as "@Kit" — a name to type, not a category to look for. */
+function askable(bots: CommentBot[]): string {
+    return bots[0] ? "@" + bots[0].label : "@ an agent";
+}
+
 type Anchor = { quote: string; quotePrefix: string; quoteSuffix: string };
 
 /** A page's comments, beside it.
@@ -67,7 +73,7 @@ export function CommentsPanel({ podId, path, status, threads, loading, members, 
 
             {status === "missing" && (
                 <div className="cpanel__setup">
-                    <p>Comments aren’t on in this space yet. Turning them on adds one table, <code>doc_comments</code>, that everyone here can read — and that bots can be woken by.</p>
+                    <p>Comments aren’t on in this space yet. Turning them on adds one table, <code>doc_comments</code>, that everyone here can read — and where {askable(bots)} can be asked to answer.</p>
                     <button className="cpanel__primary" disabled={enable.isPending} onClick={() => enable.mutate()}>
                         {enable.isPending ? "Turning on…" : "Turn on comments"}
                     </button>
@@ -93,7 +99,7 @@ export function CommentsPanel({ podId, path, status, threads, loading, members, 
                                 anchor={draft === "page" ? null : draft}
                                 parentId={null}
                                 autoFocus
-                                placeholder={draft === "page" ? "Comment on this page…" : "Comment, or @ a bot to ask it…"}
+                                placeholder={draft === "page" ? "Comment on this page…" : "Comment, or " + askable(bots) + " to ask…"}
                                 onDone={(id) => { onDraftDone(); if (id) onFocus(id); }}
                                 onCancel={onDraftDone}
                             />
@@ -102,7 +108,7 @@ export function CommentsPanel({ podId, path, status, threads, loading, members, 
                     {loading && <p className="cpanel__quiet">Loading…</p>}
                     {!loading && !draft && shown.length === 0 && (
                         <p className="cpanel__quiet">
-                            {showResolved ? "Nothing resolved yet." : "No comments. Select some text and choose Comment — or @ a bot there to ask it to change it."}
+                            {showResolved ? "Nothing resolved yet." : "No comments. Select some text and choose Comment — or " + askable(bots) + " there to ask for a change."}
                         </p>
                     )}
                     {shown.map((thread) => (
@@ -152,7 +158,7 @@ function ThreadView({ podId, path, thread, members, bots, active, onFocus, onOpe
             {replying && (
                 <div onClick={(event) => event.stopPropagation()}>
                     <Composer podId={podId} path={path} members={members} bots={bots} anchor={null} parentId={thread.root.id}
-                        autoFocus placeholder="Reply, or @ a bot…" onDone={() => setReplying(false)} onCancel={() => setReplying(false)} />
+                        autoFocus placeholder={"Reply, or " + askable(bots) + "…"} onDone={() => setReplying(false)} onCancel={() => setReplying(false)} />
                 </div>
             )}
         </article>
