@@ -50,6 +50,7 @@ export class McpAccessService {
                 'grant_id': grantId,
             },
             errors: {
+                404: `No such connection, already ended, or not yours to end`,
                 422: `Validation Error`,
             },
         });

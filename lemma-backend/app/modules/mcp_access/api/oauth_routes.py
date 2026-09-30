@@ -31,6 +31,7 @@ from app.modules.mcp_access.domain.resources import (
     PROTECTED_RESOURCE_METADATA_PATH,
     pod_resource_url,
 )
+from app.modules.mcp_access.infrastructure.rate_limit import RateLimiter
 from app.modules.mcp_access.services.client_auth import DigestClientAuthenticator
 from app.modules.mcp_access.services.wiring import (
     authorization_server,
@@ -136,20 +137,44 @@ def _limited(
     key: Callable[[Request], Awaitable[str]],
     limit: Callable[[], int],
     window: int,
+    address_limit: Callable[[], int] | None = None,
+    limiter: Callable[[], RateLimiter] = rate_limiter,
 ) -> Handler:
+    """``handler`` behind a rate limit on ``key``, and -- when the key is one
+    the caller partly chooses -- a ceiling on the source address as well.
+
+    `_by_client_and_address` takes the ``client_id`` from the request, so a
+    caller who varies it gets a fresh bucket every time; and a new URL-shaped
+    ``client_id`` costs an outbound fetch of its metadata document. The address
+    ceiling is what bounds that. It is checked first, and sized for a hosted
+    client's shared addresses rather than for one browser.
+    """
+    buckets: list[tuple[Callable[[Request], Awaitable[str]], Callable[[], int]]] = []
+    if address_limit is not None:
+        buckets.append((_by_address_only, address_limit))
+    buckets.append((key, limit))
+
     async def endpoint(request: Request) -> Response:
-        wait = await rate_limiter().retry_after(
-            f"{name}:{await key(request)}", limit=limit(), window_seconds=window
-        )
-        if wait is not None:
-            return JSONResponse(
-                {"error": "slow_down", "error_description": "Too many requests"},
-                status_code=429,
-                headers={"Retry-After": str(wait)},
+        for bucket_key, bucket_limit in buckets:
+            wait = await limiter().retry_after(
+                f"{name}:{await bucket_key(request)}",
+                limit=bucket_limit(),
+                window_seconds=window,
             )
+            if wait is not None:
+                return JSONResponse(
+                    {"error": "slow_down", "error_description": "Too many requests"},
+                    status_code=429,
+                    headers={"Retry-After": str(wait)},
+                )
         return await handler(request)
 
     return endpoint
+
+
+async def _by_address_only(request: Request) -> str:
+    # Its own namespace, so it never shares a bucket with a `_by_address` key.
+    return f"address:{client_ip(request.scope)}"
 
 
 def oauth_router() -> APIRouter:
@@ -208,6 +233,9 @@ def oauth_router() -> APIRouter:
             key=_by_client_and_address,
             limit=lambda: mcp_access_settings.mcp_access_token_requests_per_minute,
             window=60,
+            address_limit=lambda: (
+                mcp_access_settings.mcp_access_token_requests_per_address_per_minute
+            ),
         ),
         methods=["POST"],
         include_in_schema=False,
@@ -232,6 +260,9 @@ def oauth_router() -> APIRouter:
             key=_by_client_and_address,
             limit=lambda: mcp_access_settings.mcp_access_token_requests_per_minute,
             window=60,
+            address_limit=lambda: (
+                mcp_access_settings.mcp_access_token_requests_per_address_per_minute
+            ),
         ),
         methods=["POST"],
         include_in_schema=False,

@@ -19385,6 +19385,16 @@
           "204": {
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such connection, already ended, or not yours to end"
+          },
           "422": {
             "content": {
               "application/json": {

@@ -488,6 +488,7 @@ MCP_ACCESS_REQUESTS_PER_MINUTE=300           # per connected client, per pod
 MCP_ACCESS_AUTHORIZE_REQUESTS_PER_MINUTE=60  # sign-in requests, per source IP
 MCP_ACCESS_REGISTRATIONS_PER_HOUR=300        # dynamic registrations, per source IP
 MCP_ACCESS_TOKEN_REQUESTS_PER_MINUTE=600     # token + revoke, per client per source IP
+MCP_ACCESS_TOKEN_REQUESTS_PER_ADDRESS_PER_MINUTE=6000  # token + revoke, per source IP, any client
 ```
 
 ## Authentication and email

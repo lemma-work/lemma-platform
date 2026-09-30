@@ -49,6 +49,16 @@ class McpAccessSettings(BaseSettings):
             "sized for that."
         ),
     )
+    mcp_access_token_requests_per_address_per_minute: int = Field(
+        default=6000,
+        ge=1,
+        description=(
+            "Token and revocation requests per source IP per minute, whatever "
+            "client they name. The per-client limit alone does not bound one "
+            "address, since the caller chooses the client_id. Ten times the "
+            "per-client limit, so a hosted client's shared addresses fit."
+        ),
+    )
     mcp_access_authorize_requests_per_minute: int = Field(
         default=60,
         ge=1,

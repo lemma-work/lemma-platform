@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.api.schemas import ErrorResponse
 from app.modules.mcp_access.domain.entities import ConnectedApp, Scope
 from app.modules.mcp_access.domain.resources import pod_resource_url
 from app.modules.mcp_access.services.grants import GrantService
@@ -165,6 +166,12 @@ async def list_grants(
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="mcp_access.grants.revoke",
     summary="Disconnect an MCP client",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "No such connection, already ended, or not yours to end",
+        }
+    },
 )
 async def revoke_grant(grant_id: UUID, user: CurrentUser) -> None:
     """Ends the grant and every token it issued. The client's next request is

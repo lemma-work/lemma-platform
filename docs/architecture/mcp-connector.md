@@ -177,9 +177,12 @@ registrations, and refresh-token and client-assertion replays are logged too.
 and revocation requests are limited per client *and* per source address (600 a
 minute): Claude and ChatGPT refresh for all their users from a few shared
 addresses, so an address alone would make every one of their users share one
-budget. Sign-in requests (60 a minute) and dynamic registrations (300 an hour)
-are limited per address, since each holds something — a pending request in
-Redis, a client row — before anyone has authenticated. Limits fail open if
+budget. The caller chooses the `client_id`, though, and a new URL-shaped one
+costs a fetch of its metadata document, so an address also has a ceiling of its
+own across every client it names (6,000 a minute), checked first. Sign-in
+requests (60 a minute) and dynamic registrations (300 an hour) are limited per
+address, since each holds something in Redis — a pending request, a pending
+client — before anyone has authenticated. Limits fail open if
 Redis is unavailable: they protect the service, they do not authorize.
 
 **The Agent Host's mount is unchanged.** The same FastMCP app answers at
@@ -258,9 +261,9 @@ tested against claude.ai and ChatGPT through a single tunnel.
   (`/plugin marketplace add <owner>/<repo>`). `lemma skills install --target
   claude` already installs the skills; the plugin would add the connector
   beside them and make both one install.
-- **A product scenario.** The module e2e test drives the whole exchange
-  in-process; a `tests/scenarios/` journey over a real socket belongs with a
-  product-spec entry for "connect a pod to an outside assistant".
+- **A scenario journey.** The product-spec entries are PS-ACCESS-040 and
+  PS-ACCESS-041. The module e2e test drives the whole exchange in-process; the
+  `tests/scenarios/` journey over a real socket has not been built yet.
 - **A resource check at the token endpoint.** The SDK does not pass the token
   request's `resource` to the provider, so a client that names a different
   resource at the token step than at authorize still gets a token for the one
