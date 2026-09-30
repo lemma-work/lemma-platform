@@ -2,6 +2,8 @@
 Name=en* eth*
 
 [Network]
+# DHCP's name server, the vmnet gateway, stays: it is the second of the two
+# resolved asks. The first is the host DNS relay, in resolved.conf.d/lemma.conf.
 DHCP=yes
 IPv6AcceptRA=no
 LinkLocalAddressing=no

@@ -9,6 +9,7 @@ mod data_binding;
 mod diagnostics;
 mod engine;
 mod firewall_model;
+mod host_dns;
 mod host_gateway_firewall;
 mod host_loopback;
 mod image_prune;
