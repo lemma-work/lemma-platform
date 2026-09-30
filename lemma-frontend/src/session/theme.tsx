@@ -24,10 +24,10 @@ function readTextSize(): ChatTextSize {
 export const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
     { value: "mono", label: "Mono", swatch: "#0d0d0d" },
     { value: "violet", label: "Violet", swatch: "#6b4fe0" },
-    { value: "coral", label: "Coral", swatch: "#dd5238" },
+    { value: "coral", label: "Coral", swatch: "#d54024" },
     { value: "forest", label: "Forest", swatch: "#2d7a58" },
     { value: "ocean", label: "Ocean", swatch: "#1f6f9e" },
-    { value: "amber", label: "Amber", swatch: "#b06f12" },
+    { value: "amber", label: "Amber", swatch: "#a56811" },
     { value: "plum", label: "Plum", swatch: "#9c3f6d" },
     { value: "slate", label: "Slate", swatch: "#4a5568" },
     { value: "ink", label: "Ink", swatch: "#26262c" },
