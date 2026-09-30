@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from pathlib import Path
 import re
 import socket
 from uuid import uuid4
+from zipfile import ZipFile
 
 from fastapi.responses import HTMLResponse
 import pytest
@@ -28,6 +30,9 @@ pytestmark = pytest.mark.e2e
         "signed-out",
         "workspace-signed-out",
         "login-return",
+        "html-login-return",
+        "nested-html-login-return",
+        "concurrent",
         "blocked-cookies",
         "service-down",
     ],
@@ -94,12 +99,16 @@ async def test_private_app_browser_direct_and_workspace(
         json={"name": slug, "public_slug": slug, "visibility": "POD"},
     )
     assert created.status_code == 201, created.text
+    archive = io.BytesIO(build_dist_archive("PRIVATE_APP_CONTENT"))
+    with ZipFile(archive, "a") as bundle:
+        for path in ["reports.html", "nested/index.html"]:
+            bundle.writestr(path, "<html><body>PRIVATE_APP_CONTENT</body></html>")
     uploaded = await authenticated_client.post(
         f"/pods/{test_pod['id']}/apps/{slug}/bundle",
         files={
             "dist_archive": (
                 "dist.zip",
-                build_dist_archive("PRIVATE_APP_CONTENT"),
+                archive.getvalue(),
                 "application/zip",
             )
         },
@@ -180,6 +189,10 @@ async def test_private_app_browser_direct_and_workspace(
                 "apiOrigin": api_origin,
                 "workspaceOrigin": workspace_origin,
                 "mode": mode,
+                "path": {
+                    "html-login-return": "/reports.html?period=current#totals",
+                    "nested-html-login-return": "/nested/index.html?period=current#totals",
+                }.get(mode, "/deep/path?mode=study#section"),
                 "workspace": workspace_origin + "/public/sdk/private-app-test-workspace"
                 if workspace
                 else None,

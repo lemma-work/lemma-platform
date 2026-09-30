@@ -6,8 +6,10 @@ import asyncio
 import base64
 from dataclasses import dataclass
 import hashlib
+import io
 import time
 from uuid import uuid4
+from zipfile import ZipFile
 
 from httpx import ASGITransport, AsyncClient
 import pytest
@@ -195,8 +197,90 @@ async def test_missing_app_is_indistinguishable_before_authorization(
     assert refused.status_code == 404 and "missing" not in refused.text
 
 
+@pytest.mark.parametrize("asset_path", ["reports.html", "nested/index.html"])
+async def test_private_html_navigation_can_sign_in_at_its_original_path(
+    browser, hosted_app, authenticated_client, asset_path
+):
+    archive = io.BytesIO(build_dist_archive("PRIVATE_APP_CONTENT"))
+    with ZipFile(archive, "a") as bundle:
+        bundle.writestr(asset_path, "<html><body>PRIVATE_REPORT</body></html>")
+    uploaded = await authenticated_client.post(
+        f"/pods/{hosted_app.pod_id}/apps/{hosted_app.name}/bundle",
+        files={"dist_archive": ("dist.zip", archive.getvalue(), "application/zip")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    url = hosted_app.origin + "/" + asset_path + "?period=current"
+    gate = await browser.get(url, headers={"Accept": "text/html"})
+    assert gate.status_code == 401 and "Open this app" in gate.text, gate.text
+    assert "PRIVATE_REPORT" not in gate.text
+    script = await browser.get(
+        url, headers={"Accept": "text/html", "Sec-Fetch-Dest": "script"}
+    )
+    assert (
+        script.status_code == 401 and "text/html" not in script.headers["content-type"]
+    )
+    await establish(browser, authenticated_client, hosted_app.origin)
+    opened = await browser.get(url, headers={"Accept": "text/html"})
+    assert opened.status_code == 200 and "PRIVATE_REPORT" in opened.text
+    assert opened.headers["cache-control"] == "private, no-store"
+
+
+async def test_concurrent_first_handoffs_both_redeem_in_one_browser(
+    browser, hosted_app, authenticated_client
+):
+    pending = await asyncio.gather(
+        *(offer(browser, hosted_app.origin) for _ in range(2))
+    )
+    approved = await asyncio.gather(
+        *(
+            approve(authenticated_client, request_id, hosted_app.origin)
+            for request_id in pending
+        )
+    )
+    assert all(response.status_code == 200 for response in approved)
+    redeemed = await asyncio.gather(
+        *(
+            browser.post(
+                hosted_app.origin + "/_lemma/app-access/redeem",
+                headers={"Origin": hosted_app.origin},
+                json={
+                    "request_id": request_id,
+                    "code": response.json()["code"],
+                    "verifier": VERIFIER,
+                },
+            )
+            for request_id, response in zip(pending, approved, strict=True)
+        )
+    )
+    assert [response.status_code for response in redeemed] == [200, 200]
+    assert not any(
+        cookie.name.startswith("__Host-lemmaAppAccessBinding-")
+        for cookie in browser.cookies.jar
+    )
+    assert (await browser.get(hosted_app.origin + "/")).status_code == 200
+
+
+async def test_private_missing_document_navigation_offers_workspace_recovery(
+    browser, hosted_app, authenticated_client
+):
+    await establish(browser, authenticated_client, hosted_app.origin)
+    url = hosted_app.origin + "/library/report.pdf"
+    navigation = await browser.get(url, headers={"Accept": "text/html"})
+    assert navigation.status_code == 404
+    assert "text/html" in navigation.headers["content-type"], navigation.text
+    assert (
+        hosted_app.pod_id in navigation.text and "library/report.pdf" in navigation.text
+    )
+    assert "Open it in your workspace" in navigation.text
+    assert navigation.headers["cache-control"] == "private, no-store"
+    asset = await browser.get(url, headers={"Accept": "application/pdf"})
+    assert (
+        asset.status_code == 404 and "application/json" in asset.headers["content-type"]
+    )
+
+
 @pytest.mark.parametrize(
-    "attack", ["verifier", "binding", "cross-app", "origin", "replay"]
+    "attack", ["verifier", "binding", "other-binding", "cross-app", "origin", "replay"]
 )
 async def test_redemption_is_bound_and_single_use(
     browser, hosted_app, authenticated_client, attack
@@ -216,6 +300,10 @@ async def test_redemption_is_bound_and_single_use(
         data["verifier"] = "x" * 64
     elif attack == "binding":
         browser.cookies.clear()
+    elif attack == "other-binding":
+        other = await offer(browser, origin)
+        other_binding = browser.cookies[f"__Host-lemmaAppAccessBinding-{other}"]
+        headers["Cookie"] = f"__Host-lemmaAppAccessBinding-{pending}={other_binding}"
     elif attack == "cross-app":
         target = "https://other.apps.example.test"
         headers["Origin"] = target

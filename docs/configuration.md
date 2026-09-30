@@ -496,6 +496,9 @@ the complete portal URL. Verify the configured login page accepts the `redirect_
 parameter and returns to the original app path, query and fragment.
 
 Requests expire after five minutes and redemption codes after 60 seconds.
+Each request sets its own `__Host-lemmaAppAccessBinding-<request_id>` cookie,
+which is cleared on successful redemption or expires after five minutes.
+This keeps concurrent first visits from replacing one another's browser proof.
 `APP_ACCESS_CREATE_LIMIT_PER_MINUTE` defaults to 30 per client address; forwarded
 addresses are trusted only from `AUTH_TRUSTED_PROXY_IPS`. Redis holds token
 hashes and opaque access records whose lifetime cannot exceed the parent
@@ -505,7 +508,8 @@ Private responses use `Cache-Control: private, no-store`, with no private 304s.
 Public app caching and desktop HTTP framing retain their existing behavior.
 
 Deploy compatible backend, browser SDK and workspace frontend images together.
-Check a private direct link, a workspace tab, an unauthorized account, logout
+Check a private direct link (including an HTML page or nested `index.html`),
+simultaneous first visits in two tabs, a workspace tab, an unauthorized account, logout
 and a public app before promotion. Rolling back those images restores the
 previous private-host 404 behavior; access records expire automatically in
 Redis. No Terraform change is required by this protocol.

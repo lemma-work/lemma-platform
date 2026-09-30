@@ -418,6 +418,28 @@ jobs:
         # (test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wheel)
         # needs it installed, same as the unit-test CI job (ci.yml).
         run: uv sync --extra local
+      # Apps includes real browser handoffs. The catch-all owns it until the
+      # shard planner assigns it explicitly; both layouts need the runner.
+      - uses: actions/setup-node@v7
+        if: matrix.shard.catch_all || contains(matrix.shard.args, 'app/modules/apps')
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: lemma-frontend/package-lock.json
+      - name: Install the app browser runner
+        if: matrix.shard.catch_all || contains(matrix.shard.args, 'app/modules/apps')
+        working-directory: lemma-frontend
+        run: npm ci
+      - name: Cache the app test browser
+        if: matrix.shard.catch_all || contains(matrix.shard.args, 'app/modules/apps')
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-auth-${{ runner.os }}-${{ hashFiles('lemma-frontend/package-lock.json') }}
+      - name: Install browser for app handoffs
+        if: matrix.shard.catch_all || contains(matrix.shard.args, 'app/modules/apps')
+        working-directory: lemma-frontend
+        run: npx --no-install playwright install --with-deps chromium
       # Pulled once for the whole run by `service-images`, which either found
       # this key or created it -- so a miss here is a broken assumption, not
       # something to paper over by pulling in every shard again.

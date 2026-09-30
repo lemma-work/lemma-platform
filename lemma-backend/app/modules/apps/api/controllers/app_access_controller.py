@@ -40,7 +40,7 @@ from app.modules.identity.contracts.app_sessions import (
 
 router = APIRouter(tags=["Apps"], redirect_slashes=False)
 ACCESS_COOKIE = "__Host-lemmaAppAccess"
-BINDING_COOKIE = "__Host-lemmaAppAccessBinding"
+BINDING_COOKIE_PREFIX = "__Host-lemmaAppAccessBinding-"
 PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "X-Robots-Tag": "noindex"}
 
 
@@ -77,6 +77,10 @@ def get_app_access_store() -> AppAccessStore:
 
 
 AppAccessStoreDep = Annotated[AppAccessStore, Depends(get_app_access_store)]
+
+
+def binding_cookie_name(request_id: str) -> str:
+    return BINDING_COOKIE_PREFIX + request_id
 
 
 def app_origin(request: Request) -> tuple[str, str, str | None]:
@@ -117,9 +121,9 @@ async def create_app_access_request(
     try:
         origin, slug, release_ref = app_origin(request)
         _require_same_origin(request, origin)
-        binding = request.cookies.get(BINDING_COOKIE) or secrets.token_urlsafe(32)
-        if len(binding) != 43:
-            binding = secrets.token_urlsafe(32)
+        # First visits in separate tabs have no shared cookie yet. A binding
+        # for each request lets both responses arrive without overwriting it.
+        binding = secrets.token_urlsafe(32)
         pending = AppAccessRequest(
             origin=origin,
             slug=slug,
@@ -142,7 +146,7 @@ async def create_app_access_request(
         headers=PRIVATE_HEADERS,
     )
     response.set_cookie(
-        BINDING_COOKIE,
+        binding_cookie_name(request_id),
         binding,
         max_age=REQUEST_TTL_SECONDS,
         secure=True,
@@ -240,7 +244,7 @@ async def redeem_app_access(
                 request_id=data.request_id,
                 code=data.code,
                 challenge=challenge,
-                binding=request.cookies.get(BINDING_COOKIE, ""),
+                binding=request.cookies.get(binding_cookie_name(data.request_id), ""),
                 origin=origin,
             ),
             timeout=5,
@@ -261,6 +265,13 @@ async def redeem_app_access(
         ACCESS_COOKIE,
         token,
         max_age=max(1, session.expires_at - int(time.time())),
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    response.delete_cookie(
+        binding_cookie_name(data.request_id),
         secure=True,
         httponly=True,
         samesite="lax",

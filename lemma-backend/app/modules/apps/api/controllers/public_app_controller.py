@@ -8,6 +8,7 @@ either via that host rewrite or directly from clients that set the header.
 """
 
 import asyncio
+from pathlib import PurePosixPath
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -49,11 +50,21 @@ _SLUG_HEADER = "X-App-Public-Slug"
 def _is_navigation(request: Request) -> bool:
     """Whether a person is looking at this response, or code is reading it.
 
-    A fetch for a missing bundle asset still gets the JSON error it has always
-    got; only a browser following a link is shown a page. `Accept` is the
-    signal every navigation sends and no asset fetch does.
+    Fetch metadata distinguishes documents from scripts even when a caller
+    sends an HTML Accept header. Older clients fall back to Accept.
     """
-    return "text/html" in request.headers.get("accept", "")
+    destination = request.headers.get("sec-fetch-dest")
+    return "text/html" in request.headers.get("accept", "") and (
+        destination is None or destination in {"document", "iframe", "frame"}
+    )
+
+
+def _can_show_access_page(request: Request, asset_path: str | None) -> bool:
+    if not _is_navigation(request):
+        return False
+    if request.headers.get("sec-fetch-dest") in {"document", "iframe", "frame"}:
+        return True
+    return PurePosixPath(asset_path or "").suffix.lower() in {"", ".html", ".htm"}
 
 
 def _asset_not_found_response(
@@ -145,11 +156,7 @@ async def _serve_private_asset(
         )
         return app_asset_response(asset)
     except AppAccessInvalidError as error:
-        if not _is_navigation(request) or (
-            asset_path
-            and "." in asset_path.rsplit("/", 1)[-1]
-            and asset_path != "index.html"
-        ):
+        if not _can_show_access_page(request, asset_path):
             return error_response(error)
         response = Response(
             render_app_access_page(),
@@ -161,6 +168,8 @@ async def _serve_private_asset(
             ACCESS_COOKIE, secure=True, httponly=True, samesite="lax", path="/"
         )
         return response
+    except AppAssetNotFoundError:
+        raise
     except DomainError:
         return error_response(AppNotFoundError())
     except RedisError, SuperTokensError, TimeoutError:

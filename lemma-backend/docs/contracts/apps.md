@@ -34,7 +34,10 @@ The table below is generated from the committed OpenAPI specification by `script
 An anonymous browser on a configured HTTPS app origin supplies a SHA-256
 verifier challenge. The server derives the slug and optional release from the
 Host, checks the exact Origin, and creates a five-minute Redis request bound to
-an HttpOnly, Secure, host-only browser cookie. Creation is rate-limited by the
+an HttpOnly, Secure, host-only cookie named
+`__Host-lemmaAppAccessBinding-<request_id>`. Each request owns its binding, so
+simultaneous first visits in separate tabs do not overwrite one another.
+Creation is rate-limited by the
 trusted client address. Neither the response nor the bootstrap reveals private
 app metadata or whether the slug exists.
 
@@ -56,8 +59,16 @@ proofs, browser bindings and cross-app attempts. A valid parent session and
 eligible account are required. The host-only `__Host-lemmaAppAccess` cookie
 authorizes that app's HTML and assets only, with an expiry no later than the
 parent session. Every private read rechecks identity and current app permission.
+Successful redemption clears only that request's binding cookie; abandoned
+bindings expire with the five-minute request.
 
 All handoff responses and private assets use `private, no-store`. Unavailable
 Redis or identity services fail closed with a useful 503; external handoff
 phases have bounded waits and run outside permission transactions. Public assets
 retain anonymous serving and their existing caching.
+
+Private HTML document navigations, including `.html` pages and nested
+`index.html` paths, receive the generic sign-in bootstrap before authorization.
+Script and stylesheet reads receive JSON refusals. After authorization, a
+missing document receives the existing recovery page linking to the workspace;
+non-navigation asset reads retain their JSON 404 response.

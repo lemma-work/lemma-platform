@@ -4,6 +4,8 @@ import { chromium } from "playwright";
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const config = JSON.parse(input);
+const loginReturn = config.mode.endsWith("login-return");
+const destination = config.origin + config.path;
 const browser = await chromium.launch({
     headless: true,
     channel: process.env.LEMMA_TEST_BROWSER_CHANNEL || undefined,
@@ -11,7 +13,19 @@ const browser = await chromium.launch({
 });
 try {
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
-    if (!config.mode?.endsWith("signed-out") && config.mode !== "login-return") await context.addCookies([{ name: "sAccessToken", value: config.token, domain: "api.example.test", path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+    if (!config.mode?.endsWith("signed-out") && !loginReturn) await context.addCookies([{ name: "sAccessToken", value: config.token, domain: "api.example.test", path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
+    const offers = [];
+    const redemptions = [];
+    if (config.mode === "concurrent") {
+        await context.route("**/_lemma/app-access/requests", async route => {
+            assert.ok(!route.request().headers().cookie?.includes("__Host-lemmaAppAccessBinding"));
+            offers.push(route);
+            if (offers.length === 2) await Promise.all(offers.map(offer => offer.continue()));
+        });
+        context.on("response", response => {
+            if (new URL(response.url()).pathname === "/_lemma/app-access/redeem") redemptions.push(response.status());
+        });
+    }
     if (config.mode === "blocked-cookies") {
         await context.route("**/_lemma/app-access/redeem", async route => {
             const target = new URL(route.request().url());
@@ -25,22 +39,26 @@ try {
     }
     if (config.mode === "service-down") await context.route("**/_lemma/app-access/requests", route => route.fulfill({ status: 503, contentType: "application/json", body: '{}' }));
     const page = await context.newPage();
+    const secondPage = config.mode === "concurrent" ? await context.newPage() : null;
     page.on("pageerror", error => console.error(error.message));
     page.on("console", message => { if (message.type() === "error") console.error(message.text()); });
     page.on("requestfailed", request => console.error(new URL(request.url()).pathname, request.failure()));
     page.on("response", response => { if (response.status() >= 400) console.error(response.status(), new URL(response.url()).pathname); });
     let navigations = 0;
     page.on("framenavigated", () => { navigations++; });
-    const response = await page.goto(config.workspace ? config.workspace : config.origin + "/deep/path?mode=study#section");
+    const [response] = await Promise.all([
+        page.goto(config.workspace || destination),
+        ...(secondPage ? [secondPage.goto(destination)] : []),
+    ]);
     const view = config.workspace ? page.frameLocator("iframe") : page;
-    if (config.mode === "login-return") {
+    if (loginReturn) {
         const signIn = view.getByRole("link", { name: "Sign in to Lemma" });
         await signIn.waitFor({ timeout: 15_000 });
         const link = new URL(await signIn.getAttribute("href"));
         assert.equal(link.origin, config.workspaceOrigin);
         assert.equal(link.pathname, "/auth");
         const returnUrl = link.searchParams.get("redirect_uri");
-        assert.equal(returnUrl, config.origin + "/deep/path?mode=study#section");
+        assert.equal(returnUrl, destination);
         await signIn.click();
         await page.getByRole("heading", { name: "Sign in", exact: true }).waitFor();
         const signedIn = await page.evaluate(async ({ apiOrigin, email }) => {
@@ -56,7 +74,7 @@ try {
         const link = new URL(await signIn.getAttribute("href"));
         assert.equal(link.origin, config.workspaceOrigin);
         assert.equal(link.pathname, "/auth");
-        assert.equal(link.searchParams.get("redirect_uri"), config.workspace || config.origin + "/deep/path?mode=study#section");
+        assert.equal(link.searchParams.get("redirect_uri"), config.workspace || destination);
         assert.equal((await view.locator("body").innerText()).includes("PRIVATE_APP_CONTENT"), false);
     } else if (["blocked-cookies", "service-down"].includes(config.mode)) {
         await view.getByText(config.mode === "blocked-cookies" ? "Your browser blocked app access. Allow cookies for this site, then try again." : "We couldn’t check your access. Try again.").waitFor({ timeout: 15_000 });
@@ -75,7 +93,13 @@ try {
         console.error(await page.evaluate(() => ({ sdk: typeof window.LemmaClient?.startAppAccess, crypto: typeof crypto.subtle, parent: window.parent === window })));
         throw error;
     }
-    if (!config.workspace) assert.equal(page.url(), config.origin + "/deep/path?mode=study#section");
+    if (!config.workspace) assert.equal(page.url(), destination);
+    if (secondPage) {
+        await secondPage.getByText("PRIVATE_APP_CONTENT", { exact: true }).waitFor({ timeout: 15_000 });
+        assert.equal(secondPage.url(), destination);
+        assert.deepEqual(redemptions, [200, 200]);
+        assert.ok(!(await context.cookies()).some(cookie => cookie.name.startsWith("__Host-lemmaAppAccessBinding-")));
+    }
     const cookies = await context.cookies();
     assert.equal(cookies.find(cookie => cookie.name === "sAccessToken").domain, "api.example.test");
     const access = cookies.find(cookie => cookie.name === "__Host-lemmaAppAccess");

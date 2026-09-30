@@ -68,6 +68,9 @@ module publishes parent-session and account eligibility checks. Private reads
 recheck authorization in a short unit of work, read storage afterward, and
 return `private, no-store` without ETags or 304 responses. App API credentials
 and desktop HTTP serving remain governed by their existing contracts.
+Request-specific browser binding cookies allow simultaneous first visits.
+Private HTML deep links use the same sign-in bootstrap as the app root, and
+authorized missing-document navigations retain the workspace recovery page.
 `AppsSettings` owns source/dist/combined upload ceilings and archive-entry,
 expanded-size, and compression-ratio protections.
 
