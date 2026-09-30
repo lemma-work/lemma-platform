@@ -539,7 +539,11 @@ where it would otherwise promise mail: a new invitation comes back with
 password reset answers that email isn't set up; and email-code sign-in refuses
 before minting a code (`EMAIL_NOT_CONFIGURED`) and points at a password instead.
 The filesystem transport is not "no mail" in this sense — it writes a spool for
-tests and the dev stack to read, and every send succeeds.
+tests and the dev stack to read, and every send succeeds. Chat signup is the
+exception that treats the spool as no mail, because nobody in a chat can read
+it: on either, a sender a shared bot does not recognise is told how to be
+recognised instead of being asked for an address (see
+[chat onboarding](operators/chat-onboarding.md)).
 
 On a local installation (`ENVIRONMENT=local`), a signed-in user can ask whether
 mail can be sent (`GET /users/me/email-delivery`) and send a test email to their

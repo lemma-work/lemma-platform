@@ -604,6 +604,13 @@ jobs:
       - name: Test auth journeys
         working-directory: lemma-frontend
         run: npm run test:auth-browser
+      # The auth journeys ran a dev server, and tsconfig includes the types it
+      # writes under .next/dev; one it left half written fails the build's
+      # type check. Cleared here rather than in `npm run build`, which must
+      # not pull the rug from under a dev server someone has running.
+      - name: Clear the auth journeys' dev output
+        working-directory: lemma-frontend
+        run: rm -rf .next/dev
       - run: npm run build
         working-directory: lemma-frontend
         env:
