@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { ownSettingsRow, readStatus } from "../src/desktop/agent-host.ts";
+import { ownSettingsRow, readStatus, takesOwnSettings } from "../src/desktop/agent-host.ts";
 
 /** "Use my own skills and settings" is a choice about this computer's Agent
  *  Host, made per agent. It was only under This Mac → Coding agents; people
@@ -19,4 +19,11 @@ test("the switch reads the host's list, and says why when it cannot", () => {
     assert.deepEqual(ownSettingsRow(status, "claude-code"), { checked: false, blocked: null });
     assert.match(ownSettingsRow(readStatus({ available: true }), "codex").blocked ?? "", /Update Lemma/);
     assert.ok(ownSettingsRow(null, "codex").blocked);
+});
+
+test("the switch is drawn for Claude Code only", async () => {
+    assert.equal(takesOwnSettings("claude-code"), true);
+    for (const harness of ["codex", "opencode", "cursor"]) assert.equal(takesOwnSettings(harness), false);
+    const source = await readFile(new URL("../src/desktop/this-computer-card.tsx", import.meta.url), "utf8");
+    assert.match(source, /if \(!takesOwnSettings\(harness\)\) return null;/);
 });
