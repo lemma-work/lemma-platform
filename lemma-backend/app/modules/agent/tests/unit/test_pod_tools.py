@@ -964,7 +964,6 @@ async def test_pod_edit_file_reapplies_to_what_the_file_says_now(monkeypatch):
         ["sha-1", "sha-2"],
     )
     services.current["next"] = "sha-2"
-    monkeypatch.setattr(pod_files, "invalidate_memory_brief", AsyncMock())
     _patch_services(monkeypatch, services)
 
     result = await pod_files.pod_edit_file(
@@ -992,7 +991,6 @@ async def test_pod_edit_file_writes_nothing_while_the_file_keeps_changing(monkey
         return await original(pod_id, path, ctx)
 
     services.file.get_file_by_path = always_moved
-    monkeypatch.setattr(pod_files, "invalidate_memory_brief", AsyncMock())
     _patch_services(monkeypatch, services)
 
     result = await pod_files.pod_edit_file(
