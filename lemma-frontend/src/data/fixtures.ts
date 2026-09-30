@@ -2508,6 +2508,16 @@ export const fixtureSource: PodSource = {
         if (SAMPLE_EDITS.has(path)) throw Object.assign(new Error("A file already exists at " + path), { statusCode: 409 });
         SAMPLE_EDITS.set(path, text);
     },
+    async renameFile(_podId: string, from: string, to: string) {
+        await wait(160);
+        if (SAMPLE_EDITS.has(to)) throw Object.assign(new Error("A file already exists at " + to), { statusCode: 409 });
+        /* Folders and never-opened fixtures are not in the edit map; a page
+           the sample has written is. Anything else reads as not there. */
+        const text = SAMPLE_EDITS.get(from);
+        if (text === undefined) throw Object.assign(new Error("No file at " + from), { statusCode: 404 });
+        SAMPLE_EDITS.set(to, text);
+        SAMPLE_EDITS.delete(from);
+    },
     async widgetEmbedUrl(): Promise<string> {
         throw new Error("The sample source cannot mint an embed URL.");
     },
