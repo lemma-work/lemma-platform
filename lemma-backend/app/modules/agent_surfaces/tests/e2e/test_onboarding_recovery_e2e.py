@@ -39,9 +39,9 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 )
 from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
 from app.modules.agent_surfaces.services.chat_onboarding import (
+    READY_MESSAGE,
     ChatOnboardingCoordinator,
 )
-from app.modules.agent_surfaces.services.onboarding_replies import READY_MESSAGE
 from app.modules.agent_surfaces.services.onboarding_cleanup import (
     ATTACHED_PURGE_GRACE_SECONDS,
     PURGE_GRACE_SECONDS,
@@ -184,7 +184,6 @@ async def test_a_revoked_identity_can_be_bound_to_the_account_that_proves_it_nex
                 external_user_id=sender,
                 user_id=fixed_test_user["id"],
                 verified_phone="+19995550000",
-                proof="phone",
                 revoked_at=datetime.now(timezone.utc),
             )
         )

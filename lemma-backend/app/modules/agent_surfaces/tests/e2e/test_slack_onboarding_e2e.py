@@ -272,8 +272,7 @@ async def test_a_channel_mention_during_signup_is_answered_where_the_room_cannot
     factory = SessionUnitOfWorkFactory(
         async_sessionmaker(db_session.bind, expire_on_commit=False)
     )
-    # A deployment that mails codes: without one, signup ends before it asks.
-    coordinator = ChatOnboardingCoordinator(factory, email_deliverable=lambda: True)
+    coordinator = ChatOnboardingCoordinator(factory)
     actor = "U" + uuid4().hex[:10]
 
     async def say(text, *, channel=False):

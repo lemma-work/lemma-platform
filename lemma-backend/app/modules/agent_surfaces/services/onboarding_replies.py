@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
-from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -114,67 +113,6 @@ async def say_privately(
         message=message,
         metadata=metadata,
     )
-
-
-#: What "done" sounds like. Both completion paths used to say nothing at all:
-#: the only sign of success was the replayed request coming back answered, and
-#: `replay_onboarding` has several raises that dead-letter after their retries
-#: -- so a failure there left somebody who had just proved their email with no
-#: acknowledgement and no answer, and nothing to tell that apart from being
-#: ignored. The confirmation is cheap and it is sent before the replay, so the
-#: flow is never silent even when the replay is.
-READY_MESSAGE = "You're all set. Picking up your message now."
-
-
-def ready_message(invited_pod_name: str | None = None) -> str:
-    """The confirmation, plus the one thing it never said.
-
-    An account made here has a single login method and it is passwordless.
-    Everything on the web that a person would reach for first -- a password,
-    "forgot password", Continue with Google -- is refused for exactly that
-    reason, and the only door that opens is a code sent to this same address.
-    Nobody was ever told that, so signing up on WhatsApp and then trying the
-    website looked like an account that did not work.
-
-    Composed rather than folded into `READY_MESSAGE` so the constant stays the
-    literal confirmation sentence that the recovery test matches on, and so the
-    URL is read when the message is sent rather than when the module is
-    imported.
-    """
-    joined = f"You were invited to {invited_pod_name}, and you're in it now.\n\n"
-    return (
-        f"{joined if invited_pod_name else ''}{READY_MESSAGE}\n\n"
-        f"To use Lemma on the web, go to {settings.frontend_url.rstrip('/')}/login "
-        "and enter this same email address. We'll send you a sign-in code -- "
-        "there's no password to remember."
-    )
-
-
-#: Where the owner of a Desktop install mints a link. Named once because the
-#: two replies below and the expired-link reply all send people there.
-LINK_BUTTON_PATH = (
-    "Lemma → Settings → This Mac → Server setup → Telegram and press "
-    "Chat with your agents on Telegram"
-)
-
-
-def no_email_signup_message(platform: SurfacePlatform) -> str:
-    """What a stranger is told when signup could only end in an unsent code.
-
-    Signup's last step is a code emailed to them, and an installation that
-    cannot send mail -- Lemma Desktop, unless its owner set up email -- would
-    ask for an address and then fail to deliver, every time. Saying so up front
-    is the honest answer; the owner connecting them from the app is the way in
-    that does work. Telegram also gets the owner's own path, because the person
-    most likely to message a Desktop install's bot is the one who set it up.
-    """
-    message = (
-        "This bot belongs to a private Lemma. Ask its owner to connect you from "
-        "the Lemma app."
-    )
-    if platform == SurfacePlatform.TELEGRAM:
-        message += f"\n\nIf this is your Lemma, open {LINK_BUTTON_PATH}."
-    return message
 
 
 def initial_prompt_for(step: str) -> str:

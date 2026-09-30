@@ -1,14 +1,13 @@
 """The three ways a signup ends without an account at the other side.
 
 Cancelled because they asked, expired because nobody came back, refused because
-it cannot be finished -- including the special case of an installation that
-cannot send the email code signup ends on. Separated from `ChatOnboardingCoordinator` because they
+it cannot be finished. Separated from `ChatOnboardingCoordinator` because they
 are one thing said three ways, and saying it three times in the middle of the
 state machine is what let `_refused` go missing in the first place -- a refusal
 that replied and changed nothing, so the next message re-entered the same branch
 and was refused in the same words, with no exit and nothing logged.
 
-All of them do exactly the same thing to the row: drop the held message, set a
+All three do exactly the same thing to the row: drop the held message, set a
 terminal step, and stamp `handed_off_at` so the next message goes through
 `recognize_sender` and starts afresh. That is `_end_with`, and having it in one
 place is the point -- the bug was one of the three not doing it.
@@ -34,10 +33,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
 )
-from app.modules.agent_surfaces.services.onboarding_replies import (
-    no_email_signup_message,
-    say_privately,
-)
+from app.modules.agent_surfaces.services.onboarding_replies import say_privately
 from app.modules.agent_surfaces.services.onboarding_transport import (
     OnboardingTransport,
 )
@@ -116,37 +112,6 @@ class OnboardingOutcomes:
             transport,
             destination,
             "Setup expired. Send a fresh request to start again.",
-        )
-
-    async def email_unavailable(
-        self,
-        transport: OnboardingTransport,
-        state: PendingState,
-        destination: ParsedInboundSurfaceEvent,
-    ) -> None:
-        """End a signup whose only remaining proof is an email nobody can send.
-
-        REFUSED rather than a new step, because it is exactly what REFUSED
-        means: signup has no answer for this person, and the next message
-        should be a stranger's again. That next signup is not a trap either --
-        if the owner connects them from the app they are recognised before it
-        starts, and if email is set up in between it simply asks for an address.
-
-        Not an error: this is the installation working as configured, so it is
-        logged as an observation and without the refusal's traceback.
-        """
-        logger.info(
-            "agent_surfaces.chat_onboarding.email_unavailable.observed",
-            platform=state.platform,
-            step=state.step,
-        )
-        await self._end_with(state, OnboardingStep.REFUSED)
-        await say_privately(
-            self._adapters,
-            self._uows,
-            transport,
-            destination,
-            no_email_signup_message(transport.event.platform),
         )
 
     async def refused(

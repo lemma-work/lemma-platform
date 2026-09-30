@@ -94,9 +94,6 @@ from app.modules.agent_surfaces.services.surface_service import (
 )
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
-from app.modules.agent_surfaces.services.telegram_link_service import (
-    TelegramLinkService,
-)
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagerService,
 )
@@ -316,7 +313,3 @@ def build_telegram_manager_service(
     uow_factory: UnitOfWorkFactory,
 ) -> TelegramManagerService:
     return TelegramManagerService(uow_factory=uow_factory)
-
-
-def build_telegram_link_service(uow_factory: UnitOfWorkFactory) -> TelegramLinkService:
-    return TelegramLinkService(uow_factory)
