@@ -169,6 +169,38 @@ class PodWriteFileRequest(BaseModel):
     )
 
 
+class FileEdit(BaseModel):
+    old_text: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Exact text to replace, copied from the file. It must appear exactly "
+            "once unless `replace_all` is set; include a neighbouring line to make "
+            "it unique."
+        ),
+    )
+    new_text: str = Field(..., description="Text to put in its place.")
+    replace_all: bool = Field(
+        default=False, description="Replace every occurrence instead of one."
+    )
+
+
+class PodEditFileRequest(BaseModel):
+    path: str = Field(
+        ...,
+        description=(
+            "Pod file path of an existing text file. A relative path resolves "
+            "against `/me/c/{date}/{slug}`."
+        ),
+    )
+    edits: list[FileEdit] = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="Replacements applied in order; each sees the result of the last.",
+    )
+
+
 class PodReadFileRequest(BaseModel):
     path: str = Field(
         ...,

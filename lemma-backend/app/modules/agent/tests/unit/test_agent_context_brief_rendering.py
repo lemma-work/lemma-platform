@@ -215,13 +215,26 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         assert framing.startswith("BRIEF")
         assert "steps" in framing and "minutes" in framing
         # The number never travels alone. Stated bare, a ceiling reads as a
-        # target and the run hurries to fit it; the work should take as long as
-        # it takes, and the limit is only there for a run going in circles.
-        assert "Take the time the work needs" in framing
+        # target and the run hurries to fit it; the limit is only there for a
+        # run going in circles. What a watched run is told instead is where its
+        # time actually went: extra checking, not the work.
+        assert "A person is waiting for this reply" in framing
+        assert "rather than rendering" in framing
+        assert "still gets the time it needs" in framing
         assert "shortest route" not in framing
         # Nothing is claimed about who started it, or whether anybody is waiting.
         assert "schedule" not in framing.lower()
         assert "nobody is watching" not in framing.lower()
+
+    def test_an_unattended_run_is_told_to_take_the_time_it_needs(self):
+        conversation = SimpleNamespace(metadata={"started_by": "SCHEDULE"})
+
+        framing = brief_lines.with_run_framing(
+            "BRIEF", conversation=conversation, run_source="wait_resume"
+        )
+
+        assert "Take the time the work needs" in framing
+        assert "A person is waiting" not in framing
 
     def test_a_conversation_with_no_metadata_at_all_is_safe(self):
         framing = brief_lines.with_run_framing("BRIEF", conversation=SimpleNamespace())

@@ -242,11 +242,39 @@ def build_agent_instructions(
     include_toolset_prompts: bool = True,
     runs_as_remote_process: bool = False,
 ) -> str:
+    """The whole system prompt as one string; see `build_agent_instruction_parts`."""
+    stable, per_conversation = build_agent_instruction_parts(
+        agent=agent,
+        conversation=conversation,
+        ctx=ctx,
+        include_toolset_prompts=include_toolset_prompts,
+        runs_as_remote_process=runs_as_remote_process,
+    )
+    return _SEPARATOR.join(part for part in (stable, per_conversation) if part)
+
+
+_SEPARATOR = "\n\n---\n\n"
+
+
+def build_agent_instruction_parts(
+    *,
+    agent: Agent,
+    conversation: Conversation,
+    ctx: AgentContext,
+    include_toolset_prompts: bool = True,
+    runs_as_remote_process: bool = False,
+) -> tuple[str, str]:
     """Compose the full system prompt for an agent run.
 
-    Layering: base prompt (pod-default vs user-agent) → reply discipline →
-    per-toolset fragments → agent instruction → conversation instructions →
-    runtime context brief.
+    Returned in two parts: what is the same for every conversation with this
+    agent (base prompt, reply discipline, per-toolset fragments, the agent's
+    own instruction), and what belongs to this conversation and this run
+    (working directory, conversation instructions, runtime brief, the open
+    doc, the task list). A provider caches the literal prefix, so the split is
+    the cache boundary: the in-process harness puts the capability guidance
+    between the two, which keeps that large and unchanging block inside the
+    prefix a new conversation can reuse, rather than behind a working
+    directory that differs in every conversation.
 
     ``include_toolset_prompts`` controls whether the per-toolset fragments are
     folded in here. The in-process LEMMA harness passes ``False`` because those
@@ -305,7 +333,11 @@ def build_agent_instructions(
     # Native agents also have a host cwd, resolved by Agent Host at dispatch.
     # Keep the sandbox path scoped to its tools so neither path masquerades as
     # a mount that does not exist.
-    sections.extend(
+    if agent.instruction.strip():
+        sections.append("# Agent Instructions\n" + agent.instruction.strip())
+
+    stable = sections
+    sections = list(
         _directory_sections(
             ctx=ctx,
             conversation=conversation,
@@ -313,9 +345,6 @@ def build_agent_instructions(
             runs_as_remote_process=runs_as_remote_process,
         )
     )
-
-    if agent.instruction.strip():
-        sections.append("# Agent Instructions\n" + agent.instruction.strip())
     if conversation.instructions and conversation.instructions.strip():
         sections.append(
             "# Conversation Instructions\n" + conversation.instructions.strip()
@@ -325,6 +354,11 @@ def build_agent_instructions(
     context_brief = getattr(ctx, "context_brief", None)
     if isinstance(context_brief, str) and context_brief.strip():
         sections.append(context_brief.strip())
+    # The doc this conversation is attached to, read fresh this run. After the
+    # brief because it changes whenever the doc does, which is most turns.
+    attached_document = getattr(ctx, "attached_document", None)
+    if isinstance(attached_document, str) and attached_document.strip():
+        sections.append(attached_document.strip())
 
     # The task list the conversation already has, if any. Without this a run
     # starts blind: the list lives in conversation metadata, and the tool return
@@ -339,8 +373,9 @@ def build_agent_instructions(
     # update; anything behind it would not. Appended unconditionally; the join
     # below drops it when it is empty.
     sections.append(_task_list_section(conversation, enabled=enabled))
-    return "\n\n---\n\n".join(
-        section.strip() for section in sections if section.strip()
+    return (
+        _SEPARATOR.join(section.strip() for section in stable if section.strip()),
+        _SEPARATOR.join(section.strip() for section in sections if section.strip()),
     )
 
 

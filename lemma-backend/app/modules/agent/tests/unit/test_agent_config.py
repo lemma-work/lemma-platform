@@ -39,6 +39,7 @@ EXPECTED = [
         60,
     ),
     ("agent_memory_index_max_chars", "AGENT_MEMORY_INDEX_MAX_CHARS", 2000),
+    ("agent_attached_document_max_chars", "AGENT_ATTACHED_DOCUMENT_MAX_CHARS", 24000),
     ("agent_memory_section_max_chars", "AGENT_MEMORY_SECTION_MAX_CHARS", 6000),
     (
         "agent_memory_brief_cache_ttl_seconds",

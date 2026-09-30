@@ -208,7 +208,12 @@ if [[ "$OPEN_PAGE" == "1" ]]; then
   # the same question `live_port` asks: a recorded port, and something
   # answering on it.
   if ! browser_is_live; then
-    lemma-ensure-display >/dev/null
+    # `9>&-`: what this starts -- Xvfb, the window manager, the browser relay
+    # -- outlives the capture, and a child inherits every open descriptor. With
+    # the lock's fd among them, the first capture that brought the display up
+    # left three daemons holding the lock for the life of the sandbox, and
+    # every capture after it waited out CAPTURE_LOCK_WAIT and failed.
+    lemma-ensure-display >/dev/null 9>&-
   fi
   CAPTURE_TAB="lemma-capture-$$"
   agent-browser tab new --label "$CAPTURE_TAB" "$URL" >/dev/null
