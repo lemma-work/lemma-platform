@@ -22,7 +22,7 @@ revision is 2026-07-28.
 |---|---|---|---|
 | Claude (claude.ai, Desktop, mobile) | A client ID metadata document when the server advertises both `client_id_metadata_document_supported` and `"none"` among token endpoint auth methods; dynamic registration otherwise; or a client ID pasted under Advanced settings | `https://claude.ai/api/mcp/auth_callback` | Starts sign-in **only** on a 401 carrying `resource_metadata`. Uses the first authorization server only. The resource in the metadata must equal the URL the person entered. Reaches the server from `160.79.104.0/21`, so the server must be public. Requires `readOnlyHint`/`destructiveHint` on every tool |
 | Claude Code | The same metadata document (`https://claude.ai/oauth/claude-code-client-metadata`), dynamic registration, or `--client-id` | `http://localhost:<any port>/callback` | `claude mcp add --transport http <name> <url>`, then `/mcp` or `claude mcp login <name>` |
-| ChatGPT (developer mode) | A metadata document (`https://chatgpt.com/oauth/...`) preferred; dynamic registration; pre-registered | `https://chatgpt.com/connector_platform_oauth_redirect` when the server returns `iss`; `https://chatgpt.com/connector/oauth/{callback_id}` otherwise | Token audience equal to the `resource` it sent. `search`/`fetch` tools are needed only to be a "company knowledge" source, not to connect. Tools without `readOnlyHint` are treated as writes and confirmed |
+| ChatGPT | A metadata document (`https://chatgpt.com/oauth/...`) preferred; dynamic registration; pre-registered | `https://chatgpt.com/connector_platform_oauth_redirect` when the server returns `iss`; `https://chatgpt.com/connector/oauth/{callback_id}` otherwise | Token audience equal to the `resource` it sent. `search`/`fetch` tools are needed only to be a "company knowledge" source, not to connect. Tools without `readOnlyHint` are treated as writes and confirmed |
 | Any 2026-07-28 client | Pre-registered, then metadata document, then dynamic registration (now deprecated but still the fallback) | Its own | Refuses a server whose metadata lacks `code_challenge_methods_supported`. Sends `resource` on both authorize and token requests. Validates RFC 9207 `iss` |
 
 Sources:
@@ -164,19 +164,25 @@ Redis. Clients, grants and token digests live in `mcp_oauth_clients`,
 
 ## Connecting a client
 
-The URL is `https://<api>/mcp/<pod id>`; `GET /oauth/mcp-endpoint/{pod_id}`
-returns it for a signed-in person.
+Everything below is also on each space's **Settings › AI tools** page, with the
+space's own link and a Copy button. The link is `https://<api>/mcp/<pod id>`;
+`GET /oauth/mcp-endpoint/{pod_id}` returns it for a signed-in person.
 
-- **Claude**: Customize → Connectors → Add custom connector, paste the URL,
-  and leave the OAuth client choice on Claude's own identity. The API must be
-  reachable from the public internet.
-- **Claude Code**: `claude mcp add --transport http lemma <url>`, then run
-  `/mcp` in a session (or `claude mcp login lemma`) and allow access in the
-  browser.
-- **ChatGPT**: Settings → Security and login → turn on developer mode, then
-  add a connector with the URL and choose OAuth.
-- **Anything else**: point it at the URL. A client that follows the MCP
-  authorization spec needs nothing more.
+- **Claude** (claude.ai, Desktop): Customize › Connectors, then Add › Add
+  custom connector. Name it, paste the link, choose Add, then Connect, and
+  allow Lemma. Claude detects OAuth and uses its own published identity; leave
+  both as detected.
+- **ChatGPT**: Plugins, then Add › Create MCP App. Name it, paste the link
+  under Connection, tick "I understand", choose Create, then Continue, and
+  allow Lemma. Mention it in a chat with `@<name>`. ChatGPT picks the client
+  metadata document and `private_key_jwt` on its own.
+- **Claude Code**: `claude mcp add --transport http lemma <link>`, then `/mcp`
+  in a session (or `claude mcp login lemma`), and allow Lemma in the browser.
+- **Anything else**: add the link as a remote MCP server. A client that
+  follows the MCP authorization spec needs nothing more.
+
+Claude and ChatGPT connect from their own servers, so the API must be
+reachable from the public internet; the settings page says so when it is not.
 
 ## Deploying behind a path prefix
 

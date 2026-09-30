@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import {
     MCP_CLIENTS,
     accessLabel,
+    connectorName,
     disconnectClient,
     mcpUrl,
     quote,
@@ -83,4 +84,19 @@ test("disconnecting something already gone is not an error", async () => {
     await disconnectClient("https://api.lemma.work", "g", gone);
     const broken = (async () => new Response(null, { status: 500 })) as unknown as typeof fetch;
     await assert.rejects(disconnectClient("https://api.lemma.work", "g", broken), /could not be disconnected/);
+});
+
+test("each client's steps name the connector the same way and never ask for more than three clicks", () => {
+    const url = "https://api.lemma.work/mcp/" + pod.id;
+    assert.equal(connectorName(pod), "Lemma – Marketing");
+    for (const client of MCP_CLIENTS) {
+        const steps = client.steps(url, pod);
+        assert.ok(steps.length >= 1 && steps.length <= 3, client.id);
+    }
+    for (const id of ["claude", "chatgpt"]) {
+        const steps = MCP_CLIENTS.find(client => client.id === id)?.steps(url, pod).join(" ") ?? "";
+        assert.match(steps, /Lemma – Marketing/);
+        assert.match(steps, /allow Lemma/);
+    }
+    assert.deepEqual(MCP_CLIENTS.map(client => client.id), ["claude", "chatgpt", "claude-code", "other"]);
 });

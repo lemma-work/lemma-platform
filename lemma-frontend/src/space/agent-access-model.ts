@@ -1,6 +1,6 @@
 import type { Pod } from "@/data";
 
-/** The words and commands behind Settings › Coding agents, kept apart from
+/** The words and commands behind Settings › AI tools, kept apart from
  *  the component so the quoting — the part a person pastes into a shell — is
  *  tested rather than trusted. */
 
@@ -132,16 +132,34 @@ export type McpClient = {
     steps: (url: string, pod: Pick<Pod, "name">) => string[];
 };
 
+/** What to call the space in a client's list of connectors. */
+export function connectorName(pod: Pick<Pod, "name">): string {
+    return "Lemma – " + pod.name;
+}
+
+/** The clicks, in each client's own words, as they are today. Kept to what a
+ *  person does: the link is copied above, so no step repeats it. */
 export const MCP_CLIENTS: McpClient[] = [
     {
         id: "claude",
         label: "Claude",
         remote: true,
         command: null,
-        steps: url => [
-            "In Claude, open Customize › Connectors and choose Add custom connector.",
-            "Paste " + url + " and add it.",
-            "Choose Connect, sign in to Lemma, and allow access.",
+        steps: (_url, pod) => [
+            "In Claude, open Customize › Connectors, then Add › Add custom connector.",
+            "Name it “" + connectorName(pod) + "”, paste the link, and choose Add.",
+            "Choose Connect and allow Lemma. Then just ask Claude about " + pod.name + ".",
+        ],
+    },
+    {
+        id: "chatgpt",
+        label: "ChatGPT",
+        remote: true,
+        command: null,
+        steps: (_url, pod) => [
+            "In ChatGPT, open Plugins, then Add › Create MCP App.",
+            "Name it “" + connectorName(pod) + "”, paste the link under Connection, tick “I understand”, and choose Create.",
+            "Choose Continue and allow Lemma. Then type @" + connectorName(pod) + " in any chat.",
         ],
     },
     {
@@ -151,18 +169,7 @@ export const MCP_CLIENTS: McpClient[] = [
         command: (url, pod) => "claude mcp add --transport http " + serverName(pod) + " " + url,
         steps: (_url, pod) => [
             "Run the command in the folder you work in.",
-            "In Claude Code, run /mcp, choose " + serverName(pod) + ", sign in to Lemma and allow access.",
-        ],
-    },
-    {
-        id: "chatgpt",
-        label: "ChatGPT",
-        remote: true,
-        command: null,
-        steps: url => [
-            "In ChatGPT on the web, turn on developer mode under Settings › Security and login.",
-            "Add a new connector with " + url + " and choose OAuth.",
-            "Sign in to Lemma when asked, and allow access.",
+            "In Claude Code, run /mcp, choose " + serverName(pod) + " and allow Lemma.",
         ],
     },
     {
@@ -170,9 +177,9 @@ export const MCP_CLIENTS: McpClient[] = [
         label: "Other",
         remote: false,
         command: null,
-        steps: url => [
-            "Add " + url + " as a remote MCP server (streamable HTTP).",
-            "A client that signs in with OAuth sends you here to allow access; nothing else to configure.",
+        steps: () => [
+            "Add the link as a remote MCP server.",
+            "When it asks you to sign in, allow Lemma. Nothing else to set up.",
         ],
     },
 ];

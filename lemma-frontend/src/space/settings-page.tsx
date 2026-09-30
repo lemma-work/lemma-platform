@@ -28,7 +28,7 @@ const SECTIONS: { id: SettingsSection; label: string }[] = [
     { id: "people", label: "People" },
     { id: "bots", label: "Bots" },
     { id: "channels", label: "Channels" },
-    { id: "agents", label: "Coding agents" },
+    { id: "agents", label: "AI tools" },
     { id: "schedules", label: "Schedules" },
     { id: "skills", label: "Skills" },
     { id: "model", label: "Models" },
@@ -87,7 +87,7 @@ export function SettingsPage({ pod, orgId, orgName, section, onSection, onOpenBo
                     </Section>
                 )}
                 {section === "agents" && (
-                    <Section title="Coding agents" note={"Use " + pod.name + " from Claude Code, Codex, Cursor or OpenCode — its pages, tables, workflows and bots — or connect Claude and ChatGPT by URL."}>
+                    <Section title="AI tools" note={"Use " + pod.name + " from Claude, ChatGPT, Claude Code and other AI tools."}>
                         <AgentAccess pod={pod} />
                     </Section>
                 )}

@@ -22,19 +22,17 @@ import { configuredApiUrl } from "@/session/origins";
 import { copyText } from "@/desktop/clipboard";
 import { CheckIcon, CopyIcon } from "@/ui/icons";
 
-/** Using a space from the coding agent somebody already works in.
+/** Using a space from the AI tools somebody already works in.
  *
- *  Everything here goes through the `lemma` CLI, because that is the path
- *  that works today: it signs in once, keeps its session fresh, and ships the
- *  skills that teach Claude Code or Codex what a space is. The first card is
- *  one prompt that does the whole setup — the agent runs the commands and
- *  you finish sign-in in the browser — so there is a zero-typing way in; the
- *  commands are underneath for anyone who would rather run them.
+ *  The link comes first because it is the easiest way in: copy it, paste it
+ *  into Claude or ChatGPT, allow Lemma — no install, no terminal. Each
+ *  connection asks the person first, acts as them, and is listed right below
+ *  to be disconnected.
  *
- *  Below it, the other way in: the space's MCP URL, which Claude, ChatGPT and
- *  any MCP client can add directly and sign in to — no CLI, and for Claude and
- *  ChatGPT no terminal at all. Each connection asks the person first, acts as
- *  them, and is listed here to be disconnected. */
+ *  The `lemma` CLI is folded underneath. It is still the fuller path for a
+ *  coding agent — it ships the skills that teach Codex or Cursor what a space
+ *  is — so it keeps its one-prompt setup, where the agent runs the commands
+ *  and the person only finishes sign-in in the browser. */
 
 function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
     const [copied, setCopied] = useState(false);
@@ -56,48 +54,51 @@ export function AgentAccess({ pod }: { pod: Pod }) {
 
     return (
         <div className="access">
-            <div className="access__tools" role="tablist" aria-label="Coding agent">
-                {TOOLS.map(entry => (
-                    <button key={entry.id} role="tab" aria-selected={entry.id === tool.id} onClick={() => setToolId(entry.id)}>{entry.label}</button>
-                ))}
-            </div>
-
-            <div className="access__card">
-                <div className="access__head">
-                    <span>
-                        <b>Set up</b>
-                        <small>Paste this into {tool.label}. It installs the Lemma CLI and connects it to {pod.name}; you finish sign-in in the browser.</small>
-                    </span>
-                    <CopyButton text={setup} label="Copy prompt" />
-                </div>
-                <pre className="access__text">{setup}</pre>
-                <details className="access__manual">
-                    <summary>Or run the commands yourself</summary>
-                    <div className="access__head">
-                        <small>In a terminal, in the folder you work in.</small>
-                        <CopyButton text={commands} />
-                    </div>
-                    <pre className="access__text access__text--code">{commands}</pre>
-                </details>
-            </div>
-
-            <div className="access__label">Then ask it</div>
-            <ul className="access__prompts">
-                {starterPrompts(pod).map(item => (
-                    <li key={item.title}>
-                        <span>
-                            <b>{item.title}</b>
-                            <small>{item.prompt}</small>
-                        </span>
-                        <span className="access__actions">
-                            <CopyButton text={item.prompt} />
-                            {tool.launch && <CopyButton text={tool.launch(item.prompt)} label="Command" />}
-                        </span>
-                    </li>
-                ))}
-            </ul>
-
             <McpAccess pod={pod} />
+
+            <details className="access__manual">
+                <summary>Use the Lemma CLI instead — for Codex, Cursor and OpenCode</summary>
+                <div className="access__tools" role="tablist" aria-label="Coding agent">
+                    {TOOLS.map(entry => (
+                        <button key={entry.id} role="tab" aria-selected={entry.id === tool.id} onClick={() => setToolId(entry.id)}>{entry.label}</button>
+                    ))}
+                </div>
+
+                <div className="access__card">
+                    <div className="access__head">
+                        <span>
+                            <b>Set up</b>
+                            <small>Paste this into {tool.label}. It installs the Lemma CLI and connects it to {pod.name}; you finish sign-in in the browser.</small>
+                        </span>
+                        <CopyButton text={setup} label="Copy prompt" />
+                    </div>
+                    <pre className="access__text">{setup}</pre>
+                    <details className="access__manual">
+                        <summary>Or run the commands yourself</summary>
+                        <div className="access__head">
+                            <small>In a terminal, in the folder you work in.</small>
+                            <CopyButton text={commands} />
+                        </div>
+                        <pre className="access__text access__text--code">{commands}</pre>
+                    </details>
+                </div>
+
+                <div className="access__label">Then ask it</div>
+                <ul className="access__prompts">
+                    {starterPrompts(pod).map(item => (
+                        <li key={item.title}>
+                            <span>
+                                <b>{item.title}</b>
+                                <small>{item.prompt}</small>
+                            </span>
+                            <span className="access__actions">
+                                <CopyButton text={item.prompt} />
+                                {tool.launch && <CopyButton text={tool.launch(item.prompt)} label="Command" />}
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            </details>
         </div>
     );
 }
@@ -136,17 +137,16 @@ function McpAccess({ pod }: { pod: Pod }) {
 
     return (
         <>
-            <div className="access__label">Or connect by URL</div>
             <div className="access__card">
                 <div className="access__head">
                     <span>
-                        <b>{pod.name} over MCP</b>
-                        <small>Add this to Claude, ChatGPT or any MCP client. It asks you to sign in and allow it, then reads and writes this space’s tables and files as you.</small>
+                        <b>Connect with a link</b>
+                        <small>Paste this link into Claude, ChatGPT or any AI tool that supports MCP, and allow Lemma when it asks. It works in {pod.name} as you, and sees only what you can.</small>
                     </span>
-                    <CopyButton text={url} label="Copy URL" />
+                    <CopyButton text={url} label="Copy link" />
                 </div>
                 <pre className="access__text access__text--code">{url}</pre>
-                <div className="access__tools" role="tablist" aria-label="MCP client">
+                <div className="access__tools" role="tablist" aria-label="AI tool">
                     {MCP_CLIENTS.map(entry => (
                         <button key={entry.id} role="tab" aria-selected={entry.id === client.id} onClick={() => setClientId(entry.id)}>{entry.label}</button>
                     ))}
