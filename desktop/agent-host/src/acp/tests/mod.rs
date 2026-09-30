@@ -4,6 +4,7 @@
 // mean the acp module itself, and now means this one.
 use super::*;
 
+mod claude_settings_tests;
 mod configuration_plan;
 mod lost_session;
 mod object_id_tests;
