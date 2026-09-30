@@ -79,6 +79,44 @@ export interface StandingJob {
     /** Set when the item was not a schedule shape at all. The row still draws;
      *  it just says so. */
     broken: boolean;
+    /** Whose work it is. `space` fires once for the whole space — set up by
+     *  whoever runs the space, so "Admin" on screen. `person` fires once per
+     *  person it concerns (a DATASTORE schedule runs as the row's owner).
+     *  `mine` is a PERSONAL schedule nobody else sees. */
+    scope: Scope;
+    /** What is missing before it can fire, in words — empty when nothing is. */
+    needsSetup: string;
+    /** Who made it, and so who it runs as (`user_id`). */
+    ownerId: string;
+    /** PERSONAL | POD | RESTRICTED | PUBLIC, upper-cased; "" when absent. */
+    visibility: string;
+    /** The row as it arrived, for making a copy of it. */
+    raw: Record<string, unknown>;
+}
+
+export type Scope = "space" | "person" | "mine";
+
+export const SCOPE_LABEL: Record<Scope, string> = { space: "Admin", person: "Each person", mine: "Only you" };
+export const SCOPE_NOTE: Record<Scope, string> = {
+    space: "Runs once for the whole space",
+    person: "Runs separately for each person, as them",
+    mine: "Yours alone; nobody else sees it",
+};
+
+export function scopeOf(kind: ScheduleKind, visibility: string): Scope {
+    if (kind === "DATASTORE") return "person";
+    if (visibility.toUpperCase() === "PERSONAL") return "mine";
+    return "space";
+}
+
+/** A WEBHOOK schedule listens through a connected account and a connector
+ *  trigger; without both it is a schedule that can never fire, and nothing
+ *  else on the row says so. */
+export function setupOf(kind: ScheduleKind, accountId: string, connectorTriggerId: string): string {
+    if (kind !== "WEBHOOK") return "";
+    if (!accountId) return "Needs an account connected before it can listen.";
+    if (!connectorTriggerId) return "Needs its trigger installed on the connected account.";
+    return "";
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -237,6 +275,11 @@ export function readSchedule(raw: unknown): StandingJob {
         failures: count(row["consecutive_failures"]),
         actions: Array.isArray(row["allowed_actions"]) ? (row["allowed_actions"] as unknown[]).map(text).filter(Boolean) : [],
         broken: !id,
+        scope: scopeOf(kind, text(row["visibility"])),
+        ownerId: text(row["user_id"]),
+        visibility: text(row["visibility"]).toUpperCase(),
+        raw: row,
+        needsSetup: setupOf(kind, text(row["account_id"]), text(row["connector_trigger_id"])),
     };
 }
 
@@ -283,6 +326,7 @@ export function healthOf(job: StandingJob): { tone: Tone; line: string } {
     }
     if (!job.active) return { tone: "off", line: "It will not fire until somebody resumes it." };
     if (job.target.kind === "none") return { tone: "bad", line: "No agent or workflow is assigned to this schedule." };
+    if (job.needsSetup) return { tone: "warn", line: job.needsSetup };
     if (job.failures > 0) {
         const times = job.failures === 1 ? "once" : job.failures + " times in a row";
         return { tone: "bad", line: "Failed " + times + "." };
@@ -320,6 +364,9 @@ export interface ScheduleRun {
     targetKind: string;
     /** The run the target itself made — an agent run or a workflow run. */
     targetRunId: string;
+    /** The row a DATASTORE firing was about (`payload.id`), for matching a
+     *  firing back to the record that caused it. */
+    subjectId: string;
     /** Set when this run is itself a retry of an earlier one. */
     retryOf: string;
     error: string;
@@ -359,6 +406,7 @@ export function readRun(raw: unknown): ScheduleRun {
         attempts: count(row["attempts"]),
         targetKind: text(row["target_kind"]).toLowerCase(),
         targetRunId: text(row["target_run_id"]),
+        subjectId: text(record(row["payload"])["id"]) || text(record(row["metadata"])["record_id"]),
         retryOf: text(row["redrive_of_run_id"]),
         error,
         /* When the event happened, falling back to when the row was written.
@@ -514,3 +562,48 @@ export const CADENCES: { label: string; cron: string }[] = [
     "0 * * * *",
     "*/30 * * * *",
 ].map((cron) => ({ label: describeCron(cron), cron }));
+
+/* ── one person's copy of somebody else's schedule ─────────────────── */
+
+/** What a copy of this schedule would need from the person making it.
+ *
+ *  A schedule runs as whoever made it, so "get this for me" is a new schedule
+ *  of your own with the same trigger and target. A table change needs no
+ *  copy — it already runs as each row's owner — and a webhook needs *your*
+ *  account, because it listens through the account it was made with. */
+export type CopyNeed = "none" | "account" | "not-needed" | "impossible";
+
+export function copyNeedOf(job: StandingJob): CopyNeed {
+    if (job.broken || job.target.kind === "none" || !job.target.name) return "impossible";
+    if (job.kind === "DATASTORE") return "not-needed";
+    if (job.kind === "WEBHOOK") return "account";
+    if (job.kind === "TIME") return "none";
+    return "impossible";
+}
+
+/** The create request for your own copy — personal, so it is yours alone. */
+export function copyRequest(job: StandingJob, accountId?: string): Record<string, unknown> | null {
+    const need = copyNeedOf(job);
+    if (need === "impossible" || need === "not-needed") return null;
+    if (need === "account" && !accountId) return null;
+    const row = job.raw;
+    const body: Record<string, unknown> = {
+        schedule_type: job.kind,
+        config: record(row["config"]),
+        visibility: "PERSONAL",
+    };
+    if (job.target.kind === "workflow") body.workflow_name = job.target.name;
+    else body.agent_name = job.target.name;
+    if (job.instruction) body.instruction = job.instruction;
+    if (job.filter) body.filter_instruction = job.filter;
+    const schema = row["filter_output_schema"];
+    if (schema && typeof schema === "object") body.filter_output_schema = schema;
+    if (job.kind === "WEBHOOK") {
+        body.account_id = accountId;
+        /* An agent's webhook names its trigger; a workflow's derives it and
+           refuses to be told (`schedule_target_policy.py`). */
+        if (job.target.kind === "agent") body.connector_trigger_id = text(row["connector_trigger_id"]);
+        if (job.target.kind === "workflow") body.config = {};
+    }
+    return body;
+}

@@ -172,7 +172,7 @@ export function WaitingInbox({ pods }: {
 }
 
 function WaitingRow({ row, open, onToggle, onAnswered }: {
-    row: Row;
+    row: WaitingRow;
     open: boolean;
     onToggle: () => void;
     onAnswered: () => void;
@@ -209,7 +209,7 @@ function WaitingRow({ row, open, onToggle, onAnswered }: {
     );
 }
 
-interface Row {
+export interface WaitingRow {
     wait: Assignment["wait"];
     run: Assignment["run"];
     podId: string;
@@ -230,7 +230,7 @@ interface Row {
  *  whole queue. The backend learned the same lesson inside this endpoint:
  *  authorizing per wait means one denial fails the entire request.
  */
-async function gather(pods: Pod[], sample: boolean): Promise<{ rows: Row[]; unreadable: number }> {
+export async function gather(pods: Pod[], sample: boolean): Promise<{ rows: WaitingRow[]; unreadable: number }> {
     if (sample) {
         const { SAMPLE_WAITING, SAMPLE_WORKFLOWS } = await import("@/data/fixtures");
         const named = new Map(readWorkflows({ items: SAMPLE_WORKFLOWS }).map((one) => [one.id, one.name]));
@@ -268,7 +268,7 @@ async function gather(pods: Pod[], sample: boolean): Promise<{ rows: Row[]; unre
         for (const flow of readWorkflows(listed)) names.set(flow.id, flow.name);
     }));
 
-    const rows: Row[] = [];
+    const rows: WaitingRow[] = [];
     for (const { pod, list } of owed) {
         for (const one of byStuckLongest(list)) {
             rows.push({

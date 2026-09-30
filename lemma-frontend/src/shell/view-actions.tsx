@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Tab } from "@/data";
-import { ExternalIcon, RefreshIcon, PlusIcon, HistoryIcon, CopyIcon, DownloadIcon, MoreIcon, LinkIcon, ComputerIcon } from "@/ui/icons";
+import { ExternalIcon, RefreshIcon, CopyIcon, DownloadIcon, MoreIcon, ComputerIcon } from "@/ui/icons";
 import { ShareDialog } from "@/thread/share-dialog";
 import { saveFile } from "@/thread/save-file";
 import { copyText } from "@/desktop/clipboard";
@@ -45,8 +45,10 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
         primary = <a href={tab.url} target="_blank" rel="noreferrer" title={isDesktop() ? "Open in its own window" : "Open app in new tab"}><ExternalIcon size={17}/><span>Open</span></a>;
         secondary = <AppReload url={tab.url} onReload={onReload} />;
     } else if (tab?.kind === "file") {
-        primary = <button disabled={!file.data || downloading} onClick={() => void download()} title="Download document"><DownloadIcon size={17}/><span>{downloading ? "Downloading…" : "Download"}</span></button>;
-        secondary = <><button disabled={!file.data} onClick={() => setSharing(true)} title="Share this document"><LinkIcon size={17}/><span>Share</span></button><button disabled={!file.data?.appUrl} onClick={() => void copy()} title="Copy document link"><CopyIcon size={17}/><span>Copy link</span></button></>;
+        const downloadButton = (className: string) => <button className={className} disabled={!file.data || downloading} onClick={() => void download()} title="Download document"><DownloadIcon size={17}/><span>{downloading ? "Downloading…" : "Download"}</span></button>;
+        /* On a phone the row has no width for it, so Download moves into More. */
+        primary = downloadButton("view-actions__wide");
+        secondary = <>{downloadButton("view-actions__narrow")}<button disabled={!file.data?.appUrl} onClick={() => void copy()} title="Copy document link"><CopyIcon size={17}/><span>Copy link</span></button></>;
     } else if (tab?.kind === "library" || tab?.kind === "table") {
         primary = <button onClick={() => void cache.invalidateQueries({ queryKey: tab.kind === "library" ? ["library", podId] : ["table", podId, tab.name] })} title="Refresh resources"><RefreshIcon size={17}/><span>Refresh</span></button>;
     } else if (tab?.kind === "profile") {
@@ -58,15 +60,14 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
     } else if (tab?.kind === "computer") {
         primary = <button onClick={() => void cache.invalidateQueries({ queryKey: ["computer"] })} title="Look again"><RefreshIcon size={17}/><span>Refresh</span></button>;
     } else {
-        primary = <button onClick={onNew} title="New conversation"><PlusIcon size={17}/><span>New conversation</span></button>;
+        /* Here the sidebar starts a conversation and lists them, so
+           the row above the chat keeps only the machine it works on. */
+        primary = !sample ? <button className="view-actions__icon" onClick={onComputer} title="The computer it works on" aria-label="Computer"><ComputerIcon size={17}/><span>Computer</span></button> : null;
+        void onNew; void onHistory;
         /* Beside History rather than in the tab strip, and secondary to both:
            the machine is worth reaching from the conversation it worked in,
            and is not something anybody opens a teammate to look at. */
-        secondary = <>
-            {/* Not on the History tab itself, where it would open what is open. */}
-            {tab?.kind !== "history" && <button className="view-actions__icon" onClick={onHistory} title="History" aria-label="History"><HistoryIcon size={17}/><span>History</span></button>}
-            {!sample && <button className="view-actions__icon" onClick={onComputer} title="The computer it works on" aria-label="Computer"><ComputerIcon size={17}/><span>Computer</span></button>}
-        </>;
+
     }
 
     return <div className="view-actions" aria-label="View actions">

@@ -102,6 +102,12 @@ export interface WorkflowRow {
     /** What the server says this caller may do to it. `cancel` on a run is
      *  gated separately, per run. */
     may: string[];
+    /** GLOBAL runs once for the space; USER runs per person, each as
+     *  themselves (`WorkflowMode`). Said as "Admin" and "Each person". */
+    perPerson: boolean;
+    /** `agent:<name>` / `function:<name>` for every node that targets one —
+     *  what a check for a deleted target reads without the graph. */
+    targets: string[];
 }
 
 /** One workflow out of `workflows.list()`.
@@ -123,6 +129,8 @@ export function readWorkflow(raw: unknown): WorkflowRow | null {
         active: raw.is_active !== false,
         updated: str(raw.updated_at) ?? str(raw.created_at),
         may: Array.isArray(raw.allowed_actions) ? raw.allowed_actions.filter((one): one is string => typeof one === "string") : [],
+        perPerson: str(raw.mode) === "USER",
+        targets: Array.isArray(raw.node_targets) ? raw.node_targets.filter((one): one is string => typeof one === "string") : [],
     };
 }
 
@@ -144,8 +152,10 @@ export interface RunRow {
     startedAt: string | null;
     completedAt: string | null;
     createdAt: string | null;
-    /** MANUAL, SCHEDULE, EVENT, DATA_STORE — why this run exists. */
+    /** MANUAL, SCHEDULED, EVENT, DATASTORE_EVENT — why this run exists. */
     startType: string | null;
+    /** Who the run belongs to — who started it, or whom a schedule ran it as. */
+    userId: string | null;
 }
 
 /** One run summary. A run without an id is unopenable and uncancellable, so
@@ -169,6 +179,7 @@ export function readRun(raw: unknown): RunRow | null {
         completedAt: str(raw.completed_at),
         createdAt: str(raw.created_at),
         startType: str(raw.start_type),
+        userId: str(raw.user_id),
     };
 }
 
@@ -192,6 +203,10 @@ export interface WaitRow {
      *  beside the schema. */
     uiSchema: Record<string, unknown> | null;
     createdAt: string | null;
+    /** For an AGENT wait, the conversation it is waiting on. */
+    externalRef: string | null;
+    /** For an AGENT wait, which agent. */
+    agentName: string | null;
 }
 
 export function waitTypeOf(raw: unknown): WaitType | null {
@@ -220,6 +235,8 @@ export function readWait(raw: unknown): WaitRow | null {
         schema: isRecord(payload.input_schema) ? payload.input_schema : null,
         uiSchema: isRecord(payload.ui_schema) ? payload.ui_schema : null,
         createdAt: str(raw.created_at),
+        externalRef: str(raw.external_ref),
+        agentName: str(payload.agent_name),
     };
 }
 
@@ -258,6 +275,10 @@ export interface StepRow {
      *  scalar — a step's output is the only record of what a node produced,
      *  and dropping the ones that are objects drops most of them. */
     output: unknown;
+    /** What the step handed work to. For an AGENT step it is the id of the
+     *  conversation the agent ran in (`executors/agent.py`), which is how a
+     *  run links to what its agent said. */
+    externalRef: string | null;
 }
 
 export function readStep(raw: unknown, at: number): StepRow {
@@ -265,7 +286,7 @@ export function readStep(raw: unknown, at: number): StepRow {
         /* Deliberately still a row. A malformed step means the step *ran*;
            hiding it renumbers everything after it and quietly shortens the
            history somebody is reading to work out what happened. */
-        return { index: at, nodeId: "", status: "UNKNOWN", startedAt: null, completedAt: null, error: null, output: undefined };
+        return { index: at, nodeId: "", status: "UNKNOWN", startedAt: null, completedAt: null, error: null, output: undefined, externalRef: null };
     }
     return {
         index: typeof raw.step_index === "number" ? raw.step_index : at,
@@ -275,6 +296,7 @@ export function readStep(raw: unknown, at: number): StepRow {
         completedAt: str(raw.completed_at),
         error: str(raw.error),
         output: raw.output_data,
+        externalRef: str(raw.external_ref),
     };
 }
 
