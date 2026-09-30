@@ -164,8 +164,12 @@ function McpAccess({ pod }: { pod: Pod }) {
     const client = MCP_CLIENTS.find(entry => entry.id === clientId) ?? MCP_CLIENTS[0];
     const command = client.command?.(url, pod) ?? null;
     const outOfReach = client.remote && !reachableFromInternet(url);
+    /* The viewer first: a space's member list is who else is in it, so the
+       person reading this would otherwise be "a former member" on their own
+       connections. */
     const whoConnected = (userId: string) =>
-        pod.members.find(member => member.userId === userId)?.name ?? "a former member";
+        userId === me ? "you"
+            : pod.members.find(member => member.userId === userId)?.name ?? "a former member";
 
     const disconnect = async (grantId: string) => {
         setConfirming(null);
