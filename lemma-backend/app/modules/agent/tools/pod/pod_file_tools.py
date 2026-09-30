@@ -193,6 +193,11 @@ async def pod_write_file(
     )
 
 
+#: Reads of a file that keeps changing before an edit gives up rather than
+#: write over what somebody else just saved.
+_EDIT_ATTEMPTS = 3
+
+
 def _apply_edits(text: str, edits: list[FileEdit]) -> tuple[str, int] | str:
     """Apply the replacements in order, or say which one could not be placed."""
     replaced = 0
@@ -228,21 +233,44 @@ async def pod_edit_file(
 
     async def op(services: PodServices) -> JsonObject:
         resolved_path = resolve_pod_path(ctx.deps, request.path)
-        entity, content = await services.file.download_file_content_by_path(
-            services.ctx.pod_id, resolved_path, services.ctx
-        )
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError:
+        # A doc open in a browser is saved while the agent works on it, so the
+        # text read here can be stale by the time it is written back. Before
+        # writing, the stored checksum is compared with the one read; if the
+        # file moved, the edits are applied again to what it says now -- they
+        # are replacements, not positions, so that is safe -- and only if they
+        # no longer fit is the agent told to look again. Narrower than an
+        # atomic compare-and-set, which the update path does not offer, and
+        # wide enough for a person typing in the page.
+        for _ in range(_EDIT_ATTEMPTS):
+            entity, content = await services.file.download_file_content_by_path(
+                services.ctx.pod_id, resolved_path, services.ctx
+            )
+            try:
+                text = content.decode("utf-8")
+            except UnicodeDecodeError:
+                return {
+                    "success": False,
+                    "path": resolved_path,
+                    "error": "This file is not text; it cannot be edited in place.",
+                }
+            applied = _apply_edits(text, request.edits)
+            if isinstance(applied, str):
+                return {"success": False, "path": resolved_path, "error": applied}
+            new_text, replaced = applied
+            current = await services.file.get_file_by_path(
+                services.ctx.pod_id, entity.path, services.ctx
+            )
+            if current.content_sha256 == entity.content_sha256:
+                break
+        else:
             return {
                 "success": False,
                 "path": resolved_path,
-                "error": "This file is not text; it cannot be edited in place.",
+                "error": (
+                    "The file kept changing while this edit was being applied, "
+                    "so nothing was written. Read it again and retry."
+                ),
             }
-        applied = _apply_edits(text, request.edits)
-        if isinstance(applied, str):
-            return {"success": False, "path": resolved_path, "error": applied}
-        new_text, replaced = applied
         updated = await _overwrite(
             services, entity.path, new_text.encode("utf-8"), None
         )

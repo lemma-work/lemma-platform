@@ -18,6 +18,7 @@ import csv
 import io
 import re
 import time
+import zipfile
 
 import pytest
 
@@ -239,8 +240,12 @@ async def test_a_word_document_is_made(desk):
         budget=DOCUMENT,
     )
 
-    # A .docx is a zip; anything else under that name is not one.
-    assert (await person.downloads(path, in_pod=pod))[:2] == b"PK"
+    # A .docx is a zip holding word/document.xml; anything else under that
+    # name is not one, and the orders have to be in it, not just a title.
+    with zipfile.ZipFile(io.BytesIO(await person.downloads(path, in_pod=pod))) as docx:
+        body = docx.read("word/document.xml").decode("utf-8", "replace")
+    missing = [o["customer"] for o in ORDERS if o["customer"] not in body]
+    assert not missing, f"the Word document leaves out {missing}"
 
 
 @scenario("A short research memo cites the sources it was drawn from")
@@ -309,10 +314,12 @@ async def test_something_is_remembered(desk):
         marker in str(hit) for hit in (hits.get("results") or hits.get("items") or [])
     )
     if not found:
-        paths = await person.paths_in(pod, directory="/me")
-        found = any(
-            marker in (await person.downloads(p, in_pod=pod)).decode("utf-8", "replace")
-            for p in paths
-            if p.endswith(".md")
-        )
+        # A plain loop: `any()` cannot consume an `await` inside a generator.
+        for path in await person.paths_in(pod, directory="/me"):
+            if not path.endswith(".md"):
+                continue
+            content = await person.downloads(path, in_pod=pod)
+            if marker in content.decode("utf-8", "replace"):
+                found = True
+                break
     assert found, f"{marker} is in no memory file"
