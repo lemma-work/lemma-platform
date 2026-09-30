@@ -3353,12 +3353,17 @@ samp,
     flex-direction: column;
     font-size: 14px;
 }
-.agentpage__channels li {
+.agentpage__channels > li {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.agentpage__channelrow {
     display: flex;
     align-items: center;
     gap: 10px;
 }
-.agentpage__channels li > svg,
+.agentpage__channelrow > svg,
 .agentpage__channels .channel-icon {
     flex: none;
     color: var(--ink-2);
@@ -7196,4 +7201,254 @@ samp,
     .trail__mate .tface {
         transition: none;
     }
+}
+
+/* ── A channel's groups: where people outside the space meet its bot ──
+   Under the channel they belong to, indented past its mark. One row a
+   group: its name, who answers there, and the two things to do about it. */
+.sgroups {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-left: 12px;
+    border-left: 1px solid var(--line);
+}
+.agentpage__channels .sgroups {
+    margin-left: 8px;
+}
+.reachrow__body .sgroups {
+    margin-top: 8px;
+}
+.sgroups__head {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+}
+.sgroups__quiet {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-3);
+}
+.sgroups__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.sgroup {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+.sgroup > .channel-icon,
+.sgroup > svg {
+    flex: none;
+    margin-top: 2px;
+}
+.sgroup__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.sgroup__title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sgroup__who {
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--ink-3);
+}
+/* The link people join a group the bot opened by: the address, then a copy
+   control the size of the line rather than of a toolbar. */
+.sgroup__link {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+.sgroup__link-text {
+    min-width: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sgroup__link .copy-control__button {
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    color: var(--ink-3);
+}
+.sgroup__link .copy-control__button:hover {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+.sgroup__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 14px;
+    margin-top: 2px;
+}
+/* A switch is a checkbox that says so: `role="switch"`, and the accent
+   rather than a second design for on and off. */
+.sgroup__switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    font-size: 13px;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+.sgroup__switch input {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.sgroup__switch:has(input:disabled) {
+    opacity: 0.6;
+    cursor: default;
+}
+.sgroup__switch:has(input:disabled) input {
+    cursor: default;
+}
+.sgroup__take {
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+.sgroup__take:hover:not(:disabled) {
+    color: var(--ink);
+    text-decoration-color: currentColor;
+}
+.sgroup__take:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.sgroup__take:focus-visible,
+.sgroup__switch input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.sgroup__problem {
+    font-size: 13px;
+    color: var(--bad);
+}
+
+/* ── A conversation that also lives on a chat platform ─────────────────
+   Two ways to send, over the box: a note to the bot alone (the default), or
+   a reply the platform gets. The line under the box says what the chosen one
+   does, and a note's box sits a shade back from a reply's. */
+.composer__modes {
+    flex: 1 0 100%;
+    display: flex;
+    gap: 4px;
+    min-width: 0;
+}
+.composer__mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    height: 32px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.composer__mode > svg,
+.composer__mode > .channel-icon {
+    flex: none;
+}
+.composer__mode > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.composer__mode:hover {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.composer__mode[aria-checked="true"] {
+    background: var(--line-2);
+    color: var(--ink);
+}
+.composer__mode:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.composer__hint {
+    flex: 1 0 100%;
+    margin: 0;
+    padding: 0 16px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.composer[data-choice="note"] .composer__box {
+    background: var(--wash-b);
+}
+
+/* ── Who wrote it, where that is not simply you ────────────────────── */
+.msg__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+    white-space: nowrap;
+}
+/* A note to the bot: over your bubble, on your side. */
+.msg__chip--note {
+    margin: 0 3px 5px 0;
+}
+/* Somebody outside the space, asking in a group: the near side, their name
+   over the bubble, and the copy control beside it on the far side. */
+.msg--guest {
+    align-items: flex-start;
+}
+.msg--guest .msg__head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 0 0 0 3px;
+}
+.msg--guest .msg__who {
+    color: var(--ink);
+}
+.msg--guest .message-actions {
+    right: auto;
+    left: calc(100% + 6px);
 }

@@ -57,6 +57,10 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
            other is how a row goes on saying the old thing under an instruction
            that was edited elsewhere. */
         primary = <button onClick={() => { void cache.invalidateQueries({ queryKey: ["profile", podId] }); void cache.invalidateQueries({ queryKey: ["agents", podId] }); void cache.invalidateQueries({ queryKey: ["agent", podId] }); }} title="Read this page again"><RefreshIcon size={17}/><span>Refresh</span></button>;
+    } else if (tab?.kind === "group") {
+        /* Its people talk while you read. The page reads itself again every
+           so often; this is for now. */
+        primary = <button onClick={() => { void cache.invalidateQueries({ queryKey: ["group", podId, tab.groupId] }); void cache.invalidateQueries({ queryKey: ["group-timeline", podId, tab.groupId] }); }} title="Read this group again"><RefreshIcon size={17}/><span>Refresh</span></button>;
     } else if (tab?.kind === "computer") {
         primary = <button onClick={() => void cache.invalidateQueries({ queryKey: ["computer"] })} title="Look again"><RefreshIcon size={17}/><span>Refresh</span></button>;
     } else {

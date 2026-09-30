@@ -3,7 +3,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { unbound } from "@/thread/conversation-list";
 import { source, type Pod, type SpaceView, type Tab } from "@/data";
-import { AppsIcon, FileIcon, FolderIcon, HomeIcon, SettingsIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
+import { AppsIcon, FileIcon, FolderIcon, GroupsIcon, HomeIcon, SettingsIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
+import { sayWaiting, waitingTotal } from "@/data/groups";
+import { useGroups } from "./group-queries";
 
 const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
     { view: "pages", label: "Pages", icon: <FileIcon size={18} /> },
@@ -15,6 +17,7 @@ const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
 /** What a recent item is, for its icon. */
 function RecentGlyph({ tab }: { tab: Tab }) {
     if (tab.kind === "app") return <AppsIcon size={17} />;
+    if (tab.kind === "group") return <GroupsIcon size={17} />;
     if (tab.kind === "table" || tab.kind === "record") return <TableIcon size={17} />;
     return <FileIcon size={17} />;
 }
@@ -43,6 +46,10 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
         staleTime: 60_000,
     });
     const yours = unbound(chats.data).filter(chat => chat.kind.toUpperCase() !== "TASK").slice(0, 8);
+    /* Questions people outside the space are waiting on you for, in any of
+       its groups — the list the Groups page reads, under its key. */
+    const groups = useGroups(pod.id);
+    const waiting = waitingTotal(groups.data ?? []);
 
     return (
         <nav className="snav" aria-label={pod.name + "’s space"}>
@@ -60,6 +67,14 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                     </button>
                 ))}
                 <button className="side__item" title="Workflows" aria-current={activeId === "space:workflows" ? "page" : undefined} onClick={onWorkflows}><WorkflowIcon size={18} /><span>Workflows</span></button>
+                {/* On one group's page this is the section it is in, not the page. */}
+                <button className="side__item" title="Groups" aria-current={activeId === "space:groups" ? "page" : activeId.startsWith("group:") ? "true" : undefined} onClick={() => onPick("space:groups")}>
+                    <GroupsIcon size={18} /><span>Groups</span>
+                    {waiting > 0 && <>
+                        <span className="snav__count" aria-hidden="true">{waiting}</span>
+                        <span className="sr-only">, {sayWaiting(waiting)}</span>
+                    </>}
+                </button>
             </div>
 
 

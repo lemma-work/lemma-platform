@@ -31,6 +31,8 @@ export {
     Eye as ShowIcon, EyeSlash as HideIcon,
     // The space's home, and the presentation starter on it.
     House as HomeIcon, PresentationChart as SlidesIcon, Play as PlayIcon,
+    // A space's group chats.
+    ChatsCircle as GroupsIcon,
 } from "@phosphor-icons/react";
 
 export function LemmaLogo({ compact = false }: { compact?: boolean }) {

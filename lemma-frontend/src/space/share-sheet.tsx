@@ -77,13 +77,15 @@ function LiveLink({ link, onRevoke, revoking }: { link: SharedLink; onRevoke: ()
  *  "who has access" is the space's people for every subject, and adding a
  *  person adds them to the space. A file can also go past the space, as a
  *  bounded public link, which is the one thing only a file can do. */
-export function ShareSheet({ pod, orgId, subject, onClose }: {
+export function ShareSheet({ pod, orgId, subject, adding: addingFirst = false, onClose }: {
     pod: Pod;
     orgId: string | null;
     subject: ShareSubject;
+    /** Open on adding people — asked for by an Invite button. */
+    adding?: boolean;
     onClose: () => void;
 }) {
-    const [adding, setAdding] = useState(false);
+    const [adding, setAdding] = useState(addingFirst);
     const [copied, setCopied] = useState(false);
     const [publicLink, setPublicLink] = useState(false);
     const path = subject.kind === "file" ? subject.path : "";

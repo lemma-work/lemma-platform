@@ -1,9 +1,11 @@
 import { key } from "@/session/storage";
 import { NEW_CONVERSATION } from "./types";
+import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
 import type { Conversation, FileContent, Invitation, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { agentChanges, agentRows, answeringAs, readAgentDetail, type AgentDraft } from "./agents";
+import { readGroup, readGroupDetail, readGroups, readTimeline, WHATSAPP_TITLE_MAX } from "./groups";
 import {
     createRequest,
     readRun,
@@ -1339,12 +1341,338 @@ const SAMPLE_HANDLE: Record<string, string> = {
 
 let SURFACES: Surface[] = [
     { id: "s3", platform: "RESEND", name: "email", mine: true, agentName: "Marketing", handle: "marketing@ops.example.invalid", email: "marketing@ops.example.invalid", active: true },
+    /* The space's own bot on the three platforms that have groups, so the
+       Groups page has one of each to start or add. Disconnect one to see the
+       page offer connecting it instead. */
+    { id: "s-telegram", platform: "TELEGRAM", name: "telegram", mine: true, agentName: "Marketing", handle: "@marketing_acme_bot", active: true },
+    { id: "s-whatsapp", platform: "WHATSAPP", name: "whatsapp", mine: true, agentName: "Marketing", handle: "+1 555-629-5168", active: true },
+    { id: "s-slack", platform: "SLACK", name: "slack", mine: true, agentName: "Marketing", handle: "Marketing", active: true },
 
     { id: "s4", platform: "TELEGRAM", name: "roaster", mine: false, agentName: "Roaster", handle: "@roaster_bot", active: true },
     /* Bound to a subagent, so deleting that agent has something to name. The
        backend tears this down with the agent — see `surfacesLost`. */
-    { id: "s5", platform: "TELEGRAM", name: "researcher", mine: false, agentName: "Researcher", handle: "@acme_research_bot", active: true },
+    { id: "s5", platform: "TELEGRAM", name: "researcher", mine: false, agentName: "Researcher", agentKey: "researcher", handle: "@acme_research_bot", active: true },
+    /* A bot you may read and not configure, so its group's switches have
+       something to say about who may change them. */
+    { id: "s6", platform: "TELEGRAM", name: "nightly-digest", mine: false, agentName: "Nightly digest", agentKey: "nightly-digest", handle: "@acme_digest_bot", active: true },
+    /* WhatsApp too, where the bot opens a group when asked and people join by
+       its link. */
+    { id: "s7", platform: "WHATSAPP", name: "researcher-whatsapp", mine: false, agentName: "Researcher", agentKey: "researcher", handle: "+1 555-010-4477", active: true },
 ];
+
+/* The groups the sample's bots are in, as the space-wide list and each
+   group's page read them — wire-shaped, so the sample goes through the reader
+   the API does, and switching one changes it everywhere.
+
+   Marketing's own hold one of each state a row has to draw: a Telegram group
+   you answer for with a question waiting on you, a WhatsApp group it opened
+   with the link people join by, a Slack channel shared with another company
+   that Priya answers for, a Telegram group nobody answers for, a WhatsApp
+   group WhatsApp has not confirmed yet, and a Slack channel inside the
+   company. The researcher's Design partners is the group whose outsiders'
+   conversation is in Chats; the digest bot's is one you may look at and not
+   switch. Only Marketing has any: every other sample space opens on the
+   Groups page's first run. */
+interface SampleGroup {
+    pod: string;
+    row: Record<string, unknown>;
+    people: Record<string, unknown>[];
+    /* `asker` is the sample's own note of who asked, so an answer can be
+       played back in the group under their name. The API names nobody. */
+    waiting: (Record<string, unknown> & { asker?: string })[];
+    lines: Record<string, unknown>[];
+    /* A group started in this session: WhatsApp "confirms" it then. */
+    readyAt?: number;
+}
+
+const ME_IN_GROUPS = { name: "Dana Jones", user_id: "sample-user", in_pod: true };
+const PRIYA_IN_GROUPS = { name: "Priya", user_id: "priya-user", in_pod: true };
+
+let GROUPS: SampleGroup[] = [
+    {
+        pod: "marketing",
+        row: {
+            id: "2b8e6d41-0c7f-4a93-b2e5-6f7a8b9c0d1e", surface_name: "telegram", platform: "TELEGRAM",
+            external_channel_id: "-1001839204502", title: "Launch crew", invite_link: null, pending: false,
+            shared_externally: false, owner: { user_id: "sample-user", display_name: null },
+            answers_outsiders: true, updated_at: ago(12 * MINUTES),
+        },
+        people: [
+            { ...ME_IN_GROUPS, external_id: "tg-10442" },
+            { ...PRIYA_IN_GROUPS, external_id: "tg-10571" },
+            { name: "Mara Okafor", external_id: "tg-20931", user_id: "mara-user", in_pod: false },
+            { name: "Tomás Rivera", external_id: "tg-20988", user_id: "tomas-user", in_pod: false },
+            { name: "@kbrandt", external_id: "tg-31207", user_id: null, in_pod: false },
+        ],
+        waiting: [{
+            notification_id: "n-group-logo", asked_at: ago(12 * MINUTES), asker: "Tomás Rivera",
+            question: "Tomás Rivera asked in Launch crew whether Northwind can put its logo on the launch page. Nothing Public covers it. What should I tell him?",
+        }],
+        lines: [
+            { author_name: "Dana Jones", author_external_id: "tg-10442", in_pod: true, from_bot: false, at: ago(2 * HOURS),
+                text: "Morning all. The partner walkthrough is Thursday at 3." },
+            { author_name: "Mara Okafor", author_external_id: "tg-20931", in_pod: false, from_bot: false, at: ago(108 * MINUTES),
+                text: "@marketing_acme_bot are the launch slides ready to share?" },
+            { author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: ago(107 * MINUTES),
+                text: "Not yet. The public launch page says the slides go out with the announcement on the 14th.",
+                answered_name: "Mara Okafor", answered_from_public: true },
+            { author_name: "Priya", author_external_id: "tg-10571", in_pod: true, from_bot: false, at: ago(80 * MINUTES),
+                text: "@marketing_acme_bot when is the walkthrough? I will send Mara the invite." },
+            { author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: ago(79 * MINUTES),
+                text: "Thursday at 3, from this morning’s message.", answered_name: "Priya", answered_from_public: false },
+            { author_name: "@kbrandt", author_external_id: "tg-31207", in_pod: false, from_bot: false, at: ago(75 * MINUTES),
+                text: "Hi all, joining from the Berlin office." },
+            { author_name: "Tomás Rivera", author_external_id: "tg-20988", in_pod: false, from_bot: false, at: ago(13 * MINUTES),
+                text: "@marketing_acme_bot can we put our logo on the launch page too?" },
+            { author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: ago(12 * MINUTES),
+                text: "Nothing public says yet, so I have asked the team and will come back here.",
+                answered_name: "Tomás Rivera", answered_from_public: true },
+        ],
+    },
+    {
+        pod: "marketing",
+        row: {
+            id: "4d7e2a90-6b3c-4f1e-a8d2-0c9b8a7f6e5d", surface_name: "whatsapp", platform: "WHATSAPP",
+            external_channel_id: "120363041977712345@g.us", title: "Acme × Northwind",
+            invite_link: "https://chat.whatsapp.com/Kx4vQ9mTzR2bLw7NpE3sHd", pending: false, shared_externally: false,
+            owner: { user_id: "sample-user", display_name: null }, answers_outsiders: true, updated_at: ago(2 * HOURS),
+        },
+        people: [
+            { ...ME_IN_GROUPS, external_id: "15551230001" },
+            { name: "Jonas Weber", external_id: "4915200011122", user_id: "jonas-user", in_pod: false },
+            { name: "Ana Lima", external_id: "447700900123", user_id: null, in_pod: false },
+        ],
+        waiting: [],
+        lines: [
+            { author_name: "Dana Jones", author_external_id: "15551230001", in_pod: true, from_bot: false, at: ago(3 * HOURS),
+                text: "Hi both, this is where we run the pilot. Marketing is here too." },
+            { author_name: "Ana Lima", author_external_id: "447700900123", in_pod: false, from_bot: false, at: ago(130 * MINUTES),
+                text: "Marketing, what does the pilot include?" },
+            { author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: ago(129 * MINUTES),
+                text: "The public pilot page lists three things: onboarding, a weekly report, and a shared group like this one.",
+                answered_name: "Ana Lima", answered_from_public: true },
+            { author_name: "Jonas Weber", author_external_id: "4915200011122", in_pod: false, from_bot: false, at: ago(2 * HOURS),
+                text: "Thanks, that covers it." },
+        ],
+    },
+    {
+        pod: "marketing",
+        row: {
+            id: "8a1f3c5e-7b9d-4e2f-9a6c-3d5e7f9a1b2c", surface_name: "slack", platform: "SLACK",
+            external_channel_id: "C07PARTNERS", title: "#partners-globex", invite_link: null, pending: false,
+            shared_externally: true, owner: { user_id: "priya-user", display_name: "Priya" },
+            answers_outsiders: true, updated_at: ago(1 * DAYS), last_message_at: ago(26 * HOURS),
+        },
+        people: [],
+        waiting: [],
+        lines: [],
+    },
+    {
+        pod: "marketing",
+        row: {
+            id: "c41a07f9-8e2d-4b6c-a1f3-9d8e7c6b5a40", surface_name: "telegram", platform: "TELEGRAM",
+            external_channel_id: "-1001839204688", title: "Beta testers", invite_link: null, pending: false,
+            shared_externally: false, owner: null, answers_outsiders: true, updated_at: ago(3 * DAYS),
+        },
+        people: [
+            { name: "Sofia Marin", external_id: "tg-40112", user_id: null, in_pod: false },
+            { name: "Kenji Watanabe", external_id: "tg-40135", user_id: null, in_pod: false },
+            { name: "Lea Novak", external_id: "tg-40188", user_id: null, in_pod: false },
+            { name: "Omar Haddad", external_id: "tg-40201", user_id: null, in_pod: false },
+        ],
+        waiting: [],
+        lines: [
+            { author_name: "Sofia Marin", author_external_id: "tg-40112", in_pod: false, from_bot: false, at: ago(3 * DAYS + 2 * HOURS),
+                text: "The export button is greyed out for me. Anyone else?" },
+            { author_name: "Kenji Watanabe", author_external_id: "tg-40135", in_pod: false, from_bot: false, at: ago(3 * DAYS + 90 * MINUTES),
+                text: "Same here, on the web app." },
+            { author_name: "Lea Novak", author_external_id: "tg-40188", in_pod: false, from_bot: false, at: ago(3 * DAYS + 40 * MINUTES),
+                text: "@marketing_acme_bot is export part of the beta?" },
+            { author_name: "Omar Haddad", author_external_id: "tg-40201", in_pod: false, from_bot: false, at: ago(3 * DAYS),
+                text: "Nobody answers here, it seems." },
+        ],
+    },
+    {
+        pod: "marketing",
+        row: {
+            id: "b3f81c5e-9d2a-4e6b-8f07-1a2b3c4d5e6f", surface_name: "whatsapp", platform: "WHATSAPP",
+            external_channel_id: null, title: "Harbor Foods pilot", invite_link: null, pending: true, shared_externally: false,
+            owner: { user_id: "sample-user", display_name: null }, answers_outsiders: true, updated_at: ago(1 * MINUTES),
+        },
+        people: [],
+        waiting: [],
+        lines: [],
+    },
+    {
+        pod: "marketing",
+        row: {
+            id: "d62b8e14-3f5a-4c7d-b9e0-2a4c6e8f0b13", surface_name: "slack", platform: "SLACK",
+            external_channel_id: "C05SALESTEAM", title: "#sales-team", invite_link: null, pending: false,
+            shared_externally: false, owner: null, answers_outsiders: true, updated_at: ago(4 * DAYS), last_message_at: ago(4 * DAYS),
+        },
+        people: [],
+        waiting: [],
+        lines: [],
+    },
+    {
+        pod: "marketing",
+        row: {
+            id: "7f3c9a2e-4b1d-4e8a-9c55-1d2e3f4a5b6c", surface_name: "researcher", platform: "TELEGRAM",
+            external_channel_id: "-1001839204417", title: "Design partners", invite_link: null, pending: false,
+            shared_externally: false, owner: { user_id: "sample-user", display_name: null },
+            answers_outsiders: true, updated_at: ago(11 * MINUTES),
+        },
+        people: [
+            { name: "Mara Okafor", external_id: "tg-20931", user_id: "mara-user", in_pod: false },
+            { name: "Tomás Rivera", external_id: "tg-20988", user_id: "tomas-user", in_pod: false },
+        ],
+        waiting: [],
+        lines: [
+            { author_name: "Mara Okafor", author_external_id: "tg-20931", in_pod: false, from_bot: false, at: ago(52 * MINUTES),
+                text: "@acme_research_bot is partner export ready yet?" },
+            { author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: ago(51 * MINUTES),
+                text: "Not yet. The public roadmap lists partner export for the October release, as CSV.",
+                answered_name: "Mara Okafor", answered_from_public: true },
+            { author_name: "Tomás Rivera", author_external_id: "tg-20988", in_pod: false, from_bot: false, at: ago(40 * MINUTES),
+                text: "Will it do JSON too? Our importer only reads JSON." },
+            { author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: ago(39 * MINUTES),
+                text: "The roadmap only says CSV. I’ve asked the team and will come back here.",
+                answered_name: "Tomás Rivera", answered_from_public: true },
+        ],
+    },
+    {
+        pod: "marketing",
+        row: {
+            id: "e9b2d4c6-1a3f-4d5e-8b7c-6a5f4e3d2c1b", surface_name: "nightly-digest", platform: "TELEGRAM",
+            external_channel_id: "-1001839204733", title: "Leadership", invite_link: null, pending: false,
+            shared_externally: false, owner: { user_id: "priya-user", display_name: "Priya" },
+            answers_outsiders: true, updated_at: ago(1 * DAYS),
+        },
+        people: [
+            { ...PRIYA_IN_GROUPS, external_id: "tg-10571" },
+        ],
+        waiting: [],
+        lines: [
+            { author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: ago(1 * DAYS + 30 * MINUTES),
+                text: "Last night: 14 new sign-ups, 3 churned, and the Harbor Foods pilot moved to week two." },
+            { author_name: "Priya", author_external_id: "tg-10571", in_pod: true, from_bot: false, at: ago(1 * DAYS),
+                text: "Thanks. Can we see the churn reasons tomorrow?" },
+        ],
+    },
+];
+
+/* The Slack channels the sample's own bot answers in, and the ones it could:
+   the two Slack groups above, and one it has not been invited to. */
+const SAMPLE_SLACK_ROUTES = [
+    { channel_id: "C07PARTNERS", channel_name: "partners-globex" },
+    { channel_id: "C05SALESTEAM", channel_name: "sales-team" },
+];
+const SAMPLE_SLACK_CHANNELS = [
+    { id: "C07PARTNERS", name: "partners-globex", is_member: true },
+    { id: "C05SALESTEAM", name: "sales-team", is_member: true },
+    { id: "C09LAUNCH", name: "launch", is_member: false },
+];
+/* Which sample channels may write first. */
+const SAMPLE_SEND = new Set<string>(["telegram"]);
+
+/* WhatsApp confirms a group it was asked for a few seconds later; so does
+   the sample, the first time anything reads the list after that. */
+function settleGroups(): void {
+    const now = Date.now();
+    GROUPS = GROUPS.map((entry) => {
+        if (!entry.readyAt || entry.readyAt > now || entry.row.pending !== true) return entry;
+        const code = String(entry.row.id).replace(/[^0-9a-z]/gi, "").slice(0, 12);
+        return {
+            ...entry,
+            row: {
+                ...entry.row, pending: false, external_channel_id: "1203630" + code.replace(/[^0-9]/g, "0") + "@g.us",
+                invite_link: "https://chat.whatsapp.com/" + code + "Lm", updated_at: new Date(entry.readyAt).toISOString(),
+            },
+        };
+    });
+}
+
+/* A group as the API sends it: who has spoken counted from the people the
+   log names (nothing for Slack, which keeps its own), and what is waiting on
+   the sample user. */
+function groupWire(entry: SampleGroup): Record<string, unknown> {
+    const logged = entry.row.platform !== "SLACK";
+    const inside = entry.people.filter((person) => person.in_pod === true).length;
+    const lastLine = entry.lines.map((line) => String(line.at)).sort().at(-1) ?? null;
+    return {
+        ...entry.row,
+        welcomes_outsiders: entry.row.answers_outsiders === true && entry.row.owner != null,
+        people_in_pod: logged ? inside : null,
+        people_outside: logged ? entry.people.length - inside : null,
+        last_message_at: entry.row.last_message_at ?? lastLine,
+        waiting_for_you: entry.waiting.length,
+    };
+}
+
+function sampleGroup(groupId: string): SampleGroup {
+    settleGroups();
+    const entry = GROUPS.find((candidate) => candidate.row.id === groupId);
+    if (!entry) throw Object.assign(new Error("That group is not here any more."), { statusCode: 404 });
+    return entry;
+}
+
+/* The backend's rule, played out here: switching people outside on where
+   nobody answers for them, or taking a group over, makes you the one who
+   does. */
+function changeSampleGroup(groupId: string, change: { answers_outsiders?: boolean | null; take_over?: boolean }): Record<string, unknown> {
+    const entry = sampleGroup(groupId);
+    const was = entry.row;
+    const owner = change.take_over || (change.answers_outsiders && !was.owner)
+        ? { user_id: "sample-user", display_name: null }
+        : was.owner ?? null;
+    const answers = typeof change.answers_outsiders === "boolean" ? change.answers_outsiders : was.answers_outsiders === true;
+    const saved = { ...entry, row: { ...was, owner, answers_outsiders: answers, updated_at: new Date().toISOString() } };
+    GROUPS = GROUPS.map((candidate) => (candidate === entry ? saved : candidate));
+    return groupWire(saved);
+}
+
+/* Where Design partners' outsiders land: one conversation for the group, yours
+   because you answer for it. Two people outside the space ask; between their
+   questions, a note to the bot the group never saw. */
+const OUTSIDERS: Conversation = {
+    id: "outsiders",
+    title: "Is partner export ready yet?",
+    status: "COMPLETED",
+    agentId: "a-researcher",
+    metadata: {
+        source: "agent_surfaces", surface_platform: "TELEGRAM", conversation_kind: "CHANNEL",
+        channel_name: "Design partners", external_channel_id: "-1001839204417", audience: "outsiders",
+    },
+    messages: [
+        {
+            id: "out-1", role: "user", kind: "TEXT", sequence: 1, created_at: ago(52 * MINUTES),
+            text: "@acme_research_bot is partner export ready yet?",
+            metadata: { surface_platform: "TELEGRAM", conversation_kind: "CHANNEL", sender_display_name: "Mara Okafor" },
+        },
+        {
+            id: "out-2", role: "assistant", kind: "TEXT", sequence: 2, created_at: ago(51 * MINUTES),
+            text: "Not yet. The public roadmap lists partner export for the October release, as CSV.",
+        },
+        {
+            id: "out-3", role: "user", kind: "TEXT", sequence: 3, created_at: ago(40 * MINUTES),
+            text: "Will it do JSON too? Our importer only reads JSON.",
+            metadata: { surface_platform: "TELEGRAM", conversation_kind: "CHANNEL", sender_display_name: "Tomás Rivera" },
+        },
+        {
+            id: "out-4", role: "assistant", kind: "TEXT", sequence: 4, created_at: ago(39 * MINUTES),
+            text: "The roadmap only says CSV. I’ve asked the team and will come back here.",
+        },
+        {
+            id: "out-5", role: "user", kind: "TEXT", sequence: 5, created_at: ago(12 * MINUTES),
+            text: "JSON ships in November, with it. Fine to tell them that — no other dates.",
+            metadata: { private_note: true },
+        },
+        {
+            id: "out-6", role: "assistant", kind: "TEXT", sequence: 6, created_at: ago(11 * MINUTES),
+            text: "Understood. When it comes up I’ll say JSON arrives in November, and give no other dates.",
+        },
+    ],
+};
 
 let guidedStartedAt = 0;
 let accountStartedAt = 0;
@@ -2200,10 +2528,153 @@ export const fixtureSource: PodSource = {
         await wait(40);
         return [...SURFACES];
     },
-    async getSurface() { throw new Error("Channel configuration is available in a connected workspace."); },
-    async surfaceSetup() { throw new Error("Setup status is available in a connected workspace."); },
-    async surfaceChannels() { return { channels: [] }; },
-    async updateSurface() { throw new Error("Channel configuration is available in a connected workspace."); },
+    /* Enough of a channel's settings to judge the sheet: whether it is on,
+       who answers, whether it may write first, and — on Slack — the channels
+       it answers in. Saving changes the sample's own copy. */
+    async getSurface(podId: string, name: string) {
+        await wait(80);
+        const surface = SURFACES.find((candidate) => candidate.name === name);
+        if (!surface) throw Object.assign(new Error("That channel is not here any more."), { statusCode: 404 });
+        return {
+            id: surface.id, name: surface.name, platform: surface.platform, pod_id: podId,
+            status: surface.active ? "ACTIVE" : "INACTIVE",
+            agent_name: surface.mine ? null : surface.agentKey ?? null,
+            uses_default_agent: surface.mine,
+            reach: { handle: surface.handle, email: surface.email ?? null },
+            config: {
+                channels: surface.platform === "SLACK" ? SAMPLE_SLACK_ROUTES : [],
+                send_policy: { allow_send: SAMPLE_SEND.has(surface.name) },
+            },
+        } as unknown as AgentSurfaceResponse;
+    },
+    async surfaceSetup(_podId: string, name: string) {
+        await wait(60);
+        const surface = SURFACES.find((candidate) => candidate.name === name);
+        return {
+            exists: Boolean(surface), ready: Boolean(surface), status: surface?.active === false ? "INACTIVE" : "ACTIVE",
+            platform: surface?.platform ?? "TELEGRAM", actions: [],
+            guide: { docs_path: "", platform: surface?.platform ?? "TELEGRAM", summary: "", title: "" },
+        } as unknown as SurfaceSetupResponse;
+    },
+    async surfaceChannels() {
+        await wait(80);
+        return { channels: SAMPLE_SLACK_CHANNELS } as unknown as AvailableSurfaceChannelsResponse;
+    },
+    async updateSurface(_podId: string, name: string, patch) {
+        await wait(400);
+        if (typeof patch.is_enabled === "boolean") {
+            SURFACES = SURFACES.map((surface) => (surface.name === name ? { ...surface, active: patch.is_enabled === true } : surface));
+        }
+        if (patch.config?.send_policy?.allow_send) SAMPLE_SEND.add(name);
+        else SAMPLE_SEND.delete(name);
+    },
+    async listSurfaceGroups(podId: string, surfaceName: string) {
+        await wait(120);
+        settleGroups();
+        return readGroups({ items: GROUPS.filter((entry) => entry.pod === podId && entry.row.surface_name === surfaceName).map(groupWire) });
+    },
+    async updateSurfaceGroup(_podId: string, _surfaceName: string, groupId: string, change) {
+        await wait(500);
+        const group = readGroup(changeSampleGroup(groupId, change));
+        if (!group) throw new Error("That group is not here any more.");
+        return group;
+    },
+    async listGroups(podId: string) {
+        await wait(140);
+        settleGroups();
+        return readGroups({ items: GROUPS.filter((entry) => entry.pod === podId).map(groupWire) });
+    },
+    async getGroup(_podId: string, groupId: string) {
+        await wait(120);
+        const entry = sampleGroup(groupId);
+        const group = readGroupDetail({ ...groupWire(entry), people: entry.people, waiting: entry.waiting });
+        if (!group) throw new Error("That group is not here any more.");
+        return group;
+    },
+    async groupTimeline(_podId: string, groupId: string) {
+        await wait(160);
+        const entry = sampleGroup(groupId);
+        return readTimeline({ items: entry.row.platform === "SLACK" ? [] : entry.lines });
+    },
+    async startGroup(podId: string, start) {
+        await wait(700);
+        const surface = SURFACES.find((candidate) => candidate.name === start.surfaceName);
+        if (!surface || surface.platform !== "WHATSAPP") {
+            throw Object.assign(new Error("Only WhatsApp groups can be started from Lemma."), { statusCode: 422 });
+        }
+        const id = "sample-" + Math.random().toString(16).slice(2, 10) + "-" + Date.now().toString(16);
+        const entry: SampleGroup = {
+            pod: podId,
+            row: {
+                id, surface_name: surface.name, platform: "WHATSAPP", external_channel_id: null,
+                title: start.title.slice(0, WHATSAPP_TITLE_MAX), invite_link: null, pending: true, shared_externally: false,
+                owner: { user_id: "sample-user", display_name: null }, answers_outsiders: start.answersOutsiders,
+                updated_at: new Date().toISOString(),
+            },
+            people: [],
+            waiting: [],
+            lines: [],
+            readyAt: Date.now() + 4_000,
+        };
+        GROUPS = [entry, ...GROUPS];
+        const group = readGroup(groupWire(entry));
+        if (!group) throw new Error("That group could not be started.");
+        return group;
+    },
+    /* The link is real Telegram's shape and goes nowhere useful; the group it
+       would have added arrives here a few seconds later, the way the bot's
+       hello would bring it. */
+    async groupLink(podId: string, surfaceName: string) {
+        await wait(400);
+        const surface = SURFACES.find((candidate) => candidate.name === surfaceName);
+        if (!surface || surface.platform !== "TELEGRAM") {
+            throw Object.assign(new Error("Add-to-group links are for Telegram."), { statusCode: 422 });
+        }
+        const arriving = "sample-tg-" + Date.now().toString(16);
+        window.setTimeout(() => {
+            GROUPS = [{
+                pod: podId,
+                row: {
+                    id: arriving, surface_name: surfaceName, platform: "TELEGRAM", external_channel_id: "-100" + Date.now(),
+                    title: "Supplier chat", invite_link: null, pending: false, shared_externally: false,
+                    owner: { user_id: "sample-user", display_name: null }, answers_outsiders: true, updated_at: new Date().toISOString(),
+                },
+                people: [],
+                waiting: [],
+                lines: [{
+                    author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: new Date().toISOString(),
+                    text: "Hi, I’m " + surface.agentName + ". Mention me or reply to me to ask something.",
+                }],
+            }, ...GROUPS];
+        }, 6_000);
+        return {
+            url: "https://t.me/" + surface.handle.replace(/^@/, "") + "?startgroup=sample",
+            expiresAt: new Date(Date.now() + 60 * MINUTES).toISOString(),
+        };
+    },
+    async updateGroup(_podId: string, groupId: string, change) {
+        await wait(500);
+        const group = readGroup(changeSampleGroup(groupId, change));
+        if (!group) throw new Error("That group is not here any more.");
+        return group;
+    },
+    /* Answered: the question leaves your queue, and the bot passes the answer
+       on in the group under the asker's name. */
+    async answerGroupQuestion(_podId: string, notificationId: string, answer: string) {
+        await wait(600);
+        const entry = GROUPS.find((candidate) => candidate.waiting.some((ask) => ask.notification_id === notificationId));
+        if (!entry) throw Object.assign(new Error("Someone has already answered that."), { statusCode: 409 });
+        const asked = entry.waiting.find((ask) => ask.notification_id === notificationId);
+        const relayed = {
+            author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: new Date().toISOString(),
+            text: answer, answered_name: asked?.asker ?? null, answered_from_public: true,
+        };
+        GROUPS = GROUPS.map((candidate) => candidate === entry ? {
+            ...entry,
+            waiting: entry.waiting.filter((ask) => ask.notification_id !== notificationId),
+            lines: [...entry.lines, relayed],
+        } : candidate);
+    },
     async createSurfaceAccount() { throw new Error("Connect accounts in a connected workspace."); },
     async listConnectable() {
         await wait(90);
@@ -2556,6 +3027,7 @@ export const fixtureSource: PodSource = {
         await wait(40);
         const all = [
             { id: "fixture", title: "Monday launch", at: "10:14", kind: "CHAT", meta: {} },
+            { id: "outsiders", title: OUTSIDERS.title, at: "10:03", kind: "CHAT", agentId: OUTSIDERS.agentId, meta: OUTSIDERS.metadata ?? {} },
             { id: "c2", title: "Long report preview and channel layout review", at: "11 Sept", kind: "TASK", meta: { source: "WORKFLOW_RUN", workflow_run_id: "run-onboard" } },
             { id: "c3", title: "Design partner shortlist", at: "Thu", kind: "CHAT", meta: { source: "agent_surfaces", surface_platform: "SLACK", channel_name: "launch" } },
             { id: "c4", title: "Q1 vendor totals", at: "Wed", kind: "CHAT", meta: { lemma_resource: "file:/pages/q1-vendors.md" } },
@@ -2579,6 +3051,7 @@ export const fixtureSource: PodSource = {
         if (conversationId === NEW_CONVERSATION) {
             return { id: null, title: "", status: null, messages: [] };
         }
+        if (conversationId === OUTSIDERS.id) return OUTSIDERS;
         if (conversationId === "c2") return {
             id: "c2", title: "Long report preview", status: "COMPLETED",
             messages: [

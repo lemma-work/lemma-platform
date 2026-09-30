@@ -7,7 +7,7 @@ const isApp = (tab: string) => tab === "apps" || tab.startsWith("app:");
 export function layoutForTab(selected: string, expanded: boolean, origin = "conversation"): SplitTabs {
     /* A space's own lists are places, not things opened from somewhere: they
        always take the stage. What is opened from them sits beside them. */
-    if (selected.startsWith("space:") || selected.startsWith("bot:") || selected.startsWith("run:") || selected.startsWith("workflow:") || selected === "conversation" || selected === "profile" || selected === origin || expanded || isApp(selected)) return { main: selected, right: null };
+    if (selected.startsWith("space:") || selected.startsWith("bot:") || selected.startsWith("run:") || selected.startsWith("workflow:") || selected.startsWith("group:") || selected === "conversation" || selected === "profile" || selected === origin || expanded || isApp(selected)) return { main: selected, right: null };
     return { main: origin, right: selected };
 }
 

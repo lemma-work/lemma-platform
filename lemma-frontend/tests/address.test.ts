@@ -31,6 +31,8 @@ const PLACES: [Address, string][] = [
     [at("space:chats"), "/t/" + POD + "/chats"],
     [at("run:run_42"), "/t/" + POD + "/run/run_42"],
     [at("workflow:budget-sign-off"), "/t/" + POD + "/workflow/budget-sign-off"],
+    [at("space:groups"), "/t/" + POD + "/groups"],
+    [at("group:7f3c9a2e-4b1d-4e8a"), "/t/" + POD + "/group/7f3c9a2e-4b1d-4e8a"],
     [at("space:settings"), "/t/" + POD + "/settings"],
     [at("space:about"), "/t/" + POD + "/about"],
     [at("library"), "/t/" + POD + "/library"],
@@ -210,4 +212,13 @@ test("a new conversation getting its id replaces rather than pushes", () => {
 test("a bare space address filled in with the restored view replaces", () => {
     assert.equal(isNewPlace(readAddress("/t/" + POD), placeAt({ tabId: "space:home" })), false);
     assert.equal(isNewPlace(readAddress("/t"), placeAt({ tabId: "space:home" })), false);
+});
+
+test("a group rebuilds from its id alone, named until its page reads it", () => {
+    assert.deepEqual(tabFromId("group:7f3c9a2e"), { id: "group:7f3c9a2e", kind: "group", label: "Group", groupId: "7f3c9a2e" });
+    assert.equal(tabFromId("group:"), null);
+    // A group's address is one id and nothing after it.
+    assert.deepEqual(readAddress("/t/" + POD + "/group"), at(null));
+    assert.deepEqual(readAddress("/t/" + POD + "/group/a/b"), at(null));
+    assert.deepEqual(readAddress("/t/" + POD + "/groups/extra"), at(null));
 });

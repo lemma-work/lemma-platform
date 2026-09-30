@@ -20,6 +20,7 @@ import "@/styles/tool-cards.css";
 import "@/styles/document.css";
 import "@/styles/space-tokens.css";
 import "@/styles/space.css";
+import "@/styles/groups.css";
 import "@/styles/space-mobile.css";
 
 export const metadata: Metadata = { metadataBase: new URL(publicSiteUrl()), title: {default: 'Lemma', template: '%s | Lemma'}, description: 'Your teammates and the work they are doing.', manifest: '/manifest.webmanifest', alternates: {types: {'application/rss+xml':'/feed.xml'}} };

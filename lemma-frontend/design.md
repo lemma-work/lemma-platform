@@ -94,6 +94,29 @@ everywhere, never "Lem", "main bot" or "assistant". Say "space" only where the
 place is the point (who can open something, where it is kept); everywhere
 else the teammate's name does the work.
 
+## Groups
+
+A space's group chats are a place in it: `/t/{pod}/groups`, and one group at
+`/t/{pod}/group/{id}`. Every WhatsApp group, Telegram group and Slack channel
+any of its bots is in, from `podGroups`.
+
+- A row says the platform, the agent when it is not the space's own, who has
+  spoken there, who answers people outside the space, and when it last moved.
+  Questions waiting on you sit above the list; their count is the sidebar's
+  badge beside Groups.
+- New group offers only what the space can do. A platform its own bot is not
+  connected to is offered as connecting it, never as a dead option. Each
+  platform lets the bot in its own way — WhatsApp's number makes the group
+  and you share the link, Telegram adds it through a one-use link, Slack is
+  `/invite` — and each sheet waits, visibly, for the group to arrive.
+- A group's page answers what is waiting through the notification it came
+  as, and the bot relays the answer. People are In the space, Not in it (a
+  Lemma account; Invite opens Share), or Not recognised — which offers
+  nothing, because linking somebody else's chat account would hand them its
+  owner's access. Slack keeps its own history, so its page links there.
+- Only the sample's Marketing has groups; every other sample space opens on
+  the first run.
+
 ## Desktop
 
 The workspace also runs inside the Lemma desktop app, which loads it from a

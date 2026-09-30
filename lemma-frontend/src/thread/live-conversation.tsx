@@ -13,6 +13,7 @@ import { applyTitle, patchConversationLists, refreshConversationLists } from "./
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
+import { useChannelReply } from "./use-channel-reply";
 import { splitQueued, withdrawFailure, withoutSent } from "./queued";
 import { sendToConversation, steerConversation } from "./send-message";
 import { adoptConversationFolder, useConversationFolder } from "@/desktop/folders";
@@ -257,6 +258,10 @@ export function LiveConversation({
         [bot, pod.teammate],
     );
     const speakerSeed = bot ? pod.id + ":" + bot.name : pod.id;
+    /* A conversation that also lives on a chat platform: a note to the bot,
+       or a reply the group reads. Read off the conversation as the server
+       holds it, so it appears once that has loaded and never on a new one. */
+    const reply = useChannelReply(session.conversation?.metadata, teammate.name, session.conversationId);
 
     /* After a server restart: the conversation's status, its messages, and --
        if the run is still going -- its stream, read again. Forced, because the
@@ -415,8 +420,14 @@ export function LiveConversation({
             setSendError(null);
             await steerConversation(text, id, {
                 putFiles: (conversation, said) => putFiles(conversation, said),
+                /* A note stays a note mid-run too: the mark rides on the
+                   message, and the answer to it stays here. */
                 append: (conversation, content) =>
-                    client.conversations.appendMessage(conversation, { content }, { pod_id: pod.id }),
+                    client.conversations.appendMessage(
+                        conversation,
+                        reply.sendWith ? { content, metadata: reply.sendWith } : { content },
+                        { pod_id: pod.id },
+                    ),
                 clearAttachments: sent => setAttachments(was => withoutSent(was, sent)),
                 restoreAttachments: settled => setAttachments(was => [
                     ...settled,
@@ -432,7 +443,7 @@ export function LiveConversation({
                 void loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
             }
         },
-        [client, pod.id, putFiles, session, loadMessages],
+        [client, pod.id, putFiles, session, loadMessages, reply.sendWith],
     );
 
     /* A take-back already on its way. A second click would send a second
@@ -526,7 +537,7 @@ export function LiveConversation({
                            the message that is going. */
                         setAttachments(was => withoutSent(was, settled));
                         try {
-                            return await session.sendMessage(said, { conversationId: id, knownConversation });
+                            return await session.sendMessage(said, { conversationId: id, knownConversation, metadata: reply.sendWith });
                         } catch (problem) {
                             /* Back, but marked as already uploaded: the files
                                are in the pod whatever happened to the message,
@@ -555,7 +566,7 @@ export function LiveConversation({
                 if (mounted.current) setSending(false);
             }
         },
-        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, running, steer, createWith],
+        [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, running, steer, createWith, reply.sendWith],
     );
 
     /* A handed-over message goes once, the first time this pane sees it. The
@@ -673,6 +684,7 @@ export function LiveConversation({
                 noModel={modelMissing}
                 modelsAction={pointsAtModels(error)}
                 dockedId={waitingOn?.id}
+                outsiders={reply.thread?.outsiders ? pod.name : undefined}
             />
             <InteractionDock
                 interaction={waitingOn}
@@ -684,7 +696,8 @@ export function LiveConversation({
             />
             <FolderChip folder={folder} />
             <Composer
-                placeholder={placeholder ?? "Ask " + (teammate.name || pod.name) + "…"}
+                placeholder={reply.placeholder ?? placeholder ?? "Ask " + (teammate.name || pod.name) + "…"}
+                choices={reply.choices}
                 note={
                     /* Nothing, when the pause is on the shelf directly above
                        this line. The note existed to point at a card somewhere

@@ -1,5 +1,5 @@
 import { VoiceIcon, StopIcon, SendIcon, AttachIcon, CloseIcon, FileIcon } from "@/ui/icons";
-import { useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
     canSend,
     describeSize,
@@ -7,6 +7,53 @@ import {
     type Attachment,
 } from "./attachments";
 import { composerActions, type Queued } from "./queued";
+
+/** Where the next message goes, when there is more than one place: a note to
+ *  the bot alone, or a reply that goes out on the chat platform. Each option
+ *  says what it does in one line, shown under the box while it is chosen. */
+export interface ComposerChoices {
+    /** Names the group for assistive technology. */
+    label: string;
+    value: string;
+    options: { id: string; label: string; hint: string; icon?: ReactNode }[];
+    onChange: (id: string) => void;
+}
+
+/** A radio group of buttons: one tab stop, arrows move between them. */
+function Choices({ choices }: { choices: ComposerChoices }) {
+    const move = (event: KeyboardEvent<HTMLButtonElement>, at: number) => {
+        const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1
+            : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+        if (!step) return;
+        event.preventDefault();
+        const next = (at + step + choices.options.length) % choices.options.length;
+        choices.onChange(choices.options[next].id);
+        (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
+    };
+    return (
+        <div className="composer__modes" role="radiogroup" aria-label={choices.label}>
+            {choices.options.map((option, at) => {
+                const chosen = option.id === choices.value;
+                return (
+                    <button
+                        key={option.id}
+                        type="button"
+                        role="radio"
+                        className="composer__mode"
+                        aria-checked={chosen}
+                        tabIndex={chosen ? 0 : -1}
+                        title={option.label}
+                        onClick={() => choices.onChange(option.id)}
+                        onKeyDown={(event) => move(event, at)}
+                    >
+                        {option.icon}
+                        <span>{option.label}</span>
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
 
 export function Composer({
     placeholder,
@@ -25,6 +72,7 @@ export function Composer({
     queued,
     queuedNote,
     onWithdraw,
+    choices,
 }: {
     placeholder: string;
     note?: string;
@@ -56,7 +104,12 @@ export function Composer({
     /** Says when they will be heard, which depends on the teammate. */
     queuedNote?: string;
     onWithdraw?: (id: string) => void;
+    /** Where the message goes, in a conversation that also lives on a chat
+     *  platform. Absent everywhere else, and then nothing is drawn. */
+    choices?: ComposerChoices;
 }) {
+    const hintId = useId();
+    const chosen = choices?.options.find((option) => option.id === choices.value) ?? null;
     const [draft, setDraft] = useState("");
     const [over, setOver] = useState(false);
     const [refused, setRefused] = useState<string | null>(null);
@@ -126,6 +179,7 @@ export function Composer({
     return (
         <div
             className={"composer" + (over ? " composer--over" : "")}
+            data-choice={choices?.value}
             onDragOver={takesFiles ? (event: DragEvent) => {
                 /* Only for an actual file drag. Without the check, dragging
                    selected text across the page lights the whole composer up
@@ -187,6 +241,7 @@ export function Composer({
                 </div>
             )}
             <div className="composer__row">
+                {choices && <Choices choices={choices} />}
                 <div className="composer__box">
                     {takesFiles && (
                         <>
@@ -219,6 +274,7 @@ export function Composer({
                         ref={input}
                         className="composer__input"
                         aria-label={placeholder}
+                        aria-describedby={chosen ? hintId : undefined}
                         placeholder={placeholder}
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
@@ -276,6 +332,7 @@ export function Composer({
                         )}
                     </span>
                 )}
+                {chosen && <p className="composer__hint" id={hintId}>{chosen.hint}</p>}
             </div>
         </div>
     );
