@@ -30,7 +30,7 @@ Resend address.
 | `agent_surfaces` | Pod/platform/name, the one agent it answers as, account binding, allowed channels, identity and send policy |
 | `agent_surface_external_users` | Stable external identity to Lemma user/contact resolution |
 | `agent_surface_conversation_links` | External channel/thread to agent conversation mapping |
-| `surface_verified_identities` | One row per hashed platform/tenant/installation/actor binding: that this person proved who they are, and the pod and installation their private chat reaches. A check constraint keeps a revoked identity from holding a destination, so a live route beside a revoked proof is unrepresentable rather than merely unlikely. `proof` records how it was proven — `phone`, `email` or `link_token` (a one-time link the signed-in user opened from the app) — and only a phone proof is held to the account's current mobile number |
+| `surface_verified_identities` | One row per hashed platform/tenant/installation/actor binding: that this person proved who they are, and the pod and installation their private chat reaches. A check constraint keeps a revoked identity from holding a destination, so a live route beside a revoked proof is unrepresentable rather than merely unlikely |
 | `surface_pending_onboarding` | Onboarding in flight for one binding — step, email challenge, offered pods, and the original inbound event held until there is a conversation to commit it to |
 | `surface_onboarding_input_tokens` | Hashed handles for a native input form — a Slack modal, a Teams card, a WhatsApp prompt — each minted against one pending row, step and challenge. A submission is accepted only while all three still match, so a form left open across a step stops working rather than answering the wrong question; the cleanup sweep deletes handles at expiry |
 | `surface_whatsapp_numbers` | The deployment's WhatsApp numbers, one row each and each independent: its own WABA, access token, verify token and Flow ids, every one falling back to settings when absent so a single-number deployment declares nothing. `role` separates the one `SHARED` line everybody rides from the `ALLOCATABLE` pool; `status` separates "stop handing this out" from "we no longer own it". Who holds a number is not stored here — it is `agent_surfaces.surface_identity_id`, so there is no second copy to disagree |
@@ -62,7 +62,6 @@ impossible to leave stale.
 | `/pods/{pod_id}/surfaces` | CRUD surface installations and send a message |
 | `/.../setup`, `/.../channels`, `/surface-setup`, `/available-surfaces` | Setup state/guides and platform/account catalog |
 | `/surfaces/me` | List reachable user surfaces and choose a default |
-| `/surfaces/me/telegram-link` | Name the shared Telegram bot and mint a one-time `t.me` link that links a chat to the signed-in user without email |
 | `/surfaces/webhooks/{platform}`, `/surfaces/{surface_id}/webhook` | Platform-wide or direct webhook ingest/verification |
 | `/surfaces/teams/admin-consent/callback` | Teams tenant consent completion |
 
@@ -196,12 +195,12 @@ email provider metadata, timestamp windows, and challenge responses. Identity
 policy controls whether unknown external senders are rejected, linked, or
 represented as contacts. Redis dedup guards repeat provider deliveries.
 
-A Telegram link token is held in Redis under its SHA-256 for ten minutes, bound
-to the minting user and pod, and consumed with `GETDEL`, so it links one chat
-once. It is honoured only in a private chat, and a Telegram identity that is
-live on another account is refused rather than reassigned. The reply names the
-account the chat was linked to, so a forwarded link is visible to whoever
-pressed Start.
+A contact shared during Telegram signup is matched by `onboarding_contact`: a
+verified profile number first, then -- only with
+`SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH` -- exactly one unverified claim, the same
+rule identity resolution applies to later messages. Whether an account's email
+must be verified to chat follows `AUTH_EMAIL_VERIFICATION_REQUIRED`
+(`identity.infrastructure.chat_account_policy`).
 
 A pooled WhatsApp number answers with its own pool row's credentials for
 everything done to a message that arrived on it -- the read receipt, the typing
