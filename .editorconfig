@@ -1,0 +1,41 @@
+# Editor defaults that match what the formatters and the existing files use.
+# The formatters (`make fix`) remain the authority; this only keeps an editor
+# from fighting them between runs. https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{py,pyi,rs,swift,ps1}]
+indent_style = space
+indent_size = 4
+
+# The apps and most of the SDK use four spaces; the SDK's registry components
+# follow shadcn's two.
+[*.{ts,tsx,js,jsx,mjs,cjs}]
+indent_style = space
+indent_size = 4
+
+[lemma-typescript/registry/**.tsx]
+indent_size = 2
+
+[*.{yml,yaml,json,sh}]
+indent_style = space
+indent_size = 2
+
+[{Makefile,*.mk}]
+indent_style = tab
+
+# Two trailing spaces are a line break in Markdown.
+[*.md]
+trim_trailing_whitespace = false
+
+# Vendored, generated or committed build output: never reformat on save.
+[{desktop/ui/vendor/**,lemma-typescript/public/**,**/openapi_client/**,**/generated/**,*.min.js}]
+indent_style = unset
+indent_size = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset

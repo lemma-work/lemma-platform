@@ -50,6 +50,50 @@ bots trained on older syntax flag it as an error; it is valid, and `ruff` and
 
 [pep758]: https://peps.python.org/pep-0758/
 
+## Local development
+
+Run these through `make`, not the tools by hand: each target runs the tool,
+version and config CI does, so a clean local run predicts the CI step.
+
+| Command | What it does |
+|---|---|
+| `make fix` | Every safe auto-fixer — ruff, `eslint --fix`, `cargo fmt` — on what this branch changed |
+| `make lint` | Every fast linter on what changed: ruff, eslint, tsc, rustfmt, clippy on the changed crates, shellcheck, actionlint, hadolint, typos, yamllint |
+| `make lint-<group>` | One group: `python`, `frontend`, `rust`, `shell`, `ci`, `docker`, `docs`, `config` |
+| `make quality` | The full pre-PR gate, over everything — what CI's quality job runs |
+| `make quality-frontend` | The frontend gates `quality` cannot see; add it when you touched a frontend package or the SDK |
+| `make check` | `quality` and `quality-frontend` together |
+
+"What changed" is the diff from the merge base with `origin/main`, committed
+or not, plus untracked files. `ALL=1` covers the whole repository, `STAGED=1`
+only the index, and `FAST=1` skips tsc and clippy. The loop is `make fix`,
+`make lint` while you work, and `make quality` before opening a pull request.
+
+**Hooks.** `make hooks` opts this clone, and every worktree of it, into
+`.githooks/`: `pre-commit` runs `make lint STAGED=1 FAST=1` (seconds) and
+`pre-push` runs `make quality`, plus `quality-frontend` when the branch touches
+a frontend package. `SKIP_HOOKS=1` skips them for one command.
+
+**CodeQL runs in CI only.** A local analysis holds several cores and gigabytes
+of memory for minutes, so `make check` no longer runs it. On every pull
+request the Security workflow posts one comment listing what CodeQL found on
+the lines you changed, and an inline comment on each high or critical one.
+`make codeql` still reproduces a finding locally when you want it.
+
+**Disk.** Each worktree carries its own build output: a Rust dev
+`desktop/target` of several gigabytes, and roughly a gigabyte each for
+`node_modules` and `lemma-backend/.venv`. With many worktrees that fills a
+disk, and `make dev` warns when less than 30 GB is free. `make dev-clean` lists
+what can go and why — build output in idle worktrees, stale Rust artifacts,
+worktrees and branches whose work has landed, old sandbox images — and
+`make dev-clean-apply` removes it. Nothing it removes is unrecoverable: it
+keeps anything with uncommitted changes or commits no remote has. Each worktree
+keeps its own `desktop/target` on purpose; a shared `CARGO_TARGET_DIR` would
+make concurrent builds on different branches wait on one lock and rebuild over
+each other. [sccache](https://github.com/mozilla/sccache) is optional and
+works here if you want compiled dependencies shared across worktrees
+(`RUSTC_WRAPPER=sccache`).
+
 ## Find the right component
 
 Each component has its own setup and its own checks. Run the ones you touched.

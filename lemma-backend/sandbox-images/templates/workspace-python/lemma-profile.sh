@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Agent-facing login shells use the same Python 3.14 environment as native
 # execute_python contexts. User-installed packages live on workspace storage.
 export PIP_PREFIX=/home/user/.python

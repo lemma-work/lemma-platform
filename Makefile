@@ -40,7 +40,9 @@ SHELL := /bin/bash
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
         coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
         lint lint-clients lint-lockfiles measure-clients client-structure-record client-typecheck-record \
-        quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate
+        quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate \
+        fix format lint-python lint-frontend lint-rust lint-shell lint-ci lint-docker lint-docs lint-config \
+        lint-repo hooks dev-clean dev-clean-apply _disk-hint
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -437,16 +439,34 @@ help:
 	@echo "    make coverage-cli-e2e         lemma-cli e2e coverage (needs docker)"
 	@echo "    make coverage-frontend        frontend vitest coverage"
 	@echo ""
+	@echo "  Fast loop (on what this branch changed; ALL=1 for everything, STAGED=1 for the index)"
+	@echo "    make fix                run every safe auto-fixer: ruff, eslint --fix, cargo fmt"
+	@echo "    make lint               every fast linter; the loop is fix, lint, then quality"
+	@echo "    make lint-python        ruff check + format check, per project"
+	@echo "    make lint-frontend      eslint + tsc (FAST=1 skips tsc and clippy)"
+	@echo "    make lint-rust          cargo fmt + clippy on the changed crates"
+	@echo "    make lint-shell         shellcheck"
+	@echo "    make lint-ci            actionlint + the CI aggregator check"
+	@echo "    make lint-docker        hadolint"
+	@echo "    make lint-docs          typos, over every changed file"
+	@echo "    make lint-config        yamllint + TOML/JSON parse"
+	@echo "    make hooks              opt in to the git hooks: lint on commit, quality on push"
+	@echo ""
 	@echo "  Gates (what CI blocks on)"
-	@echo "    make pre-push           alias for quality — run this on every push"
-	@echo "    make quality            every gate the 'quality gates' CI job runs"
+	@echo "    make quality            every gate the 'quality gates' CI job runs — before a PR"
+	@echo "    make quality-frontend   eslint, tsc, design audit, education anchors (CI's frontend jobs)"
+	@echo "    make check              quality + quality-frontend"
+	@echo "    make pre-push           alias for quality"
 	@echo "    make architecture       backend architecture ratchet + route inventory"
 	@echo "    make measure-clients    ADVISORY: size/complexity/typing in lemma-cli + lemma-python"
-	@echo "    make check              quality + frontend gates + CodeQL on this branch's changes"
-	@echo "    make lint               ruff + eslint across all components"
+	@echo "    make codeql             opt-in: CodeQL on this branch's changes (CI runs it and comments on the PR)"
 	@echo "    make version-check      every Lemma component declares the same version"
 	@echo "    make local-domain-check the shell, capability and SDK know every base domain"
 	@echo "    make local-auth-gate-check  make dev and the local stack relax the same auth gates"
+	@echo ""
+	@echo "  Disk"
+	@echo "    make dev-clean          dry run: what stale build output, worktrees and branches would go"
+	@echo "    make dev-clean-apply    remove them (GIT=1 also runs git gc)"
 	@echo ""
 	@echo "  Other"
 	@echo "    make migrate            apply backend database migrations"
@@ -658,6 +678,7 @@ _ensure-frontend-env-keys:
 # ── Dev stack ─────────────────────────────────────────────────────────────────
 
 dev:
+	@$(MAKE) --no-print-directory _disk-hint
 	@echo "→ Starting Lemma dev stack…"
 	@$(MAKE) --no-print-directory _prepare-dev
 	@echo ""
@@ -683,6 +704,7 @@ dev:
 		wait
 
 dev-public:
+	@$(MAKE) --no-print-directory _disk-hint
 	@echo "→ Starting Lemma dev stack with a public Cloudflare API URL…"
 	@$(MAKE) --no-print-directory _prepare-dev
 	@$(MAKE) --no-print-directory _start-public-api-tunnel || { $(MAKE) --no-print-directory stop; exit 1; }
@@ -1002,6 +1024,7 @@ desktop-dev:
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@command -v node >/dev/null 2>&1 || \
 		(echo "  ✗ node not found — install Node.js $(NODE_VERSION) from https://nodejs.org"; exit 1)
+	@$(MAKE) --no-print-directory _disk-hint
 	@# locald runs $(WORKSPACE_DIR)'s server.mjs straight from the checkout, with
 	@# no npm in between -- so a missing install or an unbuilt SDK is not an
 	@# error message, it is a frontend health check that times out two minutes
@@ -1921,27 +1944,40 @@ coverage-frontend:
 # has to move together: this line and that bound in each pyproject.
 RUFF := uvx ruff@0.15.22
 
-# ── Lint ──────────────────────────────────────────────────────────────────────
+# ── Lint and fix: the fast loop ──────────────────────────────────────────────
+#
+#   make fix     every safe auto-fixer, on what this branch changed
+#   make lint    every fast linter, on what this branch changed
+#   make quality the full pre-PR gate, over everything (what CI runs)
+#
+# `lint` and `fix` default to the files that differ from the merge base with
+# origin/main -- committed, staged, unstaged and untracked. ALL=1 widens them
+# to the whole repository, STAGED=1 narrows them to the index (the pre-commit
+# hook), FAST=1 skips tsc and clippy, and BASE=<ref> changes the base. Each
+# language runs the tool and config CI runs for it; scripts/dev_lint.py has
+# the list. `lint-<group>` runs one group.
+#
+# The old `lint` walked every component in full and knew nothing of Rust,
+# shell, workflows or Dockerfiles; ALL=1 is that and more.
+LINT_SCOPE = $(if $(filter 1,$(ALL)),--all) $(if $(filter 1,$(STAGED)),--staged) \
+	$(if $(filter 1,$(FAST)),--fast) $(if $(BASE),--base $(BASE))
+DEV_LINT = RUFF="$(RUFF)" uv run --quiet --no-project python scripts/dev_lint.py $(LINT_SCOPE)
+LINT_GROUPS = python frontend rust shell ci docker docs config
 
-# Every component's linter, and all four can fail. Three of them used to end
-# in `2>/dev/null || true`, so `make lint` printed four arrows and could only
-# ever report the backend -- a green run here meant nothing for the other
-# three. Components whose toolchain is not installed are skipped out loud
-# rather than silently passed.
 lint:
-	@echo "→ Backend (ruff)…"
-	@# Delegates rather than running `ruff check .`, which walked into
-	@# generated code. That is why this target had been red for a while without
-	@# anyone noticing: the backend line was the one line here that could fail, and
-	@# `make quality` -- the documented gate -- calls the scoped target below.
-	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
-	@$(MAKE) --no-print-directory lint-clients
-	@echo "→ Frontend (eslint)…"
-	@if [ -d $(FRONTEND_DIR)/node_modules ]; then \
-		cd $(FRONTEND_DIR) && npm run lint --silent; \
-	else \
-		echo "  skipped: run 'npm ci' in $(FRONTEND_DIR) first"; \
-	fi
+	@$(DEV_LINT)
+
+fix:
+	@$(DEV_LINT) --fix
+
+$(addprefix lint-,$(LINT_GROUPS)):
+	@$(DEV_LINT) $(patsubst lint-%,%,$@)
+
+# The whole-repository half of the groups no other `quality` step covers:
+# shell, workflows, Dockerfiles, spelling, YAML/TOML/JSON. Seconds, and part
+# of `quality`, so CI holds the line the local loop draws.
+lint-repo:
+	@RUFF="$(RUFF)" uv run --quiet --no-project python scripts/dev_lint.py --all shell ci docker docs config
 
 # Every first-party Python package except the backend, which has its own gates.
 # Extracted from `lint` so that `quality` -- the documented pre-PR command and
@@ -1962,6 +1998,12 @@ lint-clients:
 	@cd $(BUNDLE_DIR) && $(RUFF) check . --quiet
 	@echo "→ Scenarios (ruff)…"
 	@cd $(SCENARIOS_DIR) && $(RUFF) check . --quiet
+	@# Everything with no project of its own: the repository's scripts and
+	@# their tests, and the desktop tooling. Ruff's default rules, minus E402,
+	@# because a script that imports a sibling puts its directory on sys.path
+	@# first. Not format-checked; most of it predates `ruff format`.
+	@echo "→ Repo tooling (ruff)…"
+	@$(RUFF) check --isolated --ignore E402 --exclude $(SCENARIOS_DIR) --quiet scripts tests desktop
 
 # Every project whose uv.lock can go stale, which is every one that depends on a
 # sibling by path: change a dependency in `lemma-python` and eight other locks
@@ -2003,22 +2045,9 @@ SDK_FORMAT_EXCLUDE = --exclude lemma_sdk/openapi_client
 
 
 
+# Every fixer over the whole repository: `make fix ALL=1` under its old name.
 format:
-	@echo "→ Backend…"
-	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory format
-	@echo "→ CLI…"
-	@cd $(CLI_DIR) && $(RUFF) format .
-	@echo "→ Python SDK…"
-	@cd $(PYTHON_DIR) && $(RUFF) format $(SDK_FORMAT_EXCLUDE) .
-	@echo "→ Stack…"
-	@cd $(STACK_DIR) && $(RUFF) format .
-	@echo "→ Pod bundle…"
-	@cd $(BUNDLE_DIR) && $(RUFF) format .
-	@# Scenarios was in `lint` but in neither of these, so `ruff check` held
-	@# while formatting drifted across 51 files. A directory that is checked
-	@# but never formatted is the one that drifts, because nothing says so.
-	@echo "→ Scenarios…"
-	@cd $(SCENARIOS_DIR) && $(RUFF) format .
+	@$(MAKE) --no-print-directory fix ALL=1
 
 format-check:
 	@echo "→ Backend…"
@@ -2116,6 +2145,8 @@ quality:
 	@cd $(BACKEND_DIR) && uv run python ../scripts/plan_e2e_shards.py --verify
 	@echo "→ Product scenario traceability…"
 	@python3 scripts/check_scenario_coverage.py
+	@echo "→ Shell, workflows, Dockerfiles, spelling, config…"
+	@$(MAKE) --no-print-directory lint-repo
 	@echo "✓ quality gates pass"
 
 # The backend's architecture ratchet, from the repo root. AGENTS.md and
@@ -2168,8 +2199,12 @@ client-typecheck-record:
 # costing a category of surprise. One list.
 pre-push: quality
 
-# CodeQL, the same suites CI runs. Reports only what this branch changed;
-# `codeql-all` reports the repository's full backlog.
+# CodeQL, the same suites CI runs, on this machine. Opt-in and never part of
+# `check`: an analysis holds several cores and gigabytes of memory for
+# minutes, and CI already runs it on every pull request and posts what it
+# finds on the lines you changed as a PR comment. Use these to reproduce a
+# finding locally. Reports only what this branch changed; `codeql-all` reports
+# the repository's full backlog.
 codeql:
 	@./scripts/run_codeql.sh
 
@@ -2211,8 +2246,41 @@ quality-frontend:
 	@echo "→ Frontend lint, types, design audit, education anchors…"
 	@cd $(FRONTEND_DIR) && npm run --silent check
 
-# Everything a PR is judged on, short of the test suites themselves.
-check: quality quality-frontend codeql
+# Everything a PR is judged on locally, short of the test suites themselves.
+# CodeQL is not in it: it runs in CI and reports on the pull request.
+check: quality quality-frontend
+
+# ── Local disk and hooks ──────────────────────────────────────────────────────
+#
+# Every worktree carries its own build output -- a Rust dev target directory,
+# node_modules, a backend virtualenv -- and with many worktrees open, several
+# of them an agent's, that fills a laptop. `dev-clean` is a dry run that lists
+# what would go and why; `dev-clean-apply` does it. GIT=1 adds a git gc, which
+# is slow on a large repository. scripts/dev_disk_hygiene.py has the rules and
+# every threshold as a flag: DEV_CLEAN_FLAGS="--rust-idle-days 1" and so on.
+DEV_CLEAN = uv run --quiet --no-project python scripts/dev_disk_hygiene.py $(DEV_CLEAN_FLAGS)
+
+dev-clean:
+	@$(DEV_CLEAN)
+
+dev-clean-apply:
+	@$(DEV_CLEAN) --apply $(if $(filter 1,$(GIT)),--git)
+
+# A one-line nudge from the commands that are about to need disk. Below this,
+# a single Rust build plus an image pull can fail a dev session halfway in.
+DISK_HINT_GB ?= 30
+_disk-hint:
+	@free_kb=$$(df -Pk . 2>/dev/null | awk 'NR == 2 { print $$4 }'); \
+	if [ -n "$$free_kb" ] && [ "$$free_kb" -lt $$(( $(DISK_HINT_GB) * 1024 * 1024 )) ]; then \
+		echo "  ! $$(( free_kb / 1024 / 1024 )) GB free on this disk; run \`make dev-clean\` to see what can go"; \
+	fi
+
+# Opt-in git hooks, shared by every worktree of this clone: `pre-commit` runs
+# `make lint` on the staged files, `pre-push` runs `make quality`. SKIP_HOOKS=1
+# skips both for one command; `git config --unset core.hooksPath` removes them.
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "  ✓ hooks installed from .githooks/ (pre-commit: make lint on staged files; pre-push: make quality)"
 
 # ── Migrations ────────────────────────────────────────────────────────────────
 

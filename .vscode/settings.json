@@ -1,0 +1,31 @@
+// Recommended, not required: the same tools `make fix` and `make lint` run.
+{
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true
+  },
+  "python.defaultInterpreterPath": "${workspaceFolder}/lemma-backend/.venv/bin/python",
+  "eslint.workingDirectories": [
+    { "directory": "lemma-frontend", "changeProcessCWD": true },
+    { "directory": "lemma-harness", "changeProcessCWD": true }
+  ],
+  "rust-analyzer.linkedProjects": ["desktop/Cargo.toml"],
+  "rust-analyzer.check.command": "clippy",
+  // rust-analyzer shares desktop/target with cargo, so its checks and your
+  // builds wait on the same lock. "rust-analyzer.cargo.targetDir": true gives
+  // it its own directory and ends the waiting, at the price of a second
+  // multi-gigabyte target per worktree.
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/node_modules/**": true,
+    "**/.venv/**": true,
+    "**/.next/**": true,
+    ".claude/worktrees/**": true
+  },
+  "search.exclude": {
+    "**/target": true,
+    "**/.venv": true,
+    "**/.next": true,
+    ".claude/worktrees": true
+  }
+}
