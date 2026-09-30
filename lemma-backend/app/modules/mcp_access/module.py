@@ -22,10 +22,19 @@ def _routers():
     return [consent, oauth_router()]
 
 
+def _event_routers():
+    from app.modules.mcp_access.events import pod_lifecycle
+
+    return [pod_lifecycle.router]
+
+
 def _register_streaq() -> None:
     import app.modules.mcp_access.events.tasks  # noqa: F401
 
 
 module = LemmaModule(
-    name="mcp_access", routers=_routers, register_streaq=_register_streaq
+    name="mcp_access",
+    routers=_routers,
+    event_routers=_event_routers,
+    register_streaq=_register_streaq,
 )

@@ -323,3 +323,49 @@ async def test_an_assertion_used_on_one_replica_is_refused_on_another():
         await _directory(key, shared).verify_assertion(
             client_id=CHATGPT, assertion=assertion, audiences=AUDIENCES
         )
+
+
+@pytest.mark.asyncio
+async def test_no_process_keeps_a_cache_of_assertion_ids_to_fill():
+    """fastmcp's per-process cache refused every assertion once 10,000 ids were
+    in it, and anyone can mint assertions from a document they host. Replay is
+    Redis's to catch; nothing accumulates here."""
+    key = _signing_key()
+    directory = _directory(key)
+    for n in range(3):
+        await directory.verify_assertion(
+            client_id=CHATGPT,
+            assertion=_assertion(key, audience=AUDIENCES[0], jti=f"fill-{n}"),
+            audiences=AUDIENCES,
+        )
+    assert len(directory._assertions._jti_cache) == 0
+
+
+class _IdnaFailingFetcher:
+    """What the HTTP client does with a host that will not IDNA-encode."""
+
+    fetched = 0
+
+    def is_cimd_client_id(self, client_id: str) -> bool:
+        return client_id.startswith("https://")
+
+    async def fetch(self, client_id: str):
+        self.fetched += 1
+        raise UnicodeError("label empty or too long")
+
+
+@pytest.mark.asyncio
+async def test_a_client_id_that_cannot_be_fetched_or_stored_is_unknown_not_a_500():
+    from app.modules.mcp_access.infrastructure.ephemeral import EphemeralStore
+    from app.modules.mcp_access.services.clients import ClientDirectory
+
+    fetcher = _IdnaFailingFetcher()
+    directory = ClientDirectory(
+        None,  # type: ignore[arg-type]  # neither path opens a unit of work
+        ephemeral=EphemeralStore(_Redis()),
+        fetcher=fetcher,  # type: ignore[arg-type]
+    )
+    assert await directory.get("https://exämple.\u200b/c.json") is None
+    # Too long for the column it would be written to: refused before a fetch.
+    assert await directory.get("https://a.example/" + "x" * 2_100) is None
+    assert fetcher.fetched == 1

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.security import account_may_sign_in
+from app.modules.pod.contracts.liveness import pod_is_live
 from app.modules.mcp_access.infrastructure.ephemeral import EphemeralStore
 from app.modules.mcp_access.infrastructure.rate_limit import RateLimiter
 from app.modules.mcp_access.services.authorization_server import (
@@ -43,6 +45,10 @@ def _uow_factory() -> SessionUnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
 
 
+async def _pod_is_live(pod_id: UUID) -> bool:
+    return await pod_is_live(_uow_factory(), pod_id)
+
+
 @lru_cache(maxsize=1)
 def client_directory() -> ClientDirectory:
     return ClientDirectory(_uow_factory(), ephemeral=_ephemeral())
@@ -61,6 +67,8 @@ def authorization_server() -> LemmaAuthorizationServer:
         ephemeral=_ephemeral(),
         api_url=issuer(),
         auth_frontend_url=settings.auth_frontend_url,
+        account_may_sign_in=account_may_sign_in,
+        pod_is_live=_pod_is_live,
     )
 
 
@@ -80,6 +88,7 @@ def access_token_verifier() -> AccessTokenVerifier:
         uow_factory=_uow_factory(),
         api_url=issuer(),
         account_may_sign_in=account_may_sign_in,
+        pod_is_live=_pod_is_live,
     )
 
 

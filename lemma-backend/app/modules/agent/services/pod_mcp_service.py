@@ -14,7 +14,8 @@ connected it, and sees only the tools its scopes cover.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Literal
 from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
@@ -38,6 +39,7 @@ from app.modules.agent.services.mcp_content import (
 )
 from app.modules.agent.services.pod_mcp_tool_policy import (
     policy_for,
+    scope_for_call,
     without_approval_envelope,
 )
 from app.modules.agent.domain.vision import AgentVisionMode
@@ -56,7 +58,6 @@ from app.modules.mcp_access.contracts import (
     McpPrincipal,
     Scope,
     is_mcp_access_token,
-    verify_mcp_access_token,
 )
 
 logger = get_logger(__name__)
@@ -74,8 +75,12 @@ class _Caller:
     """The outside client and its connection, for the audit line each call
     writes; ``None`` for a Lemma session."""
 
-    def may_call(self, tool_name: str) -> bool:
-        return self.scopes is None or policy_for(tool_name).scope in self.scopes
+    def may_call(
+        self, tool_name: str, arguments: Mapping[str, object] | None = None
+    ) -> bool:
+        return (
+            self.scopes is None or scope_for_call(tool_name, arguments) in self.scopes
+        )
 
 
 class PodMCPService:
@@ -120,13 +125,14 @@ class PodMCPService:
             pod_id=pod_id, token=token, principal=principal
         )
         tool_name = normalize_local_mcp_tool_name(name)
-        if not caller.may_call(tool_name):
+        if not caller.may_call(tool_name, arguments):
+            _audit(caller, tool_name, outcome="refused")
             return tool_call_error(
                 tool_name,
                 PermissionError(
                     "This connection was not granted "
-                    f"{policy_for(tool_name).scope.value}. Reconnect it and "
-                    "allow that access to use this tool."
+                    f"{scope_for_call(tool_name, arguments).value}. Reconnect "
+                    "it and allow that access to use this."
                 ),
             )
         try:
@@ -143,19 +149,22 @@ class PodMCPService:
                 "agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded",
                 exc_info=True,
             )
+            _audit(caller, tool_name, outcome="failed")
             return tool_call_error(tool_name, exc)
         if caller.scopes is not None:
             result = without_approval_envelope(result)
         answer = tool_call_result(result)
-        _audit(caller, tool_name, failed=bool(answer.is_error))
+        _audit(caller, tool_name, outcome="failed" if answer.is_error else "ok")
         return answer
 
     async def _require_caller(
         self, *, pod_id: UUID, token: str, principal: McpPrincipal | None = None
     ) -> _Caller:
-        if principal is not None and principal.pod_id == pod_id:
+        if principal is not None:
             # Already verified at the door, this request: `PublicPodMCPApp`
             # checked the token and hands over what it found.
+            if principal.pod_id != pod_id:
+                raise ValueError("Unauthorized pod MCP token")
             return _external_caller(principal, pod_id=pod_id)
         caller = await self._caller_from_token(pod_id=pod_id, token=token)
         if caller is None:
@@ -164,10 +173,11 @@ class PodMCPService:
 
     async def _caller_from_token(self, *, pod_id: UUID, token: str) -> _Caller | None:
         if is_mcp_access_token(token):
-            principal = await verify_mcp_access_token(token, pod_id=pod_id)
-            if principal is None:
-                return None
-            return _external_caller(principal, pod_id=pod_id)
+            # An outside client's token is honoured only as the principal the
+            # public mount verified -- where its rate limit and Origin check
+            # are. Read from a header here, it could be a second
+            # `Authorization` the door never looked at.
+            return None
         ctx = await self._context_from_session(pod_id=pod_id, token=token)
         return _Caller(ctx=ctx, scopes=None) if ctx is not None else None
 
@@ -235,11 +245,17 @@ def _external_caller(principal: McpPrincipal, *, pod_id: UUID) -> _Caller:
     )
 
 
-def _audit(caller: _Caller, tool_name: str, *, failed: bool) -> None:
-    """One line per outside client's tool call: which app, for whom, did what.
+def _audit(
+    caller: _Caller, tool_name: str, *, outcome: Literal["ok", "failed", "refused"]
+) -> None:
+    """One line per outside client's tool call -- including the ones refused
+    for scope and the ones that raised: which app, through which connection,
+    for whom, did what.
 
     Records and their events carry the person, not the app, so this line is
-    where "that change came from ChatGPT" is written down.
+    where "that change came from ChatGPT" is written down. The connection, not
+    the pod: a grant row outlives its revocation and names the pod, and the
+    logging contract allows three identifiers.
     """
     principal = caller.principal
     if principal is None:
@@ -249,9 +265,9 @@ def _audit(caller: _Caller, tool_name: str, *, failed: bool) -> None:
         tool=tool_name,
         client_id=principal.client_id,
         client_name=principal.client_name[:120],
+        grant_id=str(principal.grant_id),
         user_id=str(principal.user_id),
-        pod_id=str(principal.pod_id),
-        failed=failed,
+        outcome=outcome,
     )
 
 

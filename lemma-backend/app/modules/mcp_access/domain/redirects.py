@@ -68,3 +68,35 @@ def redirect_allowed(uri: str) -> bool:
     if scheme == "http":
         return _is_loopback(parts.hostname)
     return True
+
+
+def redirect_matches(candidate: str, registered: str) -> bool:
+    """Whether ``candidate`` is ``registered``, exactly -- OAuth 2.1 §4.1.1 and
+    the MCP spec both require it.
+
+    The one allowance is RFC 8252 §7.3: a loopback redirect's port may differ,
+    because a native app listens on whatever port is free. Claude Code's
+    document registers ``http://localhost/callback`` and comes back on
+    ``http://localhost:54321/callback``. Everything else -- path, query,
+    scheme, host -- must match character for character: a registered callback
+    that forwards on a query parameter would otherwise hand the code on.
+    """
+    if candidate == registered:
+        return True
+    try:
+        want, got = urlsplit(registered), urlsplit(candidate)
+        want_port, got_port = want.port, got.port
+    except ValueError:
+        return False
+    del want_port, got_port  # read only to reject a malformed port
+    return (
+        want.scheme == got.scheme == "http"
+        and _is_loopback(want.hostname)
+        and want.hostname == got.hostname
+        and want.path == got.path
+        and want.query == got.query
+        and not want.fragment
+        and not got.fragment
+        and want.username is None
+        and got.username is None
+    )

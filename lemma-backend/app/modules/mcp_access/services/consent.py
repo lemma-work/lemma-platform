@@ -26,6 +26,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.mcp_access.domain.entities import Scope, parse_scopes
+from app.modules.mcp_access.domain.names import display_name
 from app.modules.mcp_access.domain.redirects import redirect_allowed
 from app.modules.mcp_access.domain.resources import pod_resource_url
 from app.modules.mcp_access.infrastructure.ephemeral import (
@@ -71,6 +72,10 @@ class ConsentRequest:
     fact about who is asking. ``None`` for a dynamically registered client."""
     client_uri: str | None
     redirect_host: str
+    """For a web redirect, the host. For an app's own scheme, the scheme and a
+    colon -- ``cursor:`` -- because the rest of such a URI is whatever the app
+    wrote: ``evilapp://claude.ai/cb`` is not going to claude.ai."""
+    redirect_to_app: bool
     pod_id: UUID
     pod_name: str
     scopes: frozenset[Scope]
@@ -79,6 +84,14 @@ class ConsentRequest:
 def _host(url: str) -> str:
     parts = urlsplit(url)
     return parts.netloc or url
+
+
+def _is_web(url: str) -> bool:
+    return urlsplit(url).scheme.lower() in {"http", "https"}
+
+
+def _redirect_target(url: str) -> str:
+    return _host(url) if _is_web(url) else urlsplit(url).scheme.lower() + ":"
 
 
 class ConsentService:
@@ -109,10 +122,13 @@ class ConsentService:
             raise ConsentRequestGone()
         return ConsentRequest(
             client_id=pending.client_id,
-            client_name=client.client_name or _host(pending.redirect_uri),
+            client_name=display_name(
+                client.client_name, _redirect_target(pending.redirect_uri)
+            ),
             verified_host=client.verified_host,
             client_uri=str(client.client_uri) if client.client_uri else None,
-            redirect_host=_host(pending.redirect_uri),
+            redirect_host=_redirect_target(pending.redirect_uri),
+            redirect_to_app=not _is_web(pending.redirect_uri),
             pod_id=UUID(pending.pod_id),
             pod_name=name,
             scopes=parse_scopes(pending.scopes),
@@ -124,13 +140,18 @@ class ConsentService:
         """The URL to send the browser to: the client's redirect URI, with a
         code or with ``access_denied``, and always with ``state`` and ``iss``.
 
-        ``read_only`` is the person narrowing what the client asked for; it can
-        only take scopes away. The person's standing in the pod is checked
+        ``read_only`` is the person answering "allow reading only": the
+        connection reads and does nothing else, whatever the client asked
+        for. The person's standing in the pod is checked
         before the request is used up, so somebody who has learned a request id
         but cannot read the pod cannot spend it.
         """
         pending = await self._ephemeral.read_pending(request_id)
         if pending is None:
+            raise ConsentRequestGone()
+        # Before anything is granted: refused on the way out instead, the
+        # grant and a code would already exist for a browser never sent back.
+        if not redirect_allowed(pending.redirect_uri):
             raise ConsentRequestGone()
         pod_id = UUID(pending.pod_id)
         await self._pod_name_if_allowed(user_id=user_id, pod_id=pod_id)
@@ -148,9 +169,9 @@ class ConsentService:
         if client is None:
             raise ConsentRequestGone()
         await self._clients.persist(client)
-        scopes = parse_scopes(pending.scopes)
-        if read_only:
-            scopes = scopes & {Scope.READ}
+        # Reading only is reading, whatever the client asked for: an app that
+        # asked only to write, answered "read only", can read.
+        scopes = {Scope.READ} if read_only else parse_scopes(pending.scopes)
         granted = sorted(scope.value for scope in scopes)
         async with self._uow_factory() as uow:
             grant_id = await McpAccessRepository(uow).create_grant(

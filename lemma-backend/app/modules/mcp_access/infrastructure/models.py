@@ -92,9 +92,15 @@ class McpOAuthGrant(UUIDAuditBase):
 class McpOAuthToken(UUIDCreatedBase):
     """An access or refresh token, by digest.
 
-    A rotated refresh token is kept, marked ``rotated_at``, until it expires: a
-    second presentation of it means two parties hold it, and the answer to that
-    (OAuth 2.1 §4.3.1) is to end the grant, which needs the old row to know.
+    A rotated refresh token is marked ``rotated_at``: a second presentation of
+    it means two parties hold it, and the answer to that (OAuth 2.1 §4.3.1) is
+    to end the grant, which needs the old row to know. Each rotation keeps only
+    the token it just rotated, so a grant holds a handful of rows.
+
+    ``superseded_at`` marks a refresh token a retried refresh cancelled. Those
+    are kept until they expire whatever later rotations prune: the party left
+    holding one is the one that lost the race, and presenting it later has to
+    end the grant rather than find nothing.
     """
 
     __tablename__ = "mcp_oauth_tokens"
@@ -113,5 +119,8 @@ class McpOAuthToken(UUIDCreatedBase):
         DateTime(timezone=True), nullable=False
     )
     rotated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

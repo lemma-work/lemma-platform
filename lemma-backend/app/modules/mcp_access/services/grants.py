@@ -82,6 +82,8 @@ class GrantService:
                 "mcp_access.grant.revoked",
                 grant_id=str(grant_id),
                 pod_id=str(pod_id),
+                # Who ended it -- the person, or which of the pod's admins.
+                by_user_id=str(user_id),
                 by_admin=owner_id != user_id,
             )
         return revoked

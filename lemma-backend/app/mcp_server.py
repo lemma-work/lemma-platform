@@ -198,23 +198,25 @@ class PodMCPASGIApp:
 
         path = str(scope.get("path") or "")
         match = _POD_MCP_PATH.match(path)
-        if match is None:
+        pod_id = _pod_id(match)
+        if pod_id is None:
             response = JSONResponse({"error": "not_found"}, status_code=404)
             await response(scope, receive, send)
             return
 
+        headers = Headers(scope=scope)
+        if _more_than_one_authorization(headers):
+            await _ambiguous_credentials()(scope, receive, send)
+            return
         # An outside client's token belongs on the public mount, where its
         # rate limit and Origin check are. Refused here rather than served
         # without them.
-        _, _, token = Headers(scope=scope).get("authorization", "").partition(" ")
+        _, _, token = headers.get("authorization", "").partition(" ")
         if is_mcp_access_token(token):
-            pod_id = UUID(match.group("pod_id"))
             await _unauthorized(pod_id, error="invalid_token")(scope, receive, send)
             return
 
-        await self._mcp_app(
-            _forward_to_pod(scope, match.group("pod_id")), receive, send
-        )
+        await self._mcp_app(_forward_to_pod(scope, str(pod_id)), receive, send)
 
 
 def _origin_allowed(origin: str) -> bool:
@@ -274,13 +276,12 @@ class PublicPodMCPApp:
                 scope, receive, send
             )
             return
-        match = _PUBLIC_POD_MCP_PATH.match(str(scope.get("path") or ""))
-        if match is None:
+        pod_id = _pod_id(_PUBLIC_POD_MCP_PATH.match(str(scope.get("path") or "")))
+        if pod_id is None:
             await JSONResponse({"error": "not_found"}, status_code=404)(
                 scope, receive, send
             )
             return
-        pod_id = UUID(match.group("pod_id"))
         state: dict[str, object] = dict(scope.get("state") or {})
         refusal = await self._refusal(Headers(scope=scope), pod_id, state)
         if refusal is not None:
@@ -300,6 +301,8 @@ class PublicPodMCPApp:
         if origin and not self._gate.origin_allowed(origin):
             return JSONResponse({"error": "origin_not_allowed"}, status_code=403)
 
+        if _more_than_one_authorization(headers):
+            return _ambiguous_credentials()
         scheme, _, token = headers.get("authorization", "").partition(" ")
         if scheme.lower() != "bearer" or not token:
             return _unauthorized(pod_id, error=None)
@@ -321,6 +324,39 @@ class PublicPodMCPApp:
                 headers={"Retry-After": str(wait)},
             )
         return None
+
+
+def _pod_id(match: re.Match[str] | None) -> UUID | None:
+    """The pod a path names. Thirty-six hex digits and dashes is the shape of
+    a UUID, not a guarantee of one -- `----...` matches the pattern -- so a
+    path that fits and does not parse is a 404 rather than a 500."""
+    if match is None:
+        return None
+    try:
+        return UUID(match.group("pod_id"))
+    except ValueError:
+        return None
+
+
+def _more_than_one_authorization(headers: Headers) -> bool:
+    """Two ``Authorization`` headers are refused outright on both mounts.
+
+    Starlette's ``Headers.get`` answers with the first and fastmcp's
+    ``get_http_headers`` with the last, so the token checked at the door and
+    the one the tools act on could differ -- an outside client's token behind
+    a session token, served without its rate limit.
+    """
+    return len(headers.getlist("authorization")) > 1
+
+
+def _ambiguous_credentials() -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "invalid_request",
+            "error_description": "More than one Authorization header",
+        },
+        status_code=400,
+    )
 
 
 def _unauthorized(pod_id: UUID, *, error: str | None) -> JSONResponse:

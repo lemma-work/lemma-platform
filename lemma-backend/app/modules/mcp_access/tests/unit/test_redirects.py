@@ -11,7 +11,7 @@ from mcp.shared.auth import InvalidRedirectUriError, OAuthClientInformationFull
 from pydantic import AnyUrl
 
 from app.modules.mcp_access.domain.entities import ClientRegistration
-from app.modules.mcp_access.domain.redirects import redirect_allowed
+from app.modules.mcp_access.domain.redirects import redirect_allowed, redirect_matches
 from app.modules.mcp_access.infrastructure.repositories import StoredClient
 from app.modules.mcp_access.services.clients import LemmaOAuthClient, _from_stored
 
@@ -172,3 +172,47 @@ async def test_registration_refuses_an_unsafe_redirect():
                 client_id="x", redirect_uris=[AnyUrl(SCRIPT)]
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("candidate", "registered"),
+    [
+        (
+            "https://claude.ai/api/mcp/auth_callback",
+            "https://claude.ai/api/mcp/auth_callback",
+        ),
+        ("http://localhost:54321/callback", "http://localhost/callback"),
+        ("http://127.0.0.1:1/callback", "http://127.0.0.1:8080/callback"),
+        ("http://[::1]:9/cb", "http://[::1]/cb"),
+    ],
+)
+def test_a_redirect_matches_exactly_or_on_another_loopback_port(candidate, registered):
+    assert redirect_matches(candidate, registered)
+
+
+@pytest.mark.parametrize(
+    ("candidate", "registered"),
+    [
+        # A callback that forwards on a query parameter would hand the code on.
+        (
+            "https://claude.ai/api/mcp/auth_callback?next=https://evil.example",
+            "https://claude.ai/api/mcp/auth_callback",
+        ),
+        # A registered root is not a registered prefix.
+        ("https://app.example/anything", "https://app.example/"),
+        (
+            "https://claude.ai:8443/api/mcp/auth_callback",
+            "https://claude.ai/api/mcp/auth_callback",
+        ),
+        ("http://localhost:1/elsewhere", "http://localhost/callback"),
+        ("http://localhost:1/callback?x=1", "http://localhost/callback"),
+        ("http://127.0.0.1:1/callback", "http://localhost/callback"),
+        ("http://evil.example:1/callback", "http://evil.example/callback"),
+        (
+            "https://CLAUDE.ai/api/mcp/auth_callback",
+            "https://claude.ai/api/mcp/auth_callback",
+        ),
+    ],
+)
+def test_anything_else_does_not_match(candidate, registered):
+    assert not redirect_matches(candidate, registered)

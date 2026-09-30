@@ -263,3 +263,76 @@ async def test_public_mount_answers_429_over_the_grants_budget():
     assert messages[0]["status"] == 429
     assert dict(messages[0]["headers"])[b"retry-after"] == b"17"
     assert forwarded == []
+
+
+# --- Two Authorization headers, either mount ---------------------------------
+
+_TWO_BEARERS = [
+    (b"authorization", b"Bearer a-session"),
+    (b"authorization", b"Bearer lemma_mcp_at_x"),
+]
+
+
+@pytest.mark.asyncio
+async def test_the_agent_host_mount_refuses_two_authorization_headers():
+    """The door reads the first, the tools read the last: an outside client's
+    token sent second would be served here without its rate limit."""
+    forwarded: list[dict] = []
+    app = object.__new__(mcp_server.PodMCPASGIApp)
+
+    async def fake_mcp(scope, receive, send):
+        forwarded.append(scope)
+
+    app._mcp_app = fake_mcp
+    messages = await _capture_response(
+        lambda send: app(
+            _scope(f"/agent-runtime/pods/{uuid4()}/mcp", headers=_TWO_BEARERS),
+            lambda: None,
+            send,
+        )
+    )
+    assert messages[0]["status"] == 400
+    assert forwarded == []
+
+
+@pytest.mark.asyncio
+async def test_the_public_mount_refuses_two_authorization_headers():
+    forwarded: list[dict] = []
+
+    async def session_ok(*, pod_id, token):
+        return True
+
+    app = _public_app(forwarded)
+    app._gate = mcp_server.PublicMCPGate(
+        verify_access_token=_accept,
+        authorize_session=session_ok,
+        retry_after=_no_wait,
+        origin_allowed=lambda origin: True,
+    )
+    messages = await _capture_response(
+        lambda send: app(
+            _scope(f"/mcp/{uuid4()}", headers=_TWO_BEARERS), lambda: None, send
+        )
+    )
+    assert messages[0]["status"] == 400
+    assert forwarded == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path", ["/mcp/" + "-" * 36, "/agent-runtime/pods/" + "a" * 36 + "/mcp"]
+)
+async def test_a_pod_id_shaped_but_not_a_uuid_is_a_404(path):
+    forwarded: list[dict] = []
+    pod_app = object.__new__(mcp_server.PodMCPASGIApp)
+
+    async def fake_mcp(scope, receive, send):
+        forwarded.append(scope)
+
+    pod_app._mcp_app = fake_mcp
+    app = _public_app(forwarded) if path.startswith("/mcp/") else pod_app
+    messages = await _capture_response(
+        lambda send: app(_scope(path, headers=[_BEARER]), lambda: None, send)
+    )
+    assert messages[0]["status"] == 404
+    assert forwarded == []

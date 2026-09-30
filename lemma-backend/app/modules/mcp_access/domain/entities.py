@@ -41,14 +41,19 @@ ALL_SCOPES: tuple[Scope, ...] = (Scope.READ, Scope.WRITE)
 
 
 def parse_scopes(raw: list[str] | None) -> frozenset[Scope]:
-    """The scopes a request names, or every scope when it names none.
+    """The scopes named, and no others -- an empty list is no scopes.
+
+    "Asked for nothing, so offer everything" is decided once, at the authorize
+    endpoint, where the request arrives. Read anywhere later, an empty list is
+    a grant or token that holds nothing, and treating it as everything is how
+    a read-only answer to a write-only request came back as read and write.
 
     Unknown values are dropped rather than refused: the authorize endpoint has
     already validated the request against `ALL_SCOPES`, so anything else here is
     a stored value from a newer build, and ignoring it grants less, never more.
     """
     if not raw:
-        return frozenset(ALL_SCOPES)
+        return frozenset()
     known = {scope.value: scope for scope in ALL_SCOPES}
     return frozenset(known[value] for value in raw if value in known)
 

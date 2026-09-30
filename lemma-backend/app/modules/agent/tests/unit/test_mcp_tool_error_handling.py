@@ -151,3 +151,14 @@ async def test_approval_executor_returns_error_on_tool_failure(monkeypatch):
         "error_type": "RuntimeError",
         "tool": "exec_command",
     }
+
+
+@pytest.mark.asyncio
+async def test_an_outside_clients_token_read_from_a_header_is_never_honoured():
+    """Only the principal the public mount verified counts. A token arriving
+    any other way -- a second Authorization header the door never read -- is
+    refused before anything looks it up."""
+    service = PodMCPService()
+    assert not await service.authorize(pod_id=uuid4(), token="lemma_mcp_at_x")
+    with pytest.raises(ValueError):
+        await service.list_tools(pod_id=uuid4(), token="lemma_mcp_at_x")

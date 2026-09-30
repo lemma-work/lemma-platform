@@ -302,7 +302,9 @@ async def test_two_retries_at_once_take_turns_and_leave_one_live_refresh_token(
         await setup.commit()
 
     async def retry(repository: McpAccessRepository, token_hash: str) -> None:
-        await repository.supersede_live_tokens(grant_id=grant_id, rotated_at=now)
+        await repository.supersede_live_tokens(
+            grant_id=grant_id, rotated_at=now, now=now
+        )
         await repository.add_token(
             token_hash=token_hash,
             grant_id=grant_id,
@@ -367,6 +369,115 @@ async def test_the_superseded_refresh_token_is_a_replay_after_the_grace(
     assert after.status_code == 401
 
 
+async def test_a_token_retried_twice_ends_the_grant(
+    mcp_client, authenticated_client, test_pod
+):
+    """One retry is a lost response. Two is somebody else."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    first = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    assert (await mcp_client.refresh(first["refresh_token"])).status_code == 200
+    retried = await mcp_client.refresh(first["refresh_token"])
+    assert retried.status_code == 200, retried.text
+
+    again = await mcp_client.refresh(first["refresh_token"])
+    assert again.status_code in (400, 401)
+    assert again.json()["error"] == "invalid_grant"
+    after = await mcp_client.rpc(pod_id, retried.json()["access_token"], "tools/list")
+    assert after.status_code == 401
+
+
+async def test_the_cancelled_token_still_ends_the_grant_after_the_winner_rotates(
+    mcp_client, authenticated_client, test_pod, db_session
+):
+    """The party a retry cancelled keeps a token that later rotations must not
+    prune away: presented afterwards, it is caught, not merely unknown."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    first = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    second = (await mcp_client.refresh(first["refresh_token"])).json()
+    third = (await mcp_client.refresh(first["refresh_token"])).json()
+    fourth = await mcp_client.refresh(third["refresh_token"])
+    assert fourth.status_code == 200, fourth.text
+
+    await db_session.execute(
+        text(
+            "UPDATE mcp_oauth_tokens SET rotated_at = rotated_at - interval '5 minutes' "
+            "WHERE rotated_at IS NOT NULL"
+        )
+    )
+    await db_session.commit()
+    replayed = await mcp_client.refresh(second["refresh_token"])
+    assert replayed.json()["error"] == "invalid_grant"
+    after = await mcp_client.rpc(pod_id, fourth.json()["access_token"], "tools/list")
+    assert after.status_code == 401
+
+
+async def test_a_deleted_pod_refuses_its_clients_and_ends_their_grants(
+    mcp_client, authenticated_client, test_pod, db_manager
+):
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    tokens = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    assert (await authenticated_client.delete(f"/pods/{pod_id}")).status_code == 204
+
+    # Refused at once, before anything reacts to the deletion event.
+    served = await mcp_client.rpc(pod_id, tokens["access_token"], "tools/list")
+    assert served.status_code == 401
+    refreshed = await mcp_client.refresh(tokens["refresh_token"])
+    assert refreshed.json()["error"] == "invalid_grant"
+
+    # And the event's handler ends the grants themselves.
+    async with db_manager.session_factory() as session:
+        ended = await McpAccessRepository(
+            SqlAlchemyUnitOfWork(session)
+        ).revoke_pod_grants(pod_id=UUID(pod_id), now=datetime.now(timezone.utc))
+        await session.commit()
+    assert ended == 1
+
+
+async def test_a_public_client_disconnects_with_only_its_token(
+    mcp_client, authenticated_client, test_pod
+):
+    """Claude and Claude Code have no secret to send; revoking still works,
+    and ends the connection rather than one token."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    tokens = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+
+    revoked = await mcp_client.http.post(
+        "/oauth/revoke",
+        data={"token": tokens["refresh_token"], "client_id": mcp_client.client_id},
+    )
+    assert revoked.status_code == 200, revoked.text
+    after = await mcp_client.rpc(pod_id, tokens["access_token"], "tools/list")
+    assert after.status_code == 401
+    listed = await authenticated_client.get("/oauth/grants", params={"pod_id": pod_id})
+    assert listed.json()["items"] == []
+
+
+async def test_an_oversized_registration_is_refused_before_it_is_held(mcp_client):
+    padded = await mcp_client.http.post(
+        "/oauth/register",
+        json={
+            "client_name": "x" * 40_000,
+            "redirect_uris": [REDIRECT],
+            "token_endpoint_auth_method": "none",
+        },
+    )
+    assert padded.status_code == 413
+    long_name = await mcp_client.http.post(
+        "/oauth/register",
+        json={
+            "client_name": "x" * 1_000,
+            "redirect_uris": [REDIRECT],
+            "token_endpoint_auth_method": "none",
+        },
+    )
+    assert long_name.status_code == 400
+    assert long_name.json()["error"] == "invalid_client_metadata"
+
+
 async def test_revoking_a_connection_ends_its_tokens_at_once(
     mcp_client, authenticated_client, test_pod
 ):
@@ -415,6 +526,20 @@ async def test_a_read_only_connection_is_not_offered_the_writing_tools(
         },
     )
     assert refused.json()["result"]["isError"] is True
+
+    # An in-app link is offered; a public one is publishing, and refused.
+    assert "lemma_pod_get_file_url" in names
+    published = await mcp_client.rpc(
+        pod_id,
+        tokens["access_token"],
+        "tools/call",
+        {
+            "name": "lemma_pod_get_file_url",
+            "arguments": {"request": {"path": "/any.pdf", "url_type": "public"}},
+        },
+    )
+    assert published.json()["result"]["isError"] is True
+    assert "pod:write" in published.json()["result"]["content"][0]["text"]
 
 
 async def test_a_denied_consent_redirects_with_access_denied(
@@ -517,6 +642,24 @@ async def test_the_person_can_allow_reading_only_whatever_the_app_asked_for(
     listed = await mcp_client.rpc(pod_id, tokens["access_token"], "tools/list")
     names = {tool["name"] for tool in listed.json()["result"]["tools"]}
     assert "lemma_pod_write_record" not in names
+
+
+async def test_reading_only_on_a_write_only_request_grants_reading_not_everything(
+    mcp_client, authenticated_client, test_pod
+):
+    """It used to store no scopes, and no scopes read back as all of them."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    resource, _ = await mcp_client.discover(pod_id)
+    request_id, verifier = await mcp_client.authorize(resource, "pod:write")
+    answered = await authenticated_client.post(
+        f"/oauth/consent/{request_id}", json={"allow": True, "read_only": True}
+    )
+    code = parse_qs(urlsplit(answered.json()["redirect_to"]).query)["code"][0]
+    tokens = await mcp_client.redeem(code, verifier, resource)
+    assert tokens["scope"] == "pod:read"
+    listed = await authenticated_client.get("/oauth/grants", params={"pod_id": pod_id})
+    assert listed.json()["items"][0]["scopes"] == ["pod:read"]
 
 
 async def test_a_pods_admin_sees_everyones_connections_and_nobody_else_does(

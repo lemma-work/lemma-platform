@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -18,6 +20,7 @@ from app.modules.mcp_access.services.clients import LemmaOAuthClient
 pytestmark = pytest.mark.unit
 
 API = "https://api.lemma.work"
+CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 
 
 class _FakeRedis:
@@ -34,6 +37,10 @@ class _FakeRedis:
         return self.values.pop(name, None)
 
 
+async def _yes(_: UUID) -> bool:
+    return True
+
+
 def _server(redis: _FakeRedis) -> LemmaAuthorizationServer:
     return LemmaAuthorizationServer(
         uow_factory=None,  # type: ignore[arg-type]  # these paths never open one
@@ -41,6 +48,8 @@ def _server(redis: _FakeRedis) -> LemmaAuthorizationServer:
         ephemeral=EphemeralStore(redis),
         api_url=API,
         auth_frontend_url="https://lemma.work",
+        account_may_sign_in=_yes,
+        pod_is_live=_yes,
     )
 
 
@@ -57,7 +66,7 @@ def _params(
     return AuthorizationParams(
         state="st",
         scopes=scopes,
-        code_challenge="challenge",
+        code_challenge=CHALLENGE,
         redirect_uri=AnyUrl("https://claude.ai/api/mcp/auth_callback"),
         redirect_uri_provided_explicitly=True,
         resource=resource,
@@ -86,6 +95,27 @@ async def test_authorize_holds_the_request_and_sends_the_browser_to_consent():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("code_challenge", "short"),
+        ("code_challenge", "x" * 2_000_000),
+        ("code_challenge", "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw+cM"),
+        ("state", "s" * 2_049),
+    ],
+)
+async def test_authorize_holds_nothing_oversized_or_malformed(field, value):
+    """The request waits in Redis until the person answers, so what it carries
+    is bounded before it is held."""
+    redis = _FakeRedis()
+    params = _params(pod_resource_url(API, uuid4())).model_copy(update={field: value})
+    with pytest.raises(AuthorizeError) as raised:
+        await _server(redis).authorize(_client(), params)
+    assert raised.value.error == "invalid_request"
+    assert redis.values == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("resource", [None, "https://evil.example/mcp/x"])
 async def test_authorize_refuses_a_request_that_names_no_pod_here(resource):
     with pytest.raises(AuthorizeError) as raised:
@@ -102,7 +132,7 @@ async def test_a_code_belongs_to_the_client_it_was_issued_to_and_redeems_once():
             grant_id=str(uuid4()),
             client_id="client-1",
             scopes=["pod:read"],
-            code_challenge="challenge",
+            code_challenge=CHALLENGE,
             redirect_uri="https://claude.ai/api/mcp/auth_callback",
             redirect_uri_provided_explicitly=True,
             resource=pod_resource_url(API, uuid4()),

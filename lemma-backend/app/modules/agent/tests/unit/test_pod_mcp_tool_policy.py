@@ -5,6 +5,7 @@ import pytest
 from app.modules.agent.services.pod_mcp_tool_policy import (
     POD_TOOL_POLICIES,
     policy_for,
+    scope_for_call,
     without_approval_envelope,
 )
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
@@ -34,6 +35,26 @@ def test_reading_tools_are_annotated_read_only():
     assert annotations.read_only_hint is True
     assert annotations.destructive_hint is False
     assert annotations.open_world_hint is False
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"request": {"path": "/a.pdf", "url_type": "public"}},
+        {"path": "/a.pdf", "url_type": "public"},
+    ],
+)
+def test_a_public_file_link_is_publishing_and_needs_write(arguments):
+    """It outlives the connection and anyone can open it for up to a week."""
+    assert scope_for_call("pod_get_file_url", arguments) is Scope.WRITE
+    assert policy_for("pod_get_file_url").annotations().open_world_hint is True
+
+
+@pytest.mark.parametrize(
+    "arguments", [None, {}, {"request": {"path": "/a.pdf"}}, {"url_type": "app"}]
+)
+def test_an_in_app_file_link_is_reading(arguments):
+    assert scope_for_call("pod_get_file_url", arguments) is Scope.READ
 
 
 def test_an_unknown_tool_gets_the_most_cautious_policy():

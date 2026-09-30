@@ -17,12 +17,12 @@ from fastapi import APIRouter
 from fastmcp.server.auth.auth import TokenHandler
 from mcp.server.auth.handlers.authorize import AuthorizationHandler
 from mcp.server.auth.handlers.register import RegistrationHandler
-from mcp.server.auth.handlers.revoke import RevocationHandler
 from mcp.server.auth.settings import ClientRegistrationOptions
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.modules.identity.contracts.client_address import client_ip
+from app.modules.mcp_access.api.revocation import RevocationHandler
 from app.modules.mcp_access.config import mcp_access_settings
 from app.modules.mcp_access.domain.entities import ALL_SCOPES
 from app.modules.mcp_access.domain.resources import (
@@ -32,7 +32,10 @@ from app.modules.mcp_access.domain.resources import (
     pod_resource_url,
 )
 from app.modules.mcp_access.infrastructure.rate_limit import RateLimiter
-from app.modules.mcp_access.services.client_auth import DigestClientAuthenticator
+from app.modules.mcp_access.services.client_auth import (
+    DigestClientAuthenticator,
+    basic_credentials,
+)
 from app.modules.mcp_access.services.wiring import (
     authorization_server,
     client_directory,
@@ -71,7 +74,9 @@ def authorization_server_metadata(issuer_url: str) -> dict[str, object]:
         "token_endpoint_auth_methods_supported": _AUTH_METHODS,
         "revocation_endpoint_auth_methods_supported": _AUTH_METHODS,
         # For `private_key_jwt`, which ChatGPT's metadata document declares.
-        "token_endpoint_auth_signing_alg_values_supported": ["RS256", "ES256"],
+        # What fastmcp's verifier accepts; advertising more sends a client
+        # signing with it to a refusal.
+        "token_endpoint_auth_signing_alg_values_supported": ["RS256"],
         # Spec-following clients refuse a server that omits this (MCP
         # authorization, "Authorization Code Protection").
         "code_challenge_methods_supported": ["S256"],
@@ -125,9 +130,47 @@ async def _by_client_and_address(request: Request) -> str:
     form = await request.form()
     client_id = form.get("client_id")
     if not isinstance(client_id, str) or not client_id:
-        header = request.headers.get("Authorization", "")
-        client_id = header[:80] if header.startswith("Basic ") else ""
+        # Only the id half: the rest of Basic credentials is the secret, and
+        # this string becomes a Redis key name.
+        credentials = basic_credentials(request.headers.get("Authorization", ""))
+        client_id = credentials[0] if credentials else ""
     return f"{client_ip(request.scope)}:{client_id[:512]}"
+
+
+MAX_BODY_BYTES = 16 * 1024
+"""Every OAuth request body here is a short form or a small JSON object. The
+cap is checked before anything parses it: registration used to hold whatever it
+was sent, and python-multipart failed a 1 MB form field with a 500."""
+
+
+def _bounded(handler: Handler) -> Handler:
+    """``handler``, refusing a body over `MAX_BODY_BYTES` before it is read in
+    full -- whatever the ``Content-Length`` claims, since a chunked body has
+    none."""
+
+    async def endpoint(request: Request) -> Response:
+        declared = request.headers.get("content-length")
+        if declared is not None and (
+            not declared.isdigit() or int(declared) > MAX_BODY_BYTES
+        ):
+            return _too_large()
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_BODY_BYTES:
+                return _too_large()
+        # Starlette serves `form()` and `json()` from `_body` once it is set.
+        request._body = bytes(body)
+        return await handler(request)
+
+    return endpoint
+
+
+def _too_large() -> Response:
+    return JSONResponse(
+        {"error": "invalid_request", "error_description": "Request body too large"},
+        status_code=413,
+    )
 
 
 def _limited(
@@ -215,54 +258,64 @@ def oauth_router() -> APIRouter:
         )
     router.add_route(
         f"{OAUTH_PREFIX}/authorize",
-        _limited(
-            authorize.handle,
-            name="authorize",
-            key=_by_address,
-            limit=lambda: mcp_access_settings.mcp_access_authorize_requests_per_minute,
-            window=60,
+        _bounded(
+            _limited(
+                authorize.handle,
+                name="authorize",
+                key=_by_address,
+                limit=lambda: (
+                    mcp_access_settings.mcp_access_authorize_requests_per_minute
+                ),
+                window=60,
+            )
         ),
         methods=["GET", "POST"],
         include_in_schema=False,
     )
     router.add_route(
         f"{OAUTH_PREFIX}/token",
-        _limited(
-            token.handle,
-            name="token",
-            key=_by_client_and_address,
-            limit=lambda: mcp_access_settings.mcp_access_token_requests_per_minute,
-            window=60,
-            address_limit=lambda: (
-                mcp_access_settings.mcp_access_token_requests_per_address_per_minute
-            ),
+        _bounded(
+            _limited(
+                token.handle,
+                name="token",
+                key=_by_client_and_address,
+                limit=lambda: mcp_access_settings.mcp_access_token_requests_per_minute,
+                window=60,
+                address_limit=lambda: (
+                    mcp_access_settings.mcp_access_token_requests_per_address_per_minute
+                ),
+            )
         ),
         methods=["POST"],
         include_in_schema=False,
     )
     router.add_route(
         f"{OAUTH_PREFIX}/register",
-        _limited(
-            registration.handle,
-            name="register",
-            key=_by_address,
-            limit=lambda: mcp_access_settings.mcp_access_registrations_per_hour,
-            window=3600,
+        _bounded(
+            _limited(
+                registration.handle,
+                name="register",
+                key=_by_address,
+                limit=lambda: mcp_access_settings.mcp_access_registrations_per_hour,
+                window=3600,
+            )
         ),
         methods=["POST"],
         include_in_schema=False,
     )
     router.add_route(
         f"{OAUTH_PREFIX}/revoke",
-        _limited(
-            revocation.handle,
-            name="revoke",
-            key=_by_client_and_address,
-            limit=lambda: mcp_access_settings.mcp_access_token_requests_per_minute,
-            window=60,
-            address_limit=lambda: (
-                mcp_access_settings.mcp_access_token_requests_per_address_per_minute
-            ),
+        _bounded(
+            _limited(
+                revocation.handle,
+                name="revoke",
+                key=_by_client_and_address,
+                limit=lambda: mcp_access_settings.mcp_access_token_requests_per_minute,
+                window=60,
+                address_limit=lambda: (
+                    mcp_access_settings.mcp_access_token_requests_per_address_per_minute
+                ),
+            )
         ),
         methods=["POST"],
         include_in_schema=False,

@@ -8,7 +8,7 @@ from app.modules.mcp_access.api.oauth_routes import (
     authorization_server_metadata,
     protected_resource_metadata,
 )
-from app.modules.mcp_access.domain.entities import ALL_SCOPES, Scope, parse_scopes
+from app.modules.mcp_access.domain.entities import Scope, parse_scopes
 from app.modules.mcp_access.domain.resources import (
     pod_id_for_resource,
     pod_resource_url,
@@ -70,8 +70,11 @@ def test_metadata_document_url_inserts_the_well_known_segment_before_the_path():
     )
 
 
-def test_no_scopes_requested_means_all_and_unknown_scopes_grant_nothing():
-    assert parse_scopes(None) == frozenset(ALL_SCOPES)
+def test_no_scopes_named_means_none_and_unknown_scopes_grant_nothing():
+    # Empty is nothing. "Everything" is decided at authorize, never inferred
+    # from an empty stored list.
+    assert parse_scopes(None) == frozenset()
+    assert parse_scopes([]) == frozenset()
     assert parse_scopes(["pod:read", "offline_access", "admin"]) == {Scope.READ}
 
 

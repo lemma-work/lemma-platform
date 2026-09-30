@@ -19,6 +19,7 @@ client would ask the person before each call.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from mcp.types import ToolAnnotations
@@ -32,6 +33,7 @@ class ToolPolicy:
     scope: Scope
     destructive: bool = False
     idempotent: bool = True
+    open_world: bool = False
 
     def annotations(self) -> ToolAnnotations:
         read_only = self.scope is Scope.READ
@@ -40,9 +42,9 @@ class ToolPolicy:
             read_only_hint=read_only,
             destructive_hint=self.destructive,
             idempotent_hint=self.idempotent,
-            # Everything these tools touch is inside the pod. A signed file URL
-            # is a link to the pod's own storage, not a reach outside it.
-            open_world_hint=False,
+            # Everything these tools touch is inside the pod, save a public
+            # file link, which anyone it is handed to can open.
+            open_world_hint=self.open_world,
         )
 
 
@@ -54,7 +56,9 @@ POD_TOOL_POLICIES: dict[str, ToolPolicy] = {
     "pod_read_file": ToolPolicy("Read a file", Scope.READ),
     "pod_search_files": ToolPolicy("Search files", Scope.READ),
     "pod_view_document_pages": ToolPolicy("View document pages", Scope.READ),
-    "pod_get_file_url": ToolPolicy("Get a link to a file", Scope.READ),
+    # Listed for reading: an in-app link needs the person's own session to
+    # open. Its public mode is `scope_for_call`'s exception.
+    "pod_get_file_url": ToolPolicy("Get a link to a file", Scope.READ, open_world=True),
     # Can delete a record, so destructive; not idempotent, since "create" run
     # twice makes two rows.
     "pod_write_record": ToolPolicy(
@@ -81,6 +85,28 @@ _WRITE_UNLESS_KNOWN = ToolPolicy(
 def policy_for(tool_name: str) -> ToolPolicy:
     """The tool's row, or the most cautious one for a tool with none."""
     return POD_TOOL_POLICIES.get(tool_name, _WRITE_UNLESS_KNOWN)
+
+
+def scope_for_call(tool_name: str, arguments: Mapping[str, object] | None) -> Scope:
+    """The scope this particular call needs.
+
+    The tool's own, except a public file link: it mints a URL anyone can open,
+    for up to a week and a thousand downloads, and it outlives the connection
+    that made it. That is publishing, not reading, so it needs ``pod:write``.
+    """
+    if tool_name == "pod_get_file_url" and _url_type(arguments) == "public":
+        return Scope.WRITE
+    return policy_for(tool_name).scope
+
+
+def _url_type(arguments: Mapping[str, object] | None) -> object:
+    if not arguments:
+        return None
+    # The tool's one parameter is its request model; clients send it wrapped
+    # under its name or, when the schema is inlined, flat.
+    inner = arguments.get("request")
+    source = inner if isinstance(inner, Mapping) else arguments
+    return source.get("url_type")
 
 
 APPROVAL_KEYS = ("needs_approval", "approval")

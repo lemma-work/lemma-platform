@@ -39,9 +39,15 @@ class ConsentRequestResponse(BaseModel):
     client_uri: str | None = None
     redirect_host: str = Field(
         description=(
-            "Where the person is sent back to. The one part of the request a "
-            "client cannot claim falsely, so the consent screen shows it."
+            "Where the person is sent back to: a web redirect's host, or an "
+            "app's scheme and a colon (`cursor:`), since the rest of an app's "
+            "URI proves nothing. The one part of the request a client cannot "
+            "claim falsely, so the consent screen shows it."
         )
+    )
+    redirect_to_app: bool = Field(
+        default=False,
+        description="The redirect opens an app on the device, not a web page.",
     )
     pod_id: UUID
     pod_name: str
@@ -116,6 +122,7 @@ async def get_consent_request(
         verified_host=found.verified_host,
         client_uri=found.client_uri,
         redirect_host=found.redirect_host,
+        redirect_to_app=found.redirect_to_app,
         pod_id=found.pod_id,
         pod_name=found.pod_name,
         scopes=sorted(found.scopes),

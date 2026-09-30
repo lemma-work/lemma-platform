@@ -3,8 +3,10 @@
 Every condition is checked on every request, from the database, because each
 is something a person can change and expect to take effect at once: revoking
 the grant, losing access to the pod, the pod being deleted, the account being
-deactivated. The first three are the grant row and the tool layer's own
-authorization; the last is `account_may_sign_in`.
+deactivated. The first two are the grant row and the tool layer's own
+authorization; the pod is `pod_is_live` and the account `account_may_sign_in`.
+A deleted pod needs its own check: deletion is soft and memberships survive it,
+so the person's standing in it still reads as it did.
 """
 
 from __future__ import annotations
@@ -34,11 +36,13 @@ class AccessTokenVerifier:
         uow_factory: UnitOfWorkFactory,
         api_url: str,
         account_may_sign_in: Callable[[UUID], Awaitable[bool]],
+        pod_is_live: Callable[[UUID], Awaitable[bool]],
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._uow_factory = uow_factory
         self._api_url = api_url
         self._account_may_sign_in = account_may_sign_in
+        self._pod_is_live = pod_is_live
         self._now = clock
 
     async def verify(self, token: str, *, pod_id: UUID) -> McpPrincipal | None:
@@ -71,14 +75,15 @@ class AccessTokenVerifier:
                 await uow.commit()
         if not await self._account_may_sign_in(found.user_id):
             return None
+        if not await self._pod_is_live(found.pod_id):
+            return None
         return McpPrincipal(
             user_id=found.user_id,
             pod_id=found.pod_id,
             grant_id=found.grant_id,
             client_id=found.client_id,
             client_name=found.client_name,
-            # The token's scopes as narrowed by the grant now: reconnecting with
-            # less access takes effect on tokens already issued, not only new ones.
+            # Never more than the grant holds, whatever the token row says.
             scopes=(
                 parse_scopes(found.scopes) & parse_scopes(found.grant_scopes)
                 if found.scopes and found.grant_scopes

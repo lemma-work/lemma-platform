@@ -24,17 +24,27 @@ from app.modules.mcp_access.domain.tokens import digest
 from app.modules.mcp_access.services.clients import ClientDirectory, LemmaOAuthClient
 
 
-def _basic_credentials(header: str, client_id: str) -> str:
+def basic_credentials(header: str) -> tuple[str, str] | None:
+    """(client id, secret) from an ``Authorization: Basic`` header, each
+    form-decoded as RFC 6749 §2.3.1 has them sent; ``None`` for any other
+    header, or one that does not decode. The one parser for it here."""
     if not header.startswith("Basic "):
-        raise AuthenticationError("Missing or invalid Basic authentication")
+        return None
     try:
-        decoded = base64.b64decode(header[6:]).decode("utf-8")
-        basic_id, _, secret = decoded.partition(":")
-    except (binascii.Error, UnicodeDecodeError) as exc:
-        raise AuthenticationError("Invalid Basic authentication header") from exc
-    if unquote(basic_id) != client_id:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+    except binascii.Error, UnicodeDecodeError:
+        return None
+    client_id, _, secret = decoded.partition(":")
+    return unquote(client_id), unquote(secret)
+
+
+def _basic_secret(header: str, client_id: str) -> str:
+    credentials = basic_credentials(header)
+    if credentials is None:
+        raise AuthenticationError("Missing or invalid Basic authentication")
+    if credentials[0] != client_id:
         raise AuthenticationError("Client ID mismatch in Basic auth")
-    return unquote(secret)
+    return credentials[1]
 
 
 JWT_BEARER_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
@@ -44,11 +54,10 @@ def _client_id(from_form: object, header: str) -> str:
     """From the form, or from Basic credentials when the form has none."""
     client_id = from_form
     if not client_id and header.startswith("Basic "):
-        try:
-            decoded = base64.b64decode(header[6:]).decode("utf-8")
-        except (binascii.Error, UnicodeDecodeError) as exc:
-            raise AuthenticationError("Invalid Basic authentication header") from exc
-        client_id = unquote(decoded.partition(":")[0])
+        credentials = basic_credentials(header)
+        if credentials is None:
+            raise AuthenticationError("Invalid Basic authentication header")
+        client_id = credentials[0]
     if not isinstance(client_id, str) or not client_id:
         raise AuthenticationError("Missing client_id")
     return client_id
@@ -82,7 +91,7 @@ class DigestClientAuthenticator(ClientAuthenticator):
         if client.client_secret_hash is None:
             raise AuthenticationError("Client has no stored secret")
         if method == "client_secret_basic":
-            presented = _basic_credentials(header, client_id)
+            presented = _basic_secret(header, client_id)
         elif method == "client_secret_post":
             raw = form.get("client_secret")
             presented = raw if isinstance(raw, str) else ""

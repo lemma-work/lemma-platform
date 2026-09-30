@@ -34,7 +34,6 @@ from fastmcp.server.auth.cimd import (
     CIMDFetchError,
     CIMDValidationError,
 )
-from fastmcp.server.auth.redirect_validation import matches_allowed_pattern
 from mcp.server.auth.provider import RegistrationError
 from mcp.shared.auth import (
     InvalidRedirectUriError,
@@ -46,7 +45,10 @@ from pydantic import AnyUrl, model_validator
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.mcp_access.domain.entities import ALL_SCOPES, ClientRegistration
-from app.modules.mcp_access.domain.redirects import redirect_allowed
+from app.modules.mcp_access.domain.redirects import (
+    redirect_allowed,
+    redirect_matches,
+)
 from app.modules.mcp_access.domain.tokens import digest
 from app.modules.mcp_access.infrastructure.ephemeral import (
     EphemeralStore,
@@ -64,14 +66,56 @@ OFFLINE_ACCESS = "offline_access"
 authorization server lists it; this one issues refresh tokens regardless and
 does not list it, as the MCP spec asks."""
 
-_SECRET_FIELDS = ("client_secret", "client_secret_expires_at")
+STORED_FIELDS = frozenset(
+    {
+        "client_name",
+        "client_uri",
+        "redirect_uris",
+        "grant_types",
+        "response_types",
+        "scope",
+        "token_endpoint_auth_method",
+        "software_id",
+        "software_version",
+    }
+)
+"""Everything a client's registration is kept for. The rest of RFC 7591's
+metadata is read by nothing here, and keeping it would let one unauthenticated
+request park whatever it liked."""
+
+
+class _NeverFull(dict[str, float]):
+    """A jti cache that remembers nothing."""
+
+    def __setitem__(self, key: str, value: float) -> None:
+        del key, value
+
+
+class _AssertionValidator(CIMDAssertionValidator):
+    """fastmcp's checks, less its replay cache.
+
+    That cache is per process and refuses every assertion -- "Server
+    overloaded" -- once it holds 10,000 ids, and anyone can fill it with
+    assertions signed by keys in a document they host. `ClientDirectory`
+    claims each ``jti`` in Redis instead, once across every replica.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._jti_cache = _NeverFull()
+
+
+MAX_REDIRECT_URIS = 10
+MAX_URI_LENGTH = 2048
+MAX_FIELD_LENGTH = 512
 
 
 class LemmaOAuthClient(OAuthClientInformationFull):
     """A resolved client, with the two checks the SDK delegates to it.
 
-    ``redirect_patterns`` holds a metadata document's redirect URIs verbatim.
-    They are patterns rather than URLs: Claude Code's document lists
+    ``redirect_patterns`` holds a metadata document's redirect URIs verbatim,
+    rather than parsed into URLs that would normalize them. They match exactly,
+    save a loopback port: Claude Code's document lists
     ``http://localhost/callback`` and then listens on whatever port is free,
     which RFC 8252 §7.3 says a loopback redirect may do.
     """
@@ -109,11 +153,7 @@ class LemmaOAuthClient(OAuthClientInformationFull):
             self.redirect_patterns
         )
         if redirect_uri is None:
-            if (
-                len(allowed) == 1
-                and "*" not in allowed[0]
-                and redirect_allowed(allowed[0])
-            ):
+            if len(allowed) == 1 and redirect_allowed(allowed[0]):
                 return AnyUrl(allowed[0])
             raise InvalidRedirectUriError(
                 "redirect_uri must be specified unless the client has exactly "
@@ -121,8 +161,7 @@ class LemmaOAuthClient(OAuthClientInformationFull):
             )
         candidate = str(redirect_uri)
         if redirect_allowed(candidate) and any(
-            candidate == pattern or matches_allowed_pattern(candidate, pattern)
-            for pattern in allowed
+            redirect_matches(candidate, registered) for registered in allowed
         ):
             return redirect_uri
         raise InvalidRedirectUriError(
@@ -198,13 +237,17 @@ class ClientDirectory:
         self._uow_factory = uow_factory
         self._ephemeral = ephemeral
         self._fetcher = fetcher or CIMDFetcher()
-        self._assertions = CIMDAssertionValidator()
+        self._assertions = _AssertionValidator()
         self._now = clock
 
     def is_metadata_document_id(self, client_id: str) -> bool:
         return self._fetcher.is_cimd_client_id(client_id)
 
     async def get(self, client_id: str) -> LemmaOAuthClient | None:
+        if len(client_id) > MAX_URI_LENGTH:
+            # Longer than the column a consented client is written to: refused
+            # here, at authorize, rather than after the person has answered.
+            return None
         if self.is_metadata_document_id(client_id):
             return await self._resolve_document(client_id)
         async with self._uow_factory() as uow:
@@ -225,15 +268,27 @@ class ClientDirectory:
         )
 
     async def register(self, client_info: OAuthClientInformationFull) -> None:
-        for uri in client_info.redirect_uris or []:
-            if not redirect_allowed(str(uri)):
+        uris = [str(uri) for uri in client_info.redirect_uris or []]
+        if len(uris) > MAX_REDIRECT_URIS:
+            raise RegistrationError(
+                error="invalid_redirect_uri",
+                error_description=f"At most {MAX_REDIRECT_URIS} redirect URIs",
+            )
+        for uri in uris:
+            if len(uri) > MAX_URI_LENGTH or not redirect_allowed(uri):
                 raise RegistrationError(
                     error="invalid_redirect_uri",
-                    error_description=f"Redirect URI not allowed: {uri}",
+                    error_description=f"Redirect URI not allowed: {uri[:200]}",
                 )
         metadata = client_info.model_dump(
-            mode="json", exclude_none=True, exclude={"client_id", *_SECRET_FIELDS}
+            mode="json", exclude_none=True, include=set(STORED_FIELDS)
         )
+        for field, value in metadata.items():
+            if field != "redirect_uris" and len(str(value)) > MAX_FIELD_LENGTH:
+                raise RegistrationError(
+                    error="invalid_client_metadata",
+                    error_description=f"{field} is too long",
+                )
         secret = client_info.client_secret
         await self._ephemeral.hold_client(
             RegisteredClient(
@@ -244,6 +299,7 @@ class ClientDirectory:
         )
         logger.info(
             "mcp_access.client.registered",
+            client_id=client_info.client_id or "",
             client_name=str(metadata.get("client_name") or "")[:120],
         )
 
@@ -255,19 +311,7 @@ class ClientDirectory:
         time a person consents.
         """
         metadata = client.model_dump(
-            mode="json",
-            exclude_none=True,
-            include={
-                "client_name",
-                "client_uri",
-                "redirect_uris",
-                "grant_types",
-                "response_types",
-                "scope",
-                "token_endpoint_auth_method",
-                "software_id",
-                "software_version",
-            },
+            mode="json", exclude_none=True, include=set(STORED_FIELDS)
         )
         if client.registration is ClientRegistration.METADATA_DOCUMENT:
             metadata["redirect_uris"] = list(client.redirect_patterns)
@@ -290,8 +334,8 @@ class ClientDirectory:
         ChatGPT's document asks for this method. The assertion is accepted with
         the token endpoint or the issuer as its audience: RFC 7523 names the
         token endpoint, and newer guidance names the issuer, and clients follow
-        either. Each assertion is used once across every replica: fastmcp's own
-        replay check is per process.
+        either. Each assertion is used once across every replica, claimed in
+        Redis; fastmcp's per-process replay cache is switched off.
         """
         try:
             document = await self._fetcher.fetch(client_id)
@@ -323,7 +367,9 @@ class ClientDirectory:
     async def _resolve_document(self, client_id: str) -> LemmaOAuthClient | None:
         try:
             document = await self._fetcher.fetch(client_id)
-        except CIMDFetchError, CIMDValidationError:
+        except CIMDFetchError, CIMDValidationError, ValueError:
+            # ValueError too: a host that is not ASCII fails IDNA encoding
+            # inside the HTTP client, before any fetch.
             logger.warning(
                 "mcp_access.client_document.unusable",
                 client_id=client_id,

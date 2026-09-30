@@ -22,9 +22,10 @@ PENDING_TTL_SECONDS = 600
 CODE_TTL_SECONDS = 300
 """RFC 6749 §4.1.2 recommends ten minutes at most; a client redeems in one."""
 
-REGISTRATION_TTL_SECONDS = 7 * 24 * 3600
-"""A client that is never allowed is forgotten after a week; one that comes
-back later registers again, which RFC 7591 clients do on `invalid_client`."""
+REGISTRATION_TTL_SECONDS = 24 * 3600
+"""A client that is never allowed is forgotten after a day -- registration is
+followed by sign-in within minutes; one that comes back later registers again,
+which RFC 7591 clients do on `invalid_client`."""
 
 _PENDING_PREFIX = "mcp_access:pending:"
 _CLIENT_PREFIX = "mcp_access:client:"

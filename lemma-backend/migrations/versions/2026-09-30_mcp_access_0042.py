@@ -95,6 +95,7 @@ def upgrade() -> None:
         sa.Column("scopes", postgresql.ARRAY(sa.Text()), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("rotated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("superseded_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index(

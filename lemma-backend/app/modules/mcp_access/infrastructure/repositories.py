@@ -15,6 +15,7 @@ from app.modules.mcp_access.domain.entities import (
     TokenKind,
     parse_scopes,
 )
+from app.modules.mcp_access.domain.names import display_name
 from app.modules.mcp_access.infrastructure.models import (
     McpOAuthClient,
     McpOAuthGrant,
@@ -77,7 +78,7 @@ def _has_live_token(now: datetime):  # noqa: ANN202 - an EXISTS clause for a WHE
 
 def _client_name(metadata: dict[str, object], client_id: str) -> str:
     name = metadata.get("client_name")
-    return name if isinstance(name, str) and name.strip() else client_id
+    return display_name(name if isinstance(name, str) else None, client_id)
 
 
 class McpAccessRepository:
@@ -214,6 +215,23 @@ class McpAccessRepository:
         )
         return True
 
+    async def revoke_pod_grants(self, *, pod_id: UUID, now: datetime) -> int:
+        """End every live grant on a pod and delete their tokens -- the pod was
+        deleted. How many were ended."""
+        await self._session.execute(
+            delete(McpOAuthToken).where(
+                McpOAuthToken.grant_id.in_(
+                    select(McpOAuthGrant.id).where(McpOAuthGrant.pod_id == pod_id)
+                )
+            )
+        )
+        ended = await self._session.execute(
+            update(McpOAuthGrant)
+            .where(McpOAuthGrant.pod_id == pod_id, McpOAuthGrant.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        return int(getattr(ended, "rowcount", 0) or 0)
+
     async def grant_owner(self, grant_id: UUID) -> tuple[UUID, UUID] | None:
         """(user, pod) of a live grant."""
         row = (
@@ -226,9 +244,9 @@ class McpAccessRepository:
         return (row[0], row[1]) if row is not None else None
 
     async def live_grant_scopes(self, grant_id: UUID) -> list[str] | None:
-        """The scopes the person last agreed to, or ``None`` when the grant is
-        gone or revoked. Read at every issuance, so consenting again with less
-        narrows the tokens that follow, not just the list the person sees."""
+        """The scopes the person agreed to, or ``None`` when the grant is gone,
+        revoked or past its ceiling. Read at every issuance, so no token is
+        issued with more than the grant holds."""
         scopes = await self._session.scalar(
             select(McpOAuthGrant.scopes).where(
                 McpOAuthGrant.id == grant_id,
@@ -322,7 +340,7 @@ class McpAccessRepository:
         )
 
     async def supersede_live_tokens(
-        self, *, grant_id: UUID, rotated_at: datetime
+        self, *, grant_id: UUID, rotated_at: datetime, now: datetime
     ) -> None:
         """Cancel every pair a grant holds before a retried refresh writes a
         new one, so a grant never has two usable pairs at once.
@@ -352,22 +370,24 @@ class McpAccessRepository:
                 McpOAuthToken.grant_id == grant_id,
                 McpOAuthToken.rotated_at.is_(None),
             )
-            .values(rotated_at=rotated_at)
+            .values(rotated_at=rotated_at, superseded_at=now)
         )
 
     async def prune_grant_tokens(
         self, *, grant_id: UUID, keep_rotated: UUID, now: datetime
     ) -> None:
         """Keep a grant to its live tokens and the one refresh token just
-        rotated -- the one a replay would present. Older rotated tokens and
-        expired ones go, so a grant holds a handful of rows however often it
-        refreshes, rather than one per hour for thirty days."""
+        rotated -- the one a replay would present -- and any a retry cancelled,
+        which the losing party still holds. Older rotated tokens and expired
+        ones go, so a grant holds a handful of rows however often it refreshes,
+        rather than one per hour for thirty days."""
         await self._session.execute(
             delete(McpOAuthToken).where(
                 McpOAuthToken.grant_id == grant_id,
                 (McpOAuthToken.expires_at < now)
                 | (
                     McpOAuthToken.rotated_at.is_not(None)
+                    & McpOAuthToken.superseded_at.is_(None)
                     & (McpOAuthToken.id != keep_rotated)
                 ),
             )
