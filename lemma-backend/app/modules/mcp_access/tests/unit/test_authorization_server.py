@@ -103,6 +103,10 @@ async def test_authorize_holds_the_request_and_sends_the_browser_to_consent():
         ("code_challenge", "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw+cM"),
         ("state", "s" * 2_049),
     ],
+    # Named, never derived from the values: pytest makes a string parameter
+    # the test's id, and a two-million-character id stalled CI's unit job for
+    # its whole half hour while it wrote the verbose log line and the report.
+    ids=["short-challenge", "huge-challenge", "not-base64url", "long-state"],
 )
 async def test_authorize_holds_nothing_oversized_or_malformed(field, value):
     """The request waits in Redis until the person answers, so what it carries
