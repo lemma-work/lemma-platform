@@ -38,7 +38,9 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
-from app.modules.agent_surfaces.services.chat_onboarding import ChatOnboardingCoordinator
+from app.modules.agent_surfaces.services.chat_onboarding import (
+    ChatOnboardingCoordinator,
+)
 from app.modules.agent_surfaces.services.onboarding_replies import READY_MESSAGE
 from app.modules.agent_surfaces.services.onboarding_cleanup import (
     ATTACHED_PURGE_GRACE_SECONDS,

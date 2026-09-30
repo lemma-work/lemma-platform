@@ -28,25 +28,32 @@ class _AccountFlags(Protocol):
     is_verified: bool
 
 
-def email_verification_counts() -> bool:
-    """Whether an unverified email disqualifies an account on this deployment."""
-    return bool(settings.auth_email_verification_required)
+def email_verification_counts(required: bool | None = None) -> bool:
+    """Whether an unverified email disqualifies an account on this deployment.
+
+    ``required`` stands in for the setting when a caller already knows it.
+    """
+    if required is None:
+        required = settings.auth_email_verification_required
+    return bool(required)
 
 
-def is_chat_account(user: _AccountFlags | None) -> bool:
+def is_chat_account(
+    user: _AccountFlags | None, *, required: bool | None = None
+) -> bool:
     """Active, not deleted, and email-verified where the server requires it."""
     return (
         user is not None
         and bool(user.is_active)
         and not user.is_deleted
-        and (bool(user.is_verified) or not email_verification_counts())
+        and (bool(user.is_verified) or not email_verification_counts(required))
     )
 
 
-def chat_account_clause() -> ColumnElement[bool]:
+def chat_account_clause(*, required: bool | None = None) -> ColumnElement[bool]:
     """`is_chat_account` as a SQL predicate on `User`."""
     return and_(
         User.is_active.is_(True),
         User.is_deleted.is_(False),
-        User.is_verified.is_(True) if email_verification_counts() else true(),
+        User.is_verified.is_(True) if email_verification_counts(required) else true(),
     )
