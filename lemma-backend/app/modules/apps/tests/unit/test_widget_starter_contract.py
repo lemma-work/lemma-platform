@@ -205,7 +205,9 @@ def test_chart_examples_carry_a_table_view_and_a_hover_layer():
         assert "mousemove" in content, name
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="needs node to parse JavaScript")
+@pytest.mark.skipif(
+    shutil.which("node") is None, reason="needs node to parse JavaScript"
+)
 def test_every_example_script_and_the_kit_parse(tmp_path):
     # The markup checks above cannot see a script that does not parse, and one
     # that does not parse leaves its widget on "Loading…" for good. Three
