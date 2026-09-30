@@ -121,6 +121,37 @@ fn a_sign_in_codex_wrote_in_its_lemma_home_goes_back_to_the_persons() {
     );
 }
 
+/// A person who signed in again directly since keeps that newer sign-in.
+#[cfg(unix)]
+#[test]
+fn a_newer_personal_sign_in_is_not_overwritten_by_a_stray_copy() {
+    let person = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let homes = homes(person.path(), data.path());
+    let private = codex_home(&homes).unwrap().unwrap();
+    fs::remove_file(private.join("auth.json")).unwrap();
+    fs::write(private.join("auth.json"), "stray").unwrap();
+    let personal = homes.codex_home.join("auth.json");
+    fs::write(&personal, "newer").unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+    fs::File::options()
+        .write(true)
+        .open(&personal)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+
+    codex_home(&homes).unwrap().unwrap();
+
+    assert!(
+        fs::symlink_metadata(private.join("auth.json"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_to_string(&personal).unwrap(), "newer");
+}
+
 /// Codex files keychain credentials under its home's own path, so no other
 /// home can reach them; it stays in the person's.
 #[test]

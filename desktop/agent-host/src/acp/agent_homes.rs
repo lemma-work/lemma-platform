@@ -178,8 +178,8 @@ fn read_toml(path: &Path) -> toml::Table {
 /// `link` made a link to the person's `target`, and kept that way.
 ///
 /// A plain file where the link should be is a sign-in Codex wrote after
-/// removing the link (signing out does that), so it is the newest one and
-/// goes to the person's file before the link is put back.
+/// removing the link (signing out does that). It goes to the person's file
+/// before the link is put back, unless the person's file is newer.
 fn link_sign_in(link: &Path, target: &Path) -> io::Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
@@ -191,7 +191,16 @@ fn link_sign_in(link: &Path, target: &Path) -> io::Result<()> {
             }
         }
         Ok(meta) if meta.is_file() => {
-            if lemma_private_file::replace(link, target).is_err() {
+            // Unless the person has signed in again since, directly: then
+            // theirs is the newer one, and the stray copy is dropped.
+            let target_newer = fs::metadata(target)
+                .and_then(|found| found.modified())
+                .ok()
+                .zip(meta.modified().ok())
+                .is_some_and(|(theirs, ours)| theirs > ours);
+            if target_newer {
+                fs::remove_file(link)?;
+            } else if lemma_private_file::replace(link, target).is_err() {
                 fs::copy(link, target)?;
                 fs::remove_file(link)?;
             }
