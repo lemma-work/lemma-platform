@@ -14,6 +14,9 @@ export interface PageTools {
     /** The bot the page's conversation is with, by name. */
     botName: string;
     openFile: (path: string) => void;
+    /** Rename this page's file to follow its title; resolves to the new path.
+     *  Absent where a page cannot be renamed. */
+    renamePage?: (from: string, title: string) => Promise<string>;
     /** Open a pod table on its own. */
     openTable?: (name: string) => void;
     /** Where the page's save status goes: its top bar, clear of the floating
@@ -37,16 +40,4 @@ export function usePageTools(): PageTools | null {
     return useContext(PageToolsContext);
 }
 
-/** Where a page keeps what belongs to it: `/pages/Plan.md` keeps its images
- *  in `/pages/Plan-files/` and its sub-pages in `/pages/Plan/`. */
-export function pageDirs(path: string): { assets: string; children: string } {
-    const cut = path.lastIndexOf("/");
-    const dir = cut > 0 ? path.slice(0, cut) : "";
-    const stem = path.slice(cut + 1).replace(/\.(md|markdown)$/i, "");
-    return { assets: dir + "/" + stem + "-files", children: dir + "/" + stem };
-}
-
-/** A file name safe to put in a markdown link without angle brackets. */
-export function safeName(name: string): string {
-    return name.trim().replace(/\s+/g, "-").replace(/[^\w.-]/g, "") || "file";
-}
+export { pageDirs, safeName } from "./page-paths";

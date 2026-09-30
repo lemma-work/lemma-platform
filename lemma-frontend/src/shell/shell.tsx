@@ -35,13 +35,15 @@ import { ChatsPage } from "@/space/chats-page";
 import { RunPage } from "@/space/run-page";
 import type { SpaceView } from "@/data";
 import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
-import type { Tab } from "@/data";
+import type { FileContent, Tab } from "@/data";
 import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
 import { makePage } from "@/docpages/templates";
+import { renamePage } from "@/docpages/rename";
+import { moveComments } from "@/docpages/comments/store";
 import { NOWHERE, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
@@ -688,6 +690,47 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         openFile(path, "space:pages");
     }, [pod, openFile, queryClient]);
 
+    /** A page's file follows its title. Moves the file (and what it owns —
+     *  see `docpages/rename.ts`), then swaps the open tab in place: same pane,
+     *  so the editor with its caret is not rebuilt, and the address replaced
+     *  rather than pushed. Returns the new path. */
+    const renamePageAt = useCallback(async (from: string, title: string): Promise<string> => {
+        if (!pod) return from;
+        const podId = pod.id;
+        const to = await renamePage({
+            move: (a, b) => source.renameFile(podId, a, b),
+            read: async (at) => {
+                try { return (await source.readFile(podId, at)).text ?? null; }
+                catch (error) { if ((error as { statusCode?: number } | null)?.statusCode === 404) return null; throw error; }
+            },
+            write: (at, text) => source.writeFile(podId, at, text),
+            moveComments: (a, b) => moveComments(podId, a, b),
+        }, from, title);
+        if (to === from) return from;
+        const was = queryClient.getQueryData<FileContent>(["file", podId, from]);
+        if (was) queryClient.setQueryData<FileContent>(["file", podId, to], { ...was, path: to, name: to.slice(to.lastIndexOf("/") + 1) });
+        const oldId = "file:" + from;
+        const newId = "file:" + to;
+        renamed.current[podId + "|" + oldId] = newId;
+        replaceNext.current = true;
+        setExtraTabs((previous) => ({
+            ...previous,
+            [podId]: (previous[podId] ?? []).map((tab) => (tab.id === oldId && tab.kind === "file"
+                ? { ...tab, id: newId, path: to, label: docTitle(to), pane: tab.pane ?? tab.id }
+                : tab)),
+        }));
+        setTabOrigins((previous) => {
+            const key = podId + "|" + oldId;
+            if (!(key in previous)) return previous;
+            const { [key]: origin, ...rest } = previous;
+            return { ...rest, [podId + "|" + newId]: origin };
+        });
+        setTabs((previous) => (previous[podId] === oldId ? { ...previous, [podId]: newId } : previous));
+        void queryClient.invalidateQueries({ queryKey: ["library", podId] });
+        void queryClient.invalidateQueries({ queryKey: ["file", podId, to] });
+        return to;
+    }, [pod, queryClient]);
+
     /* A sign-in card asks for the site; it opens beside whatever you are on,
        as the browser itself with one thin bar, rather than a dialog. */
     useEffect(() => {
@@ -742,6 +785,13 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        after the tab, and the mirror would otherwise write the chat being left
        over the one asked for — as a new history entry. */
     const pendingConversation = useRef<string | null>(null);
+    /* Pages renamed in this session, old tab id to new, so an address still in
+       the browser's history (Back to the page under its old name) lands on
+       the page instead of on a file that is not there any more. */
+    const renamed = useRef<Record<string, string>>({});
+    /* The next address written replaces the current one instead of pushing:
+       a rename, or an old address redirected, is not somewhere you went. */
+    const replaceNext = useRef(false);
     useEffect(() => {
         if (preview) return;
         if (!pod) return;
@@ -763,20 +813,23 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         if (address.podId && address.podId !== pod.id) return;
         applied.current = pathname;
         if (!address.tabId) return;
+        let wanted = address.tabId;
+        for (let hops = 0; renamed.current[pod.id + "|" + wanted] && hops < 20; hops++) wanted = renamed.current[pod.id + "|" + wanted];
+        if (wanted !== address.tabId) replaceNext.current = true;
 
-        setTabs((previous) => (previous[pod.id] === address.tabId ? previous : { ...previous, [pod.id]: address.tabId! }));
+        setTabs((previous) => (previous[pod.id] === wanted ? previous : { ...previous, [pod.id]: wanted }));
         if (address.agentName) setOpenAgentName(address.agentName);
         if (address.conversationId && address.conversationId !== selection.id) {
             pendingConversation.current = address.conversationId;
             setConversationId(address.conversationId);
         }
 
-        const known = allTabs.some((tab) => tab.id === address.tabId);
-        const rebuilt = known ? null : tabFromId(address.tabId);
+        const known = allTabs.some((tab) => tab.id === wanted);
+        const rebuilt = known ? null : tabFromId(wanted);
         if (rebuilt) openTab(rebuilt);
         /* Only a tab that will exist: one that never arrives would hold the
            mirror still for good. */
-        if (known || rebuilt) pendingTab.current = address.tabId === "profile" ? "space:settings" : address.tabId;
+        if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:settings" : wanted;
     }, [pathname, address, pod, allTabs, openTab, selection.id, setConversationId, preview]);
 
     /** The address bar, kept in step with where you actually are.
@@ -815,7 +868,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         });
         if (url === pathname) return;
         applied.current = url;
-        if (isNewPlace(readAddress(pathname), readAddress(url))) window.history.pushState(null, "", url);
+        if (replaceNext.current) { replaceNext.current = false; window.history.replaceState(null, "", url); }
+        else if (isNewPlace(readAddress(pathname), readAddress(url))) window.history.pushState(null, "", url);
         else window.history.replaceState(null, "", url);
     }, [pod, activeTab, conversationId, openAgentName, pathname, preview]);
 
@@ -1572,9 +1626,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 </div>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "file"}> => tab.kind === "file").map(tab => (
-                                <div className={"pane file-tab-pane" + (isDoc(tab.path) ? " doc-tab-pane" : "")} key={tab.id} {...paneProps(tab.id)}>
+                                <div className={"pane file-tab-pane" + (isDoc(tab.path) ? " doc-tab-pane" : "")} key={tab.pane ?? tab.id} {...paneProps(tab.id)}>
                                     {isDoc(tab.path)
-                                        ? <DocAskContext.Provider value={docAsk}><DocSpace pod={pod} path={tab.path} openFile={openFile} openTable={(name) => openTable(name)} openConversation={(id) => { setConversationId(id); pickTab("conversation"); }} sendToBot={chatResource ? chat.send : null} /></DocAskContext.Provider>
+                                        ? <DocAskContext.Provider value={docAsk}><DocSpace pod={pod} path={tab.path} renamePage={renamePageAt} openFile={openFile} openTable={(name) => openTable(name)} openConversation={(id) => { setConversationId(id); pickTab("conversation"); }} sendToBot={chatResource ? chat.send : null} /></DocAskContext.Provider>
                                         : <div className="pane__inner"><FileView podId={pod.id} path={tab.path} full /></div>}
                                 </div>
                             ))}

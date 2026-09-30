@@ -1083,6 +1083,10 @@ export const liveSource: PodSource = {
         await lemma(podId).files.upload(file, { name, directoryPath: cut > 0 ? path.slice(0, cut) : "/", searchEnabled: true });
     },
 
+    async renameFile(podId: string, from: string, to: string): Promise<void> {
+        await lemma(podId).files.update(from, { newPath: to });
+    },
+
     async shareFile(podId: string, path: string, options?: { expiresSeconds?: number; maxHits?: number }): Promise<SharedLink> {
         const minted = (await lemma(podId).files.createSignedUrl(path, options)) as {
             signed_url?: string;
