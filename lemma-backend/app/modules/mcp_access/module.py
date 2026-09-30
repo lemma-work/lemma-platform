@@ -37,4 +37,5 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     register_streaq=_register_streaq,
+    stream_groups=(("pod_events", "mcp-access-pod-events"),),
 )
