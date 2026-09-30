@@ -3,20 +3,19 @@
 //! Lemma is the source of truth for a run's instructions, skills and tools,
 //! and a coding agent on somebody's Mac also loads its own: Claude Code reads
 //! `~/.claude` (instructions, skills, plugins, hooks, MCP servers), Codex
-//! `~/.codex`, `OpenCode` `~/.claude` and `~/.agents` as well as its own. Left
-//! alone, those compete with Lemma's -- a user skill that drives a browser on
-//! the Mac, a hook that rewrites every command, an instruction file for some
-//! other project. So by default each agent is started with its own switches
-//! set to leave them out. A person can turn that off per agent ("Use my own
-//! skills and settings", `HostConfig::own_settings`), which is the behaviour
-//! from before.
+//! `~/.codex` (`AGENTS.md`, rules, hooks, MCP servers, plugins), `OpenCode`
+//! `~/.config/opencode` as well as `~/.claude` and `~/.agents`. Left alone,
+//! those compete with Lemma's -- a user skill that drives a browser on the
+//! Mac, a hook that rewrites every command, an instruction file for some
+//! other project. Claude Code is therefore started by default with flags that
+//! leave `~/.claude` out; a person can turn that off ("Use my own skills and
+//! settings", `HostConfig::own_settings`), which applies to Claude Code only.
+//! Codex and `OpenCode` run on the person's own setup unchanged: Lemma only
+//! adds its MCP server, its `LEMMA_*` environment and its instructions.
 //!
-//! What stays either way: the agent's sign-in. Nothing here moves a config
-//! home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, XDG), because that is where each
-//! keeps its credentials. That is also the limit of what can be left out:
-//! Codex always reads `~/.codex/AGENTS.md`, and `OpenCode` always reads
-//! `~/.config/opencode`, and neither offers a switch that leaves the login in
-//! place. See docs/architecture/agent-host.md, "What a coding agent loads".
+//! What stays either way: the agent's sign-in, and a bound project's own
+//! instructions and settings, which belong to the folder the person chose.
+//! See docs/architecture/agent-host.md, "What a coding agent loads".
 //!
 //! Some tools are withheld whichever way the switch is set, because Lemma
 //! offers the same thing and its prompt tells the agent to use Lemma's: the
@@ -28,6 +27,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
+use super::{claude_config_dir, claude_sign_in};
 use crate::protocol::RunSpec;
 
 /// The Lemma tool that stands in for an agent's own web search.
@@ -51,7 +51,7 @@ pub(crate) struct SessionOptions {
 ///
 /// `adapter_environment` is the pinned adapter's own (`agent-adapters.lock.json`),
 /// merged into rather than replaced where both set a variable. `own_settings` is
-/// the person's choice for this agent. `lemma_cli` is the `bin/` of Lemma's own
+/// the person's choice for this agent, and only Claude Code reads it. `lemma_cli` is the `bin/` of Lemma's own
 /// CLI, when this Mac has one for the run, which goes first on the agent's
 /// `PATH` so the `lemma` it runs is the release its server is.
 pub(crate) fn session_options(
@@ -63,14 +63,14 @@ pub(crate) fn session_options(
 ) -> SessionOptions {
     let lemma_tools = LemmaTools::of(spec);
     let mut options = match adapter_key {
-        "claude-code" => claude_code(spec, own_settings, &lemma_tools),
-        "codex" => codex(
-            adapter_environment,
+        "claude-code" => claude_code(
+            spec,
             own_settings,
             &lemma_tools,
-            home_directory().as_deref(),
+            claude_config_dir().as_deref(),
         ),
-        "opencode" => opencode(own_settings, &lemma_tools),
+        "codex" => codex(adapter_environment, &lemma_tools),
+        "opencode" => opencode(&lemma_tools),
         _ => SessionOptions::default(),
     };
     if let Some(bin) = lemma_cli
@@ -109,11 +109,19 @@ impl LemmaTools {
 ///   commands, plugins, hooks and settings, and keeps a bound project's own
 ///   (`"project"`, `"local"`). `strictMcpConfig` keeps only the MCP servers
 ///   the session names -- Lemma's -- so neither the person's own servers nor
-///   their claude.ai connectors load. Auto-memory is Claude Code's store of
-///   what it learnt across sessions; Lemma has its own.
+///   their claude.ai connectors load. `plugins: []` adds none of the SDK's.
+///   Auto-memory is Claude Code's store of what it learnt across sessions;
+///   Lemma has its own. What the person's settings say about signing in (an
+///   `apiKeyHelper`, a Bedrock or Vertex environment) comes back as `settings`,
+///   the flag layer, which `settingSources` does not govern.
 /// - `disallowedTools` merges with the adapter's own list, which already
 ///   removes `AskUserQuestion` (Lemma asks through `lemma_ask_user`).
-fn claude_code(spec: &RunSpec, own_settings: bool, lemma_tools: &LemmaTools) -> SessionOptions {
+fn claude_code(
+    spec: &RunSpec,
+    own_settings: bool,
+    lemma_tools: &LemmaTools,
+    claude_config: Option<&Path>,
+) -> SessionOptions {
     let mut disallowed = vec![json!("mcp__claude-in-chrome")];
     if lemma_tools.web_search {
         disallowed.push(json!("WebSearch"));
@@ -129,10 +137,14 @@ fn claude_code(spec: &RunSpec, own_settings: bool, lemma_tools: &LemmaTools) -> 
     if !own_settings {
         claude_options.insert("settingSources".to_owned(), json!(["project", "local"]));
         claude_options.insert("strictMcpConfig".to_owned(), Value::Bool(true));
+        claude_options.insert("plugins".to_owned(), json!([]));
         claude_options.insert(
             "env".to_owned(),
             json!({ "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1" }),
         );
+        if let Some(sign_in) = claude_config.and_then(claude_sign_in) {
+            claude_options.insert("settings".to_owned(), Value::Object(sign_in));
+        }
     }
     let mut meta = Map::new();
     let instructions = spec.system_prompt.trim();
@@ -154,36 +166,17 @@ fn claude_code(spec: &RunSpec, own_settings: bool, lemma_tools: &LemmaTools) -> 
 /// every thread, layered over `~/.codex/config.toml`.
 ///
 /// Merged into the pinned adapter's own value, which already disables Codex's
-/// bundled browser and computer-use plugins. Each of the person's own skills
-/// -- `~/.codex/skills` and `~/.agents/skills`, which is also where an older
-/// copy of Lemma's own skills lands when installed by hand -- is switched off
-/// by path (`skills.config`), which leaves Codex's bundled ones (image
-/// generation among them) in place; `skills.include_instructions` would have
-/// taken those too. `features.hooks` switches off the person's hooks. A bound
-/// project's `AGENTS.md` still loads, as Claude Code's project instructions
-/// do, and `~/.codex/AGENTS.md` loads regardless: Codex has no switch for it
-/// short of another `CODEX_HOME`, which is where the login is.
+/// bundled browser and computer-use plugins. The person's own skills, hooks,
+/// `AGENTS.md` and MCP servers load as they would outside Lemma. The one
+/// switch Lemma adds is `web_search`, off when the run has Lemma's own web
+/// search, so the agent does not hold two competing search tools.
 fn codex(
     adapter_environment: &BTreeMap<String, String>,
-    own_settings: bool,
     lemma_tools: &LemmaTools,
-    home: Option<&Path>,
 ) -> SessionOptions {
     let mut overrides = Map::new();
     if lemma_tools.web_search {
         overrides.insert("web_search".to_owned(), json!("disabled"));
-    }
-    if !own_settings {
-        overrides.insert("features".to_owned(), json!({ "hooks": false }));
-        let skills: Vec<Value> = home
-            .map(codex_user_skills)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|path| json!({ "path": path, "enabled": false }))
-            .collect();
-        if !skills.is_empty() {
-            overrides.insert("skills".to_owned(), json!({ "config": skills }));
-        }
     }
     let mut environment = BTreeMap::new();
     if !overrides.is_empty() {
@@ -202,54 +195,17 @@ fn codex(
     }
 }
 
-/// Every `SKILL.md` the person installed for Codex themselves.
-///
-/// A folder whose name starts with a dot is Codex's own (`.system` holds the
-/// bundled skills) and is left alone.
-fn codex_user_skills(home: &Path) -> Vec<String> {
-    let codex_home = std::env::var_os("CODEX_HOME")
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| home.join(".codex"), std::path::PathBuf::from);
-    let mut skills = Vec::new();
-    for folder in [codex_home.join("skills"), home.join(".agents/skills")] {
-        let Ok(entries) = std::fs::read_dir(&folder) else {
-            continue;
-        };
-        let mut found: Vec<String> = entries
-            .filter_map(Result::ok)
-            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
-            .map(|entry| entry.path().join("SKILL.md"))
-            .filter(|skill| skill.is_file())
-            .map(|skill| skill.to_string_lossy().into_owned())
-            .collect();
-        found.sort();
-        skills.extend(found);
-    }
-    skills
-}
-
 /// `OpenCode`, through its environment switches and a config overlay.
 ///
-/// `OPENCODE_DISABLE_EXTERNAL_SKILLS` leaves out the skills under `~/.claude`
-/// and `~/.agents`, and `OPENCODE_DISABLE_CLAUDE_CODE` Claude Code's
-/// instructions and skills, which `OpenCode` otherwise borrows. The overlay
-/// (`OPENCODE_CONFIG_CONTENT`, merged over the person's own config) denies the
-/// `skill` tool, the only way to keep `OpenCode`'s own skill folder out without
-/// moving `XDG_CONFIG_HOME`; its `AGENTS.md` there still loads.
-fn opencode(own_settings: bool, lemma_tools: &LemmaTools) -> SessionOptions {
+/// The person's own skills, instructions and config load as they would outside
+/// Lemma. The overlay (`OPENCODE_CONFIG_CONTENT`, merged over the person's own
+/// config) only denies `webfetch` when the run has Lemma's own page fetch.
+fn opencode(lemma_tools: &LemmaTools) -> SessionOptions {
     let mut permission = Map::new();
     if lemma_tools.web_fetch {
         permission.insert("webfetch".to_owned(), json!("deny"));
     }
     let mut environment = BTreeMap::new();
-    if !own_settings {
-        permission.insert("skill".to_owned(), json!("deny"));
-        environment.insert(
-            "OPENCODE_DISABLE_EXTERNAL_SKILLS".to_owned(),
-            "1".to_owned(),
-        );
-        environment.insert("OPENCODE_DISABLE_CLAUDE_CODE".to_owned(), "1".to_owned());
-    }
     if !permission.is_empty() {
         environment.insert(
             "OPENCODE_CONFIG_CONTENT".to_owned(),
@@ -306,63 +262,101 @@ fn merge(base: &mut Value, overrides: &Value) {
 mod tests {
     use super::*;
 
-    fn skill(at: &Path) {
-        std::fs::create_dir_all(at).unwrap();
-        std::fs::write(at.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+    fn no_web_tools() -> LemmaTools {
+        LemmaTools {
+            web_search: false,
+            web_fetch: false,
+        }
     }
 
-    /// The person's own skills are switched off by path; Codex's bundled ones,
-    /// under a dot folder, are not -- image generation is one of them.
+    /// Codex and `OpenCode` get none of the switches that hide a person's
+    /// own setup, whatever the own-settings choice says.
     #[test]
-    fn codex_leaves_out_the_persons_skills_and_keeps_its_own() {
-        let home = tempfile::tempdir().unwrap();
-        skill(&home.path().join(".codex/skills/browser"));
-        skill(&home.path().join(".codex/skills/.system/imagegen"));
-        skill(&home.path().join(".agents/skills/lemma-builder"));
-        std::fs::create_dir_all(home.path().join(".codex/skills/not-a-skill")).unwrap();
+    fn codex_and_opencode_keep_the_persons_own_setup() {
+        let spec: RunSpec = serde_json::from_value(json!({
+            "agent_run_id": uuid::Uuid::nil(),
+            "conversation_id": uuid::Uuid::nil(),
+            "harness_id": uuid::Uuid::nil(),
+            "profile_revision": "r",
+            "system_prompt": "",
+            "prompt": [],
+            "run_deadline": "2026-09-25T00:00:00Z",
+        }))
+        .unwrap();
+        for own in [false, true] {
+            for key in ["codex", "opencode"] {
+                assert_eq!(
+                    session_options(key, &BTreeMap::new(), &spec, own, None),
+                    SessionOptions::default(),
+                    "{key} own_settings={own}"
+                );
+            }
+        }
+    }
 
+    #[test]
+    fn codex_turns_off_its_web_search_only_when_lemma_serves_one() {
         let options = codex(
             &BTreeMap::new(),
-            false,
             &LemmaTools {
-                web_search: false,
+                web_search: true,
                 web_fetch: false,
             },
-            Some(home.path()),
         );
-
         let config: Value = serde_json::from_str(&options.environment["CODEX_CONFIG"]).unwrap();
-        let disabled: Vec<&str> = config["skills"]["config"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .inspect(|entry| assert_eq!(entry["enabled"], json!(false)))
-            .map(|entry| entry["path"].as_str().unwrap())
-            .collect();
-        assert_eq!(disabled.len(), 2, "{disabled:?}");
-        assert!(
-            disabled
-                .iter()
-                .any(|path| std::path::Path::new(path).ends_with(".codex/skills/browser/SKILL.md"))
+        assert_eq!(config, json!({ "web_search": "disabled" }));
+        assert_eq!(
+            codex(&BTreeMap::new(), &no_web_tools()),
+            SessionOptions::default()
         );
-        assert!(disabled.iter().any(|path| {
-            std::path::Path::new(path).ends_with(".agents/skills/lemma-builder/SKILL.md")
-        }));
-        assert!(!disabled.iter().any(|path| path.contains(".system")));
     }
 
     #[test]
-    fn codex_with_its_own_settings_and_no_lemma_web_tools_is_left_alone() {
-        let options = codex(
-            &BTreeMap::new(),
-            true,
-            &LemmaTools {
-                web_search: false,
-                web_fetch: false,
-            },
-            None,
-        );
-        assert_eq!(options, SessionOptions::default());
+    fn opencode_denies_only_webfetch_when_lemma_serves_one() {
+        let options = opencode(&LemmaTools {
+            web_search: false,
+            web_fetch: true,
+        });
+        assert_eq!(options.environment.len(), 1, "{:?}", options.environment);
+        let overlay: Value =
+            serde_json::from_str(&options.environment["OPENCODE_CONFIG_CONTENT"]).unwrap();
+        assert_eq!(overlay, json!({ "permission": { "webfetch": "deny" } }));
+    }
+
+    #[test]
+    fn claude_code_is_given_the_persons_sign_in_as_flag_settings() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        std::fs::write(
+            home.path().join(".claude/settings.json"),
+            r#"{"apiKeyHelper": "key-helper", "hooks": {"Stop": []}}"#,
+        )
+        .unwrap();
+        let config = home.path().join(".claude");
+        let spec: RunSpec = serde_json::from_value(json!({
+            "agent_run_id": uuid::Uuid::nil(),
+            "conversation_id": uuid::Uuid::nil(),
+            "harness_id": uuid::Uuid::nil(),
+            "profile_revision": "r",
+            "system_prompt": "",
+            "prompt": [],
+            "run_deadline": "2026-09-25T00:00:00Z",
+        }))
+        .unwrap();
+        let tools = LemmaTools {
+            web_search: false,
+            web_fetch: false,
+        };
+
+        let isolated = claude_code(&spec, false, &tools, Some(&config));
+        let options = &isolated.meta.unwrap()["claudeCode"]["options"];
+        assert_eq!(options["settings"], json!({ "apiKeyHelper": "key-helper" }));
+        assert_eq!(options["plugins"], json!([]));
+
+        let own = claude_code(&spec, true, &tools, Some(&config));
+        let options = &own.meta.unwrap()["claudeCode"]["options"];
+        assert!(options.get("settings").is_none(), "{options}");
+        assert!(options.get("plugins").is_none(), "{options}");
     }
 
     #[test]

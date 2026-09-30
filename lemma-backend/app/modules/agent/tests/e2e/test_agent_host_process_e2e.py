@@ -245,7 +245,7 @@ async def create_host_conversation(
 
 
 @pytest.mark.asyncio
-async def test_a_coding_agent_is_started_with_lemmas_settings_and_its_run_identity(
+async def test_a_coding_agent_keeps_its_own_setup_and_gets_its_run_identity(
     scenario: E2EScenario,
     backend_server: dict[str, str],
     worker: object,
@@ -254,8 +254,9 @@ async def test_a_coding_agent_is_started_with_lemmas_settings_and_its_run_identi
     """What the real host starts an agent with, as the agent sees it.
 
     The scripted agent stands in for OpenCode here, so it is started the way
-    OpenCode is: with the person's own skills left out
-    (`acp::session_options`), which is the default. And like every agent it is
+    OpenCode is: on the person's own setup, with none of the switches that
+    would leave their skills out (`acp::session_options`); only Lemma's
+    web-fetch override, when the run has Lemma's. And like every agent it is
     handed the run's Lemma identity, now including the conversation the
     `lemma` CLI's conversation commands default to.
     """
@@ -300,10 +301,12 @@ async def test_a_coding_agent_is_started_with_lemmas_settings_and_its_run_identi
     environment = environments[-1]
     # Names only in the messages: the values are the host's environment.
     names = sorted(environment)
-    assert environment.get("OPENCODE_DISABLE_EXTERNAL_SKILLS") == "1", names
-    assert environment.get("OPENCODE_DISABLE_CLAUDE_CODE") == "1", names
-    overlay = json.loads(environment["OPENCODE_CONFIG_CONTENT"])
-    assert overlay["permission"]["skill"] == "deny"
+    assert "OPENCODE_DISABLE_EXTERNAL_SKILLS" not in environment, names
+    assert "OPENCODE_DISABLE_CLAUDE_CODE" not in environment, names
+    if "OPENCODE_CONFIG_CONTENT" in environment:
+        # Only there when the run has Lemma's own page fetch.
+        overlay = json.loads(environment["OPENCODE_CONFIG_CONTENT"])
+        assert overlay == {"permission": {"webfetch": "deny"}}, overlay
     conversation_id = conversation_path.rsplit("/", 1)[-1]
     assert environment.get("LEMMA_CONVERSATION_ID") == conversation_id, names
 
