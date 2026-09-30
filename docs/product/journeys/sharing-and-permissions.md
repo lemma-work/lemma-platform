@@ -156,6 +156,51 @@ rights than the person who asked.
 
 ---
 
+## Capability: Use a pod from another AI tool
+
+### PS-ACCESS-040 — A person connects an outside AI tool to one pod, and it acts as them
+**Status:** manual
+
+- The system shall give each pod one link that a person can add to an AI tool
+  that speaks MCP, such as Claude or ChatGPT, without installing anything.
+- When a tool first uses the link, the system shall ask the person to sign in
+  and shall show them which tool is asking, which pod it wants, and where they
+  will be sent back to, before anything is granted.
+- While a tool is connected, the system shall let it read and change that pod
+  only as far as the person themselves may, row-level security included, and
+  shall not let it reach any other pod.
+- Where the person allowed reading only, the system shall not let the tool
+  change anything.
+- If a tool presents access that was issued for a different pod, then the
+  system shall refuse it and shall reveal nothing about that pod.
+- If the person declines, then the system shall grant nothing and shall tell
+  the tool it was refused.
+
+> **Manual:** the promise is about someone else's product reaching Lemma from
+> the internet, so proving it needs Claude and ChatGPT themselves. Verified by
+> hand against both through a public tunnel; the whole exchange — discovery,
+> registration, consent, token, tool calls, the pod boundary and read-only
+> access — is covered by the module e2e suite (`mcp_access/tests/e2e`).
+
+**Contracts:** `mcp_access.endpoint.get`
+
+### PS-ACCESS-041 — A person sees what they have connected, and disconnecting takes effect at once
+**Status:** manual
+
+- The system shall list, for each pod, the tools a person has connected to it,
+  with what each may do and when it was last used.
+- When a person disconnects a tool, the system shall refuse that tool's very
+  next request, and shall not let it back in without asking the person again.
+- If a tool's saved access is used by two parties, then the system shall end
+  the connection for both.
+- If the person's account is deactivated, then the system shall refuse every
+  tool they connected.
+
+> **Manual:** as PS-ACCESS-040. The module e2e suite covers disconnecting,
+> refresh-token reuse and the list.
+
+**Contracts:** `mcp_access.grants.list`, `mcp_access.grants.revoke`
+
 ## Capability: Understand and audit access
 
 ### PS-ACCESS-030 — A person can see who can reach a resource

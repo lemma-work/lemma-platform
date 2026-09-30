@@ -31,17 +31,32 @@ class McpAccessSettings(BaseSettings):
         ),
     )
     mcp_access_registrations_per_hour: int = Field(
-        default=30,
+        default=300,
         ge=1,
         description=(
             "Dynamic client registrations per source IP per hour. Registration "
-            "is unauthenticated by design (RFC 7591), so this is its only limit."
+            "is unauthenticated by design (RFC 7591), so this is its only limit. "
+            "Sized for a hosted client registering from a few shared addresses."
         ),
     )
     mcp_access_token_requests_per_minute: int = Field(
+        default=600,
+        ge=1,
+        description=(
+            "Token and revocation requests per client per source IP per minute. "
+            "Claude and ChatGPT refresh for all of their users from a small set "
+            "of addresses, so this is per client as well as per address, and "
+            "sized for that."
+        ),
+    )
+    mcp_access_authorize_requests_per_minute: int = Field(
         default=60,
         ge=1,
-        description="Token endpoint requests per source IP per minute.",
+        description=(
+            "Authorization requests per source IP per minute. Each one holds a "
+            "pending request in Redis until it is answered or expires, and "
+            "these come from people's browsers, not from a client's servers."
+        ),
     )
 
 

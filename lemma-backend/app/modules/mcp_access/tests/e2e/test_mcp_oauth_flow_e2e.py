@@ -128,8 +128,16 @@ class _Client:
         )
 
 
-async def _connect(client: _Client, person: AsyncClient, pod_id: str, scope: str):
+async def _connect(
+    client: _Client,
+    person: AsyncClient,
+    pod_id: str,
+    scope: str,
+    *,
+    spell_resource=lambda resource: resource,
+):
     resource, _ = await client.discover(pod_id)
+    resource = spell_resource(resource)
     request_id, verifier = await client.authorize(resource, scope)
 
     shown = await person.get(f"/oauth/consent/{request_id}")
@@ -318,3 +326,41 @@ async def test_a_person_cannot_hand_over_a_pod_they_are_not_in(
         f"/oauth/consent/{request_id}", json={"allow": True}
     )
     assert answered.status_code == 403
+
+
+async def test_a_resource_spelled_differently_still_works_once_connected(
+    mcp_client, authenticated_client, test_pod
+):
+    """RFC 3986 calls a trailing slash the same resource; authorize accepts it,
+    so the token it leads to must work too, not 401 in a sign-in loop."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    tokens = await _connect(
+        mcp_client,
+        authenticated_client,
+        pod_id,
+        "pod:read",
+        spell_resource=lambda resource: resource + "/",
+    )
+    listed = await mcp_client.rpc(pod_id, tokens["access_token"], "tools/list")
+    assert listed.status_code == 200, listed.text
+
+
+async def test_reconnecting_with_less_access_narrows_tokens_already_issued(
+    mcp_client, authenticated_client, test_pod
+):
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    wide = await _connect(
+        mcp_client, authenticated_client, pod_id, "pod:read pod:write"
+    )
+    # The same client, allowed again with reading only.
+    await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+
+    old_access = await mcp_client.rpc(pod_id, wide["access_token"], "tools/list")
+    names = {tool["name"] for tool in old_access.json()["result"]["tools"]}
+    assert "lemma_pod_write_record" not in names
+
+    refreshed = await mcp_client.refresh(wide["refresh_token"])
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["scope"] == "pod:read"

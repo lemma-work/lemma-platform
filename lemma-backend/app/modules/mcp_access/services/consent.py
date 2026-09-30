@@ -25,6 +25,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.mcp_access.domain.entities import Scope, parse_scopes
+from app.modules.mcp_access.domain.resources import pod_resource_url
 from app.modules.mcp_access.infrastructure.ephemeral import (
     CODE_TTL_SECONDS,
     EphemeralStore,
@@ -125,7 +126,11 @@ class ConsentService:
                 client_id=pending.client_id,
                 pod_id=pod_id,
                 scopes=sorted(scope.value for scope in parse_scopes(pending.scopes)),
-                resource=pending.resource,
+                # The canonical form, not what the client sent: authorize
+                # accepts any spelling RFC 3986 calls the same (a trailing
+                # slash, an upper-case host), and the verifier compares with
+                # the canonical one.
+                resource=pod_resource_url(self._issuer, pod_id),
             )
             await uow.commit()
         code = await self._ephemeral.issue_code(
@@ -136,7 +141,7 @@ class ConsentService:
                 code_challenge=pending.code_challenge,
                 redirect_uri=pending.redirect_uri,
                 redirect_uri_provided_explicitly=pending.redirect_uri_provided_explicitly,
-                resource=pending.resource,
+                resource=pod_resource_url(self._issuer, pod_id),
                 expires_at=self._now() + CODE_TTL_SECONDS,
             )
         )

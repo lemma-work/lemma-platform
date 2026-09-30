@@ -51,6 +51,7 @@ class LiveToken:
     client_id: str
     client_name: str
     resource: str
+    grant_scopes: list[str]
     grant_revoked: bool
     grant_last_used_at: datetime | None
 
@@ -199,13 +200,16 @@ class McpAccessRepository:
         )
         return True
 
-    async def grant_is_live(self, grant_id: UUID) -> bool:
-        live = await self._session.scalar(
-            select(McpOAuthGrant.id).where(
+    async def live_grant_scopes(self, grant_id: UUID) -> list[str] | None:
+        """The scopes the person last agreed to, or ``None`` when the grant is
+        gone or revoked. Read at every issuance, so consenting again with less
+        narrows the tokens that follow, not just the list the person sees."""
+        scopes = await self._session.scalar(
+            select(McpOAuthGrant.scopes).where(
                 McpOAuthGrant.id == grant_id, McpOAuthGrant.revoked_at.is_(None)
             )
         )
-        return live is not None
+        return list(scopes) if scopes is not None else None
 
     async def touch_grant(self, *, grant_id: UUID, now: datetime) -> None:
         await self._session.execute(
@@ -267,6 +271,7 @@ class McpAccessRepository:
             client_id=grant.client_id,
             client_name=_client_name(metadata, grant.client_id),
             resource=grant.resource,
+            grant_scopes=list(grant.scopes),
             grant_revoked=grant.revoked_at is not None,
             grant_last_used_at=grant.last_used_at,
         )

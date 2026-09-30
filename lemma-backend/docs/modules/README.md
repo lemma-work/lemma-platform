@@ -1,6 +1,6 @@
 # Lemma backend module guide
 
-This directory describes the 14 open-source runtime modules registered in
+This directory describes the open-source runtime modules registered in
 `app/core/registry/installed.py`. A module document explains the behavior that
 exists today; it is not a product roadmap. Review findings and proposed work
 live in the pull request that introduces them.
@@ -25,7 +25,7 @@ flowchart LR
 
 The canonical registration order is identity, pod, pod bundle, datastore,
 schedule, connectors, agent, function, apps, workflow, agent surfaces, icon,
-usage, and workspace. Order affects router and lifespan registration, but
+usage, workspace, web login, MCP access, and analytics. Order affects router and lifespan registration, but
 modules should communicate through explicit ports or domain events rather than
 depending on import order.
 

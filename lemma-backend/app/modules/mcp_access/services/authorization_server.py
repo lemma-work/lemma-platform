@@ -167,10 +167,14 @@ class LemmaAuthorizationServer(
                 error="invalid_grant",
                 error_description="authorization code already used",
             )
-        return await self._issue_pair(
-            grant_id=UUID(authorization_code.grant_id),
-            scopes=authorization_code.scopes,
-        )
+        async with self._uow_factory() as uow:
+            tokens = await self._write_pair(
+                McpAccessRepository(uow),
+                grant_id=UUID(authorization_code.grant_id),
+                scopes=authorization_code.scopes,
+            )
+            await uow.commit()
+        return tokens
 
     # --- refresh -----------------------------------------------------------
 
@@ -200,7 +204,11 @@ class LemmaAuthorizationServer(
         return LemmaRefreshToken(
             token=refresh_token,
             client_id=found.client_id,
-            scopes=found.scopes,
+            scopes=sorted(
+                scope.value
+                for scope in parse_scopes(found.scopes)
+                & parse_scopes(found.grant_scopes)
+            ),
             expires_at=int(found.expires_at.timestamp()),
             grant_id=str(found.grant_id),
             token_id=str(found.token_id),
@@ -212,20 +220,28 @@ class LemmaAuthorizationServer(
         refresh_token: LemmaRefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
+        # One transaction: claiming the old refresh token and writing its
+        # replacement land together or not at all. Split in two, a failure in
+        # between left the old token spent and no new one issued -- and the
+        # client's retry with the only token it has read as a replay, which
+        # ends the whole grant.
         now = self._now()
         grant_id = UUID(refresh_token.grant_id)
         async with self._uow_factory() as uow:
             repository = McpAccessRepository(uow)
-            claimed = await repository.mark_rotated(
+            if not await repository.mark_rotated(
                 token_id=UUID(refresh_token.token_id), now=now
-            )
+            ):
+                raise TokenError(
+                    error="invalid_grant",
+                    error_description="refresh token already used",
+                )
             await repository.delete_expired_tokens(grant_id=grant_id, now=now)
-            await uow.commit()
-        if not claimed:
-            raise TokenError(
-                error="invalid_grant", error_description="refresh token already used"
+            tokens = await self._write_pair(
+                repository, grant_id=grant_id, scopes=scopes
             )
-        return await self._issue_pair(grant_id=grant_id, scopes=scopes)
+            await uow.commit()
+        return tokens
 
     # --- access tokens and revocation --------------------------------------
 
@@ -264,30 +280,42 @@ class LemmaAuthorizationServer(
             )
             await uow.commit()
 
-    async def _issue_pair(self, *, grant_id: UUID, scopes: list[str]) -> OAuthToken:
+    async def _write_pair(
+        self,
+        repository: McpAccessRepository,
+        *,
+        grant_id: UUID,
+        scopes: list[str],
+    ) -> OAuthToken:
+        """Add a new access and refresh token to the caller's transaction.
+
+        Scopes are what was asked for *and* what the grant allows now: a person
+        who reconnected a client with less access has narrowed every token
+        issued afterwards, including the ones a refresh produces.
+        """
+        allowed = await repository.live_grant_scopes(grant_id)
+        if allowed is None:
+            # Revoked between consent and redemption, or between refreshes.
+            raise TokenError(
+                error="invalid_grant", error_description="access was revoked"
+            )
+        granted = sorted(
+            scope.value for scope in parse_scopes(scopes) & parse_scopes(allowed)
+        )
         now = self._now()
         access = mint(TokenKind.ACCESS)
         refresh = mint(TokenKind.REFRESH)
-        granted = sorted(scope.value for scope in parse_scopes(scopes))
-        async with self._uow_factory() as uow:
-            repository = McpAccessRepository(uow)
-            if not await repository.grant_is_live(grant_id):
-                # Revoked between consent and redemption, or between refreshes.
-                raise TokenError(
-                    error="invalid_grant", error_description="access was revoked"
-                )
-            for token, kind, ttl in (
-                (access, TokenKind.ACCESS, ACCESS_TOKEN_TTL),
-                (refresh, TokenKind.REFRESH, REFRESH_TOKEN_TTL),
-            ):
-                await repository.add_token(
-                    token_hash=digest(token),
-                    grant_id=grant_id,
-                    kind=kind,
-                    scopes=granted,
-                    expires_at=now + ttl,
-                )
-            await uow.commit()
+        for token, kind, ttl in (
+            (access, TokenKind.ACCESS, ACCESS_TOKEN_TTL),
+            (refresh, TokenKind.REFRESH, REFRESH_TOKEN_TTL),
+        ):
+            await repository.add_token(
+                token_hash=digest(token),
+                grant_id=grant_id,
+                kind=kind,
+                scopes=granted,
+                expires_at=now + ttl,
+            )
         return OAuthToken(
             access_token=access,
             expires_in=int(ACCESS_TOKEN_TTL.total_seconds()),

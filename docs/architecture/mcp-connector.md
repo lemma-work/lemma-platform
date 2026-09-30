@@ -88,11 +88,15 @@ to publish keys in.
 Dynamic registration as well, because the spec keeps it as the fallback and
 older clients use it. Registered client secrets are stored as SHA-256 digests.
 
-**Tokens are opaque and stored as digests.** Every MCP request already reads
+**Tokens are opaque and stored as digests, and never outlive the grant's
+terms.** Every MCP request already reads
 the database to authorize the tool call, so one indexed lookup more buys what a
 JWT cannot: revocation takes effect on the next request. Access tokens last an
 hour. Refresh tokens last 30 days, rotate on every use, and a rotated refresh
-token presented again ends the whole grant (OAuth 2.1 §4.3.1). Tokens carry a
+token presented again ends the whole grant (OAuth 2.1 §4.3.1). Rotating a
+refresh token and writing its replacement is one transaction. Every token is
+narrowed by the grant's current scopes when it is issued and when it is used,
+so reconnecting a client with less access narrows the tokens it already holds. Tokens carry a
 `lemma_mcp_at_` / `lemma_mcp_rt_` prefix, which is how the endpoint tells them
 from Lemma session tokens without asking SuperTokens, and how a secret scanner
 recognises a leaked one.
@@ -127,9 +131,14 @@ per client and pod, with scopes and when it was last used);
 revoke through `/oauth/revoke`, which ends its whole grant.
 
 **Rate limits.** Per grant, 300 MCP requests a minute
-(`MCP_ACCESS_REQUESTS_PER_MINUTE`), answered with 429 and `Retry-After`. Per
-source IP, 30 registrations an hour and 60 token requests a minute. Limits fail
-open if Redis is unavailable: they protect the service, they do not authorize.
+(`MCP_ACCESS_REQUESTS_PER_MINUTE`), answered with 429 and `Retry-After`. Token
+and revocation requests are limited per client *and* per source address (600 a
+minute): Claude and ChatGPT refresh for all their users from a few shared
+addresses, so an address alone would make every one of their users share one
+budget. Sign-in requests (60 a minute) and dynamic registrations (300 an hour)
+are limited per address, since each holds something — a pending request in
+Redis, a client row — before anyone has authenticated. Limits fail open if
+Redis is unavailable: they protect the service, they do not authorize.
 
 **The Agent Host's mount is unchanged.** The same FastMCP app answers at
 `/agent-runtime/pods/{id}/mcp`, where a bad session token is still a JSON-RPC

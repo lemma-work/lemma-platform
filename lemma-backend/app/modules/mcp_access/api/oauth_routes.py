@@ -109,12 +109,37 @@ async def _resource_metadata(request: Request) -> Response:
     )
 
 
+async def _by_address(request: Request) -> str:
+    return client_ip(request.scope)
+
+
+async def _by_client_and_address(request: Request) -> str:
+    """Per client as well as per address. Hosted clients call from a handful
+    of shared addresses on behalf of all their users, so an address alone
+    would make every Claude or ChatGPT user share one budget.
+
+    The form is read here and cached on the request, so the handler reads the
+    same parsed body.
+    """
+    form = await request.form()
+    client_id = form.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        header = request.headers.get("Authorization", "")
+        client_id = header[:80] if header.startswith("Basic ") else ""
+    return f"{client_ip(request.scope)}:{client_id[:512]}"
+
+
 def _limited(
-    handler: Handler, *, name: str, limit: Callable[[], int], window: int
+    handler: Handler,
+    *,
+    name: str,
+    key: Callable[[Request], Awaitable[str]],
+    limit: Callable[[], int],
+    window: int,
 ) -> Handler:
     async def endpoint(request: Request) -> Response:
         wait = await rate_limiter().retry_after(
-            f"{name}:{client_ip(request.scope)}", limit=limit(), window_seconds=window
+            f"{name}:{await key(request)}", limit=limit(), window_seconds=window
         )
         if wait is not None:
             return JSONResponse(
@@ -165,7 +190,13 @@ def oauth_router() -> APIRouter:
         )
     router.add_route(
         f"{OAUTH_PREFIX}/authorize",
-        authorize.handle,
+        _limited(
+            authorize.handle,
+            name="authorize",
+            key=_by_address,
+            limit=lambda: mcp_access_settings.mcp_access_authorize_requests_per_minute,
+            window=60,
+        ),
         methods=["GET", "POST"],
         include_in_schema=False,
     )
@@ -174,6 +205,7 @@ def oauth_router() -> APIRouter:
         _limited(
             token.handle,
             name="token",
+            key=_by_client_and_address,
             limit=lambda: mcp_access_settings.mcp_access_token_requests_per_minute,
             window=60,
         ),
@@ -185,6 +217,7 @@ def oauth_router() -> APIRouter:
         _limited(
             registration.handle,
             name="register",
+            key=_by_address,
             limit=lambda: mcp_access_settings.mcp_access_registrations_per_hour,
             window=3600,
         ),
@@ -193,7 +226,13 @@ def oauth_router() -> APIRouter:
     )
     router.add_route(
         f"{OAUTH_PREFIX}/revoke",
-        revocation.handle,
+        _limited(
+            revocation.handle,
+            name="revoke",
+            key=_by_client_and_address,
+            limit=lambda: mcp_access_settings.mcp_access_token_requests_per_minute,
+            window=60,
+        ),
         methods=["POST"],
         include_in_schema=False,
     )

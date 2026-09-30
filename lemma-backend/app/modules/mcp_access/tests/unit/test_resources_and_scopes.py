@@ -104,3 +104,42 @@ def test_protected_resource_metadata_names_the_pod_url_and_this_server():
     assert metadata["resource"] == pod_resource_url(API, pod_id)
     assert metadata["authorization_servers"] == [API]
     assert str(pod_id) not in str(metadata.get("resource_name"))
+
+
+def _form_request(body: bytes, headers: list[tuple[bytes, bytes]] | None = None):
+    from starlette.requests import Request
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/oauth/token",
+            "client": ("203.0.113.9", 1),
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")]
+            + (headers or []),
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_token_limit_is_per_client_as_well_as_per_address():
+    """Claude and ChatGPT refresh for all their users from shared addresses;
+    one budget per address would let one client exhaust another's."""
+    from app.modules.mcp_access.api.oauth_routes import _by_client_and_address
+
+    claude = await _by_client_and_address(
+        _form_request(b"client_id=https%3A%2F%2Fclaude.ai%2Fdoc&grant_type=x")
+    )
+    chatgpt = await _by_client_and_address(
+        _form_request(b"client_id=https%3A%2F%2Fchatgpt.com%2Fdoc&grant_type=x")
+    )
+    assert claude != chatgpt
+    assert claude.startswith("203.0.113.9:")
+    request = _form_request(b"client_id=abc&grant_type=x")
+    await _by_client_and_address(request)
+    # The handler after it still reads the same body.
+    assert (await request.form()).get("grant_type") == "x"

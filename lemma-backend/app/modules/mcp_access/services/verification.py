@@ -77,5 +77,11 @@ class AccessTokenVerifier:
             grant_id=found.grant_id,
             client_id=found.client_id,
             client_name=found.client_name,
-            scopes=parse_scopes(found.scopes) if found.scopes else frozenset(),
+            # The token's scopes as narrowed by the grant now: reconnecting with
+            # less access takes effect on tokens already issued, not only new ones.
+            scopes=(
+                parse_scopes(found.scopes) & parse_scopes(found.grant_scopes)
+                if found.scopes and found.grant_scopes
+                else frozenset()
+            ),
         )

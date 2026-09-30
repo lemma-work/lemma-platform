@@ -484,9 +484,10 @@ and for Claude and ChatGPT, one reachable from the public internet.
 
 ```dotenv
 MCP_ACCESS_ENABLED=true
-MCP_ACCESS_REQUESTS_PER_MINUTE=300      # per connected client, per pod
-MCP_ACCESS_REGISTRATIONS_PER_HOUR=30    # dynamic registrations, per source IP
-MCP_ACCESS_TOKEN_REQUESTS_PER_MINUTE=60 # token endpoint, per source IP
+MCP_ACCESS_REQUESTS_PER_MINUTE=300           # per connected client, per pod
+MCP_ACCESS_AUTHORIZE_REQUESTS_PER_MINUTE=60  # sign-in requests, per source IP
+MCP_ACCESS_REGISTRATIONS_PER_HOUR=300        # dynamic registrations, per source IP
+MCP_ACCESS_TOKEN_REQUESTS_PER_MINUTE=600     # token + revoke, per client per source IP
 ```
 
 ## Authentication and email
