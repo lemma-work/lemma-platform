@@ -22,7 +22,13 @@ PENDING_TTL_SECONDS = 600
 CODE_TTL_SECONDS = 300
 """RFC 6749 §4.1.2 recommends ten minutes at most; a client redeems in one."""
 
+REGISTRATION_TTL_SECONDS = 7 * 24 * 3600
+"""A client that is never allowed is forgotten after a week; one that comes
+back later registers again, which RFC 7591 clients do on `invalid_client`."""
+
 _PENDING_PREFIX = "mcp_access:pending:"
+_CLIENT_PREFIX = "mcp_access:client:"
+_ONCE_PREFIX = "mcp_access:once:"
 _CODE_PREFIX = "mcp_access:code:"
 
 
@@ -52,8 +58,21 @@ class IssuedCode(BaseModel):
     expires_at: float
 
 
+class RegisteredClient(BaseModel):
+    """A dynamically registered client nobody has consented to yet.
+
+    Held here rather than in Postgres: registration is unauthenticated by
+    design (RFC 7591), so a row per registration would let anyone grow a table
+    without bound. A client is written down only when a person allows it.
+    """
+
+    client_id: str
+    client_metadata: dict[str, object]
+    client_secret_hash: str | None
+
+
 class _KeyValue(Protocol):
-    async def set(self, name: str, value: str, ex: int) -> object: ...
+    async def set(self, name: str, value: str, ex: int, nx: bool = False) -> object: ...
 
     async def get(self, name: str) -> str | None: ...
 
@@ -102,3 +121,22 @@ class EphemeralStore:
     async def take_code(self, code: str) -> IssuedCode | None:
         raw = await self._redis.getdel(_CODE_PREFIX + code)
         return IssuedCode.model_validate_json(raw) if raw else None
+
+    async def hold_client(self, client: RegisteredClient) -> None:
+        await self._redis.set(
+            _CLIENT_PREFIX + client.client_id,
+            client.model_dump_json(),
+            ex=REGISTRATION_TTL_SECONDS,
+        )
+
+    async def read_client(self, client_id: str) -> RegisteredClient | None:
+        raw = await self._redis.get(_CLIENT_PREFIX + client_id)
+        return RegisteredClient.model_validate_json(raw) if raw else None
+
+    async def claim_once(self, key: str, ttl_seconds: int) -> bool:
+        """True the first time ``key`` is claimed, on any replica, until it
+        expires. For values that must be used once, such as an assertion id."""
+        claimed = await self._redis.set(
+            _ONCE_PREFIX + key, "1", ex=max(1, ttl_seconds), nx=True
+        )
+        return bool(claimed)

@@ -71,6 +71,7 @@ class ConnectedApp:
     """One grant, as the person who made it sees it."""
 
     grant_id: UUID
+    user_id: UUID
     pod_id: UUID
     client_id: str
     client_name: str

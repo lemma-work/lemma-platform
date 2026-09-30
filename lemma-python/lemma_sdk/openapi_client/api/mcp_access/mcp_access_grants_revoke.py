@@ -62,7 +62,8 @@ def sync_detailed(
     """Disconnect an MCP client
 
      Ends the grant and every token it issued. The client's next request is
-    refused and it has to ask the person again.
+    refused and it has to ask the person again. A pod's admins may end any
+    member's connection to their pod.
 
     Args:
         grant_id (UUID):
@@ -94,7 +95,8 @@ def sync(
     """Disconnect an MCP client
 
      Ends the grant and every token it issued. The client's next request is
-    refused and it has to ask the person again.
+    refused and it has to ask the person again. A pod's admins may end any
+    member's connection to their pod.
 
     Args:
         grant_id (UUID):
@@ -121,7 +123,8 @@ async def asyncio_detailed(
     """Disconnect an MCP client
 
      Ends the grant and every token it issued. The client's next request is
-    refused and it has to ask the person again.
+    refused and it has to ask the person again. A pod's admins may end any
+    member's connection to their pod.
 
     Args:
         grant_id (UUID):
@@ -151,7 +154,8 @@ async def asyncio(
     """Disconnect an MCP client
 
      Ends the grant and every token it issued. The client's next request is
-    refused and it has to ask the person again.
+    refused and it has to ask the person again. A pod's admins may end any
+    member's connection to their pod.
 
     Args:
         grant_id (UUID):

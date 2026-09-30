@@ -16,7 +16,7 @@ always do, and this issues tokens for the one pod they agreed to.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -32,6 +32,7 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.mcp_access.domain.entities import (
     ALL_SCOPES,
     TokenKind,
@@ -53,6 +54,9 @@ from app.modules.mcp_access.infrastructure.repositories import McpAccessReposito
 from app.modules.mcp_access.services.clients import ClientDirectory, LemmaOAuthClient
 
 
+logger = get_logger(__name__)
+
+
 class LemmaAuthorizationCode(AuthorizationCode):
     grant_id: str
 
@@ -60,6 +64,16 @@ class LemmaAuthorizationCode(AuthorizationCode):
 class LemmaRefreshToken(RefreshToken):
     grant_id: str
     token_id: str
+    retried: bool = False
+    """Already exchanged moments ago: the client is retrying a refresh whose
+    response it never received, not replaying a stolen token."""
+
+
+REFRESH_RETRY_GRACE = timedelta(seconds=60)
+"""How long after rotation the old refresh token still counts as the same
+client retrying. OAuth 2.1 §4.3.1 ends the grant on reuse; a lost response
+followed by a retry is not theft, and ending the connection for it sends the
+person back through consent for a network blip."""
 
 
 def consent_page_url(auth_frontend_url: str, request_id: str) -> str:
@@ -195,12 +209,21 @@ class LemmaAuthorizationServer(
                 or found.expires_at <= now
             ):
                 return None
+            retried = False
             if found.rotated_at is not None:
-                # Presented after it was exchanged: someone else has a copy.
-                # OAuth 2.1 §4.3.1 -- end the whole grant, for both holders.
-                await repository.revoke_grant(grant_id=found.grant_id, now=now)
-                await uow.commit()
-                return None
+                if now - found.rotated_at <= REFRESH_RETRY_GRACE:
+                    retried = True
+                else:
+                    # Presented well after it was exchanged: someone else has
+                    # a copy. OAuth 2.1 §4.3.1 -- end the grant for both.
+                    await repository.revoke_grant(grant_id=found.grant_id, now=now)
+                    await uow.commit()
+                    logger.warning(
+                        "mcp_access.refresh_token.replayed",
+                        grant_id=str(found.grant_id),
+                        client_id=found.client_id,
+                    )
+                    return None
         return LemmaRefreshToken(
             token=refresh_token,
             client_id=found.client_id,
@@ -212,6 +235,7 @@ class LemmaAuthorizationServer(
             expires_at=int(found.expires_at.timestamp()),
             grant_id=str(found.grant_id),
             token_id=str(found.token_id),
+            retried=retried,
         )
 
     async def exchange_refresh_token(
@@ -227,16 +251,19 @@ class LemmaAuthorizationServer(
         # ends the whole grant.
         now = self._now()
         grant_id = UUID(refresh_token.grant_id)
+        token_id = UUID(refresh_token.token_id)
         async with self._uow_factory() as uow:
             repository = McpAccessRepository(uow)
-            if not await repository.mark_rotated(
-                token_id=UUID(refresh_token.token_id), now=now
+            if not refresh_token.retried and not await repository.mark_rotated(
+                token_id=token_id, now=now
             ):
                 raise TokenError(
                     error="invalid_grant",
                     error_description="refresh token already used",
                 )
-            await repository.delete_expired_tokens(grant_id=grant_id, now=now)
+            await repository.prune_grant_tokens(
+                grant_id=grant_id, keep_rotated=token_id, now=now
+            )
             tokens = await self._write_pair(
                 repository, grant_id=grant_id, scopes=scopes
             )
@@ -275,10 +302,16 @@ class LemmaAuthorizationServer(
         else:
             return
         async with self._uow_factory() as uow:
-            await McpAccessRepository(uow).revoke_grant(
+            revoked = await McpAccessRepository(uow).revoke_grant(
                 grant_id=grant_id, now=self._now()
             )
             await uow.commit()
+        if revoked:
+            logger.info(
+                "mcp_access.grant.revoked_by_client",
+                grant_id=str(grant_id),
+                client_id=token.client_id,
+            )
 
     async def _write_pair(
         self,

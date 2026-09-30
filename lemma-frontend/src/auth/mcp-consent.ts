@@ -16,9 +16,12 @@ import { onApi } from "./config";
 
 export interface ConsentRequest {
     client_id: string;
+    /** What the app calls itself. Anyone can register an app called "Claude". */
     client_name: string;
+    /** The host serving the app's metadata document — the one thing about it
+     *  that is checked. Null for an app that registered itself. */
+    verified_host: string | null;
     client_uri: string | null;
-    logo_uri: string | null;
     redirect_host: string;
     pod_id: string;
     pod_name: string;
@@ -26,6 +29,25 @@ export interface ConsentRequest {
 }
 
 export const WRITE_SCOPE = "pod:write";
+
+/** Who is asking, said the way a person can check it. The host serving an
+ *  app's metadata document is verified; the name an app gives itself is not,
+ *  so the name is never the subject of the question. */
+export function whoIsAsking(request: Pick<ConsentRequest, "verified_host" | "client_name">): {
+    title: string;
+    claim: string;
+    verified: boolean;
+} {
+    const claim = "It calls itself “" + request.client_name + "”.";
+    if (request.verified_host) {
+        return { title: request.verified_host, claim, verified: true };
+    }
+    return {
+        title: "An unverified app",
+        claim: claim + " Lemma cannot check that: this app registered itself.",
+        verified: false,
+    };
+}
 
 /** Held across sign-in, which leaves this page and may leave the site. */
 const KEY = "lemma.mcp-consent.request";
@@ -73,21 +95,50 @@ export async function readConsentRequest(id: string, fetcher: typeof fetch = fet
     return (await response.json()) as ConsentRequest;
 }
 
-/** The URL to send the browser to. Only ever the one the API returns: the
- *  API has already checked it against what the client registered. */
+/** Schemes that run something in the page that navigates to them. The
+ *  browser is on the auth site with the person signed in, so a redirect to one
+ *  of these would run it there. Mirrors `app/modules/mcp_access/domain/redirects.py`. */
+const REFUSED_SCHEMES = new Set([
+    "javascript:", "vbscript:", "data:", "blob:", "file:", "filesystem:",
+    "about:", "view-source:", "jar:", "ws:", "wss:", "ftp:",
+]);
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Whether the browser may be sent to `raw`. The API checks this too; this is
+ *  the backstop, because this page is where a bad URI would do its harm. */
+export function safeRedirect(raw: string): boolean {
+    if (/[\u0000-\u0020]/.test(raw)) return false;
+    let url: URL;
+    try {
+        url = new URL(raw);
+    } catch {
+        return false;
+    }
+    if (REFUSED_SCHEMES.has(url.protocol)) return false;
+    if (url.username || url.password) return false;
+    if (url.protocol === "https:") return url.hostname !== "";
+    if (url.protocol === "http:") return LOOPBACK.has(url.hostname);
+    return /^[a-z][a-z0-9+.-]*:$/.test(url.protocol);
+}
+
+/** The URL to send the browser to. Only ever the one the API returns, and
+ *  only when it passes `safeRedirect`. `readOnly` narrows what the app asked
+ *  for; it never widens it. */
 export async function answerConsentRequest(
     id: string,
-    allow: boolean,
+    answer: { allow: boolean; readOnly?: boolean },
     fetcher: typeof fetch = fetch,
 ): Promise<string> {
     const response = await fetcher(onApi("/oauth/consent/" + encodeURIComponent(id)), {
         method: "POST",
         credentials: "include",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify({ allow }),
+        body: JSON.stringify({ allow: answer.allow, read_only: answer.readOnly ?? false }),
     });
     if (!response.ok) throw await problem(response, "Your answer could not be sent (" + response.status + ").");
     const body = (await response.json()) as { redirect_to?: unknown };
     if (typeof body.redirect_to !== "string") throw new Error("The server did not say where to go next.");
+    if (!safeRedirect(body.redirect_to)) throw new Error("This app asked to send you somewhere unsafe, so you were not sent.");
     return body.redirect_to;
 }

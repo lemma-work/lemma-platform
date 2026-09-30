@@ -45,7 +45,7 @@ def _uow_factory() -> SessionUnitOfWorkFactory:
 
 @lru_cache(maxsize=1)
 def client_directory() -> ClientDirectory:
-    return ClientDirectory(_uow_factory())
+    return ClientDirectory(_uow_factory(), ephemeral=_ephemeral())
 
 
 @lru_cache(maxsize=1)

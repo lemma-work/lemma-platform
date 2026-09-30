@@ -12,4 +12,8 @@ export type ConnectedClientResponse = {
     last_used_at: (string | null);
     pod_id: string;
     scopes: Array<Scope>;
+    /**
+     * The person who connected it.
+     */
+    user_id: string;
 };

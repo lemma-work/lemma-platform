@@ -5,20 +5,27 @@ Two ways in, in the order the MCP authorization spec prefers them:
 * **Client ID metadata document** -- the ``client_id`` is an HTTPS URL, and the
   document it serves names the client and its redirect URIs. Claude and ChatGPT
   both use this when the server advertises it. Nothing is issued; the document
-  is fetched (SSRF-guarded, cached by its own HTTP headers) and a copy kept so
-  a grant has a row to point at and a name to show.
+  is fetched (SSRF-guarded, cached by its own HTTP headers). The one verified
+  fact about such a client is the host serving its document.
 * **Dynamic registration** (RFC 7591) -- the client POSTs its metadata and is
   issued an id, and a secret unless it asked for none. The spec now calls this
   a fallback, and clients that predate metadata documents still depend on it.
+  Nothing about such a client is verified.
 
-Either way the client is only ever trusted for where it may send the person
-back to. Its name is shown on the consent screen as the client's own claim.
+Neither is written to Postgres until a person consents (`persist`): both paths
+are reachable without signing in, and a row per request would let anyone grow
+the table. Either way the client is only ever trusted for where it may send the
+person back to, and every one of those is checked by `redirect_allowed`.
 """
 
 from __future__ import annotations
 
+import json
+import time
+from base64 import urlsafe_b64decode
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
+from datetime import datetime, timezone
 
 from fastmcp.server.auth.cimd import (
     CIMDAssertionValidator,
@@ -27,10 +34,7 @@ from fastmcp.server.auth.cimd import (
     CIMDFetchError,
     CIMDValidationError,
 )
-from fastmcp.server.auth.redirect_validation import (
-    is_redirect_uri_allowed_for_application_type,
-    matches_allowed_pattern,
-)
+from fastmcp.server.auth.redirect_validation import matches_allowed_pattern
 from mcp.server.auth.provider import RegistrationError
 from mcp.shared.auth import (
     InvalidRedirectUriError,
@@ -42,7 +46,12 @@ from pydantic import AnyUrl, model_validator
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.mcp_access.domain.entities import ALL_SCOPES, ClientRegistration
+from app.modules.mcp_access.domain.redirects import redirect_allowed
 from app.modules.mcp_access.domain.tokens import digest
+from app.modules.mcp_access.infrastructure.ephemeral import (
+    EphemeralStore,
+    RegisteredClient,
+)
 from app.modules.mcp_access.infrastructure.repositories import (
     McpAccessRepository,
     StoredClient,
@@ -55,7 +64,6 @@ OFFLINE_ACCESS = "offline_access"
 authorization server lists it; this one issues refresh tokens regardless and
 does not list it, as the MCP spec asks."""
 
-_DOCUMENT_COPY_REFRESH = timedelta(hours=1)
 _SECRET_FIELDS = ("client_secret", "client_secret_expires_at")
 
 
@@ -85,19 +93,34 @@ class LemmaOAuthClient(OAuthClientInformationFull):
             self.grant_types = [*self.grant_types, "refresh_token"]
         return self
 
+    @property
+    def verified_host(self) -> str | None:
+        """The host serving a metadata document -- the only thing about a
+        client that is checked rather than claimed. ``None`` for a dynamically
+        registered client, about which nothing is."""
+        if self.registration is not ClientRegistration.METADATA_DOCUMENT:
+            return None
+        return urlsplit(self.client_id or "").hostname
+
     def validate_redirect_uri(self, redirect_uri: AnyUrl | None) -> AnyUrl:
+        """Registered *and* safe, on every path. A registered URI is only as
+        good as whoever registered it, and anyone can host a document."""
         allowed = [str(uri) for uri in self.redirect_uris or []] + list(
             self.redirect_patterns
         )
         if redirect_uri is None:
-            if len(allowed) == 1 and "*" not in allowed[0]:
+            if (
+                len(allowed) == 1
+                and "*" not in allowed[0]
+                and redirect_allowed(allowed[0])
+            ):
                 return AnyUrl(allowed[0])
             raise InvalidRedirectUriError(
                 "redirect_uri must be specified unless the client has exactly "
                 "one registered URI"
             )
         candidate = str(redirect_uri)
-        if any(
+        if redirect_allowed(candidate) and any(
             candidate == pattern or matches_allowed_pattern(candidate, pattern)
             for pattern in allowed
         ):
@@ -145,7 +168,6 @@ def _from_document(document: CIMDDocument) -> dict[str, object]:
         include={
             "client_name",
             "client_uri",
-            "logo_uri",
             "redirect_uris",
             "grant_types",
             "response_types",
@@ -157,15 +179,24 @@ def _from_document(document: CIMDDocument) -> dict[str, object]:
     )
 
 
+def _unverified_claims(assertion: str) -> dict[str, object]:
+    """The payload of an assertion whose signature has already been checked."""
+    payload = assertion.split(".")[1]
+    decoded = json.loads(urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    return decoded if isinstance(decoded, dict) else {}
+
+
 class ClientDirectory:
     def __init__(
         self,
         uow_factory: UnitOfWorkFactory,
         *,
+        ephemeral: EphemeralStore,
         fetcher: CIMDFetcher | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._uow_factory = uow_factory
+        self._ephemeral = ephemeral
         self._fetcher = fetcher or CIMDFetcher()
         self._assertions = CIMDAssertionValidator()
         self._now = clock
@@ -178,11 +209,24 @@ class ClientDirectory:
             return await self._resolve_document(client_id)
         async with self._uow_factory() as uow:
             stored = await McpAccessRepository(uow).get_client(client_id)
-        return _from_stored(stored) if stored is not None else None
+        if stored is not None:
+            return _from_stored(stored)
+        pending = await self._ephemeral.read_client(client_id)
+        if pending is None:
+            return None
+        return _from_stored(
+            StoredClient(
+                client_id=pending.client_id,
+                registration=ClientRegistration.DYNAMIC.value,
+                client_metadata=pending.client_metadata,
+                client_secret_hash=pending.client_secret_hash,
+                updated_at=self._now(),
+            )
+        )
 
     async def register(self, client_info: OAuthClientInformationFull) -> None:
         for uri in client_info.redirect_uris or []:
-            if not is_redirect_uri_allowed_for_application_type(uri, "native"):
+            if not redirect_allowed(str(uri)):
                 raise RegistrationError(
                     error="invalid_redirect_uri",
                     error_description=f"Redirect URI not allowed: {uri}",
@@ -191,12 +235,48 @@ class ClientDirectory:
             mode="json", exclude_none=True, exclude={"client_id", *_SECRET_FIELDS}
         )
         secret = client_info.client_secret
-        async with self._uow_factory() as uow:
-            await McpAccessRepository(uow).save_client(
+        await self._ephemeral.hold_client(
+            RegisteredClient(
                 client_id=client_info.client_id or "",
-                registration=ClientRegistration.DYNAMIC.value,
                 client_metadata=metadata,
                 client_secret_hash=digest(secret) if secret else None,
+            )
+        )
+        logger.info(
+            "mcp_access.client.registered",
+            client_name=str(metadata.get("client_name") or "")[:120],
+        )
+
+    async def persist(self, client: LemmaOAuthClient) -> None:
+        """Write the client down, because a person has just allowed it.
+
+        A grant points at this row, and the connected-apps list reads the
+        client's name from it. A metadata document's copy is refreshed each
+        time a person consents.
+        """
+        metadata = client.model_dump(
+            mode="json",
+            exclude_none=True,
+            include={
+                "client_name",
+                "client_uri",
+                "redirect_uris",
+                "grant_types",
+                "response_types",
+                "scope",
+                "token_endpoint_auth_method",
+                "software_id",
+                "software_version",
+            },
+        )
+        if client.registration is ClientRegistration.METADATA_DOCUMENT:
+            metadata["redirect_uris"] = list(client.redirect_patterns)
+        async with self._uow_factory() as uow:
+            await McpAccessRepository(uow).save_client(
+                client_id=client.client_id or "",
+                registration=client.registration.value,
+                client_metadata=metadata,
+                client_secret_hash=client.client_secret_hash,
                 now=self._now(),
             )
             await uow.commit()
@@ -210,7 +290,8 @@ class ClientDirectory:
         ChatGPT's document asks for this method. The assertion is accepted with
         the token endpoint or the issuer as its audience: RFC 7523 names the
         token endpoint, and newer guidance names the issuer, and clients follow
-        either.
+        either. Each assertion is used once across every replica: fastmcp's own
+        replay check is per process.
         """
         try:
             document = await self._fetcher.fetch(client_id)
@@ -224,10 +305,20 @@ class ClientDirectory:
                 await self._assertions.validate_assertion(
                     assertion, client_id, audience, document
                 )
-                return
+                break
             except ValueError as exc:
                 refusal = exc
-        raise refusal or ValueError("no audience to check the assertion against")
+        else:
+            raise refusal or ValueError("no audience to check the assertion against")
+        claims = _unverified_claims(assertion)
+        jti, expires = claims.get("jti"), claims.get("exp")
+        if not isinstance(jti, str) or not isinstance(expires, (int, float)):
+            raise ValueError("assertion needs jti and exp")
+        if not await self._ephemeral.claim_once(
+            f"jti:{digest(client_id)}:{digest(jti)}", int(expires - time.time()) + 60
+        ):
+            logger.warning("mcp_access.client_assertion.replayed")
+            raise ValueError("assertion already used")
 
     async def _resolve_document(self, client_id: str) -> LemmaOAuthClient | None:
         try:
@@ -240,29 +331,23 @@ class ClientDirectory:
             )
             return None
         metadata = _from_document(document)
-        now = self._now()
-        async with self._uow_factory() as uow:
-            repository = McpAccessRepository(uow)
-            stored = await repository.get_client(client_id)
-            if (
-                stored is None
-                or stored.client_metadata != metadata
-                or now - stored.updated_at > _DOCUMENT_COPY_REFRESH
-            ):
-                await repository.save_client(
-                    client_id=client_id,
-                    registration=ClientRegistration.METADATA_DOCUMENT.value,
-                    client_metadata=metadata,
-                    client_secret_hash=None,
-                    now=now,
-                )
-                await uow.commit()
+        safe = [
+            str(uri)
+            for uri in metadata.get("redirect_uris") or []  # type: ignore[union-attr]
+            if redirect_allowed(str(uri))
+        ]
+        if not safe:
+            logger.warning(
+                "mcp_access.client_document.no_safe_redirect", client_id=client_id
+            )
+            return None
+        metadata["redirect_uris"] = safe
         return _from_stored(
             StoredClient(
                 client_id=client_id,
                 registration=ClientRegistration.METADATA_DOCUMENT.value,
                 client_metadata=metadata,
                 client_secret_hash=None,
-                updated_at=now,
+                updated_at=self._now(),
             )
         )

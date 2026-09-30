@@ -22,4 +22,10 @@ def _routers():
     return [consent, oauth_router()]
 
 
-module = LemmaModule(name="mcp_access", routers=_routers)
+def _register_streaq() -> None:
+    import app.modules.mcp_access.events.tasks  # noqa: F401
+
+
+module = LemmaModule(
+    name="mcp_access", routers=_routers, register_streaq=_register_streaq
+)

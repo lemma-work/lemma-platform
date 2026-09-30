@@ -8,8 +8,7 @@ import {
     accessLabel,
     disconnectClient,
     fetchMcpUrl,
-    listConnectedClients,
-    mcpUrl,
+    loadConnections,
     reachableFromInternet,
     serverSteps,
     setupCommands,
@@ -106,25 +105,39 @@ export function AgentAccess({ pod }: { pod: Pod }) {
 function McpAccess({ pod }: { pod: Pod }) {
     const apiUrl = configuredApiUrl();
     const [clientId, setClientId] = useState("claude");
-    const [stated, setStated] = useState<string | null>(null);
+    /* Undefined while asking, null when this deployment does not serve spaces
+       over MCP — then the section is not shown at all. */
+    const [url, setUrl] = useState<string | null | undefined>(undefined);
     const [connected, setConnected] = useState<ConnectedClient[] | null>(null);
+    const [everyone, setEveryone] = useState(false);
     const [problem, setProblem] = useState<string | null>(null);
 
     useEffect(() => {
         if (!apiUrl) return;
         let cancelled = false;
-        fetchMcpUrl(apiUrl, pod.id).then(url => { if (!cancelled) setStated(url); }).catch(() => undefined);
-        listConnectedClients(apiUrl, pod.id)
-            .then(items => { if (!cancelled) setConnected(items); })
-            .catch(error => { if (!cancelled) setProblem(error instanceof Error ? error.message : null); });
+        void (async () => {
+            const stated = await fetchMcpUrl(apiUrl, pod.id).catch(() => null);
+            if (cancelled) return;
+            setUrl(stated);
+            if (!stated) return;
+            try {
+                const loaded = await loadConnections(apiUrl, pod.id);
+                if (cancelled) return;
+                setConnected(loaded.items);
+                setEveryone(loaded.everyone);
+            } catch (error) {
+                if (!cancelled) setProblem(error instanceof Error ? error.message : null);
+            }
+        })();
         return () => { cancelled = true; };
     }, [apiUrl, pod.id]);
 
-    const url = stated ?? mcpUrl(apiUrl, pod.id);
     if (!apiUrl || !url) return null;
     const client = MCP_CLIENTS.find(entry => entry.id === clientId) ?? MCP_CLIENTS[0];
     const command = client.command?.(url, pod) ?? null;
     const outOfReach = client.remote && !reachableFromInternet(url);
+    const whoConnected = (userId: string) =>
+        pod.members.find(member => member.userId === userId)?.name ?? "a former member";
 
     const disconnect = async (grantId: string) => {
         try {
@@ -169,7 +182,7 @@ function McpAccess({ pod }: { pod: Pod }) {
                 )}
             </div>
 
-            <div className="access__label">Connected by you</div>
+            <div className="access__label">{everyone ? "Connected to " + pod.name : "Connected by you"}</div>
             {problem && <div className="access__head"><small role="alert">{problem}</small></div>}
             {connected !== null && connected.length === 0 && (
                 <div className="access__head"><small>Nothing is connected to {pod.name} yet.</small></div>
@@ -180,7 +193,10 @@ function McpAccess({ pod }: { pod: Pod }) {
                         <li key={item.grant_id}>
                             <span>
                                 <b>{item.client_name}</b>
-                                <small>{accessLabel(item.scopes)} · {item.last_used_at ? "used " + agoOf(item.last_used_at) : "connected " + agoOf(item.connected_at)}</small>
+                                <small>
+                                    {everyone ? "by " + whoConnected(item.user_id) + " · " : ""}
+                                    {accessLabel(item.scopes)} · {item.last_used_at ? "used " + agoOf(item.last_used_at) : "connected " + agoOf(item.connected_at)}
+                                </small>
                             </span>
                             <span className="access__actions">
                                 <button className="access__copy" onClick={() => void disconnect(item.grant_id)}>Disconnect</button>

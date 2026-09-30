@@ -52,9 +52,9 @@ def test_mcp_access_tables_upgrade_and_roll_back_cleanly() -> None:
             live_index = connection.execute(
                 "SELECT i.indisunique, pg_get_expr(i.indpred, i.indrelid) "
                 "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-                "WHERE c.relname = 'uq_mcp_oauth_grants_live'"
+                "WHERE c.relname = 'ix_mcp_oauth_grants_connection'"
             ).fetchone()
-            assert live_index == (True, "(revoked_at IS NULL)")
+            assert live_index == (False, "(revoked_at IS NULL)")
 
         migrate("downgrade", BEFORE)
         with psycopg.connect(sync_url) as connection:

@@ -3,8 +3,8 @@
 Three new tables, none of them read by existing code, so this takes no lock on
 anything already serving. `mcp_oauth_clients` is keyed by the client id as
 clients send it (a registration id, or the URL of a client metadata document).
-`mcp_oauth_grants` holds one live row per person, client and pod, enforced by
-a partial unique index so that revoked rows can stay for the record.
+`mcp_oauth_grants` holds one row per consent -- a connection per device --
+with revoked rows kept for the record.
 `mcp_oauth_tokens` holds SHA-256 digests only.
 
 Revision ID: 0042_mcp_access
@@ -72,10 +72,9 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index(
-        "uq_mcp_oauth_grants_live",
+        "ix_mcp_oauth_grants_connection",
         "mcp_oauth_grants",
         ["user_id", "client_id", "pod_id"],
-        unique=True,
         postgresql_where=sa.text("revoked_at IS NULL"),
     )
     op.create_index(
@@ -112,6 +111,6 @@ def downgrade() -> None:
     op.drop_table("mcp_oauth_tokens")
     op.drop_index("ix_mcp_oauth_grants_pod", table_name="mcp_oauth_grants")
     op.drop_index("ix_mcp_oauth_grants_user", table_name="mcp_oauth_grants")
-    op.drop_index("uq_mcp_oauth_grants_live", table_name="mcp_oauth_grants")
+    op.drop_index("ix_mcp_oauth_grants_connection", table_name="mcp_oauth_grants")
     op.drop_table("mcp_oauth_grants")
     op.drop_table("mcp_oauth_clients")

@@ -11,7 +11,11 @@ import mcp.types
 from fastmcp import FastMCP
 from fastmcp.server.auth import AccessToken, AuthProvider
 from fastmcp.server.context import ServerRequestContext
-from fastmcp.server.dependencies import bind_request_context, get_http_headers
+from fastmcp.server.dependencies import (
+    bind_request_context,
+    get_http_headers,
+    get_http_request,
+)
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -81,9 +85,11 @@ class PodFastMCP(FastMCP):
         del params
         with bind_request_context(ctx):
             pod_id, token = await _pod_request_context()
-            if not await pod_mcp_service.authorize(pod_id=pod_id, token=token):
-                raise ValueError("Unauthorized pod MCP token")
-            tools = await pod_mcp_service.list_tools(pod_id=pod_id, token=token)
+            # `list_tools` refuses a bad token itself; asking `authorize` first
+            # checked every token twice.
+            tools = await pod_mcp_service.list_tools(
+                pod_id=pod_id, token=token, principal=_verified_principal()
+            )
         return mcp.types.ListToolsResult(tools=tools)
 
     async def _on_call_tool(
@@ -93,14 +99,30 @@ class PodFastMCP(FastMCP):
     ) -> mcp.types.CallToolResult:
         with bind_request_context(ctx):
             pod_id, token = await _pod_request_context()
-            if not await pod_mcp_service.authorize(pod_id=pod_id, token=token):
-                raise ValueError("Unauthorized pod MCP token")
             return await pod_mcp_service.call_tool(
                 pod_id=pod_id,
                 token=token,
                 name=params.name,
                 arguments=params.arguments or {},
+                principal=_verified_principal(),
             )
+
+
+_PRINCIPAL_STATE_KEY = "lemma_mcp_principal"
+
+
+def _verified_principal() -> McpPrincipal | None:
+    """What `PublicPodMCPApp` verified for this request, if it did.
+
+    Carried on the request's own state rather than a header: a header is
+    something the client can send, the state is not.
+    """
+    try:
+        state = get_http_request().scope.get("state") or {}
+    except RuntimeError:
+        return None
+    principal = state.get(_PRINCIPAL_STATE_KEY)
+    return principal if isinstance(principal, McpPrincipal) else None
 
 
 async def _pod_request_context() -> tuple[UUID, str]:
@@ -259,13 +281,18 @@ class PublicPodMCPApp:
             )
             return
         pod_id = UUID(match.group("pod_id"))
-        refusal = await self._refusal(Headers(scope=scope), pod_id)
+        state: dict[str, object] = dict(scope.get("state") or {})
+        refusal = await self._refusal(Headers(scope=scope), pod_id, state)
         if refusal is not None:
             await refusal(scope, receive, send)
             return
-        await self._mcp_app(_forward_to_pod(scope, str(pod_id)), receive, send)
+        forwarded = _forward_to_pod(scope, str(pod_id))
+        forwarded["state"] = state
+        await self._mcp_app(forwarded, receive, send)
 
-    async def _refusal(self, headers: Headers, pod_id: UUID) -> JSONResponse | None:
+    async def _refusal(
+        self, headers: Headers, pod_id: UUID, state: dict[str, object]
+    ) -> JSONResponse | None:
         # MCP streamable HTTP: a server MUST validate Origin. Server-side
         # clients send none; a browser page may use this only from an origin
         # the API already trusts, the same rule CORS applies to the rest of it.
@@ -285,6 +312,7 @@ class PublicPodMCPApp:
         principal = await self._gate.verify_access_token(token, pod_id=pod_id)
         if principal is None:
             return _unauthorized(pod_id, error="invalid_token")
+        state[_PRINCIPAL_STATE_KEY] = principal
         wait = await self._gate.retry_after(principal)
         if wait is not None:
             return JSONResponse(

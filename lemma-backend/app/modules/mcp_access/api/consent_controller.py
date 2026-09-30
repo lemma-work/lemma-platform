@@ -27,8 +27,15 @@ router = APIRouter(prefix="/oauth", tags=[TAG])
 class ConsentRequestResponse(BaseModel):
     client_id: str
     client_name: str = Field(description="As the client names itself. Unverified.")
+    verified_host: str | None = Field(
+        default=None,
+        description=(
+            "The host serving the client's metadata document -- the one checked "
+            "fact about who is asking. Null for a dynamically registered client, "
+            "about which nothing is checked."
+        ),
+    )
     client_uri: str | None = None
-    logo_uri: str | None = None
     redirect_host: str = Field(
         description=(
             "Where the person is sent back to. The one part of the request a "
@@ -42,6 +49,10 @@ class ConsentRequestResponse(BaseModel):
 
 class ConsentAnswerRequest(BaseModel):
     allow: bool
+    read_only: bool = Field(
+        default=False,
+        description="Allow reading only, whatever the client asked for.",
+    )
 
 
 class ConsentAnswerResponse(BaseModel):
@@ -52,6 +63,7 @@ class ConsentAnswerResponse(BaseModel):
 
 class ConnectedClientResponse(BaseModel):
     grant_id: UUID
+    user_id: UUID = Field(description="The person who connected it.")
     pod_id: UUID
     client_id: str
     client_name: str
@@ -72,6 +84,7 @@ class McpEndpointResponse(BaseModel):
 def _connected(app: ConnectedApp) -> ConnectedClientResponse:
     return ConnectedClientResponse(
         grant_id=app.grant_id,
+        user_id=app.user_id,
         pod_id=app.pod_id,
         client_id=app.client_id,
         client_name=app.client_name,
@@ -99,8 +112,8 @@ async def get_consent_request(
     return ConsentRequestResponse(
         client_id=found.client_id,
         client_name=found.client_name,
+        verified_host=found.verified_host,
         client_uri=found.client_uri,
-        logo_uri=found.logo_uri,
         redirect_host=found.redirect_host,
         pod_id=found.pod_id,
         pod_name=found.pod_name,
@@ -119,7 +132,10 @@ async def answer_consent_request(
     request_id: str, body: ConsentAnswerRequest, user: CurrentUser
 ) -> ConsentAnswerResponse:
     redirect_to = await consent_service().answer(
-        request_id=request_id, user_id=user.id, allow=body.allow
+        request_id=request_id,
+        user_id=user.id,
+        allow=body.allow,
+        read_only=body.read_only,
     )
     return ConsentAnswerResponse(redirect_to=redirect_to)
 
@@ -133,8 +149,14 @@ async def answer_consent_request(
 async def list_grants(
     user: CurrentUser,
     pod_id: UUID | None = Query(default=None, description="Only this pod's."),
+    everyone: bool = Query(
+        default=False,
+        description="Every member's connections to pod_id. Pod admins only.",
+    ),
 ) -> ConnectedClientsResponse:
-    apps = await GrantService(get_uow_factory()).list(user_id=user.id, pod_id=pod_id)
+    apps = await GrantService(get_uow_factory()).list(
+        user_id=user.id, pod_id=pod_id, everyone=everyone
+    )
     return ConnectedClientsResponse(items=[_connected(app) for app in apps])
 
 
@@ -146,7 +168,8 @@ async def list_grants(
 )
 async def revoke_grant(grant_id: UUID, user: CurrentUser) -> None:
     """Ends the grant and every token it issued. The client's next request is
-    refused and it has to ask the person again."""
+    refused and it has to ask the person again. A pod's admins may end any
+    member's connection to their pod."""
     if not await GrantService(get_uow_factory()).revoke(
         user_id=user.id, grant_id=grant_id
     ):

@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from sqlalchemy import text
 from httpx import ASGITransport, AsyncClient
 
 pytestmark = pytest.mark.e2e
@@ -223,7 +224,7 @@ async def test_a_client_connects_one_pod_and_works_as_the_person(
 
 
 async def test_refresh_rotates_and_a_replayed_refresh_token_ends_the_grant(
-    mcp_client, authenticated_client, test_pod
+    mcp_client, authenticated_client, test_pod, db_session
 ):
     pod_id = test_pod["id"]
     await mcp_client.register()
@@ -237,7 +238,19 @@ async def test_refresh_rotates_and_a_replayed_refresh_token_ends_the_grant(
         await mcp_client.rpc(pod_id, second["access_token"], "tools/list")
     ).status_code == 200
 
-    # The old refresh token again: two parties hold it, so nobody keeps it.
+    # Straight after rotation the old token is the same client retrying a
+    # response it lost, and gets a fresh pair rather than ending the grant.
+    retried = await mcp_client.refresh(first["refresh_token"])
+    assert retried.status_code == 200, retried.text
+
+    # Well after rotation, it is someone else holding a copy: nobody keeps it.
+    await db_session.execute(
+        text(
+            "UPDATE mcp_oauth_tokens SET rotated_at = rotated_at - interval '5 minutes' "
+            "WHERE rotated_at IS NOT NULL"
+        )
+    )
+    await db_session.commit()
     replayed = await mcp_client.refresh(first["refresh_token"])
     assert replayed.status_code in (400, 401)
     assert replayed.json()["error"] == "invalid_grant"
@@ -346,21 +359,110 @@ async def test_a_resource_spelled_differently_still_works_once_connected(
     assert listed.status_code == 200, listed.text
 
 
-async def test_reconnecting_with_less_access_narrows_tokens_already_issued(
+async def test_each_consent_is_its_own_connection(
+    mcp_client, authenticated_client, test_pod
+):
+    """The same app on two devices is two connections: listed apart, and
+    disconnecting one leaves the other working."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    laptop = await _connect(
+        mcp_client, authenticated_client, pod_id, "pod:read pod:write"
+    )
+    desktop = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+
+    listed = (
+        await authenticated_client.get("/oauth/grants", params={"pod_id": pod_id})
+    ).json()["items"]
+    assert len(listed) == 2
+
+    desktop_tools = await mcp_client.rpc(pod_id, desktop["access_token"], "tools/list")
+    names = {tool["name"] for tool in desktop_tools.json()["result"]["tools"]}
+    assert "lemma_pod_write_record" not in names
+
+    newest = listed[0]["grant_id"]
+    assert (
+        await authenticated_client.delete(f"/oauth/grants/{newest}")
+    ).status_code == 204
+    assert (
+        await mcp_client.rpc(pod_id, desktop["access_token"], "tools/list")
+    ).status_code == 401
+    assert (
+        await mcp_client.rpc(pod_id, laptop["access_token"], "tools/list")
+    ).status_code == 200
+
+
+async def test_the_person_can_allow_reading_only_whatever_the_app_asked_for(
     mcp_client, authenticated_client, test_pod
 ):
     pod_id = test_pod["id"]
     await mcp_client.register()
-    wide = await _connect(
-        mcp_client, authenticated_client, pod_id, "pod:read pod:write"
+    resource, _ = await mcp_client.discover(pod_id)
+    request_id, verifier = await mcp_client.authorize(resource, "pod:read pod:write")
+    answered = await authenticated_client.post(
+        f"/oauth/consent/{request_id}", json={"allow": True, "read_only": True}
     )
-    # The same client, allowed again with reading only.
-    await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
-
-    old_access = await mcp_client.rpc(pod_id, wide["access_token"], "tools/list")
-    names = {tool["name"] for tool in old_access.json()["result"]["tools"]}
+    code = parse_qs(urlsplit(answered.json()["redirect_to"]).query)["code"][0]
+    tokens = await mcp_client.redeem(code, verifier, resource)
+    assert tokens["scope"] == "pod:read"
+    listed = await mcp_client.rpc(pod_id, tokens["access_token"], "tools/list")
+    names = {tool["name"] for tool in listed.json()["result"]["tools"]}
     assert "lemma_pod_write_record" not in names
 
-    refreshed = await mcp_client.refresh(wide["refresh_token"])
-    assert refreshed.status_code == 200, refreshed.text
-    assert refreshed.json()["scope"] == "pod:read"
+
+async def test_a_pods_admin_sees_everyones_connections_and_nobody_else_does(
+    mcp_client,
+    authenticated_client,
+    test_pod,
+    async_client_for_stranger,
+    fixed_test_user,
+):
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+
+    everyone = await authenticated_client.get(
+        "/oauth/grants", params={"pod_id": pod_id, "everyone": True}
+    )
+    assert everyone.status_code == 200, everyone.text
+    assert [item["user_id"] for item in everyone.json()["items"]] == [
+        fixed_test_user["id"]
+    ]
+    refused = await async_client_for_stranger.get(
+        "/oauth/grants", params={"pod_id": pod_id, "everyone": True}
+    )
+    assert refused.status_code == 403
+    # Nor can an outsider end somebody else's connection.
+    grant_id = everyone.json()["items"][0]["grant_id"]
+    assert (
+        await async_client_for_stranger.delete(f"/oauth/grants/{grant_id}")
+    ).status_code == 404
+
+
+async def test_a_registered_app_is_not_stored_until_someone_allows_it(
+    mcp_client, authenticated_client, test_pod, db_session
+):
+    async def stored() -> int:
+        return (
+            await db_session.execute(text("SELECT count(*) FROM mcp_oauth_clients"))
+        ).scalar_one()
+
+    before = await stored()
+    await mcp_client.register()
+    assert await stored() == before
+    await _connect(mcp_client, authenticated_client, test_pod["id"], "pod:read")
+    assert await stored() == before + 1
+
+
+async def test_registering_a_redirect_that_runs_code_is_refused(mcp_client):
+    response = await mcp_client.http.post(
+        "/oauth/register",
+        json={
+            "client_name": "Claude",
+            "redirect_uris": ["javascript://evil.example/%0aalert(document.domain)//"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        },
+    )
+    assert response.status_code == 400

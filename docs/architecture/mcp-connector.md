@@ -93,10 +93,18 @@ terms.** Every MCP request already reads
 the database to authorize the tool call, so one indexed lookup more buys what a
 JWT cannot: revocation takes effect on the next request. Access tokens last an
 hour. Refresh tokens last 30 days, rotate on every use, and a rotated refresh
-token presented again ends the whole grant (OAuth 2.1 §4.3.1). Rotating a
+token presented again ends the whole grant (OAuth 2.1 §4.3.1) — except within
+60 seconds of rotating, when it is the same client retrying a response it
+lost. Rotating a
 refresh token and writing its replacement is one transaction. Every token is
 narrowed by the grant's current scopes when it is issued and when it is used,
-so reconnecting a client with less access narrows the tokens it already holds. Tokens carry a
+so a grant never hands out more than the person agreed to. Each rotation prunes
+the grant to its live tokens and the one refresh token just rotated (the one a
+replay would present), so a grant holds a handful of rows however often it
+refreshes. An hourly job ends grants whose refresh token lapsed unused, and
+every grant ends 180 days after consent however regularly it is used.
+`private_key_jwt` assertion ids are claimed in Redis, so an assertion is used
+once across every replica rather than once per process. Tokens carry a
 `lemma_mcp_at_` / `lemma_mcp_rt_` prefix, which is how the endpoint tells them
 from Lemma session tokens without asking SuperTokens, and how a secret scanner
 recognises a leaked one.
@@ -125,10 +133,44 @@ hand-off is removed from denied results: it points a Lemma agent at
 `request_approval`, a tool outside clients do not have, and for someone acting
 as themselves a denial is the answer.
 
-**Revocation.** `GET /oauth/grants` lists a person's connected clients (one row
-per client and pod, with scopes and when it was last used);
-`DELETE /oauth/grants/{id}` ends one and deletes its tokens. A client can also
-revoke through `/oauth/revoke`, which ends its whole grant.
+**Connections, revocation and admins.** One consent is one connection (a grant):
+the same client on two devices is two connections, listed apart and ended apart,
+so disconnecting — or a refresh-token replay on — one leaves the other working.
+`GET /oauth/grants` lists a person's connections with scopes and when each was
+last used; with `everyone=true`, a pod's admins (`pod.member.manage`) see every
+member's. `DELETE /oauth/grants/{id}` ends one — the person's own, or any in a
+pod they administer — and deletes its tokens. A client can also revoke through
+`/oauth/revoke`, which ends its own grant. The feature stays on by default
+(`MCP_ACCESS_ENABLED`); a per-organization switch is a possible follow-up.
+
+**Redirects are checked on every path.** The consent page sends a signed-in
+browser to the client's redirect URI, on the auth site, so a URI that runs code
+(`javascript:`, `data:` and relatives) would run it with the person's session.
+`domain/redirects.py` allows `https`, `http` to loopback only, and an app's own
+scheme; it is applied at registration, to every metadata document's list, on an
+exact match, on the single-URI default, and again as the redirect leaves. The
+consent page refuses any `redirect_to` that fails the same rule, and `/auth/*`
+cannot be framed (`frame-ancestors 'none'`, RFC 9700 §4.16).
+
+**Who is asking, as far as it can be checked.** The consent screen leads with
+the host serving the client's metadata document — the one verified fact about
+it — and shows the name the client gives itself only as its claim. A
+dynamically registered client is labelled unverified. Where the person will be
+sent back to is in the main text, not the small print. When the client asks to
+change things, the person can allow reading only instead.
+
+**Nothing is stored before consent.** Registration and authorize are reachable
+without signing in, so neither writes to Postgres: a metadata document is only
+fetched, and a dynamic registration waits in Redis for a week. A client row is
+written when a person allows it.
+
+**Audit.** Every tool call by an outside client logs
+`agent.pod_mcp_service.external_tool.called` with the client, the connection,
+the person, the pod, the tool and whether it failed. Records and their events
+carry the person, not the app, so this line is where "that change came from
+ChatGPT" is written; a column for it on records is a possible follow-up. Consent
+granted and refused, connections ended (by the person, an admin or the client),
+registrations, and refresh-token and client-assertion replays are logged too.
 
 **Rate limits.** Per grant, 300 MCP requests a minute
 (`MCP_ACCESS_REQUESTS_PER_MINUTE`), answered with 429 and `Retry-After`. Token

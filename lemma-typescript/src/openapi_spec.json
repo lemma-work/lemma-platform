@@ -3461,10 +3461,17 @@
             },
             "title": "Scopes",
             "type": "array"
+          },
+          "user_id": {
+            "description": "The person who connected it.",
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
           }
         },
         "required": [
           "grant_id",
+          "user_id",
           "pod_id",
           "client_id",
           "client_name",
@@ -19309,6 +19316,18 @@
               "description": "Only this pod's.",
               "title": "Pod Id"
             }
+          },
+          {
+            "description": "Every member's connections to pod_id. Pod admins only.",
+            "in": "query",
+            "name": "everyone",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Every member's connections to pod_id. Pod admins only.",
+              "title": "Everyone",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -19348,7 +19367,7 @@
     },
     "/oauth/grants/{grant_id}": {
       "delete": {
-        "description": "Ends the grant and every token it issued. The client's next request is\nrefused and it has to ask the person again.",
+        "description": "Ends the grant and every token it issued. The client's next request is\nrefused and it has to ask the person again. A pod's admins may end any\nmember's connection to their pod.",
         "operationId": "mcp_access.grants.revoke",
         "parameters": [
           {

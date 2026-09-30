@@ -11,8 +11,10 @@ Two things an outside client needs that the Agent Host never did:
   writing tools, and is refused if it calls one anyway.
 
 The table is by name and total: `test_pod_mcp_tool_policy` fails when a tool is
-added to the pod toolset without a row here, because a missing row would
-default a new writing tool to "read" and hand it to read-only connections.
+added to the pod toolset without a row here. A missing row falls back to the
+most cautious policy -- a destructive write -- which is safe but wrong for a
+tool that only reads: read-only connections would not be offered it, and every
+client would ask the person before each call.
 """
 
 from __future__ import annotations

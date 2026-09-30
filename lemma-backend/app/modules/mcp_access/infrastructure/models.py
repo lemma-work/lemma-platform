@@ -49,21 +49,20 @@ class McpOAuthClient(Base):
 
 
 class McpOAuthGrant(UUIDAuditBase):
-    """One person letting one client use one pod.
+    """One person letting one client use one pod: one consent, one connection.
 
-    At most one live grant per (user, client, pod): consenting again widens or
-    narrows the scopes of the grant already there rather than adding a second
-    row to the person's connected-apps list.
+    Not unique per (user, client, pod). The same client on two devices is two
+    connections, listed and ended separately; one grant shared between them
+    meant disconnecting either -- or a replay on either -- ended both.
     """
 
     __tablename__ = "mcp_oauth_grants"
     __table_args__ = (
         Index(
-            "uq_mcp_oauth_grants_live",
+            "ix_mcp_oauth_grants_connection",
             "user_id",
             "client_id",
             "pod_id",
-            unique=True,
             postgresql_where=text("revoked_at IS NULL"),
         ),
         Index("ix_mcp_oauth_grants_user", "user_id", "created_at"),

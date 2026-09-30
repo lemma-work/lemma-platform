@@ -26,6 +26,7 @@ class ConnectedClientResponse:
         last_used_at (datetime.datetime | None):
         pod_id (UUID):
         scopes (list[Scope]):
+        user_id (UUID): The person who connected it.
     """
 
     client_id: str
@@ -36,6 +37,7 @@ class ConnectedClientResponse:
     last_used_at: datetime.datetime | None
     pod_id: UUID
     scopes: list[Scope]
+    user_id: UUID
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,6 +65,8 @@ class ConnectedClientResponse:
             scopes_item = scopes_item_data.value
             scopes.append(scopes_item)
 
+        user_id = str(self.user_id)
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -75,6 +79,7 @@ class ConnectedClientResponse:
                 "last_used_at": last_used_at,
                 "pod_id": pod_id,
                 "scopes": scopes,
+                "user_id": user_id,
             }
         )
 
@@ -122,6 +127,8 @@ class ConnectedClientResponse:
 
             scopes.append(scopes_item)
 
+        user_id = UUID(d.pop("user_id"))
+
         connected_client_response = cls(
             client_id=client_id,
             client_name=client_name,
@@ -131,6 +138,7 @@ class ConnectedClientResponse:
             last_used_at=last_used_at,
             pod_id=pod_id,
             scopes=scopes,
+            user_id=user_id,
         )
 
         connected_client_response.additional_properties = d

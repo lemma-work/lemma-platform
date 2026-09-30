@@ -12,6 +12,7 @@ import {
     holdConsentRequest,
     readConsentRequest,
     requestIdFromSearch,
+    whoIsAsking,
     type ConsentRequest,
 } from "./mcp-consent";
 
@@ -24,6 +25,9 @@ export function McpConsent() {
     const [request, setRequest] = useState<ConsentRequest | null>(null);
     const [email, setEmail] = useState<string | null>(null);
     const [said, setSaid] = useState<string | null>(null);
+    /* Starts at what the app asked for; the person can narrow it here, and
+       only narrow it. */
+    const [readOnly, setReadOnly] = useState(false);
     const id = useRef<string | null>(null);
 
     useEffect(() => {
@@ -68,7 +72,7 @@ export function McpConsent() {
         if (!current) return;
         setState("answering");
         try {
-            const next = await answerConsentRequest(current, allow);
+            const next = await answerConsentRequest(current, { allow, readOnly });
             dropConsentRequest();
             window.location.assign(next);
         } catch (problem) {
@@ -95,24 +99,40 @@ export function McpConsent() {
             );
         case "asking": {
             if (!request) return null;
-            const writes = request.scopes.includes(WRITE_SCOPE);
+            const asksToWrite = request.scopes.includes(WRITE_SCOPE);
+            const who = whoIsAsking(request);
             return (
                 <Screen
-                    title={"Let " + request.client_name + " use " + request.pod_name + "?"}
+                    title={who.title + " wants to use " + request.pod_name}
                     lead={
                         <>
-                            It will be able to read the tables and files in this space
-                            {writes ? ", and add, change and delete them," : ""} as you
-                            {email ? <> ({email})</> : null}. It can only see what you can see.
+                            {who.claim} After you answer you will be sent to{" "}
+                            <strong>{request.redirect_host}</strong> — only continue if that is where you
+                            are connecting from.
                         </>
                     }
                     footer={
                         <>
-                            You will be sent back to <strong>{request.redirect_host}</strong>. Only continue if you
-                            are connecting {request.client_name} yourself. You can disconnect it at any time.
+                            It acts as you{email ? <> ({email})</> : null} and sees only what you can see in{" "}
+                            {request.pod_name}. You can disconnect it at any time in the space’s settings.
                         </>
                     }
                 >
+                    {asksToWrite ? (
+                        <fieldset className="auth__choices">
+                            <legend>What may it do?</legend>
+                            <label>
+                                <input type="radio" name="access" checked={!readOnly} onChange={() => setReadOnly(false)} />{" "}
+                                Read, add, change and delete tables and files
+                            </label>
+                            <label>
+                                <input type="radio" name="access" checked={readOnly} onChange={() => setReadOnly(true)} />{" "}
+                                Read only
+                            </label>
+                        </fieldset>
+                    ) : (
+                        <p>It asks to read tables and files only.</p>
+                    )}
                     <div className="screen__actions">
                         <button className="btn btn--primary" onClick={() => void answer(true)}>
                             Allow

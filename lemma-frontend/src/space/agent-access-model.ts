@@ -92,29 +92,30 @@ export function starterPrompts(pod: Pod): { title: string; prompt: string }[] {
 
 /* ── Connecting a space by URL, over MCP ─────────────────────────────── */
 
-/** The URL a space is added to an MCP client by. The API serves one per
- *  space, and a token signed in for it works on that space and no other. */
-export function mcpUrl(apiUrl: string | null, podId: string): string | null {
-    if (!apiUrl) return null;
-    try {
-        const base = new URL(apiUrl);
-        return base.origin + base.pathname.replace(/\/+$/, "") + "/mcp/" + podId;
-    } catch {
-        return null;
-    }
-}
-
 /** Claude and ChatGPT connect from their own servers, not from this browser,
- *  so an API on this machine is out of their reach. Saying so beats a
- *  connector that fails to add with an error about the network. */
+ *  so an API on this machine, or on a private network, is out of their reach.
+ *  Saying so beats a connector that fails to add with an error about the
+ *  network. */
 export function reachableFromInternet(apiUrl: string | null): boolean {
     if (!apiUrl) return false;
+    let host: string;
     try {
-        const host = new URL(apiUrl).hostname;
-        return !(host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost"));
+        host = new URL(apiUrl).hostname.toLowerCase();
     } catch {
         return false;
     }
+    if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return false;
+    const v4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (v4) {
+        const [a, b] = [Number(v4[1]), Number(v4[2])];
+        return !(a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+            || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || a === 0);
+    }
+    if (host.startsWith("[")) {
+        const v6 = host.slice(1, -1);
+        return !(v6 === "::1" || v6.startsWith("fc") || v6.startsWith("fd") || v6.startsWith("fe80"));
+    }
+    return true;
 }
 
 /** The name the space goes by in a client's list of servers. */
@@ -188,6 +189,8 @@ export const MCP_CLIENTS: McpClient[] = [
 
 export type ConnectedClient = {
     grant_id: string;
+    /** The person who connected it. */
+    user_id: string;
     client_name: string;
     scopes: string[];
     connected_at: string;
@@ -199,27 +202,33 @@ export function accessLabel(scopes: string[]): string {
     return scopes.includes("pod:write") ? "Read and write" : "Read only";
 }
 
-export async function listConnectedClients(
+/** The connections to show: everyone's, for the space's admins, who answer
+ *  for what can read it; otherwise the person's own. The API decides who is
+ *  an admin; asking for everyone and being refused is how this finds out. */
+export async function loadConnections(
     apiUrl: string,
     podId: string,
     fetcher: typeof fetch = fetch,
-): Promise<ConnectedClient[]> {
-    const response = await fetcher(apiUrl + "/oauth/grants?pod_id=" + encodeURIComponent(podId), {
-        credentials: "include",
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-    });
+): Promise<{ items: ConnectedClient[]; everyone: boolean }> {
+    const url = (everyone: boolean) =>
+        apiUrl + "/oauth/grants?pod_id=" + encodeURIComponent(podId) + (everyone ? "&everyone=true" : "");
+    const init: RequestInit = { credentials: "include", cache: "no-store", headers: { Accept: "application/json" } };
+    let response = await fetcher(url(true), init);
+    let everyone = true;
+    if (response.status === 403) {
+        response = await fetcher(url(false), init);
+        everyone = false;
+    }
     if (!response.ok) throw new Error("Connected apps could not be loaded (" + response.status + ").");
     const body = (await response.json()) as { items?: ConnectedClient[] };
-    return Array.isArray(body.items) ? body.items : [];
+    return { items: Array.isArray(body.items) ? body.items : [], everyone };
 }
 
-/** Ends the connection and every token it was given; the app has to ask
- *  again to come back. A 404 means it is already gone, which is the outcome
- *  asked for. */
-/** The URL as the API states it. The browser knows the API by the address
- *  this page was configured with, which is not always the one outside
- *  clients reach; the API knows its public one. */
+/** The URL as the API states it, or null when this deployment does not
+ *  serve spaces over MCP (`MCP_ACCESS_ENABLED=false` answers 404). Never built
+ *  in the browser: the browser knows the API by the address this page was
+ *  configured with, which is not always the one outside clients reach, and a
+ *  link built here would be offered even where there is nothing behind it. */
 export async function fetchMcpUrl(apiUrl: string, podId: string, fetcher: typeof fetch = fetch): Promise<string | null> {
     const response = await fetcher(apiUrl + "/oauth/mcp-endpoint/" + encodeURIComponent(podId), {
         credentials: "include",
@@ -230,6 +239,9 @@ export async function fetchMcpUrl(apiUrl: string, podId: string, fetcher: typeof
     return typeof body.url === "string" ? body.url : null;
 }
 
+/** Ends the connection and every token it was given; the app has to ask
+ *  again to come back. A 404 means it is already gone, which is the outcome
+ *  asked for. */
 export async function disconnectClient(apiUrl: string, grantId: string, fetcher: typeof fetch = fetch): Promise<void> {
     const response = await fetcher(apiUrl + "/oauth/grants/" + encodeURIComponent(grantId), {
         method: "DELETE",

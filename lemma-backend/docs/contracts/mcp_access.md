@@ -25,14 +25,19 @@ uses it is refused at consent if the person cannot read the pod.
 
 ## `mcp_access.grants.list`
 
-The caller's own live grants only — never another person's — newest first,
-optionally narrowed to one pod, bounded at 200. Each row names the client as it
+The caller's own live grants, newest first, optionally narrowed to one pod,
+bounded at 200. With `everyone=true` and a `pod_id`, every member's live
+grants to that pod — only for a caller who may manage the pod's members
+(`pod.member.manage`); anyone else gets `403 MCP_ACCESS_NOT_POD_ADMIN`. Each
+row carries the `user_id` of the person who connected it. Each row names the client as it
 names itself, the scopes the person allowed, when they allowed it and when the
 client last used it (accurate to a few minutes). Revoked grants are not listed.
 
 ## `mcp_access.grants.revoke`
 
-Ends one of the caller's own live grants and deletes every token it issued, in
-one transaction; the client's next MCP request is a 401 and it must ask the
-person again. `404` for a grant that does not exist, is already revoked, or
-belongs to someone else — one answer for all three. Emits no event.
+Ends one of the caller's own live grants — or, for a caller who may manage a
+pod's members, any member's grant to that pod — and deletes every token it
+issued, in one transaction; the client's next MCP request is a 401 and it must
+ask the person again. `404` for a grant that does not exist, is already
+revoked, or is not the caller's to end — one answer for all three. Logs
+`mcp_access.grant.revoked`; emits no event.

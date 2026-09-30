@@ -11,17 +11,20 @@ export class McpAccessService {
     /**
      * MCP clients you have connected
      * @param podId Only this pod's.
+     * @param everyone Every member's connections to pod_id. Pod admins only.
      * @returns ConnectedClientsResponse Successful Response
      * @throws ApiError
      */
     public static mcpAccessGrantsList(
         podId?: (string | null),
+        everyone: boolean = false,
     ): CancelablePromise<ConnectedClientsResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/oauth/grants',
             query: {
                 'pod_id': podId,
+                'everyone': everyone,
             },
             errors: {
                 422: `Validation Error`,
@@ -31,7 +34,8 @@ export class McpAccessService {
     /**
      * Disconnect an MCP client
      * Ends the grant and every token it issued. The client's next request is
-     * refused and it has to ask the person again.
+     * refused and it has to ask the person again. A pod's admins may end any
+     * member's connection to their pod.
      * @param grantId
      * @returns void
      * @throws ApiError

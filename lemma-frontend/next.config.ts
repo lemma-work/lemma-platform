@@ -72,7 +72,17 @@ const config: NextConfig = {
     return config;
   },
   async headers() {
+    // Sign-in and consent answer with the person's session, so no other site
+    // may frame them: a framed "Allow" is one a hostile page can trick someone
+    // into clicking (RFC 9700 §4.16). X-Frame-Options for browsers that predate
+    // frame-ancestors.
+    const unframeable = [
+      { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+      { key: "X-Frame-Options", value: "DENY" },
+    ];
     return [
+      { source: "/auth", headers: unframeable },
+      { source: "/auth/:path*", headers: unframeable },
       {
         source: "/demo/:path*",
         headers: [

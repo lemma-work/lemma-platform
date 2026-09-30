@@ -6,7 +6,8 @@ import {
     accessLabel,
     connectorName,
     disconnectClient,
-    mcpUrl,
+    fetchMcpUrl,
+    loadConnections,
     quote,
     reachableFromInternet,
     serverName,
@@ -49,16 +50,33 @@ test("every starter prompt names the space and its pod id", () => {
     }
 });
 
-test("a space's MCP URL hangs off the API, one per space", () => {
-    assert.equal(mcpUrl("https://api.lemma.work", pod.id), "https://api.lemma.work/mcp/" + pod.id);
-    assert.equal(mcpUrl("https://example.test/api/", pod.id), "https://example.test/api/mcp/" + pod.id);
-    assert.equal(mcpUrl(null, pod.id), null);
-    assert.equal(mcpUrl("not a url", pod.id), null);
+test("the link is the API's own, and there is none where the feature is off", async () => {
+    const on = (async () => new Response(JSON.stringify({ url: "https://api.lemma.work/mcp/" + pod.id }), { status: 200 })) as unknown as typeof fetch;
+    assert.equal(await fetchMcpUrl("https://api.lemma.work", pod.id, on), "https://api.lemma.work/mcp/" + pod.id);
+    const off = (async () => new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 })) as unknown as typeof fetch;
+    assert.equal(await fetchMcpUrl("https://api.lemma.work", pod.id, off), null);
+});
+
+test("admins are shown everyone's connections, everyone else their own", async () => {
+    const asked: string[] = [];
+    const member = (async (url: string) => {
+        asked.push(url);
+        return url.includes("everyone=true")
+            ? new Response("{}", { status: 403 })
+            : new Response(JSON.stringify({ items: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    assert.deepEqual(await loadConnections("https://api.lemma.work", pod.id, member), { items: [], everyone: false });
+    assert.equal(asked.length, 2);
+    const admin = (async () => new Response(JSON.stringify({ items: [] }), { status: 200 })) as unknown as typeof fetch;
+    assert.equal((await loadConnections("https://api.lemma.work", pod.id, admin)).everyone, true);
 });
 
 test("Claude and ChatGPT are told when the API is only on this computer", () => {
     assert.equal(reachableFromInternet("https://api.lemma.work/mcp/x"), true);
-    for (const local of ["http://localhost:8000", "http://127.0.0.1:8790", "http://api.lemma.localhost:8711"]) {
+    for (const local of [
+        "http://localhost:8000", "http://127.0.0.1:8790", "http://api.lemma.localhost:8711",
+        "http://10.0.0.5:8000", "http://192.168.68.101:8790", "http://172.20.1.1", "http://mac.local:8000",
+    ]) {
         assert.equal(reachableFromInternet(local), false, local);
     }
     const remote = MCP_CLIENTS.filter(client => client.remote).map(client => client.id);

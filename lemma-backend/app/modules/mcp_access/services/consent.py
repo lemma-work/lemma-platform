@@ -24,7 +24,9 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.mcp_access.domain.entities import Scope, parse_scopes
+from app.modules.mcp_access.domain.redirects import redirect_allowed
 from app.modules.mcp_access.domain.resources import pod_resource_url
 from app.modules.mcp_access.infrastructure.ephemeral import (
     CODE_TTL_SECONDS,
@@ -35,6 +37,9 @@ from app.modules.mcp_access.infrastructure.ephemeral import (
 from app.modules.mcp_access.infrastructure.repositories import McpAccessRepository
 from app.modules.mcp_access.services.clients import ClientDirectory
 from app.modules.pod.contracts.members import pod_name
+
+
+logger = get_logger(__name__)
 
 
 class ConsentRequestGone(DomainError):
@@ -60,8 +65,11 @@ class PodNotAvailable(DomainError):
 class ConsentRequest:
     client_id: str
     client_name: str
+    """What the client calls itself. Never verified."""
+    verified_host: str | None
+    """The host serving the client's metadata document -- the one checked
+    fact about who is asking. ``None`` for a dynamically registered client."""
     client_uri: str | None
-    logo_uri: str | None
     redirect_host: str
     pod_id: UUID
     pod_name: str
@@ -102,30 +110,54 @@ class ConsentService:
         return ConsentRequest(
             client_id=pending.client_id,
             client_name=client.client_name or _host(pending.redirect_uri),
+            verified_host=client.verified_host,
             client_uri=str(client.client_uri) if client.client_uri else None,
-            logo_uri=str(client.logo_uri) if client.logo_uri else None,
             redirect_host=_host(pending.redirect_uri),
             pod_id=UUID(pending.pod_id),
             pod_name=name,
             scopes=parse_scopes(pending.scopes),
         )
 
-    async def answer(self, *, request_id: str, user_id: UUID, allow: bool) -> str:
+    async def answer(
+        self, *, request_id: str, user_id: UUID, allow: bool, read_only: bool = False
+    ) -> str:
         """The URL to send the browser to: the client's redirect URI, with a
-        code or with ``access_denied``, and always with ``state`` and ``iss``."""
+        code or with ``access_denied``, and always with ``state`` and ``iss``.
+
+        ``read_only`` is the person narrowing what the client asked for; it can
+        only take scopes away. The person's standing in the pod is checked
+        before the request is used up, so somebody who has learned a request id
+        but cannot read the pod cannot spend it.
+        """
+        pending = await self._ephemeral.read_pending(request_id)
+        if pending is None:
+            raise ConsentRequestGone()
+        pod_id = UUID(pending.pod_id)
+        await self._pod_name_if_allowed(user_id=user_id, pod_id=pod_id)
         pending = await self._ephemeral.take_pending(request_id)
         if pending is None:
             raise ConsentRequestGone()
         if not allow:
+            logger.info(
+                "mcp_access.consent.denied",
+                client_id=pending.client_id,
+                pod_id=str(pod_id),
+            )
             return self._redirect(pending, error="access_denied")
-        pod_id = UUID(pending.pod_id)
-        await self._pod_name_if_allowed(user_id=user_id, pod_id=pod_id)
+        client = await self._clients.get(pending.client_id)
+        if client is None:
+            raise ConsentRequestGone()
+        await self._clients.persist(client)
+        scopes = parse_scopes(pending.scopes)
+        if read_only:
+            scopes = scopes & {Scope.READ}
+        granted = sorted(scope.value for scope in scopes)
         async with self._uow_factory() as uow:
-            grant_id = await McpAccessRepository(uow).upsert_live_grant(
+            grant_id = await McpAccessRepository(uow).create_grant(
                 user_id=user_id,
                 client_id=pending.client_id,
                 pod_id=pod_id,
-                scopes=sorted(scope.value for scope in parse_scopes(pending.scopes)),
+                scopes=granted,
                 # The canonical form, not what the client sent: authorize
                 # accepts any spelling RFC 3986 calls the same (a trailing
                 # slash, an upper-case host), and the verifier compares with
@@ -133,11 +165,18 @@ class ConsentService:
                 resource=pod_resource_url(self._issuer, pod_id),
             )
             await uow.commit()
+        logger.info(
+            "mcp_access.grant.created",
+            grant_id=str(grant_id),
+            client_id=pending.client_id,
+            pod_id=str(pod_id),
+            scopes=" ".join(granted),
+        )
         code = await self._ephemeral.issue_code(
             IssuedCode(
                 grant_id=str(grant_id),
                 client_id=pending.client_id,
-                scopes=pending.scopes,
+                scopes=granted,
                 code_challenge=pending.code_challenge,
                 redirect_uri=pending.redirect_uri,
                 redirect_uri_provided_explicitly=pending.redirect_uri_provided_explicitly,
@@ -154,6 +193,11 @@ class ConsentService:
         code: str | None = None,
         error: str | None = None,
     ) -> str:
+        # Checked again here, on the way out, although authorize checked it on
+        # the way in: this string is what the browser is sent to, and a URI that
+        # runs code would run it on the auth site with the person signed in.
+        if not redirect_allowed(pending.redirect_uri):
+            raise ConsentRequestGone()
         # `iss` is RFC 9207: it tells the client which server answered, which is
         # how a client talking to several servers notices a mix-up attack.
         return construct_redirect_uri(

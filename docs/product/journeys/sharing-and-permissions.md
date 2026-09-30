@@ -169,8 +169,12 @@ rights than the person who asked.
 - While a tool is connected, the system shall let it read and change that pod
   only as far as the person themselves may, row-level security included, and
   shall not let it reach any other pod.
+- When a tool asks to change things, the system shall let the person allow it
+  to read only instead.
 - Where the person allowed reading only, the system shall not let the tool
   change anything.
+- If a tool asks to send the person anywhere that would run code in their
+  browser, then the system shall refuse the request and send them nowhere.
 - If a tool presents access that was issued for a different pod, then the
   system shall refuse it and shall reveal nothing about that pod.
 - If the person declines, then the system shall grant nothing and shall tell
@@ -189,6 +193,10 @@ rights than the person who asked.
 
 - The system shall list, for each pod, the tools a person has connected to it,
   with what each may do and when it was last used.
+- The system shall show a pod's admins every member's connections to it, and
+  let them disconnect any of them.
+- The same tool connected from two devices shall be two connections, each
+  disconnected on its own.
 - When a person disconnects a tool, the system shall refuse that tool's very
   next request, and shall not let it back in without asking the person again.
 - If a tool's saved access is used by two parties, then the system shall end

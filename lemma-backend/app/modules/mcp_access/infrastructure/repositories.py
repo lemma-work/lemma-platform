@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
@@ -20,6 +20,11 @@ from app.modules.mcp_access.infrastructure.models import (
     McpOAuthGrant,
     McpOAuthToken,
 )
+
+GRANT_MAX_AGE = timedelta(days=180)
+"""However regularly a connection is used, it ends this long after the person
+allowed it, and the client asks them again. Without a ceiling a sliding refresh
+token never expires."""
 
 LAST_USED_RESOLUTION = timedelta(minutes=5)
 """How stale ``last_used_at`` may be. Writing it on every tool call would put a
@@ -54,6 +59,20 @@ class LiveToken:
     grant_scopes: list[str]
     grant_revoked: bool
     grant_last_used_at: datetime | None
+
+
+def _has_live_token(now: datetime):  # noqa: ANN202 - an EXISTS clause for a WHERE
+    """Whether a grant still holds a token someone could use: unexpired, and
+    not a refresh token already exchanged."""
+    return (
+        select(McpOAuthToken.id)
+        .where(
+            McpOAuthToken.grant_id == McpOAuthGrant.id,
+            McpOAuthToken.expires_at > now,
+            McpOAuthToken.rotated_at.is_(None),
+        )
+        .exists()
+    )
 
 
 def _client_name(metadata: dict[str, object], client_id: str) -> str:
@@ -108,7 +127,7 @@ class McpAccessRepository:
 
     # --- grants ------------------------------------------------------------
 
-    async def upsert_live_grant(
+    async def create_grant(
         self,
         *,
         user_id: UUID,
@@ -117,20 +136,13 @@ class McpAccessRepository:
         scopes: list[str],
         resource: str,
     ) -> UUID:
-        existing = await self._session.scalar(
-            select(McpOAuthGrant)
-            .where(
-                McpOAuthGrant.user_id == user_id,
-                McpOAuthGrant.client_id == client_id,
-                McpOAuthGrant.pod_id == pod_id,
-                McpOAuthGrant.revoked_at.is_(None),
-            )
-            .with_for_update()
-        )
-        if existing is not None:
-            existing.scopes = scopes
-            existing.resource = resource
-            return existing.id
+        """One grant per consent, not one per (person, client, pod).
+
+        Claude Code on two laptops is one client id, and a shared grant meant
+        disconnecting one -- or a refresh-token replay on one -- ended both. A
+        grant per consent is a connection per device, each listed and ended on
+        its own.
+        """
         grant = McpOAuthGrant(
             user_id=user_id,
             client_id=client_id,
@@ -143,21 +155,22 @@ class McpAccessRepository:
         return grant.id
 
     async def list_connected_apps(
-        self, *, user_id: UUID, pod_id: UUID | None, limit: int
+        self, *, user_id: UUID | None, pod_id: UUID | None, limit: int
     ) -> list[ConnectedApp]:
+        """A person's connections, or -- with no ``user_id`` -- everyone's in
+        ``pod_id``, for its admins."""
         query = (
             select(McpOAuthGrant, McpOAuthClient.client_metadata)
             .join(
                 McpOAuthClient,
                 McpOAuthClient.client_id == McpOAuthGrant.client_id,
             )
-            .where(
-                McpOAuthGrant.user_id == user_id,
-                McpOAuthGrant.revoked_at.is_(None),
-            )
+            .where(McpOAuthGrant.revoked_at.is_(None))
             .order_by(McpOAuthGrant.created_at.desc())
             .limit(limit)
         )
+        if user_id is not None:
+            query = query.where(McpOAuthGrant.user_id == user_id)
         if pod_id is not None:
             query = query.where(McpOAuthGrant.pod_id == pod_id)
         rows = (await self._session.execute(query)).all()
@@ -167,6 +180,7 @@ class McpAccessRepository:
             apps.append(
                 ConnectedApp(
                     grant_id=grant.id,
+                    user_id=grant.user_id,
                     pod_id=grant.pod_id,
                     client_id=grant.client_id,
                     client_name=_client_name(metadata, grant.client_id),
@@ -200,13 +214,26 @@ class McpAccessRepository:
         )
         return True
 
+    async def grant_owner(self, grant_id: UUID) -> tuple[UUID, UUID] | None:
+        """(user, pod) of a live grant."""
+        row = (
+            await self._session.execute(
+                select(McpOAuthGrant.user_id, McpOAuthGrant.pod_id).where(
+                    McpOAuthGrant.id == grant_id, McpOAuthGrant.revoked_at.is_(None)
+                )
+            )
+        ).first()
+        return (row[0], row[1]) if row is not None else None
+
     async def live_grant_scopes(self, grant_id: UUID) -> list[str] | None:
         """The scopes the person last agreed to, or ``None`` when the grant is
         gone or revoked. Read at every issuance, so consenting again with less
         narrows the tokens that follow, not just the list the person sees."""
         scopes = await self._session.scalar(
             select(McpOAuthGrant.scopes).where(
-                McpOAuthGrant.id == grant_id, McpOAuthGrant.revoked_at.is_(None)
+                McpOAuthGrant.id == grant_id,
+                McpOAuthGrant.revoked_at.is_(None),
+                McpOAuthGrant.created_at > datetime.now(timezone.utc) - GRANT_MAX_AGE,
             )
         )
         return list(scopes) if scopes is not None else None
@@ -294,11 +321,54 @@ class McpAccessRepository:
             delete(McpOAuthToken).where(McpOAuthToken.id == token_id)
         )
 
-    async def delete_expired_tokens(self, *, grant_id: UUID, now: datetime) -> None:
-        """Tokens are swept per grant when it refreshes, not by a job: a grant
-        that never refreshes again has at most one expired pair left behind."""
+    async def prune_grant_tokens(
+        self, *, grant_id: UUID, keep_rotated: UUID, now: datetime
+    ) -> None:
+        """Keep a grant to its live tokens and the one refresh token just
+        rotated -- the one a replay would present. Older rotated tokens and
+        expired ones go, so a grant holds a handful of rows however often it
+        refreshes, rather than one per hour for thirty days."""
         await self._session.execute(
             delete(McpOAuthToken).where(
-                McpOAuthToken.grant_id == grant_id, McpOAuthToken.expires_at < now
+                McpOAuthToken.grant_id == grant_id,
+                (McpOAuthToken.expires_at < now)
+                | (
+                    McpOAuthToken.rotated_at.is_not(None)
+                    & (McpOAuthToken.id != keep_rotated)
+                ),
             )
         )
+
+    async def sweep(self, *, now: datetime, batch: int) -> int:
+        """End grants nobody can use any more, and delete what they held.
+
+        A grant is dead when it has passed `GRANT_MAX_AGE`, or when it has no
+        token left that has not expired: its refresh token lapsed unused. At
+        most ``batch`` grants per call, so one run is bounded however far
+        behind the sweep is.
+        """
+        live_token = _has_live_token(now)
+        ended = list(
+            (
+                await self._session.execute(
+                    select(McpOAuthGrant.id)
+                    .where(
+                        McpOAuthGrant.revoked_at.is_(None),
+                        McpOAuthGrant.created_at < now - timedelta(minutes=10),
+                        (McpOAuthGrant.created_at < now - GRANT_MAX_AGE) | ~live_token,
+                    )
+                    .limit(batch)
+                )
+            ).scalars()
+        )
+        if not ended:
+            return 0
+        await self._session.execute(
+            update(McpOAuthGrant)
+            .where(McpOAuthGrant.id.in_(ended))
+            .values(revoked_at=now)
+        )
+        await self._session.execute(
+            delete(McpOAuthToken).where(McpOAuthToken.grant_id.in_(ended))
+        )
+        return len(ended)

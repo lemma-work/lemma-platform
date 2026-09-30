@@ -92,7 +92,7 @@ async def test_pod_mcp_returns_is_error_on_tool_failure(monkeypatch):
     user_id, pod_id = uuid4(), uuid4()
     ctx = _ctx(uuid4(), pod_id, user_id)
 
-    async def fake_require_caller(self, *, pod_id, token):
+    async def fake_require_caller(self, *, pod_id, token, principal=None):
         return pod_mcp_module._Caller(ctx=ctx, scopes=None)
 
     async def raising_call_tool(self, **kwargs):

@@ -217,10 +217,34 @@ def _assertion(key, *, audience: str, issuer: str = CHATGPT, jti: str = "j1") ->
     )
 
 
-def _directory(key):
+class _Redis:
+    """Just enough of Redis for claims and held registrations."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def set(self, name: str, value: str, ex: int, nx: bool = False):
+        if nx and name in self.values:
+            return None
+        self.values[name] = value
+        return True
+
+    async def get(self, name: str) -> str | None:
+        return self.values.get(name)
+
+    async def getdel(self, name: str) -> str | None:
+        return self.values.pop(name, None)
+
+
+def _directory(key, redis: "_Redis | None" = None):
+    from app.modules.mcp_access.infrastructure.ephemeral import EphemeralStore
     from app.modules.mcp_access.services.clients import ClientDirectory
 
-    return ClientDirectory(None, fetcher=_Fetcher(_document(key)))  # type: ignore[arg-type]
+    return ClientDirectory(
+        None,  # type: ignore[arg-type]  # these paths never open a unit of work
+        ephemeral=EphemeralStore(redis or _Redis()),
+        fetcher=_Fetcher(_document(key)),  # type: ignore[arg-type]
+    )
 
 
 @pytest.mark.asyncio
@@ -282,4 +306,20 @@ async def test_a_registered_client_cannot_claim_private_key_jwt():
                 "urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer"
                 "&client_assertion=x"
             )
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_assertion_used_on_one_replica_is_refused_on_another():
+    """fastmcp remembers assertion ids per process; the claim in Redis is what
+    two replicas share."""
+    key = _signing_key()
+    shared = _Redis()
+    assertion = _assertion(key, audience=AUDIENCES[0], jti="across-replicas")
+    await _directory(key, shared).verify_assertion(
+        client_id=CHATGPT, assertion=assertion, audiences=AUDIENCES
+    )
+    with pytest.raises(ValueError, match="already used"):
+        await _directory(key, shared).verify_assertion(
+            client_id=CHATGPT, assertion=assertion, audiences=AUDIENCES
         )

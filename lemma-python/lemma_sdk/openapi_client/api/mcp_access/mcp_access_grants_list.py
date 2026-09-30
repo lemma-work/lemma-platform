@@ -14,6 +14,7 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     *,
     pod_id: None | Unset | UUID = UNSET,
+    everyone: bool | Unset = False,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -26,6 +27,8 @@ def _get_kwargs(
     else:
         json_pod_id = pod_id
     params["pod_id"] = json_pod_id
+
+    params["everyone"] = everyone
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -72,11 +75,14 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     pod_id: None | Unset | UUID = UNSET,
+    everyone: bool | Unset = False,
 ) -> Response[ConnectedClientsResponse | ErrorResponse]:
     """MCP clients you have connected
 
     Args:
         pod_id (None | Unset | UUID): Only this pod's.
+        everyone (bool | Unset): Every member's connections to pod_id. Pod admins only. Default:
+            False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -88,6 +94,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         pod_id=pod_id,
+        everyone=everyone,
     )
 
     response = client.get_httpx_client().request(
@@ -101,11 +108,14 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     pod_id: None | Unset | UUID = UNSET,
+    everyone: bool | Unset = False,
 ) -> ConnectedClientsResponse | ErrorResponse | None:
     """MCP clients you have connected
 
     Args:
         pod_id (None | Unset | UUID): Only this pod's.
+        everyone (bool | Unset): Every member's connections to pod_id. Pod admins only. Default:
+            False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -118,6 +128,7 @@ def sync(
     return sync_detailed(
         client=client,
         pod_id=pod_id,
+        everyone=everyone,
     ).parsed
 
 
@@ -125,11 +136,14 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     pod_id: None | Unset | UUID = UNSET,
+    everyone: bool | Unset = False,
 ) -> Response[ConnectedClientsResponse | ErrorResponse]:
     """MCP clients you have connected
 
     Args:
         pod_id (None | Unset | UUID): Only this pod's.
+        everyone (bool | Unset): Every member's connections to pod_id. Pod admins only. Default:
+            False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -141,6 +155,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         pod_id=pod_id,
+        everyone=everyone,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -152,11 +167,14 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     pod_id: None | Unset | UUID = UNSET,
+    everyone: bool | Unset = False,
 ) -> ConnectedClientsResponse | ErrorResponse | None:
     """MCP clients you have connected
 
     Args:
         pod_id (None | Unset | UUID): Only this pod's.
+        everyone (bool | Unset): Every member's connections to pod_id. Pod admins only. Default:
+            False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -170,5 +188,6 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             pod_id=pod_id,
+            everyone=everyone,
         )
     ).parsed
