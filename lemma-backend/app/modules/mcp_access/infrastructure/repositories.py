@@ -330,7 +330,16 @@ class McpAccessRepository:
         Access tokens go. Refresh tokens are marked rotated as of the retried
         token's own rotation, not now: they share its grace and no more, so
         presenting one after that reads as the replay it would be.
+
+        The grant row is locked first, so two retries arriving together take
+        turns: the second cancels the pair the first just wrote, rather than
+        each cancelling only what it could see and both pairs surviving.
         """
+        await self._session.execute(
+            select(McpOAuthGrant.id)
+            .where(McpOAuthGrant.id == grant_id)
+            .with_for_update()
+        )
         await self._session.execute(
             delete(McpOAuthToken).where(
                 McpOAuthToken.grant_id == grant_id,

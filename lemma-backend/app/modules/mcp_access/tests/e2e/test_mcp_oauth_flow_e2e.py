@@ -13,11 +13,17 @@ import base64
 import hashlib
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
+from uuid import UUID
 
 import pytest
 from sqlalchemy import text
 from httpx import ASGITransport, AsyncClient
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.mcp_access.domain.entities import TokenKind
+from app.modules.mcp_access.infrastructure.repositories import McpAccessRepository
 
 pytestmark = pytest.mark.e2e
 
@@ -265,6 +271,69 @@ async def test_refresh_rotates_and_a_replayed_refresh_token_ends_the_grant(
     assert replayed.json()["error"] == "invalid_grant"
     after = await mcp_client.rpc(pod_id, third["access_token"], "tools/list")
     assert after.status_code == 401
+
+
+async def test_two_retries_at_once_take_turns_and_leave_one_live_refresh_token(
+    mcp_client, authenticated_client, test_pod, db_manager
+):
+    """Driven at the repository, two sessions deep, because two HTTP requests
+    in-process never overlap: the second retry waits for the first to commit,
+    then cancels the pair the first one wrote."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    first = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    assert (await mcp_client.refresh(first["refresh_token"])).status_code == 200
+    grant_id = UUID(
+        (
+            await authenticated_client.get("/oauth/grants", params={"pod_id": pod_id})
+        ).json()["items"][0]["grant_id"]
+    )
+    now = datetime.now(timezone.utc)
+    # With no access token for both retries to delete, nothing but the grant
+    # lock orders them: row locks on the tokens alone would let each commit a
+    # pair the other never saw.
+    async with db_manager.session_factory() as setup:
+        await setup.execute(
+            text("DELETE FROM mcp_oauth_tokens WHERE grant_id = :grant AND kind = 'access'"),
+            {"grant": grant_id},
+        )
+        await setup.commit()
+
+    async def retry(repository: McpAccessRepository, token_hash: str) -> None:
+        await repository.supersede_live_tokens(grant_id=grant_id, rotated_at=now)
+        await repository.add_token(
+            token_hash=token_hash,
+            grant_id=grant_id,
+            kind=TokenKind.REFRESH,
+            scopes=["pod:read"],
+            expires_at=now + timedelta(days=1),
+        )
+
+    async with (
+        db_manager.session_factory() as one,
+        db_manager.session_factory() as two,
+    ):
+        await retry(McpAccessRepository(SqlAlchemyUnitOfWork(one)), "a" * 64)
+        second = asyncio.create_task(
+            retry(McpAccessRepository(SqlAlchemyUnitOfWork(two)), "b" * 64)
+        )
+        await asyncio.sleep(0.5)
+        assert not second.done(), "the second retry did not wait for the first"
+        await one.commit()
+        await second
+        await two.commit()
+
+    async with db_manager.session_factory() as check:
+        live = (
+            await check.execute(
+                text(
+                    "SELECT token_hash FROM mcp_oauth_tokens WHERE grant_id = :grant "
+                    "AND kind = 'refresh' AND rotated_at IS NULL"
+                ),
+                {"grant": grant_id},
+            )
+        ).scalars().all()
+    assert live == ["b" * 64]
 
 
 async def test_the_superseded_refresh_token_is_a_replay_after_the_grace(
