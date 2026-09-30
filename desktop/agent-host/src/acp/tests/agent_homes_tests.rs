@@ -6,7 +6,9 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::{AgentHomes, claude_sign_in, codex_home, opencode_config_home};
+#[cfg(unix)]
+use super::opencode_config_home;
+use super::{AgentHomes, claude_sign_in, codex_home};
 use crate::acp::agent_homes::strip_jsonc;
 
 const MARKER: &str = "PERSONAL_MARKER";
@@ -20,6 +22,7 @@ fn homes(person: &Path, root: &Path) -> AgentHomes {
     AgentHomes::of_person(person).in_folder(root.to_path_buf())
 }
 
+#[cfg(unix)]
 /// Every file under `folder`, links followed only when they stay inside it.
 fn own_files(folder: &Path) -> Vec<std::path::PathBuf> {
     let mut found = Vec::new();
