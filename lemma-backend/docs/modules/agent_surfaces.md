@@ -35,6 +35,8 @@ Resend address.
 | `surface_onboarding_input_tokens` | Hashed handles for a native input form — a Slack modal, a Teams card, a WhatsApp prompt — each minted against one pending row, step and challenge. A submission is accepted only while all three still match, so a form left open across a step stops working rather than answering the wrong question; the cleanup sweep deletes handles at expiry |
 | `surface_whatsapp_numbers` | The deployment's WhatsApp numbers, one row each and each independent: its own WABA, access token, verify token and Flow ids, every one falling back to settings when absent so a single-number deployment declares nothing. `role` separates the one `SHARED` line everybody rides from the `ALLOCATABLE` pool; `status` separates "stop handing this out" from "we no longer own it". Who holds a number is not stored here — it is `agent_surfaces.surface_identity_id`, so there is no second copy to disagree |
 | `notifications` | Something the pod needs a person to see: recipient, actor, origin, body, optional background instruction, and open/expiry state. It lives in this module because delivery is surface work; the agent and workflow modules reach it through ports in `app/composition` |
+| `agent_surface_groups` | A group chat a surface's bot is in, one row per (surface, chat): its title, whether the bot answers people outside the pod there, and `owner_user_id`, the member who answers for them. No owner means outsiders are not answered. A WhatsApp group the bot asked Meta to create exists here before its chat id does: `external_channel_id` is null and `request_id` set until the confirmation webhook fills in the id and `invite_link` |
+| `agent_surface_group_messages` | What the bot heard in a group and what it said there, kept only where the platform keeps no readable history (Telegram, WhatsApp). Always read newest-first and bounded |
 
 Conversation metadata records surface, platform, external user/channel/thread,
 and message identifiers so delivery and debugging do not depend only on the
@@ -64,6 +66,7 @@ impossible to leave stale.
 | `/surfaces/me` | List reachable user surfaces and choose a default |
 | `/surfaces/webhooks/{platform}`, `/surfaces/{surface_id}/webhook` | Platform-wide or direct webhook ingest/verification |
 | `/surfaces/teams/admin-consent/callback` | Teams tenant consent completion |
+| `/pods/{pod_id}/groups` | Every group the pod's bots are in, one place: list, one group with its people and what is waiting on the reader, its timeline, the outsiders switch, starting a WhatsApp group and minting a Telegram add-to-group link |
 
 ## Ingress and egress
 
@@ -186,6 +189,126 @@ observer renders them on the surface and a submission resumes the run.
   model sees. Once a message is bound to a conversation, the agent module alone
   decides how much history the run carries (run cap, whole recent runs,
   collapsed older runs, token compaction).
+
+### Groups, and people outside the pod
+
+A group chat holds members of the pod and people who are not. Members are
+answered there as themselves, each in their own conversation, exactly as in
+private. Everybody else -- a vendor, a client, a colleague from another team --
+is answered *for the pod*, in a group the pod has opened to them.
+
+- **A pod comes to know a group** when a member who may configure the bot adds
+  it (Telegram's `my_chat_member`, handled on the lifecycle path). That member
+  becomes the group's owner: the person who answers for its outsiders. Owners
+  and the "answers people outside" switch are managed through
+  `/pods/{pod_id}/groups`; switching outsiders on where nobody answers for them
+  makes the caller the owner.
+- **The pod's groups are one page** (`services/space_groups.py`, read by every
+  member). It is assembled from rows other parts already keep: the registry and
+  its log for who has spoken and what was said, the `~outsiders` thread links
+  for which conversations are a group's, and the open notifications those
+  conversations sent the reader for what is waiting on them. A member's own
+  conversation with the bot and a private note are never part of it. Each of
+  the bot's lines in the log records whom it answered and whether that was from
+  what is Public (`group_log.answered_in_group`), so the page can say so.
+- **A Telegram group can be added from Lemma.** `POST /pods/{pod_id}/groups/links`
+  mints a one-use, hour-long code in Redis and returns
+  `t.me/<bot>?startgroup=<code>` (`services/telegram_group_links.py`); Telegram
+  asks the person which group, adds the bot, and the bot hears
+  `/start@<bot> <code>` there. That message is claimed before anything treats it
+  as a question (`services/telegram_group_join.py`): the group is adopted with
+  the member the code was minted for as its owner, and the bot says hello. A
+  spent or unknown code is swallowed, not answered. The code never links the
+  Telegram account that used it to the member -- "add our bot to your group" is
+  easily forwarded, and linking whoever used it would hand them the member's
+  access in a private chat. Which account is theirs stays their profile's to say.
+- **A Slack channel shared with another company is a group with outsiders.**
+  Connected Slack channels and group DMs get a registry row the first time the
+  bot hears them (`services/slack_groups.py`), marked `shared_externally` when
+  Slack says the channel is Slack Connect (`is_ext_shared_channel`). There, and
+  only there, a sender whose workspace is not the installing one is an outsider
+  and answered from what is Public; everyone in the pod's own workspace is a
+  colleague, and one who is not in the pod gets the invite nudge. No lines are
+  logged: Slack keeps the history.
+- **A WhatsApp group is one the bot opened.** A business number cannot be added
+  to a group, only create one, so a member asks in their own WhatsApp chat and
+  the agent calls `whatsapp_open_group` (offered only in a member's private
+  chat; `platforms/whatsapp/tools.py`). Meta answers the creation with a
+  `request_id` only, so the row is recorded pending
+  (`services/whatsapp_groups.py`) and the member's turn waits a few seconds
+  for the `group_lifecycle_update` webhook (`services/group_updates.py`), which
+  gives the row its group id and invite link -- fetched when the webhook omits
+  it. A confirmation that overtakes its pending row is handed back to the
+  inbox to retry. Asking again for the same title answers from the row. The
+  deployment's Meta app must subscribe to the `group_lifecycle_update` webhook
+  field, or groups stay pending. Everything that names a group -- creating it,
+  its link, a message to it -- goes to Graph `v23.0`, the version the Groups
+  API was published under; ordinary messaging stays where it was.
+- **A created group belongs to the pod that created it**
+  (`bot_creates_groups`). Every pod on a shared number sees every message the
+  number receives, so a WhatsApp group message is narrowed to the surfaces
+  whose rows name the group before anything else is asked
+  (`services/created_groups.py`), and a group no surface knows is dropped.
+- **Nothing marks a mention on WhatsApp.** Meta documents no mention field and
+  no reply context for groups, so the bot is addressed when the text
+  `@`-mentions the business number, quotes the bot's own message, or names the
+  agent at the start of a line or after an `@` (`domain/addressing.py`, read in
+  ingress once the surface's agent is known). The name is the one the app shows
+  (`services/group_names.py`): the pod's own name for the pod's assistant --
+  "Sales, ..." -- with the older "Lem" still heard, and an agent's own name
+  otherwise. A group message nobody put to the bot is logged and left alone.
+- **A group takes text.** Meta refuses interactive messages there, so questions,
+  approvals and resource cards go as words (`WhatsAppRecipient.is_group`); read
+  receipts, typing and reactions are not documented for a business in a group,
+  so none are sent. Groups hold at most eight people.
+- **Who counts as an outsider** is anyone not in the surface's pod, asked the
+  way routing asks it. Membership is checked first, so members never pay for the
+  group lookup.
+- **Where their turn runs**: one conversation per group, owned by the owner,
+  opened with `for_outsiders=True` and linked under the shared `~outsiders` key.
+  The agent module then runs every turn in it as nobody: an anonymous
+  authorization context pinned to the pod, which reads only what the pod marked
+  Public; a toolset cut to pod reads, web search, todos and messaging; no
+  functions, sub-agents, surface tools, sandbox, browser, memory or `view_image`;
+  and a brief that names the owner as who looks after the conversation rather
+  than as the person being answered. `message_user` reaches the owner and no
+  one else, says the answer goes back to the stranger, always expects that
+  answer, and stays in view rather than behind tool search; `list_pod_members`
+  refuses, since the directory would be read with the owner's access.
+- **Nothing a stranger types resolves a pause.** Their conversation belongs to
+  the owner, so a typed "approve" would be recorded as the owner's decision;
+  `write_inbound_message` never consults a pending interaction for them, and
+  their runs never pause.
+- **Files** they send are not saved -- the owner's space is the only place they
+  could go -- and the run is told so.
+- **Limits**: `SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES` and
+  `SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY`, counted in Redis and failing
+  closed.
+- **The group log** records every group message the bot receives, before
+  anything decides whether it was addressed, and every answer once delivered.
+  A run in a group -- a member's or a stranger's -- is handed the recent lines
+  as background, with a stranger's lines marked, because a member's run acts
+  with the member's access and answers where everyone in the group reads it.
+- **A Slack group DM needs no channel route.** Somebody started it with the bot
+  in it, so -- like a Telegram group -- being in it is the authorization
+  (`is_slack_group_dm`): no allow-list entry, still only answered when the bot
+  is @mentioned or a reply lands in its thread. It is a Slack conversation, so
+  Slack's own history is its background and no group log is kept.
+- **A notification is never delivered into a group.** Reaching a member
+  proactively reuses only private threads; a member whose only thread with the
+  bot is a group is reached by email or their Lemma inbox instead.
+- **An email thread with other people on it is a group.** The inbound
+  normalizer keeps To and Cc; a reply goes to the sender and copies the others
+  (at most `MAX_REPLY_CC`). Copied is not asked: an email that only Cc's the
+  pod is answered only when a line speaks to the agent by name
+  (`platforms/resend/email_recipients.py`).
+- **A private note stays in Lemma.** Every run in a conversation that lives on a
+  platform answers there. A message written in Lemma with
+  `metadata.private_note = true` starts a run marked private (see the agent
+  module's `domain/private_notes`); the run observer then sends nothing of it to
+  the platform -- no stream, no typing, no answer, no approval card -- and
+  `display_resource` delivers only in Lemma. Later turns see the note labelled
+  as unseen in the chat.
 
 ## Authorization and security
 

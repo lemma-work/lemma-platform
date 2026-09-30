@@ -138,7 +138,9 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         if ctx.is_superuser:
             return AuthorizationDecision(True, "SUPERUSER", permission_id, resource)
         if ctx.actor_type == ActorType.ANONYMOUS:
-            if resource and await self._is_public_read(permission_id, resource):
+            if resource and await self._is_public_read(
+                permission_id, resource, pod_id=ctx.pod_id
+            ):
                 return AuthorizationDecision(
                     True, "PUBLIC_RESOURCE", permission_id, resource
                 )

@@ -10,6 +10,12 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `agent.group.get` | GET | `/pods/{pod_id}/groups/{group_id}` | Get Group |
+| `agent.group.link` | POST | `/pods/{pod_id}/groups/links` | Group Link |
+| `agent.group.list` | GET | `/pods/{pod_id}/groups` | List Groups |
+| `agent.group.start` | POST | `/pods/{pod_id}/groups` | Start Group |
+| `agent.group.timeline` | GET | `/pods/{pod_id}/groups/{group_id}/timeline` | Group Timeline |
+| `agent.group.update` | PATCH | `/pods/{pod_id}/groups/{group_id}` | Update Group |
 | `agent.surface.available` | GET | `/pods/{pod_id}/available-surfaces` | List Available Surfaces |
 | `agent.surface.channels` | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | List Surface Channels |
 | `agent.surface.create` | POST | `/pods/{pod_id}/surfaces` | Create Surface |

@@ -24,6 +24,7 @@ from app.core.log.log import get_logger
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Conversation, Message
+from app.modules.agent.domain.private_notes import run_metadata_for
 from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
@@ -160,7 +161,7 @@ class TurnCoordinator:
                 conversation_id=conversation.id,
                 agent_id=conversation.agent_id,
                 agent_runtime=selected_agent_runtime,
-                metadata={"source": "user_message"},
+                metadata=run_metadata_for(message_metadata),
             )
 
         # The flag goes on *after* the caller's metadata, not before it: a

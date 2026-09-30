@@ -48,6 +48,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.api.dependencies import get_conversation_service
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
+from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     MessageDraft,
@@ -182,6 +183,7 @@ async def open_surface_conversation(
     title: str | None,
     metadata: dict[str, object] | None = None,
     require_execute_grant: bool = True,
+    for_outsiders: bool = False,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
@@ -190,10 +192,17 @@ async def open_surface_conversation(
     permission to run the agent that is writing to them. Every inbound path
     leaves it on.
 
+    ``for_outsiders`` opens the conversation a group's people from outside the
+    pod talk in. ``user_id`` is then the member who looks after that group, and
+    every run in it authorizes as nobody (see ``domain/outsiders``). Marked here,
+    by this module, so the key that decides it is written in one place.
+
     The caller sets the authorization context, because it is the caller that
     knows whose it is -- an inbound message runs as the sender, a notification
     as nobody in particular.
     """
+    if for_outsiders:
+        metadata = {**(metadata or {}), AUDIENCE_KEY: OUTSIDERS}
     conversation = await _service(uow).create_conversation(
         pod_id=pod_id,
         agent_name=agent_name,

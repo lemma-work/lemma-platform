@@ -19,7 +19,8 @@ choose, and has no edge back into any of this.
 
 from __future__ import annotations
 
-from typing import Any
+from uuid import UUID
+
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -56,6 +57,13 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 )
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
+)
+from app.modules.agent_surfaces.services.configuration_prompt import (
+    prompt_for_configuration,
+)
+from app.modules.agent_surfaces.services.group_registry import (
+    adopt_connected_channel,
+    adopt_joined_group,
 )
 from app.modules.agent_surfaces.services.configuration_access import (
     ConfigurationAccess,
@@ -265,7 +273,11 @@ class AppEventHandler:
         self, adapter, credentials, setup, surface, ctx, channel_id
     ) -> None:
         agent_name = await self._surface_agent_name(surface)
-        await self._allow_channel(surface=surface, channel_id=channel_id)
+        await self._allow_channel(
+            surface=surface,
+            channel_id=channel_id,
+            owner_user_id=getattr(ctx, "user_id", None),
+        )
         async with connection_released(self.uow.session):
             await adapter.send_channel_setup_prompt(
                 credentials=credentials,
@@ -347,12 +359,16 @@ class AppEventHandler:
             return []
         return [(app.name, f"https://{app.public_slug}.{domain}") for app in apps]
 
-    async def _allow_channel(self, *, surface, channel_id: str) -> None:
+    async def _allow_channel(
+        self, *, surface, channel_id: str, owner_user_id: UUID | None = None
+    ) -> None:
         """Add one channel to the list this surface's agent answers in.
 
         It used to point the channel at a chosen agent. A surface has one agent
         now, so a channel is a place rather than a choice, and adding it twice
-        is the same as adding it once.
+        is the same as adding it once. The channel is one of the pod's groups
+        from here on, and whoever connected it answers for any people outside
+        the pod in it.
         """
         if not channel_id:
             return
@@ -364,6 +380,12 @@ class AppEventHandler:
         routes.append(SurfaceChannelRoute(channel_id=channel_id))
         surface.config.channels = routes
         await self.surface_repository.update(surface)
+        await adopt_connected_channel(
+            self.uow,
+            surface=surface,
+            channel_id=channel_id,
+            owner_user_id=owner_user_id,
+        )
         await self.uow.commit()
 
     async def _surface_agent_name(self, surface) -> str:
@@ -477,74 +499,14 @@ class AppEventHandler:
         choices = (
             await self.access._surface_choice_labels(authorized) if authorized else None
         )
-        await self._prompt_for_configuration(
+        await prompt_for_configuration(
+            self.uow.session,
             adapter=adapter,
             parsed=parsed,
             actor_external_user_id=parsed.actor_external_user_id,
             credentials=credentials,
             surface_choices=choices,
         )
-
-    async def _prompt_for_configuration(
-        self,
-        *,
-        adapter: SurfacePlatformAdapterPort,
-        parsed: ParsedSurfaceLifecycleEvent,
-        actor_external_user_id: str,
-        credentials: dict[str, Any],
-        surface_choices: list[tuple[str, str]] | None,
-    ) -> None:
-        """Ask which pod, or explain why nothing can be shown.
-
-        ``surface_choices`` of None means the actor is not authorized anywhere,
-        which is the only thing that changes between the two messages.
-
-        The actor is a parameter rather than read back off ``parsed``, where it
-        is ``str | None``: the caller has already refused an event without one,
-        and taking it here is how that guarantee crosses the boundary.
-        """
-        no_access = surface_choices is None
-        if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
-            async with connection_released(self.uow.session):
-                await adapter.publish_home_view(
-                    credentials=credentials,
-                    user_id=actor_external_user_id,
-                    pod_name=None,
-                    # No surface has been chosen on this path, so there is no
-                    # agent whose name this could be. It was omitted entirely
-                    # until the port declared the operation, and `agent_name`
-                    # has no default on any implementation -- so the one screen
-                    # that tells somebody they have no access to a connected pod
-                    # raised `TypeError` and rendered nothing at all.
-                    agent_name=DEFAULT_RESPONDER_NAME,
-                    channel_ids=[],
-                    agents=[],
-                    apps=[],
-                    surface_choices=surface_choices,
-                    access_message=(
-                        "You need access to a connected Lemma pod before this app can show agents or settings."
-                        if no_access
-                        else None
-                    ),
-                )
-            return
-
-        if (
-            parsed.kind is SurfaceLifecycleKind.JOINED_CHANNEL
-            and parsed.external_channel_id
-        ):
-            async with connection_released(self.uow.session):
-                await adapter.send_channel_setup_prompt(
-                    credentials=credentials,
-                    channel_id=parsed.external_channel_id,
-                    user_id=actor_external_user_id,
-                    surface_choices=surface_choices,
-                    configuration_error=(
-                        "Only a Lemma pod editor can configure this channel. Ask a pod admin to set it up."
-                        if no_access
-                        else None
-                    ),
-                )
 
     async def _handle_lifecycle_event(
         self,
@@ -581,6 +543,10 @@ class AppEventHandler:
         if parsed.kind is not SurfaceLifecycleKind.JOINED_CHANNEL:
             return
         if not parsed.actor_external_user_id or not parsed.external_channel_id:
+            return
+        if await adopt_joined_group(
+            self.uow, surface=surface, parsed=parsed, owner_user_id=ctx.user_id
+        ):
             return
         if surface.channel_route_for(
             channel_id=parsed.external_channel_id, channel_name=""

@@ -321,7 +321,10 @@ def build_agent_instruction_parts(
                 surface_platform_guidance,
             )
 
-            fragment = surface_platform_guidance(surface_platform)
+            fragment = surface_platform_guidance(
+                surface_platform,
+                answers_outsider=bool(getattr(ctx, "answers_outsider", False)),
+            )
             if fragment:
                 sections.append(fragment)
 

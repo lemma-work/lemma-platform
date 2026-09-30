@@ -50,6 +50,9 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
+| GET | `/pods/{pod_id}/groups` | `agent.group.list` | List Groups |
+| GET | `/pods/{pod_id}/groups/{group_id}` | `agent.group.get` | Get Group |
+| GET | `/pods/{pod_id}/groups/{group_id}/timeline` | `agent.group.timeline` | Group Timeline |
 | GET | `/pods/{pod_id}/notifications` | `notification.list` | List My Notifications |
 | GET | `/pods/{pod_id}/notifications/unread-count` | `notification.unread_count` | Count My Unread Notifications |
 | GET | `/pods/{pod_id}/surface-setup/{platform}` | `agent.surface.setup_guide` | Get Surface Setup Guide |
@@ -64,7 +67,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.verify_whatsapp_number` | Verify a pooled WhatsApp number's own callback URL |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
 | GET | `/surfaces/{surface_id}/webhook` | `surface.webhook.verify_surface` | Verify surface webhook using a surface-level callback URL |
+| PATCH | `/pods/{pod_id}/groups/{group_id}` | `agent.group.update` | Update Group |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
+| POST | `/pods/{pod_id}/groups` | `agent.group.start` | Start Group |
+| POST | `/pods/{pod_id}/groups/links` | `agent.group.link` | Group Link |
 | POST | `/pods/{pod_id}/notifications` | `notification.send` | Notify A Pod Member |
 | POST | `/pods/{pod_id}/notifications/read-all` | `notification.mark_all_read` | Mark All My Notifications Read |
 | POST | `/pods/{pod_id}/notifications/{notification_id}/acknowledge` | `notification.acknowledge` | Acknowledge A Notification |

@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from app.core.authorization.context import ResourceType
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.outsiders import answers_outsiders
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 
@@ -131,6 +132,32 @@ _CONNECTOR_RESOURCES = frozenset(
 #                place it. Whatever needs saying, the parent should say.
 _SUB_AGENT_WITHHELD = frozenset(
     {AgentToolset.SUBAGENTS, AgentToolset.WAIT, AgentToolset.MESSAGING}
+)
+
+# All a run answering somebody outside the pod keeps, when its agent has them.
+# An allow-list, because the question is which tools are safe under a stranger,
+# and a new toolset should have to earn its place here rather than arrive:
+#
+# POD         -- every call goes through the authorizer, which for this run is
+#                anonymous, so what reaches the stranger is what is Public.
+# WEB_SEARCH  -- the open web is not the pod's to leak.
+# TODO        -- conversation-scoped scratch.
+# MESSAGING   -- fenced to the member who looks after the conversation (see
+#                `message_user`), so the agent can pass a question on.
+#
+# Everything else acts as the conversation's owner rather than through the
+# authorizer -- a sandbox session, a browser, a connector account, sub-agents
+# running as them -- or pauses the run on a decision nobody in the group can
+# make (USER_INTERACTION, WAIT). MEMORY goes too: the owner's memory is theirs,
+# and the brief never lists it here. `view_image` is withheld by the assembler
+# for the same reason: it can open a file in the owner's sandbox.
+_OUTSIDER_KEPT = frozenset(
+    {
+        AgentToolset.POD,
+        AgentToolset.WEB_SEARCH,
+        AgentToolset.TODO,
+        AgentToolset.MESSAGING,
+    }
 )
 
 
@@ -250,6 +277,9 @@ def resolve_toolsets(
     allow_subagents = not is_sub_agent_run(conversation)
     if not allow_subagents:
         names = [name for name in names if name not in _SUB_AGENT_WITHHELD]
+    if answers_outsiders(conversation):
+        names = [name for name in names if name in _OUTSIDER_KEPT]
+        allow_subagents = False
     return ResolvedToolsets(
         names=names, allow_subagents=allow_subagents, derived=implied
     )

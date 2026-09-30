@@ -28,6 +28,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.groups import PASSED_ON_FROM_OUTSIDE
 
 logger = get_logger(__name__)
 
@@ -234,6 +235,7 @@ async def record_notification_response(
 
 
 __all__ = [
+    "PASSED_ON_FROM_OUTSIDE",
     "check_notifications",
     "notification_form_action",
     "open_notifications_for_conversation",

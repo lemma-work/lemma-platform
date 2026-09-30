@@ -35,6 +35,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.core.authorization.delegation import agent_display_name, effective_agent_id
 from app.modules.agent_surfaces.contracts import notifications as surfaces
 from app.modules.agent_surfaces.contracts.notifications import (
+    PASSED_ON_FROM_OUTSIDE,
     check_notifications,
     resolve_recipient,
     send_notification,
@@ -57,7 +58,47 @@ from app.modules.agent.tools.messaging.models import (
 
 logger = get_logger(__name__)
 
+
 MESSAGE_USER_TOOL_NAME = "message_user"
+
+
+def _outsider_refusal(
+    deps: BaseAgentContext, recipient_user_id: UUID
+) -> MessageUserResponse | None:
+    """Why this message may not go, on a run answering somebody outside the pod.
+
+    Such a run may reach one person: the member who looks after the
+    conversation, so a question can be passed on. Anyone else would be a
+    stranger messaging the pod's people under its bot's name.
+    """
+    if not deps.answers_outsider or recipient_user_id == deps.user_id:
+        return None
+    return MessageUserResponse(
+        success=False,
+        error=(
+            "You are talking to somebody outside the pod, so you can only "
+            "message the person who looks after this conversation "
+            f"(to: {deps.user_id})."
+        ),
+    )
+
+
+def _passes_a_question_on(deps: BaseAgentContext) -> bool:
+    """Whether this run's messages are questions it is owed an answer to.
+
+    On a run answering somebody outside the pod, the only message it can send
+    is to the member who looks after the conversation, passing on something it
+    could not answer -- and that answer is what it relays back.
+    """
+    return bool(getattr(deps, "answers_outsider", False))
+
+
+def _notification_body(deps: BaseAgentContext, message: str) -> str:
+    """What the recipient reads: the words as written, and on a stranger's run,
+    the line saying where their answer goes."""
+    return (
+        f"{message}\n\n{PASSED_ON_FROM_OUTSIDE}" if deps.answers_outsider else message
+    )
 
 
 def _title_for(request: MessageUserRequest) -> str:
@@ -146,6 +187,10 @@ async def message_user(
             ),
         )
 
+    refusal = _outsider_refusal(deps, recipient_user_id)
+    if refusal is not None:
+        return refusal
+
     # No further permission check. Holding this toolset IS the grant to contact
     # colleagues — it is opt-in, withheld from sub-agents, and every message
     # names the human whose authority the run carries. Reaching the run's own
@@ -159,7 +204,7 @@ async def message_user(
         pod_id=deps.pod_id,
         recipient_user_id=recipient_user_id,
         title=_title_for(request),
-        body=request.message,
+        body=_notification_body(deps, request.message),
         actor_user_id=deps.user_id,
         # Normalised, because a delegation token can still name the assistant
         # by the sentinel this module predates -- and that id is not a row in
@@ -183,7 +228,9 @@ async def message_user(
         # applies; this is an instruction it either follows or refuses.
         channel=request.channel.value if request.channel else None,
         background_instruction=request.background_instruction,
-        expects_response=request.expects_response,
+        # A stranger's question passed on is always a question: the member's
+        # answer is what brings this conversation back to relay it.
+        expects_response=request.expects_response or _passes_a_question_on(deps),
         expires_in_seconds=request.expires_in_seconds,
         # A retried worker job replays this exact tool call. Without a key it
         # posts the message twice, and there is no outbound dedup store to
@@ -272,6 +319,18 @@ async def list_pod_members(
     if deps.pod_id is None:
         return ListPodMembersResponse(
             success=False, error="list_pod_members is only available inside a pod."
+        )
+    if deps.answers_outsider:
+        # The directory is read as the member who looks after this run, and
+        # everything in it could be repeated to the stranger asking. Nobody
+        # listed there could be messaged from here anyway.
+        return ListPodMembersResponse(
+            success=False,
+            error=(
+                "You are talking to somebody outside the pod, so its members are "
+                "not yours to list. To pass a question on, message the person "
+                f"who looks after this conversation (to: {deps.user_id})."
+            ),
         )
 
     page = await pod_directory.list_pod_members(

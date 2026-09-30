@@ -165,8 +165,15 @@ class ConversationBinder:
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
         current_conversation_agent_id: UUID | None = None,
+        for_outsiders: bool = False,
     ) -> tuple[AgentSurfaceConversationLink, str | None]:
         """Return the link, plus the new conversation's title when one was created.
+
+        ``for_outsiders`` binds a group's people from outside the pod: the
+        caller passes the member who answers for them as the user and the shared
+        outsiders key as the external id, so the conversation is that member's
+        and one thread per group. A conversation that is no longer theirs --
+        somebody else took the group on -- is left behind for a fresh one.
 
         The title is how a caller learns a *fresh* conversation started on this
         turn — which is the only moment worth naming the thread on the platform.
@@ -219,7 +226,10 @@ class ConversationBinder:
                 )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
-            if await self._starts_new_conversation(
+            if (
+                for_outsiders
+                and not await self._still_theirs(link, resolved_user.internal_user_id)
+            ) or await self._starts_new_conversation(
                 surface=surface,
                 link=link,
                 route=route,
@@ -232,6 +242,7 @@ class ConversationBinder:
                     resolved_user=resolved_user,
                     external_user_id=external_user_id,
                     route=route,
+                    for_outsiders=for_outsiders,
                 )
                 updated = await self.conversation_link_repository.update_conversation(
                     link_id=link.id,
@@ -267,6 +278,7 @@ class ConversationBinder:
             user_id=resolved_user.internal_user_id,
             external_user_id=external_user_id,
             route=route,
+            for_outsiders=for_outsiders,
         )
         created_link = await self.conversation_link_repository.create(
             AgentSurfaceConversationLink(
@@ -365,6 +377,15 @@ class ConversationBinder:
             external_thread_id=parsed.external_thread_id,
         )
 
+    async def _still_theirs(
+        self, link: AgentSurfaceConversationLink, user_id: UUID
+    ) -> bool:
+        """Whether the linked conversation still belongs to ``user_id``."""
+        conversation = await agent_conversations.surface_conversation(
+            self.uow, link.conversation_id
+        )
+        return conversation is not None and conversation.user_id == user_id
+
     async def _starts_new_conversation(
         self,
         *,
@@ -428,6 +449,7 @@ class ConversationBinder:
         user_id: UUID,
         external_user_id: str | None,
         route: ResolvedSurfaceRoute,
+        for_outsiders: bool = False,
     ):
         surface_event_metadata = build_surface_event_metadata(
             surface.surface_type.value,
@@ -444,6 +466,7 @@ class ConversationBinder:
                 pod_id=route.pod_id,
                 agent_name=route.agent_name,
                 user_id=user_id,
+                for_outsiders=for_outsiders,
                 title=self._surface_conversation_title(
                     parsed,
                     fallback=f"{surface.surface_type.value} Conversation",

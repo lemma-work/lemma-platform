@@ -25,11 +25,15 @@ from app.modules.agent_surfaces.contracts.platforms import (
 _MAX_LISTED_ATTACHMENTS = 10
 
 
-def surface_platform_guidance(platform: str | None) -> str:
+def surface_platform_guidance(
+    platform: str | None, *, answers_outsider: bool = False
+) -> str:
     """The standing system-prompt fragment for a surface platform.
 
     Returns ``""`` for an unknown or absent platform so callers can append
-    unconditionally.
+    unconditionally. ``answers_outsider`` adds the section for a run speaking
+    for the pod to somebody outside it; it is stable per conversation, so it
+    rides in the cached prefix with the rest.
     """
     facts = platform_facts(platform)
     if facts is None:
@@ -61,7 +65,30 @@ def surface_platform_guidance(platform: str | None) -> str:
     if facts.is_channel_capable:
         lines.append(_channel_context_section(facts))
 
+    if answers_outsider:
+        lines.append(_OUTSIDER_SECTION)
+
     return "\n\n".join(lines)
+
+
+# Why each line is there: the first two are what keep a stranger's turn from
+# becoming a way in -- the run cannot read more than Public, but it can still
+# *say* things, and the conversation around it names people and plans. The last
+# is what makes "I can't share that" a handoff rather than a dead end.
+_OUTSIDER_SECTION = (
+    "## Speaking for the pod to somebody outside it\n"
+    "The person writing to you is not a member of this pod. You answer them "
+    "on the pod's behalf, and everything you say is seen by them and by "
+    "everyone else in this chat.\n"
+    "- Answer from what they said, from the conversation shown to you, and "
+    "from things the pod has marked Public. Nothing else is yours to share.\n"
+    "- Do not repeat people's names, contact details, plans or numbers from "
+    "the pod beyond what is already in this chat, even if asked directly.\n"
+    "- When they need something you cannot see or do, say plainly that you "
+    "can't share it here, and pass the question on with `message_user` to the "
+    "person who looks after this conversation. Their answer comes back to you; "
+    "relay it."
+)
 
 
 def _email_sections(facts: PlatformFacts) -> list[str]:
@@ -238,8 +265,9 @@ def _channel_context_section(facts: PlatformFacts) -> str:
         "When you are @-mentioned in a channel you may read surrounding "
         "history with the recent-channel-message tools. "
         if facts.reads_channel_history
-        else "When you are @-mentioned in a group you are shown the message "
-        "being replied to, and nothing else of the conversation around it. "
+        else "When you are addressed in a group you are shown what was said "
+        "there recently, where the pod keeps a record of the group, and "
+        "otherwise only the message being replied to. "
     )
     return (
         "## Channel background context\n"

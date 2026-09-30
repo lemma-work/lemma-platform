@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -232,6 +234,36 @@ class NotificationRepository:
                 NotificationModel.origin_id == origin_id,
                 NotificationModel.status == NotificationStatus.OPEN.value,
             )
+        )
+        return [m.to_entity() for m in result.scalars().all()]
+
+    async def list_open_asks_from(
+        self,
+        *,
+        recipient_user_id: UUID,
+        origin_conversation_ids: Sequence[UUID],
+        limit: int = 20,
+    ) -> list[NotificationEntity]:
+        """Questions these conversations put to this person that are still open.
+
+        How a group's page finds what its people outside the pod are waiting
+        on: each such question was passed on by the group's own outsiders
+        conversation, to the member who answers for them.
+        """
+        if not origin_conversation_ids:
+            return []
+        result = await self.session.execute(
+            select(NotificationModel)
+            .where(
+                NotificationModel.recipient_user_id == recipient_user_id,
+                NotificationModel.origin_conversation_id.in_(
+                    list(origin_conversation_ids)
+                ),
+                NotificationModel.expects_response.is_(True),
+                NotificationModel.status == NotificationStatus.OPEN.value,
+            )
+            .order_by(NotificationModel.created_at.desc())
+            .limit(limit)
         )
         return [m.to_entity() for m in result.scalars().all()]
 

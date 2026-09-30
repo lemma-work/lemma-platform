@@ -16,6 +16,8 @@ the middle of a pair and leave the marker this module exists to prevent.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import JsonValue
@@ -54,6 +56,41 @@ WHATSAPP_INTERACTION_SEP = "~"
 # reply (``callback_id~__approval__~<decision>``). The parser routes this to an
 # approval decision instead of an ask_user answer.
 WHATSAPP_APPROVAL_HEADER = "__approval__"
+
+
+@dataclass(frozen=True, slots=True)
+class WhatsAppRecipient:
+    """Where a message goes: one person's chat, or a group.
+
+    A group is addressed by its id with ``recipient_type: "group"``, and Meta
+    refuses a send whose type and ``to`` disagree. It also takes less: no
+    interactive messages at all (buttons, lists, CTA cards, flows), and read
+    receipts, typing and reactions are not documented to work -- so each send
+    path asks ``is_group`` before choosing what to send.
+    """
+
+    to: str
+    is_group: bool = False
+
+    @property
+    def recipient_type(self) -> str:
+        return "group" if self.is_group else "individual"
+
+
+def whatsapp_recipient(
+    reply_target: Mapping[str, object], *, fallback_wa_id: str | None = None
+) -> WhatsAppRecipient | None:
+    """The recipient an inbound message's reply goes to, or None.
+
+    A group wins over everything: the sender of a group message is a person in
+    it, and falling back to their number would answer a group question in
+    private -- the one place the answer was not asked for.
+    """
+    group_id = str(reply_target.get("group_id") or "").strip()
+    if group_id:
+        return WhatsAppRecipient(to=group_id, is_group=True)
+    wa_id = str(reply_target.get("sender_wa_id") or fallback_wa_id or "").strip()
+    return WhatsAppRecipient(to=wa_id) if wa_id else None
 
 
 def build_whatsapp_interactive(
@@ -293,10 +330,11 @@ def whatsapp_text_payload(
     recipient_wa_id: str,
     body: str,
     preview_url: bool,
+    recipient_type: str = "individual",
 ) -> dict[str, Any]:
     return {
         "messaging_product": "whatsapp",
-        "recipient_type": "individual",
+        "recipient_type": recipient_type,
         "to": recipient_wa_id,
         "type": "text",
         "text": {

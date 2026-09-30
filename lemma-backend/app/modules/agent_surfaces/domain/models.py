@@ -67,6 +67,9 @@ class SurfaceContextMessage(BaseModel):
     author: str | None = None
     text: str
     ts: str | None = None
+    #: Written by somebody outside the pod. Known only where the line came from
+    #: the pod's own group log, which can tell; a platform's history API cannot.
+    outside_pod: bool = False
 
 
 class SurfaceDisplayAction(BaseModel):

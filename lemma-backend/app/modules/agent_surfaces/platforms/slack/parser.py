@@ -65,6 +65,28 @@ class _SlackRouting:
         )
 
 
+def _sharing(
+    payload: dict[str, object], event: dict[str, object]
+) -> dict[str, bool | None]:
+    """Whether the channel is shared with another company, and the sender from it.
+
+    Slack marks a Slack Connect channel on the delivery itself
+    (``is_ext_shared_channel``), and names the sender's own workspace on the
+    message (``user_team``, else ``team``). A sender whose workspace is not the
+    one the app is installed in belongs to the other company: there, and only
+    there, somebody outside the pod is an outsider to answer rather than a
+    colleague to invite.
+    """
+    shared = bool(payload.get("is_ext_shared_channel"))
+    home = payload_text(payload, "team_id").strip()
+    theirs = (payload_text(event, "user_team") or payload_text(event, "team")).strip()
+    return {
+        "is_ext_shared_channel": shared or None,
+        "sender_is_external": (shared and bool(home and theirs and home != theirs))
+        or None,
+    }
+
+
 def _slack_routing(event: dict[str, Any], channel_id: str) -> _SlackRouting:
     """Read placement out of a Slack message event."""
     assistant_thread = payload_section(event, "assistant_thread")
@@ -259,7 +281,9 @@ class SlackMessageParser(SlackConfigurationParserMixin):
                 "thread_ts": routing.external_thread_id,
             },
             metadata={
-                key: value for key, value in metadata.items() if value is not None
+                key: value
+                for key, value in {**metadata, **_sharing(payload, event)}.items()
+                if value is not None
             },
             raw_payload=payload,
         )

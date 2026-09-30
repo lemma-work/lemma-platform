@@ -36,6 +36,9 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
+# The user an anonymous context reads RLS tables as: nobody, so no rows.
+_NOBODY = UUID(int=0)
+
 
 class SchemaManager:
     """Manages physical database operations for datastores with RLS support."""
@@ -551,7 +554,7 @@ class SchemaManager:
     async def set_rls_context(
         self,
         session: AsyncSession,
-        user_id: UUID,
+        user_id: UUID | None,
         *,
         is_pod_admin: bool = False,
     ) -> None:
@@ -562,6 +565,12 @@ class SchemaManager:
         stay transaction-local (``set_config(..., true)`` is the function form
         of ``SET LOCAL``), so nothing leaks to the next borrower of the
         connection and a transaction-mode pooler stays usable.
+
+        ``None`` is somebody with no rows: a run answering a person outside the
+        pod reads a Public table under an anonymous context. It becomes the nil
+        UUID, which no row is stamped with, so the policy matches nothing --
+        where ``str(None)`` failed the policy's uuid cast and turned an empty
+        answer into an error.
         """
         await session.execute(
             text(
@@ -569,7 +578,7 @@ class SchemaManager:
                 "set_config('app.current_user_is_pod_admin', :is_pod_admin, true)"
             ),
             {
-                "user_id": str(user_id),
+                "user_id": str(user_id or _NOBODY),
                 "is_pod_admin": "true" if is_pod_admin else "false",
             },
         )

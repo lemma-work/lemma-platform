@@ -275,6 +275,13 @@ class SurfaceConversationLinkRepository:
         surface's whole history back to reduce it here. The single-member form
         delegates to this one so a reachability check and the send that follows
         it can never disagree about which thread is theirs.
+
+        Private threads only. Every caller is reaching one person -- a
+        notification, a message the pod sends them -- and a group thread is
+        where they last *spoke*, not somewhere private to reach them: the reply
+        goes to the group, in front of everyone in it. A member whose only
+        thread is a group is therefore unreachable here, and delivery falls
+        back to email or their Lemma inbox, which is the right answer.
         """
         if not external_user_ids:
             return {}
@@ -289,6 +296,7 @@ class SurfaceConversationLinkRepository:
                 AgentSurfaceConversationLinkModel.external_user_id.in_(
                     external_user_ids
                 ),
+                AgentSurfaceConversationLinkModel.conversation_kind != "CHANNEL",
             )
             .distinct(AgentSurfaceConversationLinkModel.external_user_id)
             .order_by(
@@ -302,6 +310,32 @@ class SurfaceConversationLinkRepository:
             for link in (model.to_entity() for model in result.scalars().all())
             if link.external_user_id
         }
+
+    async def conversation_ids_in_channel(
+        self,
+        *,
+        surface_id: UUID,
+        external_channel_id: str,
+        external_user_id: str,
+        limit: int = 20,
+    ) -> list[UUID]:
+        """The conversations one sender key holds in one channel, newest first.
+
+        For a group's people outside the pod the key is shared, and a platform
+        with threads (Slack) gives them one conversation per thread.
+        """
+        stmt = (
+            select(AgentSurfaceConversationLinkModel.conversation_id)
+            .where(
+                AgentSurfaceConversationLinkModel.surface_id == surface_id,
+                AgentSurfaceConversationLinkModel.external_channel_id
+                == external_channel_id,
+                AgentSurfaceConversationLinkModel.external_user_id == external_user_id,
+            )
+            .order_by(AgentSurfaceConversationLinkModel.updated_at.desc())
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
 
     async def get_by_conversation_id(
         self,

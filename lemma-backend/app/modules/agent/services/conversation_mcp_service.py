@@ -30,6 +30,7 @@ from app.modules.agent.services.surface_context import (
 )
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
+from app.modules.agent.domain.outsiders import answers_outsiders
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 from app.modules.agent.services.mcp_content import (
     tool_call_error,
@@ -397,6 +398,9 @@ class ConversationMCPService:
                 ),
                 agent_run_id=agent_run_id or (run.id if run is not None else None),
                 runtime_profile=runtime_profile,
+                # The same answer the runner gives: a remote harness answering
+                # somebody outside the pod authorizes as nobody too.
+                answers_outsider=answers_outsiders(conversation),
                 # The runner computes these for the in-process harness, and this
                 # bridge has to as well -- it is the tool path for *every*
                 # remote harness, so anything left at its default is a default

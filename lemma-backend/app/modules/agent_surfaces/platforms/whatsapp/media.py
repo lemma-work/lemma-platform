@@ -62,6 +62,7 @@ async def send_file(
     file_bytes: bytes,
     mime_type: str,
     caption: str | None = None,
+    recipient_type: str = "individual",
 ) -> bool:
     """Upload + send raw file bytes to a chat.
 
@@ -99,6 +100,7 @@ async def send_file(
             message_id = await client.send_media(
                 phone_number_id=phone_number_id,
                 to=recipient_wa_id,
+                recipient_type=recipient_type,
                 media_id=media_id,
                 send_type=kind,
                 file_name=file_name,

@@ -157,6 +157,10 @@ class SurfaceAgentRunProgressObserver(
         self._posted_updates = 0
         self._last_post_at = 0.0
         self._heartbeat_posted = False
+        # A run started by a private note in Lemma: nothing of it goes to the
+        # platform -- no stream, no typing, no answer. See `domain/private_notes`
+        # in the agent module; the run's context says so from its first event.
+        self._stays_in_lemma = False
 
     async def on_run_started(
         self,
@@ -165,8 +169,9 @@ class SurfaceAgentRunProgressObserver(
     ) -> None:
         self._run_files = RunFiles(ctx.agent_run_id)
         self._run_started_at = time.monotonic()
+        self._stays_in_lemma = not getattr(ctx, "delivers_to_surface", True)
         platform = _surface_platform(conversation)
-        if platform is None:
+        if platform is None or self._stays_in_lemma:
             return
         capabilities = PLATFORM_CAPABILITIES.get(platform or "")
         if capabilities is not None and capabilities.finishes_stream_with_answer:
@@ -196,6 +201,8 @@ class SurfaceAgentRunProgressObserver(
         ctx: ConversationContext,
     ) -> None:
         self._run_files = RunFiles(ctx.agent_run_id)
+        if self._stays_in_lemma:
+            return
         if event.type in {AgentEventType.ERROR, AgentEventType.REJECTED}:
             self._run_errored = True
             self._run_error_text = _safe_run_error_text(event)
@@ -333,6 +340,8 @@ class SurfaceAgentRunProgressObserver(
         ctx: ConversationContext,
     ) -> None:
         self._run_files = RunFiles(ctx.agent_run_id)
+        if self._stays_in_lemma:
+            return
         task = self._typing_task
         self._typing_task = None
         if task is not None:
@@ -371,6 +380,8 @@ class SurfaceAgentRunProgressObserver(
     ) -> None:
         """Deliver failures raised before the harness can emit an error event."""
         del error
+        if self._stays_in_lemma:
+            return
         self._run_errored = True
         self._run_error_text = (
             "I couldn’t finish that request. "

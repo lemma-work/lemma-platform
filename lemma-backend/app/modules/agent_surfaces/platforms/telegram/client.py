@@ -37,8 +37,11 @@ _TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 TELEGRAM_MESSAGE_LIMIT = 4096
 
 # Update types the surface cares about; shared between webhook registration and
-# the polling receiver so both deliver identical updates.
-ALLOWED_UPDATES = ["message", "edited_message", "callback_query"]
+# the polling receiver so both deliver identical updates. `my_chat_member` is the
+# bot's own membership changing -- being added to a group, and by whom -- which
+# is how a pod comes to know a group (see `services/group_registry`). A webhook
+# registered before it was listed keeps the old set until it is registered again.
+ALLOWED_UPDATES = ["message", "edited_message", "callback_query", "my_chat_member"]
 
 
 def resolve_api_base(credentials: dict[str, Any] | None) -> str:

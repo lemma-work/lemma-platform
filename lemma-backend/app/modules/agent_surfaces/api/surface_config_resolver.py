@@ -53,7 +53,7 @@ async def require_surface_agent_action(
     )
 
 
-async def _may_perform_surface_agent_action(
+async def may_perform_surface_agent_action(
     *,
     ctx,
     pod_id: UUID,
@@ -94,7 +94,7 @@ async def surface_setup_for_reader(
     return await service.get_surface_setup_by_name(
         pod_id=pod_id,
         name=surface_name,
-        reveal_secrets=await _may_perform_surface_agent_action(
+        reveal_secrets=await may_perform_surface_agent_action(
             ctx=ctx,
             pod_id=pod_id,
             agent_id=surface.agent_id,

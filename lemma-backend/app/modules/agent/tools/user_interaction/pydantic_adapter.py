@@ -210,7 +210,9 @@ async def _maybe_deliver_to_surface(
     if deps is None or not response.success:
         return
     platform = getattr(deps, "surface_platform", None)
-    if not platform:
+    # A private note's run stays in Lemma, resources included: the chat app is
+    # where the group reads, and a note is the one thing it must not.
+    if not platform or not getattr(deps, "delivers_to_surface", True):
         return
 
     from app.modules.agent_surfaces.contracts.platforms import (

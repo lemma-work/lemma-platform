@@ -37,6 +37,12 @@ from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store 
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
+    SqlAlchemySurfaceRoutingResolutionAdapter,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
+    SurfaceGroupRepository,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
@@ -48,6 +54,10 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     deliver_fallback_reply,
+)
+from app.modules.agent_surfaces.services.group_log import (
+    group_background,
+    keeps_group_log,
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
@@ -144,8 +154,10 @@ class SurfaceTurnStarter:
         # the last few thread/channel messages fresh for THIS run and hand them to
         # the agent as background context. Best-effort; never blocks the run.
         if not context.event.is_dm:
-            channel_context = await fetch_channel_context(
-                adapter=adapter, context=context, credentials=credentials
+            channel_context = await self._group_background(context) or (
+                await fetch_channel_context(
+                    adapter=adapter, context=context, credentials=credentials
+                )
             )
             if channel_context:
                 metadata["channel_context"] = channel_context
@@ -177,7 +189,16 @@ class SurfaceTurnStarter:
         """Auto-ingest user-provided files into the pod datastore (/me/{platform}).
 
         Surface files behave like web uploads; failures never block the run.
+
+        Not a stranger's: saving them would put their files in the owner's own
+        space, where the stranger's run -- reading only what is Public -- could
+        not open them anyway. The run is told, so it does not look like it
+        ignored the file.
         """
+        if context.answers_outsider:
+            return every_attachment_failed(
+                context.event, reason="Files from outside the pod are not saved"
+            )
         if context.pod_id is None:
             return AttachmentIngest()
         try:
@@ -204,6 +225,42 @@ class SurfaceTurnStarter:
             return every_attachment_failed(
                 context.event, reason="Lemma could not receive this file"
             )
+
+    async def _group_background(
+        self, context: SurfaceChatContext
+    ) -> list[dict[str, object]]:
+        """The pod's own log of this group, where the platform keeps none.
+
+        Empty where the platform can read its history (Slack, Teams) or the
+        group is not one the pod keeps a log for -- the caller then asks the
+        platform, as it always has.
+        """
+        channel_id = context.event.external_channel_id
+        if (
+            context.surface_id is None
+            or not channel_id
+            or not keeps_group_log(context.platform.value)
+        ):
+            return []
+        async with self.uow_factory() as uow:
+            group = await SurfaceGroupRepository(uow.session).get(
+                surface_id=context.surface_id, external_channel_id=channel_id
+            )
+            if group is None:
+                return []
+            lines = await group_background(
+                uow,
+                group=group,
+                membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
+                agent_display_name=context.agent_display_name,
+            )
+        # The message being answered was logged on its way in and is already
+        # the prompt; repeating it as background shows the agent the question
+        # twice. It is the latest line in all but a race, so only that one goes.
+        background = [line.model_dump(mode="json") for line in lines]
+        if background and background[-1]["text"] == context.event.message_text.strip():
+            background.pop()
+        return background
 
     async def _name_new_thread(
         self,

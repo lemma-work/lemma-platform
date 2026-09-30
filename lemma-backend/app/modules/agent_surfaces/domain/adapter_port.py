@@ -29,6 +29,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
 )
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, SurfaceEnvelope
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
     StreamAppendResult,
@@ -244,6 +245,15 @@ class SurfacePlatformAdapterPort(Protocol):
 
     # An event about the app itself -- installed, added to a channel, home
     # opened. None when the payload is not one.
+
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]: ...
+
+    # What the platform says happened to groups themselves -- a creation the
+    # bot asked for confirmed or refused, a group deleted. Empty for a payload
+    # that carries none, which is every payload on a platform whose bot cannot
+    # create groups.
 
     async def send_channel_setup_prompt(
         self,
