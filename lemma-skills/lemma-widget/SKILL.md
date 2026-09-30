@@ -113,8 +113,8 @@ free-form input.
    it through a parser, or render it to check it: the backend validates what
    you display and says exactly what is wrong if anything is.
 
-The backend rejects unresolved placeholders, hand-written SDK loaders, and
-malformed markup before display.
+The backend rejects unresolved placeholders, incomplete hand-written SDK
+loaders, and malformed markup before display.
 
 ## The `display_resource` call
 
