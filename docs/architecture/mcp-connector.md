@@ -165,8 +165,9 @@ fetched, and a dynamic registration waits in Redis for a week. A client row is
 written when a person allows it.
 
 **Audit.** Every tool call by an outside client logs
-`agent.pod_mcp_service.external_tool.called` with the client, the connection,
-the person, the pod, the tool and whether it failed. Records and their events
+`agent.pod_mcp_service.external_tool.called` with the client, the person, the
+pod, the tool and whether it failed — not the connection, whose row is deleted
+when it ends, so its id would outlive what it names. Records and their events
 carry the person, not the app, so this line is where "that change came from
 ChatGPT" is written; a column for it on records is a possible follow-up. Consent
 granted and refused, connections ended (by the person, an admin or the client),

@@ -116,7 +116,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.pending_user_messages.announce_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.pending_user_messages.claim_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.pending_user_messages.steered_into_run.observed': EventSpec('info', frozenset({'agent_run_id', 'message_count'})),
-    'agent.pod_mcp_service.external_tool.called': EventSpec('info', frozenset({'client_id', 'client_name', 'failed', 'grant_id', 'pod_id', 'tool', 'user_id'})),
+    'agent.pod_mcp_service.external_tool.called': EventSpec('info', frozenset({'client_id', 'client_name', 'failed', 'pod_id', 'tool', 'user_id'})),
     'agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded': EventSpec('warning', frozenset()),
     'agent.pod_mcp_service.session_lookup.failed': EventSpec('error', frozenset()),
     'agent.pydantic_ai.agent_input_required_kind_call.observed': EventSpec('debug', frozenset({'tool_call_id'})),

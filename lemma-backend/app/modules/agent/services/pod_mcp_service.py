@@ -249,7 +249,6 @@ def _audit(caller: _Caller, tool_name: str, *, failed: bool) -> None:
         tool=tool_name,
         client_id=principal.client_id,
         client_name=principal.client_name[:120],
-        grant_id=str(principal.grant_id),
         user_id=str(principal.user_id),
         pod_id=str(principal.pod_id),
         failed=failed,
