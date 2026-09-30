@@ -122,6 +122,24 @@ base64 = "0.22"
 # same process; the shipped app talks to locald over a socket, as before.
 lemma-locald = { path = "locald" }
 
+# Development builds, which `cargo test` inherits through [profile.test].
+#
+# Full debug info is most of what a dev target directory holds: DWARF for every
+# dependency, then again for every test binary that links them. Line tables are
+# what a backtrace and a panic location need, so the workspace's own crates
+# keep those, and dependencies keep nothing. A debugger that has to step into a
+# dependency is the case this gives up; set `debug = true` locally for that.
+#
+# Left at their defaults on purpose: `incremental` (on, and the fast rebuild is
+# worth its disk; `make dev-clean` sweeps stale incremental state) and
+# `split-debuginfo`, which on macOS is already `unpacked` — debug info stays
+# in the object files and no dSYM is produced.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # A workspace ignores [profile] in anything but the root manifest — with a
 # warning that is easy to miss — so every member's release profile lives here.
 # strip and lto were already identical across all six. codegen-units = 1 was

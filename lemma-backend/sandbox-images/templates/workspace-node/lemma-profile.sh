@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Agent-facing login shells use this profile consistently. E2B's system services
 # intentionally retain their base-image environment and /usr/bin/node.
 export LEMMA_NODE_BINARY=/opt/node24/bin/node

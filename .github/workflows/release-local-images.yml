@@ -398,6 +398,7 @@ jobs:
           if [[ "${PUBLISH}" == "true" ]]; then
             tags+=(-t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:latest)
           fi
+          # shellcheck disable=SC2046 # one argument per digest, on purpose
           docker buildx imagetools create \
             "${tags[@]}" \
             $(printf '${{ env.IMAGE_PREFIX }}/${{ matrix.image }}@sha256:%s ' *)

@@ -52,7 +52,10 @@ LEMMA_STACK_SPEC="${LEMMA_STACK_SOURCE:-git+https://github.com/lemma-work/lemma-
 
 say "Installing lemma-stack…"
 uv tool install --force "$LEMMA_STACK_SPEC" >/dev/null
-command -v lemma-stack >/dev/null 2>&1 || export PATH="$(uv tool dir --bin 2>/dev/null || echo "$HOME/.local/bin"):$PATH"
+if ! command -v lemma-stack >/dev/null 2>&1; then
+  tool_bin="$(uv tool dir --bin 2>/dev/null || echo "$HOME/.local/bin")"
+  export PATH="$tool_bin:$PATH"
+fi
 command -v lemma-stack >/dev/null 2>&1 || fail "lemma-stack installed but not on PATH; run: uv tool update-shell"
 
 if [[ "$CLI_ONLY" == "1" ]]; then

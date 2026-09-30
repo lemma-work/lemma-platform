@@ -14,6 +14,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from codeql_scope import is_allowed, load_allowlist, read_ranges, touched
+
 # SARIF calls these "levels"; CodeQL maps its own severities onto them.
 ORDER = ("error", "warning", "note")
 
@@ -25,27 +27,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scope", choices=("diff", "all"), default="diff")
     parser.add_argument("--allow", type=Path, default=Path(".codeql-allow.txt"))
     return parser.parse_args()
-
-
-def load_allowlist(path: Path) -> list[tuple[str, str]]:
-    """Accepted (rule, path-prefix) pairs, so the gate stays actionable.
-
-    A checker nobody can get to zero is a checker everybody learns to ignore,
-    so a finding that has been read and judged fine is recorded here with its
-    reason rather than left to fail every run.
-    """
-    if not path.is_file():
-        return []
-    allowed: list[tuple[str, str]] = []
-    for line in path.read_text().splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        parts = line.split(None, 1)
-        if len(parts) != 2:
-            continue
-        allowed.append((parts[0], parts[1].strip()))
-    return allowed
 
 
 def rule_levels(run: dict) -> dict[str, str]:
@@ -67,24 +48,9 @@ def main() -> int:
         print(f"no SARIF at {args.sarif}", file=sys.stderr)
         return 2
 
-    # path -> the line ranges this branch actually touched. Scoping to lines
-    # rather than files is what keeps a rename from surfacing every pre-existing
-    # finding in the module it renamed something in.
-    changed: dict[str, list[tuple[int, int]]] = {}
-    if args.scope == "diff" and args.changed_files.is_file():
-        for entry in args.changed_files.read_text().splitlines():
-            entry = entry.strip()
-            if not entry or ":" not in entry:
-                continue
-            path, _, span = entry.rpartition(":")
-            start, _, end = span.partition("-")
-            try:
-                changed.setdefault(path, []).append((int(start), int(end)))
-            except ValueError:
-                continue
-
-    def touched(uri: str, line: int) -> bool:
-        return any(start <= line <= end for start, end in changed.get(uri, ()))
+    # Scoped to the lines this branch touched, not the files: see
+    # codeql_scope.py for why.
+    changed = read_ranges(args.changed_files) if args.scope == "diff" else {}
 
     allowed = load_allowlist(args.allow)
     sarif = json.loads(args.sarif.read_text())
@@ -101,12 +67,9 @@ def main() -> int:
                 physical = location.get("physicalLocation") or {}
                 uri = (physical.get("artifactLocation") or {}).get("uri", "")
                 line = (physical.get("region") or {}).get("startLine", 0)
-                if args.scope == "diff" and not touched(uri, line):
+                if args.scope == "diff" and not touched(changed, uri, line):
                     continue
-                if any(
-                    rule_id == rule and uri.startswith(prefix)
-                    for rule, prefix in allowed
-                ):
+                if is_allowed(allowed, rule_id, uri):
                     accepted += 1
                     continue
                 findings[level].append((uri, line, rule_id, message))

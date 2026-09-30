@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 set +e
 echo '--- addresses ---'
 ip -4 -o addr show 2>&1

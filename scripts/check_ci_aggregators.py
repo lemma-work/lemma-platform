@@ -56,6 +56,10 @@ EXEMPT = {
     # and earns a place in "CI passed" by being boring first. The ruleset can
     # require it by name in the meantime.
     ("ci.yml", "desktop-launch-smoke"),
+    # Posts CodeQL's findings as a pull request comment. It reports what the
+    # analyze jobs found, and those jobs are already in "Security passed"; a
+    # comment that failed to post is not a reason to block a merge.
+    ("security.yml", "codeql-pr-comment"),
 }
 
 # The workflow that announces a failure nobody is looking at. It watches the
