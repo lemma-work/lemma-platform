@@ -125,6 +125,17 @@ export async function updateComment(podId: string, id: string, patch: Record<str
     await lemma(podId).records.update(COMMENTS_TABLE, id, patch);
 }
 
+/** A renamed page keeps its threads: every comment on it follows the path. */
+export async function moveComments(podId: string, from: string, to: string): Promise<void> {
+    if (source.label === "sample") {
+        for (let at = 0; at < SAMPLE.length; at++) if (SAMPLE[at].filePath === from) SAMPLE[at] = { ...SAMPLE[at], filePath: to };
+        sampleChanged();
+        return;
+    }
+    const rows = await listComments(podId, from);
+    await Promise.all(rows.map((row) => lemma(podId).records.update(COMMENTS_TABLE, row.id, { file_path: to })));
+}
+
 export async function deleteComment(podId: string, id: string): Promise<void> {
     if (source.label === "sample") {
         const at = SAMPLE.findIndex((row) => row.id === id);
