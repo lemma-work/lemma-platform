@@ -821,6 +821,7 @@ def _import_e2e_models() -> None:
     from app.modules.connectors.infrastructure import models as connector_models
     from app.modules.datastore.infrastructure.models import datastore_models
     from app.modules.function.infrastructure import models as function_models
+    from app.modules.mcp_access.infrastructure import models as mcp_access_models
     from app.modules.identity.infrastructure.models import (
         organization_models,
         user_models,
@@ -851,6 +852,7 @@ def _import_e2e_models() -> None:
         agent_surface_models,
         pod_role_models,
         pod_bundle_models,
+        mcp_access_models,
     )
 
 

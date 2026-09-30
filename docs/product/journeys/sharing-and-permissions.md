@@ -156,6 +156,83 @@ rights than the person who asked.
 
 ---
 
+## Capability: Use a pod from another AI tool
+
+### PS-ACCESS-040 — A person connects an outside AI tool to one pod, and it acts as them
+**Status:** manual
+
+- When a person opens a pod's AI tools settings, the system shall give them one
+  link for that pod that an MCP client such as Claude or ChatGPT can add
+  without installing anything.
+- When a tool first uses the link, the system shall ask the person to sign in
+  before anything is granted.
+- When the person is asked to allow a tool, the system shall show which tool is
+  asking.
+- When the person is asked to allow a tool, the system shall show which pod the
+  tool wants.
+- When the person is asked to allow a tool, the system shall show where they
+  will be sent back to.
+- While a tool is connected, the system shall let it read and change only what
+  the person themselves may read and change in that pod.
+- If a connected tool asks for a pod other than the one it was connected to,
+  then the system shall refuse it.
+- When a tool asks to change things, the system shall let the person allow it
+  to read only instead.
+- Where the person allowed reading only, the system shall not let the tool
+  change anything.
+- Where the person allowed reading only, the system shall not let the tool
+  make a link to a file that anyone can open.
+- If a tool asks to send the person anywhere that would run code in their
+  browser, then the system shall refuse the request.
+- If a tool asks to send the person anywhere that would run code in their
+  browser, then the system shall not send them there.
+- If a tool presents access that was issued for a different pod, then the
+  system shall refuse it.
+- If a tool presents access that was issued for a different pod, then the
+  system shall reveal nothing about that pod.
+- If the person declines, then the system shall grant nothing.
+- If the person declines, then the system shall tell the tool it was refused.
+
+> **Manual:** the promise is about someone else's product reaching Lemma from
+> the internet, so proving it needs Claude and ChatGPT themselves. Verified by
+> hand against both through a public tunnel; the whole exchange — discovery,
+> registration, consent, token, tool calls, the pod boundary and read-only
+> access — is covered by the module e2e suite (`mcp_access/tests/e2e`).
+
+**Contracts:** `mcp_access.endpoint.get`
+
+### PS-ACCESS-041 — A person sees what they have connected, and disconnecting takes effect at once
+**Status:** manual
+
+- When a person opens a pod's AI tools settings, the system shall list the
+  tools they have connected to that pod.
+- When the system lists a connected tool, it shall show what the tool may do.
+- When the system lists a connected tool, it shall show when the tool was last
+  used.
+- When a pod admin opens the pod's AI tools settings, the system shall list
+  every member's connections to that pod.
+- When a pod admin disconnects a member's tool, the system shall end that
+  connection.
+- When a person connects the same tool from a second device, the system shall
+  record a second connection.
+- When a person disconnects one of two connections, the system shall leave the
+  other working.
+- When a person disconnects a tool, the system shall refuse that tool's very
+  next request.
+- When a disconnected tool asks to connect again, the system shall ask the
+  person again.
+- If a tool's saved access is used by two parties, then the system shall end
+  the connection for both.
+- If the person's account is deactivated, then the system shall refuse every
+  tool they connected.
+- When a pod is deleted, the system shall refuse every tool connected to it.
+- When a tool disconnects itself, the system shall end that connection.
+
+> **Manual:** as PS-ACCESS-040. The module e2e suite covers disconnecting,
+> refresh-token reuse and the list.
+
+**Contracts:** `mcp_access.grants.list`, `mcp_access.grants.revoke`
+
 ## Capability: Understand and audit access
 
 ### PS-ACCESS-030 — A person can see who can reach a resource

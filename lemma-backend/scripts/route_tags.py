@@ -22,6 +22,7 @@ TAG_MODULES = {
     "Auth": "identity",
     "Connectors": "connectors",
     "Functions": "function",
+    "MCP Access": "mcp_access",
     "Organizations": "identity",
     "Pod Bundle": "pod_bundle",
     "Pod Join Requests": "pod",

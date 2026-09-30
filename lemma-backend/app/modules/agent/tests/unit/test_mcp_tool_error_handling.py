@@ -17,6 +17,7 @@ from pydantic_ai import ModelRetry
 
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
+from app.modules.agent.services import pod_mcp_service as pod_mcp_module
 from app.modules.agent.services.pod_mcp_service import PodMCPService
 from app.modules.agent.tools.approval.executor import ApprovalExecutor
 from app.modules.agent.tools.context import BaseAgentContext
@@ -91,13 +92,13 @@ async def test_pod_mcp_returns_is_error_on_tool_failure(monkeypatch):
     user_id, pod_id = uuid4(), uuid4()
     ctx = _ctx(uuid4(), pod_id, user_id)
 
-    async def fake_require_context(self, *, pod_id, token):
-        return ctx
+    async def fake_require_caller(self, *, pod_id, token, principal=None):
+        return pod_mcp_module._Caller(ctx=ctx, scopes=None)
 
     async def raising_call_tool(self, **kwargs):
         raise RuntimeError("pod tool blew up")
 
-    monkeypatch.setattr(PodMCPService, "_require_context", fake_require_context)
+    monkeypatch.setattr(PodMCPService, "_require_caller", fake_require_caller)
     monkeypatch.setattr(AgentToolDispatcher, "call_tool", raising_call_tool)
 
     service = PodMCPService()
@@ -150,3 +151,14 @@ async def test_approval_executor_returns_error_on_tool_failure(monkeypatch):
         "error_type": "RuntimeError",
         "tool": "exec_command",
     }
+
+
+@pytest.mark.asyncio
+async def test_an_outside_clients_token_read_from_a_header_is_never_honoured():
+    """Only the principal the public mount verified counts. A token arriving
+    any other way -- a second Authorization header the door never read -- is
+    refused before anything looks it up."""
+    service = PodMCPService()
+    assert not await service.authorize(pod_id=uuid4(), token="lemma_mcp_at_x")
+    with pytest.raises(ValueError):
+        await service.list_tools(pod_id=uuid4(), token="lemma_mcp_at_x")

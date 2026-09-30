@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 170 |
 | `gap` | 2 |
-| `manual` | 16 |
+| `manual` | 18 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **188** |
+| **total** | **190** |
 
 Scenario tests declaring a promise: 422.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 243 | 267 |
+| OpenAPI operations | 243 | 270 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -238,6 +238,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ACCESS-021` No software does anything destructive by default | `covered` | `test_an_ungranted_agent_cannot_delete_a_record`, `test_a_destructive_attempt_asks_rather_than_failing_silently` |
 | `PS-ACCESS-022` Approving for a session means that session only | `covered` | `test_a_session_approval_stops_repeat_asking`, `test_a_session_approval_does_not_leak_to_another_conversation` |
 | `PS-ACCESS-023` Revoking a person's access revokes their software's too | `covered` | `test_removing_a_person_stops_their_delegations` |
+| `PS-ACCESS-040` A person connects an outside AI tool to one pod, and it acts as them | `manual` | — |
+| `PS-ACCESS-041` A person sees what they have connected, and disconnecting takes effect at once | `manual` | — |
 | `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_resource_can_be_previewed`, `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
 | `PS-ACCESS-031` Refusals are informative without leaking | `covered` | `test_a_refusal_is_informative`, `test_a_refusal_does_not_leak` |
 
