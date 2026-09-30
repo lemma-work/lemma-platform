@@ -95,7 +95,9 @@ JWT cannot: revocation takes effect on the next request. Access tokens last an
 hour. Refresh tokens last 30 days, rotate on every use, and a rotated refresh
 token presented again ends the whole grant (OAuth 2.1 §4.3.1) — except within
 60 seconds of rotating, when it is the same client retrying a response it
-lost. Rotating a
+lost. A retry cancels every pair the grant holds before issuing its own, so a
+grant never has two usable pairs; the cancelled refresh token presented after
+the grace is a replay like any other. Rotating a
 refresh token and writing its replacement is one transaction. Every token is
 narrowed by the grant's current scopes when it is issued and when it is used,
 so a grant never hands out more than the person agreed to. Each rotation prunes

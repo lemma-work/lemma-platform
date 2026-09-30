@@ -57,6 +57,13 @@ test("the link is the API's own, and there is none where the feature is off", as
     assert.equal(await fetchMcpUrl("https://api.lemma.work", pod.id, off), null);
 });
 
+test("a failed request for the link is an error, not the feature being off", async () => {
+    const down = (async () => new Response("{}", { status: 502 })) as unknown as typeof fetch;
+    await assert.rejects(fetchMcpUrl("https://api.lemma.work", pod.id, down), /could not be loaded \(502\)/);
+    const offline = (async () => { throw new TypeError("Failed to fetch"); }) as unknown as typeof fetch;
+    await assert.rejects(fetchMcpUrl("https://api.lemma.work", pod.id, offline), TypeError);
+});
+
 test("admins are shown everyone's connections, everyone else their own", async () => {
     const asked: string[] = [];
     const member = (async (url: string) => {

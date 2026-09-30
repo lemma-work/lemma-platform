@@ -106,8 +106,11 @@ function McpAccess({ pod }: { pod: Pod }) {
     const apiUrl = configuredApiUrl();
     const [clientId, setClientId] = useState("claude");
     /* Undefined while asking, null when this deployment does not serve spaces
-       over MCP — then the section is not shown at all. */
+       over MCP — then the section is not shown at all. A request that failed
+       is neither: it says so, with a way to try again. */
     const [url, setUrl] = useState<string | null | undefined>(undefined);
+    const [urlProblem, setUrlProblem] = useState<string | null>(null);
+    const [attempt, setAttempt] = useState(0);
     const [connected, setConnected] = useState<ConnectedClient[] | null>(null);
     const [everyone, setEveryone] = useState(false);
     const [problem, setProblem] = useState<string | null>(null);
@@ -116,8 +119,15 @@ function McpAccess({ pod }: { pod: Pod }) {
         if (!apiUrl) return;
         let cancelled = false;
         void (async () => {
-            const stated = await fetchMcpUrl(apiUrl, pod.id).catch(() => null);
+            let stated: string | null;
+            try {
+                stated = await fetchMcpUrl(apiUrl, pod.id);
+            } catch (error) {
+                if (!cancelled) setUrlProblem(error instanceof Error ? error.message : "The link could not be loaded.");
+                return;
+            }
             if (cancelled) return;
+            setUrlProblem(null);
             setUrl(stated);
             if (!stated) return;
             try {
@@ -130,8 +140,21 @@ function McpAccess({ pod }: { pod: Pod }) {
             }
         })();
         return () => { cancelled = true; };
-    }, [apiUrl, pod.id]);
+    }, [apiUrl, pod.id, attempt]);
 
+    if (apiUrl && urlProblem) {
+        return (
+            <div className="access__card">
+                <div className="access__head">
+                    <span>
+                        <b>Connect with a link</b>
+                        <small role="alert">{urlProblem}</small>
+                    </span>
+                    <button className="access__copy" onClick={() => { setUrlProblem(null); setAttempt(count => count + 1); }}>Try again</button>
+                </div>
+            </div>
+        );
+    }
     if (!apiUrl || !url) return null;
     const client = MCP_CLIENTS.find(entry => entry.id === clientId) ?? MCP_CLIENTS[0];
     const command = client.command?.(url, pod) ?? null;

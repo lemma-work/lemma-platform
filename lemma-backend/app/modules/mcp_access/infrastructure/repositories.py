@@ -321,6 +321,31 @@ class McpAccessRepository:
             delete(McpOAuthToken).where(McpOAuthToken.id == token_id)
         )
 
+    async def supersede_live_tokens(
+        self, *, grant_id: UUID, rotated_at: datetime
+    ) -> None:
+        """Cancel every pair a grant holds before a retried refresh writes a
+        new one, so a grant never has two usable pairs at once.
+
+        Access tokens go. Refresh tokens are marked rotated as of the retried
+        token's own rotation, not now: they share its grace and no more, so
+        presenting one after that reads as the replay it would be.
+        """
+        await self._session.execute(
+            delete(McpOAuthToken).where(
+                McpOAuthToken.grant_id == grant_id,
+                McpOAuthToken.kind == TokenKind.ACCESS.value,
+            )
+        )
+        await self._session.execute(
+            update(McpOAuthToken)
+            .where(
+                McpOAuthToken.grant_id == grant_id,
+                McpOAuthToken.rotated_at.is_(None),
+            )
+            .values(rotated_at=rotated_at)
+        )
+
     async def prune_grant_tokens(
         self, *, grant_id: UUID, keep_rotated: UUID, now: datetime
     ) -> None:

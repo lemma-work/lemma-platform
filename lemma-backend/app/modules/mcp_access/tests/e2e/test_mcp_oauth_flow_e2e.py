@@ -242,6 +242,15 @@ async def test_refresh_rotates_and_a_replayed_refresh_token_ends_the_grant(
     # response it lost, and gets a fresh pair rather than ending the grant.
     retried = await mcp_client.refresh(first["refresh_token"])
     assert retried.status_code == 200, retried.text
+    third = retried.json()
+    assert (
+        await mcp_client.rpc(pod_id, third["access_token"], "tools/list")
+    ).status_code == 200
+    # The retry's pair replaces the first exchange's; the grant never holds
+    # two usable pairs, so whoever has the losing one is refused.
+    assert (
+        await mcp_client.rpc(pod_id, second["access_token"], "tools/list")
+    ).status_code == 401
 
     # Well after rotation, it is someone else holding a copy: nobody keeps it.
     await db_session.execute(
@@ -254,7 +263,32 @@ async def test_refresh_rotates_and_a_replayed_refresh_token_ends_the_grant(
     replayed = await mcp_client.refresh(first["refresh_token"])
     assert replayed.status_code in (400, 401)
     assert replayed.json()["error"] == "invalid_grant"
-    after = await mcp_client.rpc(pod_id, second["access_token"], "tools/list")
+    after = await mcp_client.rpc(pod_id, third["access_token"], "tools/list")
+    assert after.status_code == 401
+
+
+async def test_the_superseded_refresh_token_is_a_replay_after_the_grace(
+    mcp_client, authenticated_client, test_pod, db_session
+):
+    """The pair a retry cancelled cannot come back later: its refresh token,
+    presented after the grace, ends the grant rather than being honoured."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    first = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    second = (await mcp_client.refresh(first["refresh_token"])).json()
+    third = (await mcp_client.refresh(first["refresh_token"])).json()
+
+    await db_session.execute(
+        text(
+            "UPDATE mcp_oauth_tokens SET rotated_at = rotated_at - interval '5 minutes' "
+            "WHERE rotated_at IS NOT NULL"
+        )
+    )
+    await db_session.commit()
+    replayed = await mcp_client.refresh(second["refresh_token"])
+    assert replayed.status_code in (400, 401)
+    assert replayed.json()["error"] == "invalid_grant"
+    after = await mcp_client.rpc(pod_id, third["access_token"], "tools/list")
     assert after.status_code == 401
 
 

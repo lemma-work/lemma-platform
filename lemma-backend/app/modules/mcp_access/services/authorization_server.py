@@ -67,6 +67,8 @@ class LemmaRefreshToken(RefreshToken):
     retried: bool = False
     """Already exchanged moments ago: the client is retrying a refresh whose
     response it never received, not replaying a stolen token."""
+    rotated_at: datetime | None = None
+    """When it was first exchanged; set only on a retry."""
 
 
 REFRESH_RETRY_GRACE = timedelta(seconds=60)
@@ -236,6 +238,7 @@ class LemmaAuthorizationServer(
             grant_id=str(found.grant_id),
             token_id=str(found.token_id),
             retried=retried,
+            rotated_at=found.rotated_at if retried else None,
         )
 
     async def exchange_refresh_token(
@@ -249,21 +252,30 @@ class LemmaAuthorizationServer(
         # between left the old token spent and no new one issued -- and the
         # client's retry with the only token it has read as a replay, which
         # ends the whole grant.
+        #
+        # A retry cannot be answered with the pair the first exchange issued:
+        # only digests are kept, and keeping the tokens themselves to replay
+        # them would undo that. So it cancels that pair -- and any other -- in
+        # this transaction before writing its own. Whoever holds the copy that
+        # lost finds it refused, and presenting it after the grace is a replay.
         now = self._now()
         grant_id = UUID(refresh_token.grant_id)
         token_id = UUID(refresh_token.token_id)
         async with self._uow_factory() as uow:
             repository = McpAccessRepository(uow)
-            if not refresh_token.retried and not await repository.mark_rotated(
-                token_id=token_id, now=now
-            ):
+            if refresh_token.retried and refresh_token.rotated_at is not None:
+                await repository.supersede_live_tokens(
+                    grant_id=grant_id, rotated_at=refresh_token.rotated_at
+                )
+            elif await repository.mark_rotated(token_id=token_id, now=now):
+                await repository.prune_grant_tokens(
+                    grant_id=grant_id, keep_rotated=token_id, now=now
+                )
+            else:
                 raise TokenError(
                     error="invalid_grant",
                     error_description="refresh token already used",
                 )
-            await repository.prune_grant_tokens(
-                grant_id=grant_id, keep_rotated=token_id, now=now
-            )
             tokens = await self._write_pair(
                 repository, grant_id=grant_id, scopes=scopes
             )

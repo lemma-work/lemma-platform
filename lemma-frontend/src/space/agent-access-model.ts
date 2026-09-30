@@ -228,15 +228,19 @@ export async function loadConnections(
  *  serve spaces over MCP (`MCP_ACCESS_ENABLED=false` answers 404). Never built
  *  in the browser: the browser knows the API by the address this page was
  *  configured with, which is not always the one outside clients reach, and a
- *  link built here would be offered even where there is nothing behind it. */
+ *  link built here would be offered even where there is nothing behind it.
+ *  Anything else that goes wrong throws: a failed request is not the feature
+ *  being off, and hiding the section for it would look exactly like it. */
 export async function fetchMcpUrl(apiUrl: string, podId: string, fetcher: typeof fetch = fetch): Promise<string | null> {
     const response = await fetcher(apiUrl + "/oauth/mcp-endpoint/" + encodeURIComponent(podId), {
         credentials: "include",
         headers: { Accept: "application/json" },
     });
-    if (!response.ok) return null;
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error("The link could not be loaded (" + response.status + ").");
     const body = (await response.json()) as { url?: unknown };
-    return typeof body.url === "string" ? body.url : null;
+    if (typeof body.url !== "string") throw new Error("The link could not be loaded.");
+    return body.url;
 }
 
 /** Ends the connection and every token it was given; the app has to ask

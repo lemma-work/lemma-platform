@@ -172,8 +172,8 @@ rights than the person who asked.
   tool wants.
 - When the person is asked to allow a tool, the system shall show where they
   will be sent back to.
-- While a tool is connected, the system shall let it read and change that pod
-  only as far as the person themselves may, row-level security included.
+- While a tool is connected, the system shall let it read and change only what
+  the person themselves may read and change in that pod.
 - If a connected tool asks for a pod other than the one it was connected to,
   then the system shall refuse it.
 - When a tool asks to change things, the system shall let the person allow it
