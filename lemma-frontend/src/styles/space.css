@@ -6582,7 +6582,7 @@ samp,
    the rule and its gaps (17) and the list's inset (2), less the difference
    between a 36px row and a 40px face slot. At the foot, no inset of its own,
    so Settings ends where the rail's avatar does and the two share a line.
-   The places get room to breathe; chats sit well below them, a list you
+   The places get space to breathe; chats sit well below them, a list you
    scan rather than a continuation of the places. */
 .side__space .snav {
     padding: 21px 0 0;
