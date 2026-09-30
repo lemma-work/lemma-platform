@@ -14,6 +14,7 @@ import { source, type FileContent } from "@/data";
 import { lemma } from "@/session/client";
 import { usePageTools, pageDirs, safeName } from "@/docpages/page-context";
 import { SlashBridge, SlashCommand, type SlashId } from "@/docpages/editor/slash";
+import { wantsRename } from "@/docpages/rename";
 import { FileBlock } from "@/docpages/editor/file-block";
 import { ViewBlock, WidgetBlock } from "@/docpages/editor/embeds";
 import { createPortal } from "react-dom";
@@ -116,9 +117,23 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     const picker = useRef<HTMLInputElement>(null);
     const picking = useRef<{ kind: "image" | "file"; at: number } | null>(null);
 
+    /* The title is committed when the caret leaves it, or the page loses
+       focus — then the file is renamed to follow it (see `commitTitle`). */
+    const inTitle = useRef(false);
+    const titleCommit = useRef<(() => void) | null>(null);
+
     const editor = useEditor({
-        onSelectionUpdate: ({ editor }) => setPick(asPage ? null : placePick(editor, host.current)),
-        onBlur: () => setPick(null),
+        onSelectionUpdate: ({ editor }) => {
+            setPick(asPage ? null : placePick(editor, host.current));
+            if (!asPage) return;
+            const now = editor.state.selection.$from.index(0) === 0;
+            if (inTitle.current && !now) titleCommit.current?.();
+            inTitle.current = now;
+        },
+        onBlur: () => {
+            setPick(null);
+            if (asPage) titleCommit.current?.();
+        },
         extensions: [
             /* No underline: markdown has none, and a mark that vanishes on
                save is worse than a button that is not there. */
@@ -187,18 +202,28 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
      *  typing through a save and two are in flight, and only the last of them
      *  may say what is now on disk. */
     const attempt = useRef(0);
+    /* Where saves go. A ref, not the prop: a rename moves the file before
+       the new path arrives as a prop, and a save aimed at the old path would
+       find it gone and upload a second copy under the old name. */
+    const target = useRef(path);
+    useEffect(() => { target.current = path; }, [path]);
+    const renaming = useRef(false);
     const persist = useCallback(async (next: string) => {
+        /* Held while the file moves; the autosave comes back round once the
+           new path is in. */
+        if (renaming.current) return;
         const mine = ++attempt.current;
+        const at = target.current;
         setState("saving");
         try {
-            await source.writeFile(podId, path, next);
+            await source.writeFile(podId, at, next);
             if (attempt.current !== mine) return;
             setSaved(next);
             setState("saved");
             /* The same key `FileView` and `ViewActions` read. Without this,
                Download hands over the version this tab opened with, and the
                skills deck goes on describing a SKILL.md that has changed. */
-            cache.setQueryData(["file", podId, path], (was?: FileContent) =>
+            cache.setQueryData(["file", podId, at], (was?: FileContent) =>
                 was ? { ...was, text: next, size: next.length } : was);
         } catch (error) {
             if (attempt.current !== mine) return;
@@ -209,6 +234,8 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
             if (isForbidden(error)) { setForbidden(true); setState("idle"); return; }
             setState("failed");
         }
+    /* `path` stays a dependency on purpose: a new one re-arms the autosave
+       that was held while the file moved. */
     }, [cache, path, podId]);
 
     /** Write what the editor holds now, without waiting for the pause — for
@@ -219,6 +246,27 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
         setDraft(next);
         await persist(next);
     }, [editor, persist]);
+
+    /** Rename the file to follow the page's title, once the title is done
+     *  being typed. Saved first, so the move carries every keystroke. */
+    const commitTitle = useCallback(async () => {
+        const page = toolsRef.current;
+        if (!editor || !page?.renamePage || renaming.current || forbidden) return;
+        const first = editor.state.doc.firstChild;
+        if (!first || first.type.name !== "heading" || first.attrs.level !== 1) return;
+        const title = first.textContent;
+        if (!wantsRename(target.current, title)) return;
+        await flush();
+        renaming.current = true;
+        try {
+            target.current = await page.renamePage(target.current, title);
+        } catch {
+            /* The name stays; the page is still saved where it was. */
+        } finally {
+            renaming.current = false;
+        }
+    }, [editor, flush, forbidden]);
+    titleCommit.current = () => void commitTitle();
 
     /* What each `/` item does. Set on every render so it sees the current
        page tools; the plugin only ever calls through the bridge. */

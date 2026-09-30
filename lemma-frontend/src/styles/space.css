@@ -4753,8 +4753,8 @@ samp,
 
 /* The slash menu. */
 .slash {
-    position: absolute;
-    z-index: 40;
+    position: fixed;
+    z-index: 60;
     width: 320px;
     max-height: 340px;
     overflow-y: auto;

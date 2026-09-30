@@ -245,7 +245,9 @@ export type Tab =
     | { id: "history"; kind: "history"; label: string }
     /** A file the agent showed, opened onto the stage. Same idea: you asked
      *  for it, so it stays until you close it. */
-    | { id: string; kind: "file"; label: string; path: string }
+    /** `pane` is the id it was opened under, kept through a rename so the
+     *  open editor is not rebuilt when its file moves. */
+    | { id: string; kind: "file"; label: string; path: string; pane?: string }
     /** One row, on its own page — reached from its table or from search, and
      *  worth a tab because what it is attached to is worth navigating. */
     | { id: string; kind: "record"; label: string; table: string; recordId: string }
@@ -599,6 +601,8 @@ export interface PodSource {
     /** Make a new text file, and refuse — with a 409 — if one is already
      *  there. `writeFile` replaces; a new page must never replace. */
     createFile(podId: string, path: string, text: string): Promise<void>;
+    /** Move a file or folder. 409 when `to` is taken, 404 when `from` is gone. */
+    renameFile(podId: string, from: string, to: string): Promise<void>;
     /** A signed URL the widget iframe can load. The serve route is
      *  authenticated and injects the runtime config the widget's browser SDK
      *  needs, which inline HTML in an iframe can never have. */
