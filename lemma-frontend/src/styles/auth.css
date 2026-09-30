@@ -109,7 +109,7 @@
     justify-content: center;
     padding: 40px;
 }
-.portal__form { width: min(100%, 25rem); }
+.portal__form { width: min(100%, 25rem); overflow-wrap: anywhere; }
 .portal__form h2 { margin: 0 0 8px; }
 .portal__lead {
     margin: 0 0 4px;

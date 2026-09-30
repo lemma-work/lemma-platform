@@ -12,6 +12,7 @@ import {
     holdConsentRequest,
     readConsentRequest,
     requestIdFromSearch,
+    whereBack,
     whoIsAsking,
     type ConsentRequest,
 } from "./mcp-consent";
@@ -107,7 +108,7 @@ export function McpConsent() {
                     lead={
                         <>
                             {who.claim} After you answer you will be sent to{" "}
-                            <strong>{request.redirect_host}</strong> — only continue if that is where you
+                            <strong>{whereBack(request)}</strong> — only continue if that is where you
                             are connecting from.
                         </>
                     }

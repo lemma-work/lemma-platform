@@ -22,7 +22,12 @@ export interface ConsentRequest {
      *  that is checked. Null for an app that registered itself. */
     verified_host: string | null;
     client_uri: string | null;
+    /** A web redirect's host, or an app's scheme and a colon (`cursor:`):
+     *  the rest of an app's URI is whatever the app wrote, so
+     *  `evilapp://claude.ai/cb` must not read as going to claude.ai. */
     redirect_host: string;
+    /** The redirect opens an app on this device rather than a web page. */
+    redirect_to_app?: boolean;
     pod_id: string;
     pod_name: string;
     scopes: string[];
@@ -47,6 +52,13 @@ export function whoIsAsking(request: Pick<ConsentRequest, "verified_host" | "cli
         claim: claim + " Lemma cannot check that: this app registered itself.",
         verified: false,
     };
+}
+
+/** Where the person is sent after answering, in words they can check. */
+export function whereBack(request: Pick<ConsentRequest, "redirect_host" | "redirect_to_app">): string {
+    return request.redirect_to_app
+        ? "an app on this device that opens " + request.redirect_host + " links"
+        : request.redirect_host;
 }
 
 /** Held across sign-in, which leaves this page and may leave the site. */
@@ -103,7 +115,16 @@ const REFUSED_SCHEMES = new Set([
     "about:", "view-source:", "jar:", "ws:", "wss:", "ftp:",
 ]);
 
-const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+/** The same loopback rule as the API's `ipaddress.is_loopback`: all of
+ *  127.0.0.0/8, `::1`, and IPv4-mapped 127.x (which `URL` spells
+ *  `[::ffff:7f00:1]`). Narrower here than there, a redirect the API accepted
+ *  — after creating the grant — would be refused on this page, and the person
+ *  would see an error beside a connection that exists. */
+function isLoopback(hostname: string): boolean {
+    if (hostname === "localhost" || hostname === "[::1]") return true;
+    if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+    return /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(hostname);
+}
 
 /** Whether the browser may be sent to `raw`. The API checks this too; this is
  *  the backstop, because this page is where a bad URI would do its harm. */
@@ -118,7 +139,7 @@ export function safeRedirect(raw: string): boolean {
     if (REFUSED_SCHEMES.has(url.protocol)) return false;
     if (url.username || url.password) return false;
     if (url.protocol === "https:") return url.hostname !== "";
-    if (url.protocol === "http:") return LOOPBACK.has(url.hostname);
+    if (url.protocol === "http:") return isLoopback(url.hostname);
     return /^[a-z][a-z0-9+.-]*:$/.test(url.protocol);
 }
 

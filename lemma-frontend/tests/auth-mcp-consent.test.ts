@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { answerConsentRequest, requestIdFromSearch, safeRedirect } from "../src/auth/mcp-consent.ts";
+import { answerConsentRequest, requestIdFromSearch, safeRedirect, whereBack } from "../src/auth/mcp-consent.ts";
 
 /** The consent page carries nothing but which request it answers; the API
  *  holds the rest and says where the browser goes next. */
@@ -45,6 +45,8 @@ test("the browser is never sent to a redirect that runs code, whatever the serve
         "blob:https://evil.example/x",
         "http://evil.example/callback",
         "https://user:pw@claude.ai/cb",
+        "http://128.0.0.1/cb",
+        "http://[::ffff:8.8.8.8]/cb",
     ]) {
         assert.equal(safeRedirect(bad), false, bad);
         const fetcher = (async () => new Response(JSON.stringify({ redirect_to: bad }), { status: 200 })) as unknown as typeof fetch;
@@ -53,6 +55,11 @@ test("the browser is never sent to a redirect that runs code, whatever the serve
     for (const good of [
         "https://claude.ai/api/mcp/auth_callback?code=c",
         "http://localhost:53172/callback?code=c",
+        // The API's loopback rule is all of 127/8 and IPv4-mapped 127.x; a
+        // narrower one here refused redirects the API had already granted.
+        "http://127.0.0.2:9/callback?code=c",
+        "http://[::ffff:127.0.0.1]:9/callback?code=c",
+        "http://[::1]:9/callback?code=c",
         "cursor://anysphere.cursor-retrieval/oauth/callback?code=c",
     ]) {
         assert.equal(safeRedirect(good), true, good);
@@ -68,4 +75,11 @@ test("allowing reading only is sent with the answer", async () => {
     }) as unknown as typeof fetch;
     await answerConsentRequest("consent-request-id-000123", { allow: true, readOnly: true }, fetcher);
     assert.deepEqual(body, { allow: true, read_only: true });
+});
+
+test("an app's own scheme is named as an app, not as the host its URI spells", () => {
+    assert.equal(whereBack({ redirect_host: "claude.ai" }), "claude.ai");
+    const app = whereBack({ redirect_host: "evilapp:", redirect_to_app: true });
+    assert.ok(app.includes("evilapp:"));
+    assert.ok(!app.includes("claude.ai"));
 });

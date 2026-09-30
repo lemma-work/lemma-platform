@@ -180,6 +180,8 @@ rights than the person who asked.
   to read only instead.
 - Where the person allowed reading only, the system shall not let the tool
   change anything.
+- Where the person allowed reading only, the system shall not let the tool
+  make a link to a file that anyone can open.
 - If a tool asks to send the person anywhere that would run code in their
   browser, then the system shall refuse the request.
 - If a tool asks to send the person anywhere that would run code in their
@@ -223,6 +225,8 @@ rights than the person who asked.
   the connection for both.
 - If the person's account is deactivated, then the system shall refuse every
   tool they connected.
+- When a pod is deleted, the system shall refuse every tool connected to it.
+- When a tool disconnects itself, the system shall end that connection.
 
 > **Manual:** as PS-ACCESS-040. The module e2e suite covers disconnecting,
 > refresh-token reuse and the list.

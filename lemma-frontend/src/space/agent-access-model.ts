@@ -191,11 +191,26 @@ export type ConnectedClient = {
     grant_id: string;
     /** The person who connected it. */
     user_id: string;
+    /** A metadata document's URL, or an id the app was issued. */
+    client_id: string;
+    /** What the app calls itself. Unverified. */
     client_name: string;
     scopes: string[];
     connected_at: string;
     last_used_at: string | null;
 };
+
+/** Where an app's metadata document is served — the one checked fact about
+ *  it — or null for an app that registered itself. Shown beside the name,
+ *  because the name is whatever the app chose. */
+export function verifiedHost(client: Pick<ConnectedClient, "client_id">): string | null {
+    if (!client.client_id.startsWith("https://")) return null;
+    try {
+        return new URL(client.client_id).hostname || null;
+    } catch {
+        return null;
+    }
+}
 
 /** "Read and write", "Read only": what a person agreed to, in their words. */
 export function accessLabel(scopes: string[]): string {
@@ -244,8 +259,9 @@ export async function fetchMcpUrl(apiUrl: string, podId: string, fetcher: typeof
 }
 
 /** Ends the connection and every token it was given; the app has to ask
- *  again to come back. A 404 means it is already gone, which is the outcome
- *  asked for. */
+ *  again to come back. A 404 is not an error to show — already ended, or no
+ *  longer this person's to end — but it is not proof it is gone either, so
+ *  the caller reloads the list rather than dropping the row. */
 export async function disconnectClient(apiUrl: string, grantId: string, fetcher: typeof fetch = fetch): Promise<void> {
     const response = await fetcher(apiUrl + "/oauth/grants/" + encodeURIComponent(grantId), {
         method: "DELETE",

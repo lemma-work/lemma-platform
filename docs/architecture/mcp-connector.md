@@ -78,11 +78,13 @@ pod would be a fact stored beside it rather than one the client asked for.
 
 **Both registration methods.** Client ID metadata documents, because Claude and
 ChatGPT prefer them. The document is fetched through fastmcp's SSRF-guarded
-fetcher, and loopback redirects match any port, which Claude Code relies on.
+fetcher. Redirect URIs match exactly (OAuth 2.1 §4.1.1), save that a loopback
+redirect's port may differ (RFC 8252 §7.3), which Claude Code relies on.
 ChatGPT's document (`https://chatgpt.com/oauth/client.json`) declares
 `private_key_jwt`, so a metadata-document client may authenticate at the token
 endpoint with an RFC 7523 assertion signed by the keys its document publishes;
-the assertion's audience may be the token endpoint or the issuer. A
+the assertion's audience may be the token endpoint or the issuer, and RS256 is
+the one signing algorithm offered. A
 dynamically registered client cannot use `private_key_jwt`: it has no document
 to publish keys in.
 Dynamic registration as well, because the spec keeps it as the fallback and
@@ -93,17 +95,21 @@ terms.** Every MCP request already reads
 the database to authorize the tool call, so one indexed lookup more buys what a
 JWT cannot: revocation takes effect on the next request. Access tokens last an
 hour. Refresh tokens last 30 days, rotate on every use, and a rotated refresh
-token presented again ends the whole grant (OAuth 2.1 §4.3.1) — except within
-60 seconds of rotating, when it is the same client retrying a response it
-lost. A retry cancels every pair the grant holds before issuing its own, so a
-grant never has two usable pairs; the cancelled refresh token presented after
-the grace is a replay like any other. Rotating a
-refresh token and writing its replacement is one transaction. Every token is
+token presented again ends the whole grant (OAuth 2.1 §4.3.1) — except once,
+within 60 seconds of rotating, when it is the same client retrying a response
+it lost. A retry is logged, and cancels every pair the grant holds before
+issuing its own, under a lock on the grant, so a grant never has two usable
+pairs; a second retry, or a cancelled refresh token presented later, is a replay
+like any other. A replay is answered where the token is exchanged, not where it
+is looked up, so a client revoking with a rotated token is disconnecting, not
+logged as a thief. Rotating a refresh token and writing its replacement is one
+transaction. Every token is
 narrowed by the grant's current scopes when it is issued and when it is used,
-so a grant never hands out more than the person agreed to. Each rotation prunes
-the grant to its live tokens and the one refresh token just rotated (the one a
-replay would present), so a grant holds a handful of rows however often it
-refreshes. An hourly job ends grants whose refresh token lapsed unused, and
+so a grant never hands out more than the person agreed to; an empty list is no
+scopes, never all of them. Each rotation prunes the grant to its live tokens,
+the one refresh token just rotated (the one a replay would present) and any a
+retry cancelled (which the losing party still holds, and must still be caught
+presenting), so a grant holds a handful of rows however often it refreshes. An hourly job ends grants whose refresh token lapsed unused, and
 every grant ends 180 days after consent however regularly it is used.
 `private_key_jwt` assertion ids are claimed in Redis, so an assertion is used
 once across every replica rather than once per process. Tokens carry a
@@ -123,8 +129,11 @@ pod, and tool calls run exactly as a Lemma session with no delegation claims
 does: through the pod's own assistant, which is user-equivalent, so the
 person's roles, resource grants and row-level security all apply. Consent
 additionally checks that the person can read the pod, as a courtesy refusal at
-the door rather than the enforcement. On every request the account's standing
-is checked too, so deactivating an account stops its connected clients.
+the door rather than the enforcement. On every request and every refresh the
+account's standing and the pod's liveness are checked too, so deactivating an
+account or deleting a pod stops its connected clients at once; deletion is
+soft and memberships survive it, so the pod needs its own check. A `pod.deleted`
+subscriber then ends the pod's grants.
 
 **The toolset is the pod toolset, annotated.** Every tool carries a title and
 `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`
@@ -133,7 +142,17 @@ tool has no row there, because a missing row would default a new tool to the
 cautious "write" policy silently. For outside clients the `needs_approval`
 hand-off is removed from denied results: it points a Lemma agent at
 `request_approval`, a tool outside clients do not have, and for someone acting
-as themselves a denial is the answer.
+as themselves a denial is the answer. One call needs more than its tool's
+scope: `pod_get_file_url` with `url_type: public` mints a link anyone can open
+for up to a week, which outlives the connection, so it needs `pod:write`, and
+the tool is marked open-world.
+
+**An outside client's token is honoured only where it was checked.** The public
+mount verifies the token, applies the rate limit and the Origin check, and
+hands the service the principal it found on the request's state. The service
+never reads an outside client's token from a header itself, and both mounts
+refuse a request with two `Authorization` headers: Starlette reads the first,
+fastmcp the last, so the token checked and the token acted on could differ.
 
 **Connections, revocation and admins.** One consent is one connection (a grant):
 the same client on two devices is two connections, listed apart and ended apart,
@@ -142,7 +161,9 @@ so disconnecting — or a refresh-token replay on — one leaves the other worki
 last used; with `everyone=true`, a pod's admins (`pod.member.manage`) see every
 member's. `DELETE /oauth/grants/{id}` ends one — the person's own, or any in a
 pod they administer — and deletes its tokens. A client can also revoke through
-`/oauth/revoke`, which ends its own grant. The feature stays on by default
+`/oauth/revoke`, which ends its own grant; it needs no `client_secret`, since
+neither a public client nor a `private_key_jwt` one has one to send. The
+feature stays on by default
 (`MCP_ACCESS_ENABLED`); a per-organization switch is a possible follow-up.
 
 **Redirects are checked on every path.** The consent page sends a signed-in
@@ -156,24 +177,33 @@ cannot be framed (`frame-ancestors 'none'`, RFC 9700 §4.16).
 
 **Who is asking, as far as it can be checked.** The consent screen leads with
 the host serving the client's metadata document — the one verified fact about
-it — and shows the name the client gives itself only as its claim. A
-dynamically registered client is labelled unverified. Where the person will be
-sent back to is in the main text, not the small print. When the client asks to
+it — and shows the name the client gives itself only as its claim, stripped of
+control and bidirectional-override characters and cut to 60. A dynamically
+registered client is labelled unverified. Where the person will be sent back to
+is in the main text, not the small print: a web redirect's host, or, for an
+app's own scheme, the scheme — `evilapp://claude.ai/cb` is not going to
+claude.ai. The redirect is checked before anything is granted. When the client asks to
 change things, the person can allow reading only instead.
 
 **Nothing is stored before consent.** Registration and authorize are reachable
 without signing in, so neither writes to Postgres: a metadata document is only
-fetched, and a dynamic registration waits in Redis for a week. A client row is
-written when a person allows it.
+fetched, and a dynamic registration waits in Redis for a day, holding only the
+fields that are read, with caps on their number and length. OAuth request
+bodies are capped at 16 KB before anything parses them; a held authorize
+request carries an S256 `code_challenge` and at most 2 KB of `state`. A client
+row is written when a person allows it.
 
 **Audit.** Every tool call by an outside client logs
-`agent.pod_mcp_service.external_tool.called` with the client, the person, the
-pod, the tool and whether it failed — not the connection, whose row is deleted
-when it ends, so its id would outlive what it names. Records and their events
+`agent.pod_mcp_service.external_tool.called` with the client, the connection,
+the person, the tool and the outcome — done, failed, or refused for scope. The
+connection names the pod, and outlives its revocation. Records and their events
 carry the person, not the app, so this line is where "that change came from
 ChatGPT" is written; a column for it on records is a possible follow-up. Consent
-granted and refused, connections ended (by the person, an admin or the client),
-registrations, and refresh-token and client-assertion replays are logged too.
+granted and refused, connections ended (by the person, which admin, the client,
+or the pod's deletion), registrations with their client id, refresh retries,
+and refresh-token and client-assertion replays are logged too. Assertion ids
+are claimed in Redis; fastmcp's per-process cache of them is switched off, as
+it refused everyone once it held 10,000.
 
 **Rate limits.** Per grant, 300 MCP requests a minute
 (`MCP_ACCESS_REQUESTS_PER_MINUTE`), answered with 429 and `Retry-After`. Token

@@ -6,6 +6,7 @@ import {
     accessLabel,
     connectorName,
     disconnectClient,
+    verifiedHost,
     fetchMcpUrl,
     loadConnections,
     quote,
@@ -124,4 +125,10 @@ test("each client's steps name the connector the same way and never ask for more
         assert.match(steps, /allow Lemma/);
     }
     assert.deepEqual(MCP_CLIENTS.map(client => client.id), ["claude", "chatgpt", "claude-code", "other"]);
+});
+
+test("an app is shown with the host its document is served from, or as unverified", () => {
+    assert.equal(verifiedHost({ client_id: "https://claude.ai/oauth/claude-code-client-metadata" }), "claude.ai");
+    assert.equal(verifiedHost({ client_id: "3f1c0e7a-registered-itself" }), null);
+    assert.equal(verifiedHost({ client_id: "http://claude.ai/doc" }), null);
 });

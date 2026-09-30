@@ -10,6 +10,7 @@ import {
     fetchMcpUrl,
     loadConnections,
     reachableFromInternet,
+    verifiedHost,
     serverSteps,
     setupCommands,
     setupPrompt,
@@ -18,6 +19,7 @@ import {
 } from "./agent-access-model";
 import { agoOf } from "@/schedule/schedules";
 import { configuredApiUrl } from "@/session/origins";
+import { useMe } from "@/session/use-me";
 import { copyText } from "@/desktop/clipboard";
 import { CheckIcon, CopyIcon } from "@/ui/icons";
 
@@ -114,6 +116,9 @@ function McpAccess({ pod }: { pod: Pod }) {
     const [connected, setConnected] = useState<ConnectedClient[] | null>(null);
     const [everyone, setEveryone] = useState(false);
     const [problem, setProblem] = useState<string | null>(null);
+    /* Someone else's connection, asked about once before it is ended. */
+    const [confirming, setConfirming] = useState<string | null>(null);
+    const me = useMe();
 
     useEffect(() => {
         if (!apiUrl) return;
@@ -163,9 +168,15 @@ function McpAccess({ pod }: { pod: Pod }) {
         pod.members.find(member => member.userId === userId)?.name ?? "a former member";
 
     const disconnect = async (grantId: string) => {
+        setConfirming(null);
         try {
             await disconnectClient(apiUrl, grantId);
-            setConnected(current => (current ?? []).filter(item => item.grant_id !== grantId));
+            // Read back rather than dropped locally: a 404 does not prove the
+            // connection is gone, and a row removed here would return on reload.
+            const loaded = await loadConnections(apiUrl, pod.id);
+            setConnected(loaded.items);
+            setEveryone(loaded.everyone);
+            setProblem(null);
         } catch (error) {
             setProblem(error instanceof Error ? error.message : null);
         }
@@ -212,20 +223,39 @@ function McpAccess({ pod }: { pod: Pod }) {
             )}
             {connected !== null && connected.length > 0 && (
                 <ul className="access__prompts">
-                    {connected.map(item => (
-                        <li key={item.grant_id}>
-                            <span>
-                                <b>{item.client_name}</b>
-                                <small>
-                                    {everyone ? "by " + whoConnected(item.user_id) + " · " : ""}
-                                    {accessLabel(item.scopes)} · {item.last_used_at ? "used " + agoOf(item.last_used_at) : "connected " + agoOf(item.connected_at)}
-                                </small>
-                            </span>
-                            <span className="access__actions">
-                                <button className="access__copy" onClick={() => void disconnect(item.grant_id)}>Disconnect</button>
-                            </span>
-                        </li>
-                    ))}
+                    {connected.map(item => {
+                        const host = verifiedHost(item);
+                        const someoneElses = me !== null && item.user_id !== me;
+                        const asking = confirming === item.grant_id;
+                        return (
+                            <li key={item.grant_id}>
+                                <span>
+                                    <b>{item.client_name}</b>
+                                    <small>
+                                        {host ? "from " + host : "unverified app"} ·{" "}
+                                        {everyone ? "by " + whoConnected(item.user_id) + " · " : ""}
+                                        {accessLabel(item.scopes)} · {item.last_used_at ? "used " + agoOf(item.last_used_at) : "connected " + agoOf(item.connected_at)}
+                                    </small>
+                                </span>
+                                <span className="access__actions">
+                                    {asking ? (
+                                        <>
+                                            <small>End it for {whoConnected(item.user_id)}?</small>
+                                            <button className="access__copy" onClick={() => void disconnect(item.grant_id)}>Disconnect</button>
+                                            <button className="access__copy" onClick={() => setConfirming(null)}>Keep</button>
+                                        </>
+                                    ) : (
+                                        <button
+                                            className="access__copy"
+                                            onClick={() => someoneElses ? setConfirming(item.grant_id) : void disconnect(item.grant_id)}
+                                        >
+                                            Disconnect
+                                        </button>
+                                    )}
+                                </span>
+                            </li>
+                        );
+                    })}
                 </ul>
             )}
         </>
