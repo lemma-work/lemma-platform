@@ -745,8 +745,8 @@ each card saving one operator section:
   address, and the SMTP server with its password in the vault). Until it is
   set up the host pack's `EMAIL_TRANSPORT=smtp` names no server, so the
   backend sends nothing and says so: invitations offer their link, sign-in
-  codes are refused, and chat signup on the shared bots tells a stranger the
-  bot is private instead of asking for an address. Once it is set up, locald
+  codes are refused, and chat signup on the shared bots never asks for an
+  address it cannot mail. Once it is set up, locald
   renders `RESEND_FROM_EMAIL` or `SMTP_*`. The
   Resend key is the channels' `surfaces.resend_api_key` — one Resend account
   carries mail in and out — so a Resend setup saves that section first. Test
@@ -759,11 +759,13 @@ each card saving one operator section:
   switch polling and Socket Mode on by themselves (no public address is
   needed), Resend's inbound domain, and WhatsApp and Teams, which say they
   need Public sharing. That Telegram bot is the backend's shared system bot,
-  so once its token is saved the card names it and offers "Chat with your
-  agents on Telegram": the workspace mints a one-time link for the signed-in
-  user (`POST /surfaces/me/telegram-link`, with the pod whose agent answers)
-  and opens it in Telegram, where pressing Start links that chat without an
-  email ([chat onboarding](../operators/chat-onboarding.md)).
+  so once its token is saved the card names it ("@bot is ready", from the
+  Test's `getMe`), takes the owner's mobile number onto their profile, and
+  opens the bot in Telegram. There they send any message and tap Share my
+  contact: locald sets `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH=true`, so the
+  proven contact matches that unverified profile number and the chat reaches
+  their pod's agent with no email
+  ([chat onboarding](../operators/chat-onboarding.md)).
 - **Voice** is the Deepgram key for voice notes, and the voice-call keys
   (Gemini for the voice, TypeSafe for routing) that the workspace's own server
   reads: locald keeps those in the frontend's environment, never the

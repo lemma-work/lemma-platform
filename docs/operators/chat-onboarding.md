@@ -80,42 +80,31 @@ Telegram requests the sender's own contact and accepts no typed phone proof.
 WhatsApp derives phone proof from the authenticated webhook sender. Both support
 typed email and code replies. Telegram also presents contact and setup controls.
 
-Chat signup ends on an emailed code, so it only runs where mail reaches an
-inbox. On a deployment that cannot send mail — the filesystem spool counts as
-none here, since nobody in a chat can read it — a stranger on a shared bot is
-told the bot belongs to a private Lemma and to ask its owner, and the pending
-signup ends as `refused` (logged as
-`agent_surfaces.chat_onboarding.email_unavailable.observed`). They are neither
-asked for a phone nor an address. Lemma Desktop is this case unless its owner
-sets up email.
+A contact the sender shares is matched against profile mobile numbers. A
+verified number always wins. Where `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH` is on,
+a contact that matches nobody verified is matched against unverified profile
+numbers too, and exactly one such profile is taken as its owner (logged as
+`agent_surfaces.identity.unverified_phone_match_used.observed`); two or more
+claims match nobody. A match completes signup with no email, and provisioning
+stamps the number verified, since the self-shared contact has just proven it.
+Lemma Desktop turns the setting on: its owner types their number on their
+profile (or on Server setup's Telegram card), messages the bot and taps Share my
+contact. Everywhere else it is off.
 
-### Linking a Telegram chat from the app
+An account's email verification counts toward chat only where the deployment
+requires it (`AUTH_EMAIL_VERIFICATION_REQUIRED`). Where it is not required, an
+active account with an unverified address is matched, provisioned and resolved
+like any other; hosted Lemma requires it and is unchanged.
 
-A signed-in user can link a chat with the shared Telegram bot without email.
-`GET /surfaces/me/telegram-link` names the bot (from `getMe`, cached in Redis)
-and lists the pods a chat could answer from; `POST /surfaces/me/telegram-link`
-with an optional `pod_id` returns a `https://t.me/<bot>?start=link_<token>` URL.
-Both answer `409 TELEGRAM_SYSTEM_BOT_UNAVAILABLE` when no working shared bot is
-configured, and a pod the user cannot attach a chat to is `403`. Lemma Desktop
-offers this as "Chat with your agents on Telegram" under Settings → This Mac →
-Server setup → Telegram, and a pod's Reach sheet opens a fresh link for the
-shared bot instead of the bare handle.
-
-The token is 32 random URL-safe characters held in Redis under its SHA-256 for
-ten minutes, bound to the user and pod, and consumed with `GETDEL` — so a link
-works once. When Telegram delivers `/start link_<token>` in a private chat, the
-bot records the sender's identity with proof `link_token`, attaches the chosen
-pod's default agent through the ordinary workspace step, and replays a bare
-`/start`, which the agent answers with its greeting. The reply names the account
-the chat is now linked to. A chat that is already linked can be relinked or moved
-to another pod by pressing the button again; a Telegram identity that is live on
-*another* Lemma account is refused rather than taken over. An expired or used
-link is answered with where to get a fresh one.
-
-Every verified identity records how it was proven: `phone`, `email` or
-`link_token`. Only a phone proof is held to the account's current verified mobile
-number, so a mobile-number change revokes phone-proven identities and leaves the
-others alone.
+Signup otherwise ends on an emailed code, so the email step only runs where mail
+reaches an inbox. On a deployment that cannot send mail — the filesystem spool
+counts as none here, since nobody in a chat can read it — a sender the bot does
+not recognise is told to add their number to their profile and share their
+contact again, or to ask whoever runs this Lemma for an invitation, instead of
+being asked for an address. The pending signup ends as `refused` (logged as
+`agent_surfaces.chat_onboarding.email_unavailable.observed`), so their next
+message starts afresh. Telegram still asks for the contact first; only the email
+step is skipped.
 
 WhatsApp can present two static Flows. From `lemma-backend/`, run
 `uv run python scripts/publish_onboarding_flows.py` with `WHATSAPP_ACCESS_TOKEN`

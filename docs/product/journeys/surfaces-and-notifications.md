@@ -115,9 +115,9 @@ it is asked, not skipped.
   themselves, and shall treat neither a username nor a typed number as proof.
 - Where the sender is still unknown after that, the system shall verify their
   mailbox with an email code before provisioning anything.
-- Where the deployment cannot deliver email to an inbox, the system shall ask
-  the sender for neither a phone nor an address, and shall tell them the bot
-  belongs to a private Lemma whose owner can connect them.
+- Where the deployment cannot deliver email to an inbox, the system shall not
+  ask the sender for an address, and shall tell them to add their number to
+  their profile or ask whoever runs this Lemma for an invitation.
 - A bot connected with a customer's own credentials shall keep its existing pod
   access boundaries, and inbound email shall not create an account.
 
@@ -174,29 +174,23 @@ it is asked, not skipped.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.conversation.get`
 
-### PS-SURF-007 — A signed-in person links their Telegram chat from the app
+### PS-SURF-007 — The owner of a Desktop install chats with the shared Telegram bot by sharing their contact
 **Status:** manual
 
-- When a signed-in person asks the app to chat on the shared Telegram bot, the
-  system shall give them a link that opens the bot, and pressing Start with it
-  shall link that Telegram chat to their account and to the pod they chose,
-  without an email or a phone.
-- The link shall work once, within ten minutes, and only in a private chat.
-- The first reply shall name the account the chat is now linked to, and the
-  pod's agent shall then greet them and answer what they send next.
-- Where the chat is already linked, pressing the button again shall relink it
-  or move it to another pod they can use; a Telegram account live on another
-  person's Lemma account shall not be taken over.
-- Where the deployment has no working shared Telegram bot, the system shall say
-  so rather than offer a link.
+- When the deployment accepts unverified phone matches and exactly one live
+  account has the sender's self-shared number on its profile, unverified, the
+  system shall link that Telegram chat to that account without an email, and
+  the pod's agent shall answer what they sent.
+- A number verified on another account shall win, and a number claimed by more
+  than one profile shall match nobody.
+- A typed number or somebody else's contact shall prove nothing.
 
 > **Verified by:** module e2e, not the scenario suite, for the reason under
-> PS-SURF-004. `test_telegram_chat_link_e2e.py` mints a link through the API,
-> redeems it from a new chat, and follows the next message to the pod's agent;
-> it also holds the no-email refusal PS-SURF-004 promises.
+> PS-SURF-004. `test_telegram_contact_claim_e2e.py` shares a contact against an
+> unverified profile number and follows the replayed message to the pod's
+> agent, and covers the switch, a verified owner, and a server without email.
 
-**Contracts:** `agent.surface.telegram_link_options`,
-`agent.surface.create_telegram_link`, `surface.webhook.handle_platform`
+**Contracts:** `surface.webhook.handle_platform`
 
 ---
 
