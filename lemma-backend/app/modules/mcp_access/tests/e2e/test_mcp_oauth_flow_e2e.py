@@ -294,7 +294,9 @@ async def test_two_retries_at_once_take_turns_and_leave_one_live_refresh_token(
     # pair the other never saw.
     async with db_manager.session_factory() as setup:
         await setup.execute(
-            text("DELETE FROM mcp_oauth_tokens WHERE grant_id = :grant AND kind = 'access'"),
+            text(
+                "DELETE FROM mcp_oauth_tokens WHERE grant_id = :grant AND kind = 'access'"
+            ),
             {"grant": grant_id},
         )
         await setup.commit()
@@ -325,14 +327,18 @@ async def test_two_retries_at_once_take_turns_and_leave_one_live_refresh_token(
 
     async with db_manager.session_factory() as check:
         live = (
-            await check.execute(
-                text(
-                    "SELECT token_hash FROM mcp_oauth_tokens WHERE grant_id = :grant "
-                    "AND kind = 'refresh' AND rotated_at IS NULL"
-                ),
-                {"grant": grant_id},
+            (
+                await check.execute(
+                    text(
+                        "SELECT token_hash FROM mcp_oauth_tokens WHERE grant_id = :grant "
+                        "AND kind = 'refresh' AND rotated_at IS NULL"
+                    ),
+                    {"grant": grant_id},
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert live == ["b" * 64]
 
 
