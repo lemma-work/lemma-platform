@@ -39,7 +39,7 @@ def test_the_display_it_starts_does_not_inherit_the_capture_lock(
     _stub(
         binaries,
         "lemma-ensure-display",
-        f'if {{ : >&9; }} 2>/dev/null; then echo inherited > "{mark}"; '
+        f'if ( : >&9 ) 2>/dev/null; then echo inherited > "{mark}"; '
         f'else echo closed > "{mark}"; fi',
     )
     _stub(binaries, "agent-browser", "exit 0")
