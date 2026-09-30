@@ -43,15 +43,16 @@ export const previewSource: PodSource = {
     async listOrgs() { return [{ id: "acme", name: "Acme" }]; },
     async getPod(podId) { return (await previewSource.listPods("acme")).find(pod => pod.id === podId) ?? null; },
     async listPods(orgId) {
-        return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: person.icon, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
+        return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: person.icon, description: person.role, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
     },
     async createPod(orgId, name, description) {
         const id = "sample-" + Date.now();
-        const person = { ...teammates[0], id, name, role: "New teammate", job: description ?? "Define my first responsibility with me.", promise: description ?? "Ready for my first responsibility.", waiting: "Ready to get started", ask: "What should we work on first?", reply: "This is a sample teammate. Give me a first responsibility to explore the setup.", learned: "No team guidance yet.", items: [], app: "Workspace" };
+        const person = { ...teammates[0], id, name, role: description?.trim() || "New teammate", job: description ?? "Define my first responsibility with me.", promise: description ?? "Ready for my first responsibility.", waiting: "Ready to get started", ask: "What should we work on first?", reply: "This is a sample teammate. Give me a first responsibility to explore the setup.", learned: "No team guidance yet.", items: [], app: "Workspace" };
         teammates.push(person);
-        return { id, orgId, name, iconUrl: person.icon, teammate: persona(id), subtitle: person.role, members: members(id), waiting: person.waiting };
+        return { id, orgId, name, iconUrl: person.icon, description: person.role, teammate: persona(id), subtitle: person.role, members: members(id), waiting: person.waiting };
     },
     async renamePod(id, name) { const person = teammates.find(item => item.id === id); if (person) person.name = name; },
+    async describePod(id, description) { const person = teammates.find(item => item.id === id); if (person) person.role = description.trim() || person.role; },
     async listSurfaces(id) { const person = teammateFor(id); return [{ id: id + "-email", platform: "RESEND", name: "email", mine: true, agentName: person.name, handle: person.id + "@acme.example.invalid", email: person.id + "@acme.example.invalid", active: true }]; },
     async listMySurfaces() { return teammates.map(person => ({ platform: "RESEND", podId: person.id, name: "email" })); },
     async getPodDetail(id) { return { members: members(id), teammate: persona(id), subtitle: teammateFor(id).role }; },

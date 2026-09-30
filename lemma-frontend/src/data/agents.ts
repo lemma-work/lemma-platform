@@ -164,6 +164,21 @@ export function agentRows(raw: unknown): AgentRow[] {
             a.label.localeCompare(b.label));
 }
 
+/** The space's own agent, under the teammate's name.
+ *
+ *  The pod is the teammate: it answers under its own name and wears its own
+ *  face, and the agent row behind it is plumbing. `displayAgentName` is handed
+ *  a wire name and no pod, so for that row it can only say "Lem" — which is
+ *  how one space came to call its teammate three things at once: its name on
+ *  Home, "Lem" in the agent list, and "main bot" in the copy between them.
+ *  So every list of agents passes through here once the pod's name is known.
+ */
+export function answeringAs<T extends { front: boolean; label: string }>(rows: T[], teammate: string | null | undefined): T[] {
+    const name = teammate?.trim();
+    if (!name) return rows;
+    return rows.map((row) => (row.front && row.label !== name ? { ...row, label: name } : row));
+}
+
 /** What a declared schema asks for, named rather than counted.
  *
  *  Only the top level, and only `properties` — these are the schemas an agent

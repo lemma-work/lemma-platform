@@ -17,7 +17,9 @@ export function readTourStep(data: unknown): number | null {
 }
 
 export function previewTabForStep(step: number): string {
-    if (step === 2) return "profile";
+    /* "It learns how you work": the teammate's own page, open at what it has
+       been taught. */
+    if (step === 2) return "space:about";
     if (step === 3) return "app:launch";
     return "conversation";
 }

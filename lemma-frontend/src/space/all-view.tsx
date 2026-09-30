@@ -66,7 +66,7 @@ function AccessCell({ access, people, space }: { access: Access; people: Member[
     );
 }
 
-const TITLES: Record<SpaceView, string> = { home: "Home", chats: "Chats", all: "All", pages: "Pages", apps: "Apps", tables: "Tables", files: "Files", workflows: "Workflows", settings: "Settings" };
+const TITLES: Record<SpaceView, string> = { home: "Home", chats: "Chats", all: "All", pages: "Pages", apps: "Apps", tables: "Tables", files: "Files", workflows: "Workflows", settings: "Settings", about: "About" };
 const KIND_NAME: Record<Row["kind"], string> = { page: "Page", app: "App", table: "Table", file: "File", folder: "Folder" };
 
 /** "8h", "2d", "14 Sept": short, the way Space's list says it. */
@@ -184,6 +184,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
             chats: [],
             workflows: [],
             settings: [],
+            about: [],
         };
         const wanted = new Set(holds[view]);
         const seen = new Set<string>();

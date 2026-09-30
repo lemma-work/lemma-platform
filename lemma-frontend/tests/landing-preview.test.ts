@@ -67,7 +67,7 @@ test("the preview opens on conversation and only the app tour step opens Launch 
     assert.equal(previewTabForStep(-1), "conversation");
     assert.equal(previewTabForStep(0), "conversation");
     assert.equal(previewTabForStep(1), "conversation");
-    assert.equal(previewTabForStep(2), "profile");
+    assert.equal(previewTabForStep(2), "space:about");
     assert.equal(previewTabForStep(3), "app:launch");
     assert.equal(previewTabForStep(4), "conversation");
 });

@@ -2955,7 +2955,7 @@ samp,
     grid-template-columns: 7px minmax(0, auto) minmax(0, 1fr) auto auto auto;
 }
 
-/* ── Settings › Bots: one list, flush with its heading ──────────────── */
+/* ── About › Hands work to: one list, flush with its heading ────────── */
 .settings__heading {
     display: flex;
     align-items: center;
@@ -2986,15 +2986,15 @@ samp,
     font-size: 14px;
     color: var(--ink-3);
 }
-.botlist {
+.agentlist {
     margin: -8px 0 0;
     padding: 0;
     list-style: none;
 }
-.botlist li + li {
+.agentlist li + li {
     border-top: 1px solid var(--line);
 }
-.botlist__row {
+.agentlist__row {
     display: flex;
     align-items: center;
     gap: 14px;
@@ -3006,40 +3006,40 @@ samp,
     text-align: left;
     cursor: pointer;
 }
-.botlist__row .mark {
+.agentlist__row .mark {
     flex: none;
     border-radius: 10px;
 }
-.botlist__row:hover .botlist__title b {
+.agentlist__row:hover .agentlist__title b {
     text-decoration: underline;
     text-decoration-color: var(--line-2);
     text-underline-offset: 3px;
 }
-.botlist__row > svg {
+.agentlist__row > svg {
     flex: none;
     color: var(--ink-3);
 }
-.botlist__body {
+.agentlist__body {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
 }
-.botlist__title {
+.agentlist__title {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
 }
-.botlist__title b {
+.agentlist__title b {
     font-weight: 500;
     font-size: 15px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.botlist__title em {
+.agentlist__title em {
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -3052,14 +3052,14 @@ samp,
     font-size: 12px;
     color: var(--ink-2);
 }
-.botlist__body small {
+.agentlist__body small {
     font-size: 13.5px;
     color: var(--ink-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.botlist__can {
+.agentlist__can {
     flex: none;
     max-width: 38%;
     font-size: 13px;
@@ -3459,9 +3459,9 @@ samp,
         gap: 32px;
     }
 }
-.botlist__can { max-width: 30%; }
+.agentlist__can { max-width: 30%; }
 @media (max-width: 900px) {
-    .botlist__can { display: none; }
+    .agentlist__can { display: none; }
 }
 .agentpage__ask .composer__note,
 .home__chat .composer__note {
@@ -6267,4 +6267,933 @@ samp,
 }
 .shell--collapsed .allowance--compact:hover {
     background: var(--wash-b);
+}
+
+/* ── Two altitudes: the rail of faces, and one teammate's space ──────────
+   The sidebar is two columns in one aside, so the phone drawer and its
+   focus trap still hold one element. The rail is always there; the space's
+   own column is there while a teammate is open and not collapsed. Zoomed
+   out to every teammate, and collapsed, the rail is all that is left. */
+.shell {
+    grid-template-columns: calc(var(--rail-w) + var(--side-w)) minmax(0, 1fr);
+    /* No transition on the columns. Driven by custom properties, Chrome kept
+       the old width after the class changed — hide the sidebar, show it, and
+       the column stayed at zero with no way back. The space's column slides
+       in on its own when a teammate opens. */
+    transition: none;
+}
+.shell--collapsed,
+.shell--rail-only {
+    --side-w: 0px;
+}
+@media (min-width: 768px) {
+    .shell--hidden {
+        --rail-w: 0px;
+    }
+}
+.side,
+.shell--collapsed .side {
+    flex-direction: row;
+    align-items: stretch;
+    padding: 0;
+    gap: 0;
+    min-width: 0;
+}
+
+.trail {
+    width: var(--rail-w);
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0;
+    min-height: 0;
+}
+.trail__home {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--r-md);
+    background: transparent;
+    cursor: pointer;
+}
+.trail__home:hover {
+    background: var(--accent-soft);
+}
+.trail__home[aria-current="page"] {
+    background: var(--line-2);
+}
+.trail__mark {
+    width: 26px;
+    height: 26px;
+    fill: var(--brand-bars);
+}
+.trail__rule {
+    width: 24px;
+    height: 1px;
+    flex: none;
+    background: var(--line-2);
+}
+.trail__list {
+    flex: 0 1 auto;
+    min-height: 0;
+    width: 100%;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    scrollbar-width: none;
+}
+.trail__list::-webkit-scrollbar {
+    display: none;
+}
+.trail__mate {
+    position: relative;
+    width: 100%;
+    height: 46px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+}
+/* The bar at the rail's edge: a notch on hover, a stripe for the one open. */
+.trail__mate::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 4px;
+    height: 0;
+    border-radius: 0 4px 4px 0;
+    background: var(--ink);
+    transform: translateY(-50%);
+    transition: height 160ms var(--ease-out);
+}
+.trail__mate:hover::before {
+    height: 10px;
+}
+.trail__mate[aria-current="page"]::before {
+    height: 22px;
+}
+.trail__mate .tface {
+    transition: transform 160ms var(--ease-out);
+}
+.trail__mate:hover .tface {
+    transform: translateY(-1px);
+}
+.trail__mate[aria-current="page"] .tface {
+    box-shadow: 0 0 0 2px var(--chrome), 0 0 0 3.5px var(--ink);
+}
+.trail__badge {
+    position: absolute;
+    right: 9px;
+    bottom: 1px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--warn);
+    box-shadow: 0 0 0 2px var(--chrome);
+}
+.trail__add {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    margin-top: 2px;
+    border: 1.5px dashed var(--line-2);
+    border-radius: var(--r-md);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+.trail__add:hover {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.trail__add[aria-current="page"] {
+    border-style: solid;
+    border-color: var(--ink);
+    background: var(--line-2);
+    color: var(--ink);
+}
+.trail__foot {
+    margin-top: auto;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.trail .human-profile {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 50%;
+}
+.trail .human-profile__text,
+.trail .human-profile__chevron {
+    display: none;
+}
+.trail .allowance--compact {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    justify-content: center;
+}
+/* Drawn over the page rather than inside the rail, which scrolls and would
+   clip it. */
+.trail__tip {
+    position: fixed;
+    z-index: 200;
+    max-width: 280px;
+    transform: translateY(-50%);
+    padding: 7px 10px;
+    border-radius: var(--r-sm);
+    background: var(--ink);
+    color: var(--paper);
+    box-shadow: var(--depth-raise);
+    font-size: 13px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    animation: space-rise 120ms var(--ease-out);
+}
+.trail__tip small {
+    display: block;
+    font-size: 12px;
+    opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* A teammate's face: the whole character on its own tint, in a rounded
+   square. A circle is a person. */
+.tface {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    border-radius: 28%;
+    overflow: hidden;
+}
+/* An agent: its initial on a plain tile — not a face, because it is not
+   somebody you hired. */
+.amark {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    border-radius: 28%;
+    background: var(--wash-a);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--ink-2);
+    line-height: 1;
+}
+
+.side__space {
+    width: var(--side-w);
+    flex: none;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 10px 8px 12px 0;
+    overflow: hidden;
+}
+/* Collapsed on a desk, the column is gone rather than squeezed — and out of
+   the tab order with it. */
+.shell--collapsed .side__space {
+    visibility: hidden;
+    padding-inline: 0;
+}
+.side__head {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: none;
+}
+.side__mate {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 52px;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--r-md);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.side__mate:hover {
+    background: var(--accent-soft);
+}
+.side__mate[aria-current="page"] {
+    background: var(--line-2);
+}
+.side__mate-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.3;
+}
+.side__mate-text > span,
+.side__mate-text > small {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.side__mate-text > span {
+    font-size: 15px;
+}
+.side__mate-text > small {
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.side__head .sidebar-toggle {
+    flex: none;
+}
+/* The drawer's own search, for phones; a desk has it in the toolbar. */
+.side__head .side__search {
+    display: none;
+}
+.side__space .snav {
+    padding: 10px 0 8px;
+}
+
+/* The breadcrumb climbs: organization, teammate, what is open. Not
+   `crumb__from`, which on a phone is the one back link the row keeps. */
+.crumb__up {
+    flex: none;
+    padding: 2px 6px;
+    margin: 0 -6px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    cursor: pointer;
+}
+.crumb__up:hover {
+    background: var(--wash-b);
+    color: var(--ink);
+}
+.crumb__org,
+.crumb__mate {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+.crumb .tface {
+    border-radius: 6px;
+}
+.crumb__search {
+    width: 32px;
+    height: 32px;
+}
+
+.pill-button,
+.ghost-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    flex: none;
+}
+.pill-button {
+    background: var(--ink);
+    color: var(--paper);
+}
+.pill-button:hover:not(:disabled) {
+    opacity: 0.86;
+}
+.pill-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.ghost-pill {
+    background: transparent;
+    color: var(--ink);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.ghost-pill:hover {
+    background: var(--accent-soft);
+}
+
+/* ── Zoomed out: every teammate ─────────────────────────────────────── */
+.team {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    transform-origin: 50% 30%;
+}
+.team__bar {
+    border-bottom: 0;
+}
+.team__tools {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.team__scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+.team__column {
+    width: min(100%, 1180px);
+    margin: 0 auto;
+    padding: 16px 32px 56px;
+}
+.team__head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 28px;
+}
+.team__head h1 {
+    margin: 0;
+    font-size: 30px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+}
+.team__head p {
+    margin: 6px 0 0;
+    font-size: 15px;
+    color: var(--ink-3);
+}
+.team__group {
+    margin: 0 0 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-3);
+}
+.team__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+    gap: 16px;
+    margin-bottom: 32px;
+}
+.team__quiet {
+    margin: 0;
+    font-size: 14px;
+    color: var(--ink-3);
+}
+.team__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 24px 0;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.team__empty p {
+    margin: 0;
+}
+
+.tcard {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    box-shadow: var(--depth-rest);
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    transition: box-shadow 160ms ease, transform 160ms var(--ease-out);
+}
+.tcard:hover {
+    box-shadow: var(--depth-raise);
+    transform: translateY(-2px);
+}
+.tcard:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+}
+.tcard__stage {
+    height: 148px;
+    flex: none;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 8px;
+}
+.tcard__body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 14px 16px;
+}
+.tcard__name {
+    font-size: 16px;
+}
+.tcard__job {
+    margin-top: 2px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--ink-3);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.tcard__status {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    min-height: 18px;
+    margin-top: 10px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--ink-2);
+}
+.tcard__status > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tcard__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    transform: translateY(-1px);
+}
+.tcard__dot--needs {
+    background: var(--warn);
+}
+.tcard__dot--quiet {
+    box-shadow: inset 0 0 0 1.5px var(--ink-3);
+}
+.tcard__foot {
+    margin-top: auto;
+    padding-top: 12px;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+}
+.tcard__people {
+    display: flex;
+    align-items: center;
+}
+.tcard__person {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--wash-a);
+    box-shadow: 0 0 0 2px var(--paper);
+    color: var(--ink-2);
+    font-size: 10px;
+}
+.tcard__person + .tcard__person {
+    margin-left: -4px;
+}
+.tcard__more {
+    margin-left: 6px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.tcard--new {
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 272px;
+    padding: 24px;
+    border: 1.5px dashed var(--line-2);
+    background: transparent;
+    box-shadow: none;
+    color: var(--ink-2);
+    text-align: center;
+}
+.tcard--new:hover {
+    background: var(--wash-b);
+    box-shadow: none;
+    transform: none;
+}
+.tcard--new small {
+    max-width: 190px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--ink-3);
+}
+.tcard__plus {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    margin-bottom: 6px;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink);
+}
+/* The teammate just zoomed out of, marked for a moment. */
+.tcard--was {
+    animation: tcard-was 1.4s var(--ease-out) 1;
+}
+@keyframes tcard-was {
+    from { box-shadow: 0 0 0 3px var(--ink), var(--depth-raise); }
+    to { box-shadow: var(--depth-rest); }
+}
+
+.orgmenu {
+    position: relative;
+    min-width: 0;
+}
+.orgmenu__button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 8px;
+    margin-left: -8px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+.orgmenu__button:hover,
+.orgmenu__button[aria-expanded="true"] {
+    background: var(--accent-soft);
+}
+.orgmenu__button svg {
+    color: var(--ink-3);
+}
+.orgmenu__list {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: -8px;
+    z-index: 40;
+    min-width: 240px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+}
+.orgmenu__item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 38px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.orgmenu__item:hover {
+    background: var(--accent-soft);
+}
+.orgmenu__item svg {
+    margin-left: auto;
+}
+.orgmenu__avatar {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+}
+
+/* ── About: the teammate as a page ─────────────────────────────────── */
+.aboutpage {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+}
+.aboutpage__column {
+    width: min(100%, 808px);
+    margin: 0 auto;
+    padding: 40px 24px 64px;
+}
+.aboutpage__hero {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    margin-bottom: 36px;
+}
+.aboutpage__who h1 {
+    margin: 0;
+    font-size: 34px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+}
+.aboutpage__job {
+    max-width: 520px;
+    margin: 6px 0 16px;
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.aboutpage__job--none {
+    color: var(--ink-3);
+}
+.aboutpage__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.aboutpage__edit {
+    flex: 1;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.aboutpage__edit label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.aboutpage__edit label > span {
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.aboutpage__edit input,
+.aboutpage__edit textarea {
+    padding: 9px 12px;
+    border: 0;
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    resize: vertical;
+}
+.aboutpage__edit input:focus,
+.aboutpage__edit textarea:focus {
+    outline: none;
+    box-shadow: inset 0 0 0 1.5px var(--info);
+}
+.aboutpage__error {
+    margin: 0;
+    font-size: 13px;
+    color: var(--bad);
+}
+.aboutpage__section {
+    padding-top: 28px;
+    scroll-margin-top: 16px;
+}
+.aboutpage__section + .aboutpage__section {
+    margin-top: 12px;
+}
+.aboutpage__section > header {
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+}
+.aboutpage__heading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.aboutpage__heading h2 {
+    margin: 0 auto 0 0;
+    font-size: 18px;
+    font-weight: 500;
+}
+.aboutpage__section header p {
+    margin: 4px 0 0;
+    font-size: 13.5px;
+    color: var(--ink-3);
+}
+.aboutpage__content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.aboutpage__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+    cursor: pointer;
+}
+.aboutpage__action:hover {
+    background: var(--accent-soft);
+}
+.aboutpage__quiet {
+    margin: 0;
+    font-size: 14px;
+    color: var(--ink-3);
+}
+.aboutpage__foot {
+    margin: 36px 0 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--ink-3);
+}
+
+/* ── Home: the teammate's desk ─────────────────────────────────────── */
+.home__head {
+    align-items: center;
+    gap: 16px;
+}
+.home__face {
+    flex: none;
+    padding: 0;
+    border: 0;
+    border-radius: 28%;
+    background: none;
+    cursor: pointer;
+}
+.home__who {
+    min-width: 0;
+}
+.home__head .home__who p {
+    margin-top: 4px;
+    line-height: 1.45;
+}
+.home__recent {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+}
+.home__recent li {
+    border-bottom: 1px solid var(--line);
+}
+/* One dense line a row: what, where it came from, when. */
+.home__recent button {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 4px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.home__recent button:hover {
+    background: var(--wash-b);
+}
+.home__recent-title {
+    min-width: 0;
+    flex: 0 1 auto;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.home__recent small {
+    flex: 1 0 auto;
+    font-size: 12.5px;
+    color: var(--ink-3);
+    white-space: nowrap;
+}
+.home__recent time {
+    flex: none;
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+
+.settings__elsewhere {
+    margin: 18px 10px 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-3);
+}
+/* A link in a sentence, not another item in the list above it. */
+.settings__nav .settings__elsewhere button {
+    display: inline;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--ink-2);
+    font-size: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+.settings__nav .settings__elsewhere button:hover {
+    background: none;
+    color: var(--ink);
+}
+
+/* Hiring is how a teammate arrives, so it wears the app's ink rather than
+   the old accent it was drawn in. */
+.shelf .btn--primary,
+.newface .btn--primary,
+.takeon .btn--primary,
+.met .btn--primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tcard--was,
+    .trail__tip {
+        animation: none;
+    }
+    .tcard,
+    .trail__mate::before,
+    .trail__mate .tface {
+        transition: none;
+    }
 }

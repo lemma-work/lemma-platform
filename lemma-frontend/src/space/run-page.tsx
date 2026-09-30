@@ -17,7 +17,8 @@ import {
 } from "@/workflow/run-tree";
 import { useRun, useWorkflowGraph, useWorkflowList } from "@/workflow/use-run";
 import { LiveConversation } from "@/thread/live-conversation";
-import { Mark } from "@/shell/mark";
+import { AgentMark } from "./agent-mark";
+import { isPodDefaultAgent } from "@/data/agent-names";
 import {
     CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, CodeIcon, ExternalIcon,
     RefreshIcon, TreeIcon, UserIcon, WarningIcon, WorkflowIcon,
@@ -30,7 +31,7 @@ const STARTED: Record<string, string> = {
     DATASTORE_EVENT: "Started when a row changed",
 };
 
-interface Bot { label: string; iconUrl: string | null }
+interface Bot { name: string; label: string; iconUrl: string | null; front: boolean }
 
 interface Ctx {
     pod: Pod;
@@ -79,7 +80,7 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
         queryFn: () => source.listAgents(pod.id),
         staleTime: 5 * 60_000,
     });
-    const botMap = useMemo(() => new Map((bots.data ?? []).map((bot) => [bot.name, { label: bot.label, iconUrl: bot.iconUrl }])), [bots.data]);
+    const botMap = useMemo(() => new Map((bots.data ?? []).map((bot) => [bot.name, { name: bot.name, label: bot.label, iconUrl: bot.iconUrl, front: bot.front }])), [bots.data]);
 
     const [confirming, setConfirming] = useState(false);
     const [refused, setRefused] = useState<string | null>(null);
@@ -378,7 +379,11 @@ function Actor({ node, ctx }: { node: GraphNode; ctx: Ctx }) {
     if (node.kind === "AGENT") {
         const agent = String(node.config.agent_name ?? "");
         const bot = ctx.bots.get(agent);
-        return <span className="rtree__actor rtree__actor--bot"><Mark seed={ctx.pod.id + ":" + agent} name={bot?.label ?? agent} icon={bot?.iconUrl ?? null} size={26} still /></span>;
+        return (
+            <span className="rtree__actor rtree__actor--bot">
+                <AgentMark pod={ctx.pod} agent={bot ?? { name: agent, label: agent, front: isPodDefaultAgent(agent), iconUrl: null }} size={26} />
+            </span>
+        );
     }
     const icon = node.kind === "FORM" ? <UserIcon size={15} />
         : node.kind === "FUNCTION" ? <CodeIcon size={15} />

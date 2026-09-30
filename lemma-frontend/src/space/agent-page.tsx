@@ -21,14 +21,14 @@ import { useSurfaces } from "@/shell/surfaces";
 import { ChannelIcon, channelName } from "@/shell/channels";
 import { Modal } from "@/shell/modal";
 import { SurfaceManage } from "@/shell/surface-manage";
-import { Mark } from "@/shell/mark";
+import { AgentMark } from "./agent-mark";
 import { ChatIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, EditIcon, LockIcon, WorkflowIcon } from "@/ui/icons";
 
-/** One bot, as a page of its own.
+/** One agent, as a page of its own.
  *
- *  Most people talk to one bot — the space's own — and never come here. This
- *  page is for the others: the specialist somebody set up, the one a workflow
- *  hands work to. So it answers the three questions somebody arrives with, in
+ *  Most people talk to the teammate and never come here — its own agent is the
+ *  teammate, and opens as About instead. This page is for the others: the
+ *  specialist somebody set up, the one a workflow hands work to. So it answers the three questions somebody arrives with, in
  *  that order: who is this and what is it for; let me ask it something (or
  *  pick up where I left off); and what is it actually allowed to do, and who
  *  depends on it. The last is a rail beside the first two rather than a
@@ -71,7 +71,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
         <div className="agentpage">
             <div className="agentpage__inner">
                 <nav className="runpage__crumb agentpage__crumb">
-                    <button onClick={onBack}><ChevronLeftIcon size={15} /> Bots</button>
+                    <button onClick={onBack}><ChevronLeftIcon size={15} /> {pod.name}</button>
                 </nav>
 
                 {agent.isPending && <p className="agentpage__note" role="status">Opening {calling}…</p>}
@@ -85,12 +85,11 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                 {detail && (
                     <>
                         <header className="agentpage__head">
-                            <Mark seed={pod.id + ":" + detail.name} name={detail.label} icon={detail.iconUrl} size={64} />
+                            <AgentMark pod={pod} agent={detail} size={64} />
                             <div className="agentpage__who">
                                 <h1>{detail.label}</h1>
                                 <p>{detail.description || detail.blurb || "No description written."}</p>
                                 <div className="agentpage__tags">
-                                    {detail.front && <span className="agentpage__tag">Main bot in {pod.name}</span>}
                                     {detail.visibility === "RESTRICTED" && <span className="agentpage__tag"><LockIcon size={12} /> Restricted</span>}
                                     {detail.takesInput && <span className="agentpage__tag">Called by workflows</span>}
                                 </div>
@@ -155,7 +154,7 @@ function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, cre
     if (detail.takesInput) {
         return (
             <p className="agentpage__card agentpage__called">
-                {detail.label} is called with arguments — by a workflow or another bot — rather than talked to.
+                {detail.label} is called with arguments — by a workflow or another agent — rather than talked to.
             </p>
         );
     }

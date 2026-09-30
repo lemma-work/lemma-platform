@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Mark } from "@/shell/mark";
+import { AgentMark } from "./agent-mark";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { ChannelIcon } from "@/shell/channels";
 import { ChatIcon, ClockIcon, FileIcon, PlusIcon, SearchIcon, WorkflowIcon, BellIcon } from "@/ui/icons";
@@ -104,8 +104,7 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew }: {
                                     <span className="chats-page__title">{row.title}</span>
                                     {row.agentId && botById.get(row.agentId) && (
                                         <span className="chats-page__bot">
-                                            <Mark seed={pod.id + ":" + botById.get(row.agentId)!.name} name={botById.get(row.agentId)!.label}
-                                                icon={botById.get(row.agentId)!.iconUrl} size={16} still />
+                                            <AgentMark pod={pod} agent={botById.get(row.agentId)!} size={16} />
                                             {botById.get(row.agentId)!.label}
                                         </span>
                                     )}
