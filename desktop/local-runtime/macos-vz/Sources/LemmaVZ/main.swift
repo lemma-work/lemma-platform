@@ -29,6 +29,9 @@ private let sandboxTunnelPort: UInt32 = 42_412
 /// Where guestd opens loopback relay streams *to* this host. See
 /// `host_loopback` in lemma-guestd and `loopback_relay` in locald.
 private let hostLoopbackPort: UInt32 = 42_413
+/// Where guestd forwards the guest's DNS queries. See `host_dns` in
+/// lemma-guestd and `HostDNSBridge`.
+private let hostDNSPort: UInt32 = 42_414
 private let maxRequestBytes = 1_048_576
 private let maxResponseBytes = 4_194_304
 
@@ -408,14 +411,16 @@ private func argument(_ name: String, in arguments: [String]) throws -> String {
     return arguments[index + 1]
 }
 
-/// Accepts the guest's loopback relay streams and hands them to locald.
+/// Accepts streams the guest opens to one host port and hands them to a bridge.
 ///
-/// Called by the framework on the VM's queue, which is also the bridge's.
-private final class HostLoopbackListener: NSObject, VZVirtioSocketListenerDelegate {
-    let bridge: HostLoopbackBridge
+/// Called by the framework on the VM's queue, which is also the bridges'.
+private final class GuestStreamListener: NSObject, VZVirtioSocketListenerDelegate {
+    let accept: (GuestStream) -> Bool
+    let refusal: String
 
-    init(bridge: HostLoopbackBridge) {
-        self.bridge = bridge
+    init(refusal: String, accept: @escaping (GuestStream) -> Bool) {
+        self.accept = accept
+        self.refusal = refusal
     }
 
     func listener(
@@ -423,12 +428,10 @@ private final class HostLoopbackListener: NSObject, VZVirtioSocketListenerDelega
         shouldAcceptNewConnection connection: VZVirtioSocketConnection,
         from socketDevice: VZVirtioSocketDevice
     ) -> Bool {
-        let accepted = bridge.accept(GuestStream(descriptor: connection.fileDescriptor) {
+        let accepted = accept(GuestStream(descriptor: connection.fileDescriptor) {
             connection.close()
         })
-        if !accepted {
-            vzLog("loopback relay stream refused: locald's relay is not reachable or is at capacity")
-        }
+        if !accepted { vzLog(refusal) }
         return accepted
     }
 }
@@ -436,7 +439,7 @@ private final class HostLoopbackListener: NSObject, VZVirtioSocketListenerDelega
 private final class RuntimeBridges {
     var control: GuestBridge?
     var services: [ServiceBridge] = []
-    var hostLoopback: (VZVirtioSocketListener, HostLoopbackListener)?
+    var guestListeners: [(VZVirtioSocketListener, GuestStreamListener)] = []
 }
 
 /// An optional argument's value, or nil when it was not given.
@@ -521,15 +524,26 @@ private func serve(arguments: [String]) throws -> Never {
                     }
                     bridges.services.append(service)
                 }
-                if let hostLoopbackSocket {
+                func listen(on port: UInt32, _ delegate: GuestStreamListener) {
                     let listener = VZVirtioSocketListener()
-                    let delegate = HostLoopbackListener(
-                        bridge: try HostLoopbackBridge(path: hostLoopbackSocket)
-                    )
                     listener.delegate = delegate
-                    socketDevice.setSocketListener(listener, forPort: hostLoopbackPort)
-                    bridges.hostLoopback = (listener, delegate)
+                    socketDevice.setSocketListener(listener, forPort: port)
+                    bridges.guestListeners.append((listener, delegate))
                 }
+                if let hostLoopbackSocket {
+                    let bridge = try HostLoopbackBridge(path: hostLoopbackSocket)
+                    listen(on: hostLoopbackPort, GuestStreamListener(
+                        refusal: "loopback relay stream refused: locald's relay is not reachable or is at capacity",
+                        accept: bridge.accept
+                    ))
+                }
+                // Unconditional: nothing about it depends on locald, and a
+                // guest that finds nobody listening falls back to the gateway.
+                let dns = HostDNSBridge()
+                listen(on: hostDNSPort, GuestStreamListener(
+                    refusal: "DNS query refused: the host DNS relay is at capacity",
+                    accept: dns.accept
+                ))
                 bridges.control = try GuestBridge(
                     socketDevice: socketDevice,
                     socketPath: socketPath

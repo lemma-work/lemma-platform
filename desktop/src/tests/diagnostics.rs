@@ -209,6 +209,8 @@ fn every_log_source_the_daemon_names_is_one_the_shell_serves() {
         "frontend failed: EADDRINUSE",
         "migrations setup exited",
         "registry DNS lookup failed",
+        "Your Mac can reach the internet, but Lemma's VM can't look up names.",
+        "This computer can't reach the internet right now.",
         "containerd refused to start",
         "the managed runtime did not come up",
         "backend never became healthy",

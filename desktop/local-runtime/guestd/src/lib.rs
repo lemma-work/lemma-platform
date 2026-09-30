@@ -29,6 +29,8 @@ mod host_control;
 mod image_prune;
 // Served only on Linux, by the resident guest; the relay is tested everywhere.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod host_dns;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod host_loopback;
 mod image_check;
 mod images;
@@ -54,6 +56,7 @@ pub(crate) use core_data::*;
 pub(crate) use diagnostics::*;
 pub(crate) use engine::*;
 pub use engine::{Engine, NerdctlEngine};
+pub use host_dns::HOST_DNS_VSOCK_PORT;
 pub use host_loopback::HOST_LOOPBACK_VSOCK_PORT;
 pub(crate) use host_loopback::{
     host_loopback_directory, prepare_relay_directory, HOST_LOOPBACK_MOUNT,

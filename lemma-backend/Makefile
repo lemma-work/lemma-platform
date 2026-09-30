@@ -301,8 +301,12 @@ coverage-module:
 test-collect:
 	uv run pytest --collect-only -q
 
+# Named rather than written inline because the root `make lint` reads both
+# lists, so its changed-files pass covers exactly what these targets do.
+LINT_PATHS = app migrations scripts
+
 lint:
-	uv run ruff check app migrations scripts
+	uv run ruff check $(LINT_PATHS)
 
 # Formatting, over first-party code only.
 FORMAT_PATHS = app migrations scripts sandbox_runtime load_tests standalone_app.py sitecustomize.py

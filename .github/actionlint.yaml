@@ -1,0 +1,9 @@
+# actionlint runs shellcheck over every `run:` block when shellcheck is on
+# PATH, which `make lint-ci` arranges. Style-level suggestions are not worth a
+# red lint in a workflow script: a sed where parameter expansion would do, or
+# several `>> "$GITHUB_OUTPUT"` lines rather than one grouped redirect.
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      - "SC2001:style"
+      - "SC2129:style"

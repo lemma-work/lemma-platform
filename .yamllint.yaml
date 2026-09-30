@@ -1,0 +1,21 @@
+# YAML lint, run by `make lint-config` (yamllint).
+#
+# What it is for here is the mistakes a YAML parser accepts silently: a
+# duplicated key, where the second quietly wins, and broken indentation.
+# Layout preferences are off, since nothing else in the repository enforces
+# them and the files predate this.
+extends: default
+
+rules:
+  document-start: disable
+  line-length: disable
+  # GitHub's `on:` key reads as a boolean to YAML 1.1.
+  truthy: disable
+  comments: disable
+  comments-indentation: disable
+  indentation:
+    indent-sequences: whatever
+  braces: disable
+  brackets: disable
+  empty-lines: disable
+  new-line-at-end-of-file: enable

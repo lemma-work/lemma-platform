@@ -52,6 +52,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import NoReturn
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -71,7 +72,7 @@ def log(message: str) -> None:
     print(f"[throwaway] {message}", file=sys.stderr, flush=True)
 
 
-def fail(message: str) -> "NoReturn":  # type: ignore[valid-type]
+def fail(message: str) -> NoReturn:
     print(f"[throwaway] ✗ {message}", file=sys.stderr, flush=True)
     raise SystemExit(1)
 

@@ -20,5 +20,5 @@ export GH_CONFIG_DIR
 # that never comes.
 GH_NO_UPDATE_NOTIFIER=1
 export GH_NO_UPDATE_NOTIFIER
-GH_PAGER=cat
+GH_PAGER="cat"
 export GH_PAGER

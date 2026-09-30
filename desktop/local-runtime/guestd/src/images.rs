@@ -487,9 +487,13 @@ impl<E: Engine + 'static> GuestService<E> {
         let dns_ok = diagnostic["dns_ok"].as_bool().unwrap_or(false);
         let registry_reachable = diagnostic["registry_reachable"].as_bool().unwrap_or(false);
         let hint = match (dns_ok, registry_reachable) {
-            (false, _) => "registry DNS lookup failed",
-            (true, false) => "registry HTTPS endpoint is unreachable",
-            (true, true) => "registry is reachable; retry the immutable image download",
+            (false, _) => {
+                let servers: Vec<String> =
+                    serde_json::from_value(diagnostic["name_servers"].clone()).unwrap_or_default();
+                dns_failure_hint(&servers, diagnostic["host_dns_relay"].as_bool())
+            }
+            (true, false) => "registry HTTPS endpoint is unreachable".to_owned(),
+            (true, true) => "registry is reachable; retry the immutable image download".to_owned(),
         };
         Err(GuestError::engine(format!("{error}; {hint}")))
     }

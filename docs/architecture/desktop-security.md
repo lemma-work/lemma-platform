@@ -235,6 +235,16 @@ replies to connections the Mac opened, the two callback ports, and DNS, which
 vmnet serves on the gateway, and rejects everything else (`tcp-reset` for TCP,
 so a refused connection fails at once rather than timing out).
 
+The guest itself resolves through two servers: guestd's host DNS relay on
+`127.0.0.2:53`, which hands each query to the Mac's own resolver over vsock
+42414, and the gateway as before (see
+[Guest DNS](desktop.md#guest-dns)). The relay listens only on the guest's
+loopback, so a sandbox, in its own network namespace, cannot reach it: it
+resolves through the gateway alone. The relay answers lookups and nothing else
+— lemma-vz parses each query and asks `DNSServiceQueryRecord`; it opens no
+connection on the guest's behalf — so it gives the guest no route to the Mac
+that the gateway's DNS did not already give it.
+
 - **The ports come from locald.** It names the backend's and frontend's ports
   as `callback_ports` in every `core.*` request, and guestd keeps them in
   `run/callback-ports.json` so a restarted guestd still knows them. A guest

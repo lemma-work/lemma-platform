@@ -70,14 +70,18 @@ the backend, the CLI, both SDKs, the stack, the bundle and the scenario suite;
 async safety; DB connection scope; I/O hygiene; swallowed errors; in-subject
 test doubles; import budget; the critical typecheck; the architecture ratchet;
 the logging event catalog; OpenAPI freshness; module contracts; the test census;
-and scenario traceability.
+scenario traceability; and shellcheck, actionlint, hadolint, typos and yamllint
+over the whole repository.
 
 CI runs this exact command — one job, one list. It is deliberately not
 path-filtered, because a skipped required check counts as a satisfied one.
 
 Touched the frontend or the TypeScript SDK? Add `make quality-frontend`.
-`make check` is both plus CodeQL. Then run the component's own checks from the
-table in [CONTRIBUTING.md](../../CONTRIBUTING.md#find-the-right-component).
+`make check` is both; CodeQL runs in CI and comments on the pull request. Then
+run the component's own checks from the table in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#find-the-right-component). While you
+work, `make fix` and `make lint` run the same tools on just what you changed
+([Local development](../../CONTRIBUTING.md#local-development)).
 
 ## For coding agents
 
