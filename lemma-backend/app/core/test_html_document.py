@@ -67,3 +67,34 @@ def test_title_is_escaped():
     doc = wrap_html_fragment("<div>x</div>", title="</title><script>evil</script>")
     assert "<script>evil</script>" not in doc
     assert "&lt;script&gt;" in doc
+
+
+def test_every_widget_page_carries_the_tokens_and_the_kit():
+    """What a widget used to paste in is the page's job now, so a widget is
+    only its own markup and render function -- embedded or promoted."""
+    for embed in (True, False):
+        doc = wrap_html_fragment("<div>hi</div>", embed=embed)
+        head = doc[: doc.index("</head>")]
+        assert "data-lemma-widget-tokens" in head and "--lemma-widget-surface" in head
+        assert "data-lemma-widget-kit" in head and "window.lemma = {" in head
+
+
+def test_the_page_tokens_are_the_ones_the_skill_teaches():
+    """Two copies of one design language: the page's and the skill's. They are
+    held equal here so a change to one cannot quietly leave the other behind."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    page = (Path(__file__).parent / "widget_kit" / "widget-tokens-v1.css").read_text()
+    skill = (root / "lemma-skills/lemma-widget/assets/widget-tokens-v1.css").read_text()
+    assert page == skill
+
+
+def test_the_quick_example_passes_widget_validation():
+    from pathlib import Path
+
+    from app.core.widget_html_validation import validate_widget_html
+
+    root = Path(__file__).resolve().parents[3]
+    quick = (root / "lemma-skills/lemma-widget/assets/widget-quick-v1.html").read_text()
+    assert validate_widget_html(quick) == []

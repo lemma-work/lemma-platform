@@ -191,11 +191,12 @@ whether copying succeeded.
 **Status:** covered
 
 - When a person asks the pod's default agent for everyday work — an answer from
-  the pod's tables, a change to a doc, a new record, a file made from the pod's
-  data, a quick look-up on the web, something to remember — the system shall
-  finish it while they wait, on the model the deployment is configured with:
-  an answer, a record or a change to a doc within 30 seconds; a file or a web
-  look-up within 45 seconds; a formatted document such as a PDF or a Word
+  the pod's tables, a change to a doc, a new record, a widget of the pod's data,
+  a file made from the pod's data, a quick look-up on the web, something to
+  remember — the system shall finish it while they wait, on the model the
+  deployment is configured with: an answer, a record, a change to a doc or a
+  widget in one of the common shapes within 30 seconds; a file or a web look-up
+  within 45 seconds; a widget in a shape of its own within 60 seconds; a formatted document such as a PDF or a Word
   document within 90 seconds; a short research memo drawn from several web
   sources, with those sources cited, within two minutes.
 - The system shall do what the request named: the record is in the table, the
@@ -204,6 +205,9 @@ whether copying succeeded.
   shall not re-check what a tool has already reported, render or screenshot
   what it has just written in order to check it, or build machinery a plain
   answer does not need.
+- A widget's page shall already carry the design tokens and the means to query
+  the pod and draw the common shapes, so that a widget is the answer's own
+  markup and not a copy of shared boilerplate.
 - When a conversation is attached to a doc, the system shall give the agent the
   doc as it reads at the start of each run, so that a request about the doc
   does not begin by reading it.

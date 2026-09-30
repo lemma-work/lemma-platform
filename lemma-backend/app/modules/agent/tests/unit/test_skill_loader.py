@@ -190,14 +190,17 @@ async def test_system_widget_skill_exposes_versioned_starter_assets():
         "assets/widget-trend-v1.html",
         "assets/widget-ranked-v1.html",
         "assets/widget-note-v1.html",
+        "assets/widget-quick-v1.html",
     }
     example = await read_workspace_skill_resource(
         "lemma-widget", "assets/widget-finding-v1.html"
     )
     assert 'data-lemma-widget-version="1"' in example
-    assert "window.__LEMMA_CONFIG__" in example
-    # The preamble is served too, or every example that pastes it in is quoting
-    # a file nobody can read.
+    # Examples reach pod data through the page kit, not a loader of their own.
+    assert "lemma.client()" in example
+    assert "window.__LEMMA_CONFIG__" not in example
+    # The preamble is served too: it is the reference for the tokens the page
+    # supplies, and what a widget of its own design is written against.
     preamble = await read_workspace_skill_resource(
         "lemma-widget", "assets/widget-tokens-v1.css"
     )

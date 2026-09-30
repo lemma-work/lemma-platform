@@ -1,0 +1,43 @@
+/* Lemma widget kit v1, the drawing half's styles. Tokens only, every one with a
+   fallback; weight never above 500; figures mono and tabular; hairlines, not boxes. */
+/* The page's ink and type, at zero specificity: a widget that sets its own wins,
+   one that does not still reads in the widget font rather than the browser's serif. */
+:where(body) { font: 14px/1.45 var(--lemma-widget-font, system-ui, -apple-system, "Segoe UI", sans-serif); color: var(--lemma-widget-text, #1f1f1f); }
+.lk-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lk-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.lk-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 0; border-top: 1px solid var(--lemma-widget-border, #e6e1d6); }
+.lk-label { color: var(--lemma-widget-muted, #6b665c); font-size: 12.5px; }
+.lk-value { font-family: var(--lemma-widget-font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 500; color: var(--lemma-widget-text, #1f1f1f); }
+.lk-delta { font-size: 12px; color: var(--lemma-widget-muted, #6b665c); }
+.lk-delta[data-kind="good"] { color: var(--lemma-widget-success, #1f7a4d); }
+.lk-delta[data-kind="bad"] { color: var(--lemma-widget-danger, #b3261e); }
+.lk-bar-row { display: grid; grid-template-columns: minmax(80px, 32%) 1fr auto; gap: 10px; align-items: center; padding: 5px 0; border-top: 1px solid var(--lemma-widget-border, #eee8dc); }
+.lk-bar-row:first-child { border-top: 0; }
+.lk-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.lk-track { height: 10px; }
+.lk-bar { display: block; height: 100%; border-radius: 3px; background: var(--lemma-widget-chart-1, #3d6be0); }
+.lk-bar[data-rest] { background: var(--lemma-widget-faint, #b9b3a6); }
+.lk-num, .lk-table td[data-kind="num"], .lk-record dd[data-kind="num"] { font-family: var(--lemma-widget-font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.lk-plot { position: relative; }
+.lk-plot svg { width: 100%; height: auto; display: block; }
+.lk-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 6px; font-size: 12.5px; color: var(--lemma-widget-muted, #6b665c); }
+.lk-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.lk-pt { opacity: 0.7; }
+.lk-grid { stroke: var(--lemma-widget-border, #eee8dc); stroke-width: 1; }
+.lk-path { fill: none; stroke: var(--lemma-widget-chart-1, #3d6be0); stroke-width: 2; stroke-linejoin: round; }
+.lk-area { fill: var(--lemma-widget-chart-1, #3d6be0); opacity: 0.08; }
+.lk-dot { fill: var(--lemma-widget-chart-1, #3d6be0); }
+.lk-cross { stroke: var(--lemma-widget-border-strong, #cfc8b8); }
+.lk-end, .lk-axis { font: 11px var(--lemma-widget-font-mono, ui-monospace, monospace); fill: var(--lemma-widget-muted, #6b665c); }
+.lk-tip { position: absolute; top: 0; padding: 3px 8px; border-radius: 6px; font-size: 12px; background: var(--lemma-widget-raised, #fff); border: 1px solid var(--lemma-widget-border, #e6e1d6); pointer-events: none; white-space: nowrap; }
+.lk-tools { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+.lk-tools select { font: inherit; font-size: 12.5px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--lemma-widget-border, #e6e1d6); background: var(--lemma-widget-surface, #fff); color: inherit; }
+.lk-count { color: var(--lemma-widget-muted, #6b665c); font-size: 12px; }
+.lk-table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.lk-table th { text-align: left; font-weight: 500; color: var(--lemma-widget-muted, #6b665c); font-size: 12px; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--lemma-widget-border-strong, #d9d2c3); }
+.lk-table td { padding: 6px 8px 6px 0; border-top: 1px solid var(--lemma-widget-border, #eee8dc); }
+.lk-table td[data-kind="num"] { text-align: right; }
+.lk-empty { color: var(--lemma-widget-muted, #6b665c); }
+.lk-record dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.lk-record dt { color: var(--lemma-widget-muted, #6b665c); font-size: 12.5px; }
+.lk-record dd { margin: 0; }
