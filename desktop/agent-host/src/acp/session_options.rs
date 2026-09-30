@@ -7,11 +7,12 @@
 //! `~/.config/opencode` as well as `~/.claude` and `~/.agents`. Left alone,
 //! those compete with Lemma's -- a user skill that drives a browser on the
 //! Mac, a hook that rewrites every command, an instruction file for some
-//! other project. So by default each agent is started without them: Claude
-//! Code through its own switches, Codex and `OpenCode` in a Lemma-private
-//! config folder that carries only their sign-in (`acp::agent_homes`). A
-//! person can turn that off per agent ("Use my own skills and settings",
-//! `HostConfig::own_settings`), which is the behaviour from before.
+//! other project. So by default each agent is started with its own switches
+//! set to leave out what they can. Claude Code's reach everything; Codex and
+//! `OpenCode` still read the person's own config folder (`AGENTS.md`, rules,
+//! MCP servers), which is accepted: Lemma's MCP server and instructions go on
+//! top. A person can turn that off per agent ("Use my own skills and
+//! settings", `HostConfig::own_settings`), which is the behaviour from before.
 //!
 //! What stays either way: the agent's sign-in, and a bound project's own
 //! instructions and settings, which belong to the folder the person chose.
@@ -27,7 +28,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::{AgentHomes, claude_sign_in, codex_home, opencode_config_home};
+use super::{claude_config_dir, claude_sign_in};
 use crate::protocol::RunSpec;
 
 /// The Lemma tool that stands in for an agent's own web search.
@@ -53,21 +54,29 @@ pub(crate) struct SessionOptions {
 /// merged into rather than replaced where both set a variable. `own_settings` is
 /// the person's choice for this agent. `lemma_cli` is the `bin/` of Lemma's own
 /// CLI, when this Mac has one for the run, which goes first on the agent's
-/// `PATH` so the `lemma` it runs is the release its server is. `homes` is where
-/// each agent's own setup is, and where Lemma builds the private ones.
+/// `PATH` so the `lemma` it runs is the release its server is.
 pub(crate) fn session_options(
     adapter_key: &str,
     adapter_environment: &BTreeMap<String, String>,
     spec: &RunSpec,
     own_settings: bool,
     lemma_cli: Option<&Path>,
-    homes: Option<&AgentHomes>,
 ) -> SessionOptions {
     let lemma_tools = LemmaTools::of(spec);
     let mut options = match adapter_key {
-        "claude-code" => claude_code(spec, own_settings, &lemma_tools, homes),
-        "codex" => codex(adapter_environment, own_settings, &lemma_tools, homes),
-        "opencode" => opencode(own_settings, &lemma_tools, homes),
+        "claude-code" => claude_code(
+            spec,
+            own_settings,
+            &lemma_tools,
+            claude_config_dir().as_deref(),
+        ),
+        "codex" => codex(
+            adapter_environment,
+            own_settings,
+            &lemma_tools,
+            home_directory().as_deref(),
+        ),
+        "opencode" => opencode(own_settings, &lemma_tools),
         _ => SessionOptions::default(),
     };
     if let Some(bin) = lemma_cli
@@ -117,7 +126,7 @@ fn claude_code(
     spec: &RunSpec,
     own_settings: bool,
     lemma_tools: &LemmaTools,
-    homes: Option<&AgentHomes>,
+    claude_config: Option<&Path>,
 ) -> SessionOptions {
     let mut disallowed = vec![json!("mcp__claude-in-chrome")];
     if lemma_tools.web_search {
@@ -139,7 +148,7 @@ fn claude_code(
             "env".to_owned(),
             json!({ "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1" }),
         );
-        if let Some(sign_in) = homes.and_then(claude_sign_in) {
+        if let Some(sign_in) = claude_config.and_then(claude_sign_in) {
             claude_options.insert("settings".to_owned(), Value::Object(sign_in));
         }
     }
@@ -159,63 +168,33 @@ fn claude_code(
     }
 }
 
-/// Codex, in a Lemma-private `CODEX_HOME` and through `CODEX_CONFIG`, which
-/// `codex-acp` sends as config overrides on every thread.
+/// Codex, through `CODEX_CONFIG`: `codex-acp` sends it as config overrides on
+/// every thread, layered over `~/.codex/config.toml`.
 ///
-/// The private home (`acp::agent_homes::codex_home`) is what leaves out the
-/// person's `AGENTS.md`, execpolicy `rules/`, `notify`, profiles, plugins and
-/// MCP servers: Codex reads them from its home, with no switch for most. Its
-/// `config.toml` carries only the sign-in, provider and model, and its
-/// `auth.json` is a link to the person's, so the login and token refreshes are
-/// theirs. Codex installs its bundled skills (image generation among them)
-/// into it afresh.
-///
-/// The overrides are merged into the pinned adapter's own value, which already
-/// disables Codex's bundled browser and computer-use plugins. On top of that,
-/// `features` turns off `hooks`, `apps` (the connectors of the person's
-/// `ChatGPT` account), `plugins`, `remote_plugin` (plugins synced from that
-/// account) and `memories`; and each skill under `~/.agents/skills` -- which Codex reads
-/// from every home, and where an older copy of Lemma's own skills lands when
-/// installed by hand -- is switched off by path (`skills.config`), since
-/// `skills.include_instructions` would take the bundled ones too. When no
-/// private home can be built (the person keeps Codex's credentials in the
-/// keychain, which only their own home reaches), Codex stays in theirs and
-/// their `~/.codex/skills` are switched off the same way. A bound project's
-/// `AGENTS.md` loads either way.
+/// Merged into the pinned adapter's own value, which already disables Codex's
+/// bundled browser and computer-use plugins. Each of the person's own skills
+/// -- `~/.codex/skills` and `~/.agents/skills`, which is also where an older
+/// copy of Lemma's own skills lands when installed by hand -- is switched off
+/// by path (`skills.config`), which leaves Codex's bundled ones (image
+/// generation among them) in place; `skills.include_instructions` would have
+/// taken those too. `features.hooks` switches off the person's hooks. A bound
+/// project's `AGENTS.md` still loads, as Claude Code's project instructions
+/// do, and `~/.codex/AGENTS.md` loads regardless: Codex has no switch for it
+/// short of another `CODEX_HOME`, which is where the login is.
 fn codex(
     adapter_environment: &BTreeMap<String, String>,
     own_settings: bool,
     lemma_tools: &LemmaTools,
-    homes: Option<&AgentHomes>,
+    home: Option<&Path>,
 ) -> SessionOptions {
     let mut overrides = Map::new();
-    let mut environment = BTreeMap::new();
     if lemma_tools.web_search {
         overrides.insert("web_search".to_owned(), json!("disabled"));
     }
     if !own_settings {
-        overrides.insert(
-            "features".to_owned(),
-            json!({
-                "hooks": false,
-                "apps": false,
-                "plugins": false,
-                "remote_plugin": false,
-                "memories": false,
-            }),
-        );
-        let private = homes.and_then(|homes| match codex_home(homes) {
-            Ok(private) => private,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "could not build Codex's Lemma home; it runs in the person's own"
-                );
-                None
-            }
-        });
-        let skills: Vec<Value> = homes
-            .map(|homes| codex_user_skills(homes, private.is_none()))
+        overrides.insert("features".to_owned(), json!({ "hooks": false }));
+        let skills: Vec<Value> = home
+            .map(codex_user_skills)
             .unwrap_or_default()
             .into_iter()
             .map(|path| json!({ "path": path, "enabled": false }))
@@ -223,13 +202,8 @@ fn codex(
         if !skills.is_empty() {
             overrides.insert("skills".to_owned(), json!({ "config": skills }));
         }
-        if let Some(private) = private {
-            environment.insert(
-                "CODEX_HOME".to_owned(),
-                private.to_string_lossy().into_owned(),
-            );
-        }
     }
+    let mut environment = BTreeMap::new();
     if !overrides.is_empty() {
         let mut config = adapter_environment
             .get("CODEX_CONFIG")
@@ -246,20 +220,16 @@ fn codex(
     }
 }
 
-/// Every `SKILL.md` the person installed for Codex themselves: under
-/// `~/.agents/skills`, and under their Codex home's `skills` when Codex runs
-/// in it (`in_own_home`).
+/// Every `SKILL.md` the person installed for Codex themselves.
 ///
 /// A folder whose name starts with a dot is Codex's own (`.system` holds the
 /// bundled skills) and is left alone.
-fn codex_user_skills(homes: &AgentHomes, in_own_home: bool) -> Vec<String> {
-    let mut folders = Vec::new();
-    if in_own_home {
-        folders.push(homes.codex_home.join("skills"));
-    }
-    folders.push(homes.home.join(".agents").join("skills"));
+fn codex_user_skills(home: &Path) -> Vec<String> {
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| home.join(".codex"), std::path::PathBuf::from);
     let mut skills = Vec::new();
-    for folder in folders {
+    for folder in [codex_home.join("skills"), home.join(".agents/skills")] {
         let Ok(entries) = std::fs::read_dir(&folder) else {
             continue;
         };
@@ -276,24 +246,15 @@ fn codex_user_skills(homes: &AgentHomes, in_own_home: bool) -> Vec<String> {
     skills
 }
 
-/// `OpenCode`, in a Lemma-private `XDG_CONFIG_HOME`, and through its
-/// environment switches and a config overlay.
+/// `OpenCode`, through its environment switches and a config overlay.
 ///
-/// The private config folder (`acp::agent_homes::opencode_config_home`) leaves
-/// out everything under the person's `~/.config/opencode` -- `AGENTS.md`,
-/// `opencode.json` (MCP servers, plugins, instructions), agents, commands,
-/// skills -- keeping only their providers and model. The sign-in is under
-/// `XDG_DATA_HOME`, which does not move, and the person's other config folders
-/// are linked in. `OPENCODE_DISABLE_EXTERNAL_SKILLS` leaves out the skills
-/// under `~/.claude` and `~/.agents`, and `OPENCODE_DISABLE_CLAUDE_CODE`
-/// Claude Code's instructions and skills, which `OpenCode` otherwise borrows.
-/// The overlay (`OPENCODE_CONFIG_CONTENT`) denies the `skill` tool, which also
-/// keeps out any skills in `~/.opencode`, a folder no switch moves.
-fn opencode(
-    own_settings: bool,
-    lemma_tools: &LemmaTools,
-    homes: Option<&AgentHomes>,
-) -> SessionOptions {
+/// `OPENCODE_DISABLE_EXTERNAL_SKILLS` leaves out the skills under `~/.claude`
+/// and `~/.agents`, and `OPENCODE_DISABLE_CLAUDE_CODE` Claude Code's
+/// instructions and skills, which `OpenCode` otherwise borrows. The overlay
+/// (`OPENCODE_CONFIG_CONTENT`, merged over the person's own config) denies the
+/// `skill` tool, the only way to keep `OpenCode`'s own skill folder out without
+/// moving `XDG_CONFIG_HOME`; its `AGENTS.md` there still loads.
+fn opencode(own_settings: bool, lemma_tools: &LemmaTools) -> SessionOptions {
     let mut permission = Map::new();
     if lemma_tools.web_fetch {
         permission.insert("webfetch".to_owned(), json!("deny"));
@@ -306,19 +267,6 @@ fn opencode(
             "1".to_owned(),
         );
         environment.insert("OPENCODE_DISABLE_CLAUDE_CODE".to_owned(), "1".to_owned());
-        match homes.map(opencode_config_home).transpose() {
-            Ok(Some(Some(private))) => {
-                environment.insert(
-                    "XDG_CONFIG_HOME".to_owned(),
-                    private.to_string_lossy().into_owned(),
-                );
-            }
-            Ok(_) => {}
-            Err(error) => tracing::warn!(
-                %error,
-                "could not build OpenCode's Lemma config folder; it reads the person's own"
-            ),
-        }
     }
     if !permission.is_empty() {
         environment.insert(
@@ -381,9 +329,8 @@ mod tests {
         std::fs::write(at.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
     }
 
-    /// With nowhere to build a private home, Codex stays in the person's and
-    /// their own skills are switched off by path; Codex's bundled ones, under a
-    /// dot folder, are not -- image generation is one of them.
+    /// The person's own skills are switched off by path; Codex's bundled ones,
+    /// under a dot folder, are not -- image generation is one of them.
     #[test]
     fn codex_leaves_out_the_persons_skills_and_keeps_its_own() {
         let home = tempfile::tempdir().unwrap();
@@ -399,7 +346,7 @@ mod tests {
                 web_search: false,
                 web_fetch: false,
             },
-            Some(&AgentHomes::of_person(home.path())),
+            Some(home.path()),
         );
 
         let config: Value = serde_json::from_str(&options.environment["CODEX_CONFIG"]).unwrap();
@@ -422,53 +369,6 @@ mod tests {
         assert!(!disabled.iter().any(|path| path.contains(".system")));
     }
 
-    /// In its Lemma home, Codex has none of the person's `~/.codex/skills` to
-    /// switch off, and still reads `~/.agents/skills` from every home.
-    #[cfg(unix)]
-    #[test]
-    fn codex_in_its_lemma_home_switches_off_what_every_home_reads() {
-        let home = tempfile::tempdir().unwrap();
-        let data = tempfile::tempdir().unwrap();
-        skill(&home.path().join(".codex/skills/browser"));
-        skill(&home.path().join(".agents/skills/lemma-builder"));
-        let homes = AgentHomes::of_person(home.path()).in_folder(data.path().join("agent-homes"));
-
-        let options = codex(
-            &BTreeMap::new(),
-            false,
-            &LemmaTools {
-                web_search: false,
-                web_fetch: false,
-            },
-            Some(&homes),
-        );
-
-        let private = Path::new(&options.environment["CODEX_HOME"]);
-        assert!(private.starts_with(data.path()), "{}", private.display());
-        let config: Value = serde_json::from_str(&options.environment["CODEX_CONFIG"]).unwrap();
-        for feature in ["hooks", "apps", "plugins", "remote_plugin", "memories"] {
-            assert_eq!(config["features"][feature], json!(false), "{feature}");
-        }
-        let disabled = config["skills"]["config"].as_array().unwrap();
-        assert_eq!(disabled.len(), 1, "{disabled:?}");
-        assert!(
-            Path::new(disabled[0]["path"].as_str().unwrap())
-                .ends_with(".agents/skills/lemma-builder/SKILL.md")
-        );
-
-        // And with the person's own settings, their own home, untouched.
-        let own = codex(
-            &BTreeMap::new(),
-            true,
-            &LemmaTools {
-                web_search: false,
-                web_fetch: false,
-            },
-            Some(&homes),
-        );
-        assert_eq!(own, SessionOptions::default());
-    }
-
     #[test]
     fn claude_code_is_given_the_persons_sign_in_as_flag_settings() {
         let home = tempfile::tempdir().unwrap();
@@ -478,7 +378,7 @@ mod tests {
             r#"{"apiKeyHelper": "key-helper", "hooks": {"Stop": []}}"#,
         )
         .unwrap();
-        let homes = AgentHomes::of_person(home.path());
+        let config = home.path().join(".claude");
         let spec: RunSpec = serde_json::from_value(json!({
             "agent_run_id": uuid::Uuid::nil(),
             "conversation_id": uuid::Uuid::nil(),
@@ -494,12 +394,12 @@ mod tests {
             web_fetch: false,
         };
 
-        let isolated = claude_code(&spec, false, &tools, Some(&homes));
+        let isolated = claude_code(&spec, false, &tools, Some(&config));
         let options = &isolated.meta.unwrap()["claudeCode"]["options"];
         assert_eq!(options["settings"], json!({ "apiKeyHelper": "key-helper" }));
         assert_eq!(options["plugins"], json!([]));
 
-        let own = claude_code(&spec, true, &tools, Some(&homes));
+        let own = claude_code(&spec, true, &tools, Some(&config));
         let options = &own.meta.unwrap()["claudeCode"]["options"];
         assert!(options.get("settings").is_none(), "{options}");
         assert!(options.get("plugins").is_none(), "{options}");
@@ -542,7 +442,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            session_options("cursor", &BTreeMap::new(), &spec, false, None, None),
+            session_options("cursor", &BTreeMap::new(), &spec, false, None),
             SessionOptions::default()
         );
     }

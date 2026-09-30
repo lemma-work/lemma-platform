@@ -12,7 +12,7 @@ use super::{
     plan_configuration, prompt_blocks, prompt_turn, scoped_mcp_tool_names, session_to_resume,
     steering_advertised, tool_call_id,
 };
-use super::{AgentHomes, lemma_cli_bin, session_options};
+use super::{lemma_cli_bin, session_options};
 use crate::normalize::{Dialect, Normalizer, RunContext};
 use crate::protocol::RunSpec;
 
@@ -90,17 +90,12 @@ impl AgentDriver for AcpDriver {
         callbacks: Arc<dyn AcpCallbacks>,
     ) -> anyhow::Result<AcpRunOutcome> {
         std::fs::create_dir_all(&request.scratch_directory)?;
-        let homes = request
-            .agent_homes
-            .clone()
-            .or_else(AgentHomes::from_environment);
         let session_options = session_options(
             &request.adapter.spec.key,
             &request.adapter.environment(),
             &request.run_spec,
             request.own_settings,
             lemma_cli_bin(&request.run_spec).as_deref(),
-            homes.as_ref(),
         );
         let agent = build_agent(
             &request.adapter,

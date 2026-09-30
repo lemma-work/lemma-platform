@@ -155,7 +155,6 @@ pub(crate) async fn one_turn(
             adapter: manifest.resolve(agent).unwrap(),
             agent_environment: std::collections::BTreeMap::default(),
             own_settings: false,
-            agent_homes: None,
             run_spec: RunSpec {
                 agent_run_id: run_id,
                 conversation_id,

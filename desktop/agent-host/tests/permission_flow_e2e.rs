@@ -351,7 +351,6 @@ async fn an_unanswered_request_is_denied_when_the_timeout_elapses() {
             AcpRunRequest {
                 agent_environment: std::collections::BTreeMap::default(),
                 own_settings: false,
-                agent_homes: None,
                 adapter,
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),

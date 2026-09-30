@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
-"""Do the real coding agents leave out the person's setup the way Lemma starts them?
+"""Does the real Claude Code leave out the person's setup the way Lemma starts it?
 
-A local check, not a CI one: it runs whichever of `codex` and `claude` this
-machine has installed, each in a fake home with a marker in every personal
-place, and fails if a marker reaches what the agent would send its model. It
-needs no sign-in and no network. Codex renders its prompt locally
-(`codex debug prompt-input`), and Claude Code talks to a stand-in model
-server on 127.0.0.1 with a made-up key that only that server sees.
+A local check, not a CI one: when `claude` is installed, it runs it in a fake
+home with a marker in every personal place, and fails if a marker reaches
+what it would send its model. It needs no sign-in and no network: Claude Code
+talks to a stand-in model server on 127.0.0.1 with a made-up key that only
+that server sees. (Codex and OpenCode run in the person's own config
+folders and have nothing to check here.)
 
-What it holds upstream to is what `desktop/agent-host/src/acp/agent_homes.rs`
-and `session_options.rs` rely on:
-
-- Codex in a `CODEX_HOME` of Lemma's (no `AGENTS.md`, no `rules/`, no MCP
-  servers) does not read the person's `~/.codex/AGENTS.md`, and does when
-  pointed at the person's own home, which is what makes the check mean
-  something.
-- Claude Code with `--setting-sources project,local --strict-mcp-config`
-  (the flags `settingSources` and `strictMcpConfig` become) reads none of
-  `~/.claude/CLAUDE.md`, skills, agents, commands, output styles or the
-  person's MCP servers, still reads the project's `CLAUDE.md`, and still
-  signs in through an `apiKeyHelper` given as flag settings.
+What it holds upstream to is what `desktop/agent-host/src/acp/session_options.rs`
+relies on: Claude Code with `--setting-sources project,local --strict-mcp-config`
+(the flags `settingSources` and `strictMcpConfig` become) reads none of
+`~/.claude/CLAUDE.md`, skills, agents, commands, output styles or the
+person's MCP servers, still reads the project's `CLAUDE.md`, and still signs
+in through an `apiKeyHelper` given as flag settings.
 
 Run it after bumping a pinned adapter or when an agent's upstream CLI moves:
 
@@ -45,58 +39,6 @@ PROJECT_MARKER = "PROJECT_MARKER_7732"
 def write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-
-
-def codex_prompt(codex: str, home: Path, codex_home: Path, project: Path) -> str:
-    environment = dict(os.environ, HOME=str(home), CODEX_HOME=str(codex_home))
-    completed = subprocess.run(
-        [codex, "debug", "prompt-input", "hi"],
-        cwd=project,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"codex debug prompt-input failed: {completed.stderr[-800:]}"
-        )
-    return completed.stdout
-
-
-def check_codex(root: Path) -> list[str]:
-    codex = shutil.which("codex")
-    if codex is None:
-        print("- codex: not installed, skipped")
-        return []
-    home = root / "codex-person"
-    write(home / ".codex" / "AGENTS.md", MARKER)
-    write(
-        home / ".codex" / "rules" / "default.rules",
-        f'prefix_rule(pattern=["{MARKER}"])\n',
-    )
-    write(
-        home / ".codex" / "config.toml",
-        f'[mcp_servers.{MARKER.lower()}]\ncommand = "/usr/bin/true"\n',
-    )
-    lemmas = root / "codex-lemma"
-    lemmas.mkdir()
-    project = root / "codex-project"
-    write(project / "AGENTS.md", PROJECT_MARKER)
-
-    failures = []
-    own = codex_prompt(codex, home, home / ".codex", project)
-    if MARKER not in own:
-        failures.append(
-            "codex: the person's own home did not load its AGENTS.md; the check proves nothing"
-        )
-    isolated = codex_prompt(codex, home, lemmas, project)
-    if MARKER in isolated:
-        failures.append("codex: a Lemma CODEX_HOME still loaded the person's setup")
-    if PROJECT_MARKER not in isolated:
-        failures.append("codex: the project's own AGENTS.md was lost")
-    print(f"- codex: {'ok' if not failures else 'FAILED'}")
-    return failures
 
 
 class Capture(http.server.BaseHTTPRequestHandler):
@@ -204,7 +146,7 @@ def check_claude(root: Path) -> list[str]:
 def main() -> int:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        failures = check_codex(root) + check_claude(root)
+        failures = check_claude(root)
     if failures:
         print("\n".join(failures))
         return 1
