@@ -3,6 +3,7 @@ import { NEW_CONVERSATION } from "./types";
 import type { Conversation, FileContent, Invitation, LibraryItem, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
+import { sampleListing } from "@/thread/memory-notes";
 import { agentChanges, agentRows, answeringAs, readAgentDetail, type AgentDraft } from "./agents";
 import {
     createRequest,
@@ -1960,12 +1961,11 @@ const SAMPLE_MEMORY: { path: string; description: string; daysAgo: number; text:
 ];
 
 function sampleMemoryIn(directory: string): LibraryItem[] {
-    const index = { id: directory + "/AGENTS.md", name: "AGENTS.md", kind: "file" as const, path: directory + "/AGENTS.md", updated: new Date(Date.now() - 86_400_000).toISOString(), detail: "Index" };
-    const notes = SAMPLE_MEMORY
-        .filter(note => note.path.slice(0, note.path.lastIndexOf("/")) === directory)
-        .map(note => ({ id: note.path, name: note.path.split("/").pop() ?? note.path, kind: "file" as const, path: note.path,
-            updated: new Date(Date.now() - note.daysAgo * 86_400_000).toISOString(), detail: note.description, description: note.description }));
-    return notes.length ? [index, ...notes] : [];
+    const index = (dir: string) => ({ path: dir + "/AGENTS.md", updated: new Date(Date.now() - 86_400_000).toISOString(), description: "" });
+    return sampleListing(directory, [
+        index("/memory"),
+        ...SAMPLE_MEMORY.map(note => ({ path: note.path, updated: new Date(Date.now() - note.daysAgo * 86_400_000).toISOString(), description: note.description })),
+    ]);
 }
 
 async function sampleFile(path: string): Promise<FileContent> {
@@ -2111,13 +2111,14 @@ export const fixtureSource: PodSource = {
             id: table.name, name: table.name, kind: "table" as const, path: table.name, updated, detail: table.detail,
         })) };
         if (directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) return { items: sampleMemoryIn(directory) };
-        if (directory === "/me") return { items: [{ id: "personal-note", name: "My notes.md", kind: "file" as const, path: "/me/notes.md", updated, detail: "Personal notes" }] };
+        if (directory === "/me") return { items: [...sampleMemoryIn("/me"), { id: "personal-note", name: "My notes.md", kind: "file" as const, path: "/me/notes.md", updated, detail: "Personal notes" }] };
         if (directory === "/skills") return { items: SAMPLE_SKILLS.map(skill => ({ id: "skill-" + skill.folder, name: skill.folder, kind: "folder" as const, path: "/skills/" + skill.folder, updated: skill.updated, detail: "Instructions and supporting resources" })) };
         if (directory.startsWith("/skills/")) return { items: [{ id: "skill-md", name: "SKILL.md", kind: "file" as const, path: directory + "/SKILL.md", updated, detail: "Skill instructions" }] };
         return { items: directory === "/" ? [
             { id: "pdf", name: "Project overview.pdf", kind: "file" as const, path: "/sample-document.pdf", updated, detail: "PDF document" },
             { id: "me", name: "me", kind: "folder" as const, path: "/me", updated, detail: "Personal" },
             { id: "skills", name: "skills", kind: "folder" as const, path: "/skills", updated, detail: "Skills" },
+            { id: "memory", name: "memory", kind: "folder" as const, path: "/memory", updated, detail: "What the teammate has written down" },
             { id: "report", name: "Weekly report.md", kind: "file" as const, path: "/sample-report.md", updated, detail: "Weekly progress and next steps" },
             { id: "clip", name: "sample-clip.mp4", kind: "file" as const, path: "/videos/sample-clip.mp4", updated, detail: "Video" },
             { id: "page", name: "launch-preview.html", kind: "file" as const, path: "/launch-preview.html", updated, detail: "Web page" },

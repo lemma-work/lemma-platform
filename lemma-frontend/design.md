@@ -127,7 +127,15 @@ learning (what it wrote down).
 
 "Needs you" is one queue in two parts: workflow forms, and conversations
 paused on a question or an approval (scheduled runs included). The rail
-badge, the Teammates page and Home all read both.
+badge, the Teammates page and Home all read both. An ask left for more than a
+week goes quiet: it stops counting on the rail and the Teammates page, and
+Home folds it behind "N older". Any ask can be dismissed from Home, which
+archives the conversation — the same put-away the chat list offers, so it
+leaves every device and stays readable under Archived.
+
+Memory folders are found by walking down from ones that exist (`/`, then
+`/memory`, then `agents`…; `/me` for private notes). Listing a folder nobody
+created is a 400, not an empty list, so paths are never asked for blind.
 
 ## Desktop
 

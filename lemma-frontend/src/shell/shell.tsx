@@ -36,7 +36,7 @@ import { AboutPage, isAboutSection, type AboutSection } from "@/space/about-page
 import { TeammateRail } from "@/space/teammate-rail";
 import { TeammatesPage } from "@/space/teammates-page";
 import { owedFrom } from "@/space/teammates";
-import { gatherAsked } from "@/thread/waiting-on-you";
+import { byAge, gatherAsked } from "@/thread/waiting-on-you";
 import type { SpaceView } from "@/data";
 import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
 import type { FileContent, Tab } from "@/data";
@@ -394,7 +394,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         enabled: !preview && (pods.data?.length ?? 0) > 0,
         staleTime: 60_000,
     });
-    const owed = useMemo(() => owedFrom(waiting.data?.rows ?? [], asked.data ?? []), [waiting.data, asked.data]);
+    const owed = useMemo(() => owedFrom(waiting.data?.rows ?? [], byAge(asked.data ?? []).fresh), [waiting.data, asked.data]);
 
     /* Changing teammate drops the conversation you were reading — unless the
        address named one, which is exactly what a link to a conversation is.

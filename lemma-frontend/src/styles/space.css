@@ -2587,6 +2587,50 @@ samp,
 .home__owed button > svg {
     color: var(--ink-3);
 }
+/* An ask can be put away. The row is two controls side by side: open it,
+   or dismiss it, which archives the conversation. The dismiss is quiet
+   until the row is under the pointer, and always there on touch. */
+.home__owed .home__ask {
+    display: flex;
+    align-items: center;
+}
+.home__owed .home__ask > button:first-child {
+    flex: 1;
+    min-width: 0;
+}
+.home__owed .home__dismiss {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+    border-radius: var(--r-sm);
+    color: var(--ink-3);
+    opacity: 0;
+}
+.home__owed .home__ask:hover .home__dismiss,
+.home__owed .home__dismiss:focus-visible {
+    opacity: 1;
+}
+.home__owed .home__dismiss:hover {
+    color: var(--ink);
+}
+@media (hover: none) {
+    .home__owed .home__dismiss { opacity: 1; }
+}
+.home__older {
+    margin-top: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.home__older:hover {
+    color: var(--ink);
+}
 .home__starters {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { askedRows, byAskedLongest } from "@/thread/waiting-on-you";
+import { askedRows, byAge, byAskedLongest } from "@/thread/waiting-on-you";
 import { owedFrom, sayHired, sayOwed } from "@/space/teammates";
 
 /** A conversation paused on a person is owed, the same as a workflow form.
@@ -41,4 +41,12 @@ test("tenure is a date and who hired it, never a count", () => {
     assert.match(sayHired({ hiredAt: "2026-03-12T09:00:00Z", hiredBy: "me", members }, now), /by you$/);
     assert.match(sayHired({ hiredAt: "2025-03-12T09:00:00Z", hiredBy: "gone", members }, now), /^Hired (12 March 2025|March 12, 2025)$/);
     assert.equal(sayHired({ members }, now), "");
+});
+
+test("an ask left for over a week goes quiet: listed, but no longer counted", () => {
+    const now = Date.parse("2026-10-01T12:00:00Z");
+    const row = (id: string, daysAgo: number) => ({ podId: "p1", podName: "Kit", conversationId: id, title: id, kind: "question" as const, sinceMs: now - daysAgo * 86_400_000 });
+    const { fresh, quiet } = byAge([row("today", 0), row("six", 6), row("eight", 8), row("three-weeks", 21)], now);
+    assert.deepEqual(fresh.map((one) => one.conversationId), ["today", "six"]);
+    assert.deepEqual(quiet.map((one) => one.conversationId), ["eight", "three-weeks"]);
 });

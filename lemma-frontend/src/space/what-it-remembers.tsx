@@ -1,11 +1,18 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { source, type Pod } from "@/data";
+import { source, type LibraryItem, type Pod } from "@/data";
 import { listStamp } from "@/data/stamp";
 import { isForbidden, isMissing } from "@/session/auth-state";
-import { changedLately, MEMORY_FOLDERS, notesFrom } from "@/thread/memory-notes";
+import { changedLately, listIfThere, MEMORY_FOLDERS, notesFrom } from "@/thread/memory-notes";
 import { LockIcon } from "@/ui/icons";
+
+/** The datastore's answer for a folder that is not there: a 400 with this
+ *  sentence, not a 404. */
+function isNoSuchFolder(problem: unknown): boolean {
+    const message = problem instanceof Error ? problem.message : typeof problem === "object" && problem ? String((problem as { message?: unknown }).message ?? "") : "";
+    return /directory not found/i.test(message);
+}
 
 /** What the teammate has written down while it worked, beside what people
  *  taught it. Taught is skills, which people write; this is memory, which it
@@ -19,16 +26,26 @@ import { LockIcon } from "@/ui/icons";
 export function WhatItRemembers({ pod, onFile }: { pod: Pod; onFile: (path: string) => void }) {
     const notes = useQuery({
         queryKey: ["memory-notes", pod.id],
-        queryFn: async () => notesFrom(await Promise.all(MEMORY_FOLDERS.map(async (folder) => {
-            try {
-                return { private: folder.private, items: (await source.listLibrary(pod.id, "files", folder.path)).items };
-            } catch (problem) {
-                /* A folder that was never written to is not a failure: it is
-                   a teammate that has not noted anything there yet. */
-                if (isMissing(problem)) return { private: folder.private, items: [] };
-                throw problem;
-            }
-        }))),
+        queryFn: async () => {
+            /* One listing per folder per query, however many of the walks
+               pass through it: `/` and `/memory` are each asked once. */
+            const seen = new Map<string, Promise<{ items: LibraryItem[]; next?: string | null }>>();
+            const list = (directory: string, page?: string) => {
+                const key = directory + "\u0000" + (page ?? "");
+                if (!seen.has(key)) seen.set(key, source.listLibrary(pod.id, "files", directory, page));
+                return seen.get(key)!;
+            };
+            return notesFrom(await Promise.all(MEMORY_FOLDERS.map(async (folder) => {
+                try {
+                    return { private: folder.private, items: (await listIfThere(list, folder.path)) ?? [] };
+                } catch (problem) {
+                    /* A folder that disappeared between two steps is still
+                       a teammate that has not noted anything there. */
+                    if (isMissing(problem) || isNoSuchFolder(problem)) return { private: folder.private, items: [] };
+                    throw problem;
+                }
+            })));
+        },
         staleTime: 60_000,
     });
 

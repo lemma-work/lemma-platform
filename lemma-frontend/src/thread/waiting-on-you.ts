@@ -47,6 +47,20 @@ export function askedRows(pod: { id: string; name: string }, waiting: readonly W
     return rows;
 }
 
+/** After this, an ask has gone quiet: still listed on Home behind "older",
+ *  but no longer counted on the rail or the Teammates page. A question left
+ *  for weeks is almost always one nobody is going to answer, and a badge
+ *  that never clears is a badge people learn to ignore. */
+export const QUIET_AFTER_MS = 7 * 86_400_000;
+
+/** The asks still worth a badge, and the ones that have gone quiet. */
+export function byAge(rows: readonly AskedRow[], now: number = Date.now()): { fresh: AskedRow[]; quiet: AskedRow[] } {
+    const fresh: AskedRow[] = [];
+    const quiet: AskedRow[] = [];
+    for (const row of rows) (now - row.sinceMs > QUIET_AFTER_MS ? quiet : fresh).push(row);
+    return { fresh, quiet };
+}
+
 /** Longest-waiting first, the same order the workflow queue keeps. */
 export function byAskedLongest(rows: readonly AskedRow[]): AskedRow[] {
     return [...rows].sort((a, b) => a.sinceMs - b.sinceMs);

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { changedLately, isMemoryPath, notedBy, notesFrom, topicOf } from "@/thread/memory-notes";
+import { changedLately, isMemoryPath, listIfThere, notedBy, notesFrom, sampleListing, topicOf } from "@/thread/memory-notes";
 import { buildTurns } from "@/thread/turns";
 
 /** What the teammate wrote down is read from files, never from the model
@@ -79,4 +79,35 @@ test("a turn carries each note it wrote once, however many times it saved it", (
     assert.deepEqual(turns[0].noted, [{ path: "/memory/pricing.md", topic: "Pricing", private: false }]);
     /* The writes are still steps in the trace. */
     assert.equal(turns[0].notes.length, 3);
+});
+
+test("a folder is listed only after the folder above it said it exists", async () => {
+    const tree = sampleListing;
+    const notes = [
+        { path: "/memory/pricing.md", updated: "2026-09-30T09:00:00Z", description: "" },
+        { path: "/memory/agents/pod-default/style.md", updated: "2026-09-30T09:00:00Z", description: "" },
+    ];
+    const asked: string[] = [];
+    const list = async (directory: string) => {
+        asked.push(directory);
+        const items = tree(directory, notes);
+        if (directory !== "/" && items.length === 0) throw Object.assign(new Error("Directory not found in this pod"), { statusCode: 400 });
+        return { items };
+    };
+    assert.deepEqual((await listIfThere(list, "/memory/agents/pod-default"))?.map((item) => item.path), ["/memory/agents/pod-default/style.md"]);
+    assert.deepEqual(asked, ["/", "/memory", "/memory/agents", "/memory/agents/pod-default"]);
+    asked.length = 0;
+    /* Nothing under /memory/agents/someone-else, so it is never asked for. */
+    assert.equal(await listIfThere(list, "/memory/agents/someone-else"), null);
+    assert.deepEqual(asked, ["/", "/memory", "/memory/agents"]);
+});
+
+test("a walk into /me starts at /me, which is each person's own", async () => {
+    const asked: string[] = [];
+    const list = async (directory: string) => {
+        asked.push(directory);
+        return { items: sampleListing(directory, [{ path: "/me/agents/pod-default/yours.md", updated: "2026-09-30T09:00:00Z", description: "" }]) };
+    };
+    assert.equal((await listIfThere(list, "/me/agents/pod-default"))?.length, 1);
+    assert.deepEqual(asked, ["/me", "/me/agents", "/me/agents/pod-default"]);
 });

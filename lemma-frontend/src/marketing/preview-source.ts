@@ -1,4 +1,5 @@
 import { conversationWidget } from "./conversation-widgets";
+import { sampleListing } from "@/thread/memory-notes";
 import { teammates, teammateFor } from "./teammates";
 import { fixtureSource } from "@/data/fixtures";
 import type { Conversation, Member, PodSource, Tab } from "@/data/types";
@@ -96,14 +97,10 @@ export const previewSource: PodSource = {
     },
     async listLibrary(id, kind, directory) {
         if (kind === "tables") return { items: [] };
-        if (directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) {
-            return { items: notesOf(id)
-                .filter(note => note.path.slice(0, note.path.lastIndexOf("/")) === directory)
-                .map(note => ({ id: note.path, name: note.path.split("/").pop() ?? note.path, kind: "file" as const, path: note.path,
-                    updated: new Date(Date.now() - note.daysAgo * DAY).toISOString(), detail: note.gloss, description: note.gloss })) };
-        }
+        const notes = sampleListing(directory, notesOf(id).map(note => ({ path: note.path, updated: new Date(Date.now() - note.daysAgo * DAY).toISOString(), description: note.gloss })));
+        if (directory === "/me" || directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) return { items: notes };
         if (directory === "/skills") return { items: [{ id: "brand-voice", name: "brand-voice", kind: "folder", path: "/skills/brand-voice", updated: "2026-09-23T09:00:00Z", detail: `What the team taught ${teammateFor(id).name}` }] };
-        return { items: [{ id: "guidance", name: "SKILL.md", kind: "file", path: voicePath, updated: "2026-09-23T09:00:00Z", detail: teammateFor(id).learned }] };
+        return { items: [...(directory === "/" ? notes : []), { id: "guidance", name: "SKILL.md", kind: "file", path: voicePath, updated: "2026-09-23T09:00:00Z", detail: teammateFor(id).learned }] };
     },
     async readFile(id, path) {
         const note = notesOf(id).find(one => one.path === path);
