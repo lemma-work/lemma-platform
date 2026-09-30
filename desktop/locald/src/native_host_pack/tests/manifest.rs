@@ -120,6 +120,12 @@ fn renders_packaged_managed_runtime_without_compatibility_supervisor() {
         manifest["services"][0]["env"]["AUTH_EMAIL_VERIFICATION_REQUIRED"],
         "false"
     );
+    // A self-shared Telegram contact matches the owner's unverified profile
+    // number: Desktop has no way to verify one otherwise.
+    assert_eq!(
+        manifest["services"][0]["env"]["SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH"],
+        "true"
+    );
     assert_eq!(
         manifest["services"][0]["env"]["LOCAL_HTTP_ACCESS_LOGS_ENABLED"],
         "true"

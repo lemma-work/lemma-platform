@@ -113,7 +113,9 @@ pub(crate) fn email_ready(email: &EmailConfig, resend_key: bool, smtp_password: 
 }
 
 /// What the backend sends mail with. Nothing when mail is not set up, which
-/// leaves the host pack's local spool in place.
+/// leaves the host pack's `EMAIL_TRANSPORT=smtp` with no server: the backend
+/// then reports mail as not configured and sends nothing, rather than writing
+/// a spool nobody reads.
 pub(crate) fn email_environment(
     email: &EmailConfig,
     resend_key: bool,

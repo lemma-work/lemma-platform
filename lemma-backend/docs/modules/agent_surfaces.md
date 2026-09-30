@@ -195,6 +195,13 @@ email provider metadata, timestamp windows, and challenge responses. Identity
 policy controls whether unknown external senders are rejected, linked, or
 represented as contacts. Redis dedup guards repeat provider deliveries.
 
+A contact shared during Telegram signup is matched by `onboarding_contact`: a
+verified profile number first, then -- only with
+`SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH` -- exactly one unverified claim, the same
+rule identity resolution applies to later messages. Whether an account's email
+must be verified to chat follows `AUTH_EMAIL_VERIFICATION_REQUIRED`
+(`identity.infrastructure.chat_account_policy`).
+
 A pooled WhatsApp number answers with its own pool row's credentials for
 everything done to a message that arrived on it -- the read receipt, the typing
 indicator, the media download, the fallback and the reply -- through

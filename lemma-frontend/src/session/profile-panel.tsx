@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { UserResponse } from "lemma-sdk";
 import { CheckCircleIcon } from "@/ui/icons";
+import { isLocalDeployment } from "@/site/config";
 import { lemma } from "./client";
 import { isCompleteMobileNumber, normalizeMobileNumber, storedMobileNumber } from "./mobile-number";
 import { VerifyMobile } from "./mobile-verification";
@@ -134,6 +135,9 @@ export function ProfilePanel({ user }: { user: UserResponse }) {
                 <VerifyMobile
                     number={typed}
                     complete={isCompleteMobileNumber(typed)}
+                    /* Only where a shared contact verifies a number: a local
+                       install, which matches unverified numbers. */
+                    unavailableHint={isLocalDeployment() ? "Share your contact with the Telegram bot to verify it." : undefined}
                     onVerified={(next) => {
                         /* The server wrote the number as part of verifying it,
                            so the box has to be told. Only this field: the rest
