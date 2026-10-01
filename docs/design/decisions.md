@@ -1288,7 +1288,7 @@ source, and a correction made while onboarding changes live triage.
 
 ## 12. What is built
 
-As of 2026-10-01, uncommitted, on the branch this document arrived with.
+As of 2026-10-01, in the pull request this document arrived with.
 Data onboarding (§5), the noticed feed and the reveal, channels (§6.3, §6.4),
 backfills and any frontend for deciders or triage are not built.
 

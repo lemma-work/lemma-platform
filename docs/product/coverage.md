@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **194** |
 
-Scenario tests declaring a promise: 424.
+Scenario tests declaring a promise: 426.
 
 ## Contract coverage
 
