@@ -3,21 +3,27 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openExternal } from "@/desktop/open-external";
-import { CloseIcon, DocsIcon, QuestionIcon, SparkleIcon, TourIcon } from "@/ui/icons";
+import { CloseIcon, DocsIcon, LibraryIcon, QuestionIcon, SparkleIcon, TourIcon } from "@/ui/icons";
 
 /** How long the note after the tour stays up on its own. */
 const NUDGE_MS = 7000;
 
-/** The way back to the tour, and to the two places that explain the rest.
+/** The way back to the tour, to how the place on screen works, and to the
+ *  two places that explain the rest.
  *
  *  In the rail's foot, above the account, as a glyph: the rail is faces, not
  *  words. Its menu is drawn over the page beside the rail — the rail scrolls,
- *  and anything drawn inside a scroller is clipped at its edge.
+ *  and anything drawn inside a scroller is clipped at its edge. Its first item
+ *  follows where you are: on Pages it is "How pages work"; somewhere with no
+ *  guide it is not there at all.
  *
  *  `nudge` is the one line shown next to it when a tour ends, so the person
  *  learns where it lives without having to go looking. */
-export function HelpMenu({ onTour, nudge, onNudged }: {
+export function HelpMenu({ onTour, guide, onGuide, nudge, onNudged }: {
     onTour: () => void;
+    /** The guide to the place on screen, by its title, if it has one. */
+    guide?: string | null;
+    onGuide?: () => void;
     nudge: boolean;
     onNudged: () => void;
 }) {
@@ -91,6 +97,12 @@ export function HelpMenu({ onTour, nudge, onNudged }: {
             </button>
             {open && at && createPortal(
                 <div ref={menu} className="helpmenu" role="menu" aria-label="Help" style={{ left: at.left, bottom: at.bottom }}>
+                    {guide && onGuide && (
+                        <button role="menuitem" onClick={() => { setOpen(false); onGuide(); }}>
+                            <LibraryIcon size={17} />
+                            <span>{guide}<small>What you can do here</small></span>
+                        </button>
+                    )}
                     <button role="menuitem" onClick={() => { setOpen(false); onTour(); }}>
                         <TourIcon size={17} />
                         <span>Show me around<small>A minute on where everything is</small></span>
@@ -108,7 +120,7 @@ export function HelpMenu({ onTour, nudge, onNudged }: {
             )}
             {nudge && !open && at && createPortal(
                 <div className="helpnudge" role="status" style={{ left: at.left, bottom: at.bottom }}>
-                    <span>The tour is here whenever you want it again.</span>
+                    <span>The tour, and a guide to each place, live here.</span>
                     <button aria-label="Dismiss" onClick={onNudged}><CloseIcon size={13} /></button>
                 </div>,
                 document.body,

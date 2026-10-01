@@ -38,13 +38,13 @@ import { TeammatesPage } from "@/space/teammates-page";
 import { owedByPod } from "@/space/teammates";
 import type { SpaceView } from "@/data";
 import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
-import type { FileContent, Tab } from "@/data";
+import type { FileContent, LibraryItem, Tab } from "@/data";
 import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
-import { makePage } from "@/docpages/templates";
+import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { renamePage } from "@/docpages/rename";
 import { moveComments } from "@/docpages/comments/store";
 import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
@@ -87,6 +87,8 @@ import { AppFrameView } from "@/desktop/app-frame";
 import { AppTour } from "@/tour/app-tour";
 import { HelpMenu } from "@/tour/help-menu";
 import { tourStops, type Stop } from "@/tour/stops";
+import { guideFor, placeOf } from "@/tour/guides";
+import { PlaceGuide } from "@/tour/place-guide";
 import { offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
@@ -1079,6 +1081,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const [tourWanted, setTourWanted] = useState<"offered" | "asked" | null>(() => incoming.get("tour") === "1" ? "asked" : null);
     const [touring, setTouring] = useState(false);
     const [tourNudge, setTourNudge] = useState(false);
+    /* A place's guide, open beside the help button (see below). */
+    const [guideOpen, setGuideOpen] = useState(false);
     const meId = me.data?.id;
     const meCreated = me.data?.created_at;
     useEffect(() => {
@@ -1100,6 +1104,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         return () => window.clearInterval(check);
     }, [preview, touring, tourWanted, tourBlocked, onHome, pickTab]);
     const startTour = useCallback(() => {
+        setGuideOpen(false);
         setSettings(null);
         setHiring(false);
         setSearching(false);
@@ -1131,6 +1136,47 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         if (window.matchMedia("(max-width: 767px)").matches) setMobileOpen(false);
         else setTourNudge(true);
     }, [meId]);
+
+    /* How the place on screen works, when somebody asks: from the help menu,
+       or from the place's own empty state. It belongs to the place it was
+       opened in, so going somewhere else puts it away. */
+    const guidePlace = !pod || atTeam ? null : placeOf(activeTab);
+    const guideName = pod?.teammate?.name || pod?.name || "";
+    const guide = useMemo(() => (guidePlace ? guideFor(guidePlace, guideName) : null), [guidePlace, guideName]);
+    useEffect(() => { setGuideOpen(false); }, [guidePlace, pod?.id]);
+    /* The page that explains pages by being one: opened if this space
+       already has it, made from its template if not. */
+    const madeGuides = useRef<Record<string, string>>({});
+    const openPageGuide = useCallback(async () => {
+        if (!pod) return;
+        const template = PAGE_TEMPLATES.find((one) => one.id === "guide");
+        if (!template) return;
+        const made = madeGuides.current[pod.id];
+        if (made) { openFile(made, "space:pages"); return; }
+        let listed: LibraryItem[] = [];
+        try {
+            listed = (await source.listLibrary(pod.id, "files", "/pages")).items;
+        } catch {
+            /* No listing: made below, under a name found by trying. */
+        }
+        const there = listed.find((item) => item.kind === "file" && item.name.toLowerCase() === template.file.toLowerCase() + ".md");
+        const path = there?.path ?? await makePage(
+            (at, text) => source.createFile(pod.id, at, text),
+            template.file,
+            template.body(pod.teammate?.name || pod.name, new Date()),
+            new Set(listed.map((item) => item.name.toLowerCase())),
+        );
+        madeGuides.current[pod.id] = path;
+        if (!there) void queryClient.invalidateQueries({ queryKey: ["library", pod.id] });
+        openFile(path, "space:pages");
+    }, [pod, openFile, queryClient]);
+    const promptChat = chat.prompt;
+    const tryGuide = useCallback(async () => {
+        const tryIt = guide?.tryIt;
+        if (!tryIt) return;
+        if (tryIt.kind === "page-guide") await openPageGuide();
+        else promptChat(tryIt.text);
+    }, [guide, openPageGuide, promptChat]);
 
     if (orgs.isPending) {
         return <WorkspaceLoading />;
@@ -1246,7 +1292,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                     }}
                     onHire={activeOrgId ? () => { setSettings(null); setHiring(true); setMobileOpen(false); } : null}
                     foot={<>
-                        {!preview && <HelpMenu onTour={() => { setMobileOpen(false); startTour(); }} nudge={tourNudge} onNudged={() => setTourNudge(false)} />}
+                        {!preview && <HelpMenu onTour={() => { setMobileOpen(false); startTour(); }}
+                            guide={guide?.title ?? null} onGuide={() => { setMobileOpen(false); setGuideOpen(true); }}
+                            nudge={tourNudge} onNudged={() => setTourNudge(false)} />}
                         {/* Above the account, because it is about the account — and
                             silent unless the allowance is close or spent. */}
                         <AllowanceNote orgId={activeOrgId} compact onOpenPlan={() => { setSettings("plan"); setMobileOpen(false); }} />
@@ -1737,7 +1785,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onAsk={chat.prompt}
                                         />
                                     ) : tab.view === "workflows" ? (
-                                        <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} />
+                                        <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
                                     ) : tab.view === "settings" ? (
                                         <SettingsPage
                                             pod={pod}
@@ -1762,6 +1810,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         onNewPage={newPage}
                                         onNewChat={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
                                         onAsk={chat.prompt}
+                                        onLearn={() => setGuideOpen(true)}
                                     />}
                                 </div>
                             ))}
@@ -1872,6 +1921,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             {reaching && pod && <ReachSheet pod={pod} onClose={() => setReaching(false)} />}
             {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} onClose={() => setShareOpen(false)} />}
             {touring && pod && <AppTour stops={stops} onPrepare={prepareStop} onClose={endTour} />}
+            {guideOpen && guide && !touring && <PlaceGuide guide={guide} onTry={guide.tryIt ? tryGuide : undefined} onClose={() => setGuideOpen(false)} />}
 
             {/* Here rather than on the arrival screen: this branch is the
                 first render that has somewhere to belong, whichever of the

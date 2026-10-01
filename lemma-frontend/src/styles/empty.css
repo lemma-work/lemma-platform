@@ -108,6 +108,34 @@
 .library-view .empty__starter:hover {
     background: var(--accent-soft);
 }
+/* The place's guide, as a quiet line under the actions. */
+.empty__learn {
+    margin-top: 14px;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13.5px;
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+.empty__learn:hover {
+    color: var(--ink);
+    text-decoration-color: var(--ink-3);
+}
+.empty__learn:focus-visible {
+    outline: 2px solid var(--accent-line);
+    outline-offset: 2px;
+}
+.library-view .empty__learn {
+    color: var(--ink-3);
+    text-decoration: underline;
+}
+
 /* What a place offers beneath its empty state — the page templates, the
    app ideas — at the list's full width, where the list would have been. */
 .all__after-empty {

@@ -135,7 +135,29 @@ lighting the real control rather than a drawing of it (`src/tour/`).
   the card and goes back where it was.
 - A stop in the sidebar opens the drawer on a phone and unfolds a collapsed
   sidebar; below 640px the card is a sheet on the edge away from what is lit.
-- When it ends, a line beside the help button says the tour is kept there.
+- When it ends, a line beside the help button says the tour and the guides
+  live there.
+
+## Place guides
+
+How one place works — the gestures nothing on screen advertises — for
+somebody standing in it (`src/tour/guides.ts`, drawn by `PlaceGuide`).
+
+- Three layers, from most to least pushy, and nothing else: the place says
+  it where it is used (a placeholder, a hint, a note under a section); a
+  guide card when asked; a guide learned by trying. Never a popup on a first
+  visit, never a tour per place — somebody who opened a page came to write.
+- Asked for from the help menu, whose first item is the guide to the place
+  on screen, or from the place's empty state. The card sits beside the help
+  button, or along the bottom on a phone; nothing dims or steps, and Escape
+  or a click elsewhere closes it.
+- A line is a gesture, set like a key, and one sentence of what it does; four
+  or five lines, the teammate by name.
+- Trying is real: "Open the guide page" opens the page that explains pages
+  by being one, made from its template the first time; other guides put a
+  whole-sentence ask in the chat box, unsent.
+- A place that already explains each of its parts gets no card: About has a
+  note under every section.
 
 ## Desktop
 

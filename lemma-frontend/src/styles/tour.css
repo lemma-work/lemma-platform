@@ -309,3 +309,156 @@
         animation: none;
     }
 }
+
+/* ── A place's guide, beside the help button ─────────────────────────────
+
+   A gesture and what it does, a line each: a card to read, not a tour to
+   sit through. The gestures are set like keys, because most of them are
+   something to press or type. */
+
+.guide {
+    position: fixed;
+    z-index: 210;
+    width: min(390px, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    padding: 16px 18px 16px;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+    color: var(--ink);
+    animation: tour-card-in 160ms var(--ease-out) both;
+}
+.guide:focus {
+    outline: none;
+}
+.guide__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.guide__head h2 {
+    flex: 1;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+.guide__close {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+.guide__close:hover {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+/* One grid for every line, so the gesture column is as wide as its widest
+   gesture and no wider — "/" sits beside its words, and the words of every
+   line start on one edge. Capped, because one gesture is the teammate's own
+   name, and a long one ends in an ellipsis rather than squeezing the words. */
+.guide__lines {
+    display: grid;
+    grid-template-columns: fit-content(120px) minmax(0, 1fr);
+    column-gap: 14px;
+    row-gap: 12px;
+    align-items: baseline;
+    margin: 0;
+}
+.guide__line {
+    display: contents;
+}
+.guide__line dt {
+    margin: 0;
+}
+.guide__gesture {
+    display: inline-block;
+    max-width: 100%;
+    padding: 2px 7px;
+    border-radius: var(--r-sm);
+    background: var(--wash-a);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.guide__line dd {
+    margin: 0;
+    font-size: 13.5px;
+    line-height: 1.45;
+    color: var(--ink-2);
+    text-wrap: pretty;
+}
+.guide__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 16px;
+}
+.guide__try {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+.guide__try:hover:not(:disabled) {
+    opacity: 0.86;
+}
+.guide__try:disabled {
+    opacity: 0.55;
+    cursor: progress;
+}
+.guide__close:focus-visible,
+.guide__try:focus-visible {
+    outline: 2px solid var(--accent-line);
+    outline-offset: 2px;
+}
+.guide__problem {
+    margin: 0;
+    font-size: 13px;
+    color: var(--bad);
+}
+@media (pointer: coarse) {
+    .guide__try {
+        height: 44px;
+    }
+    .guide__close {
+        width: 44px;
+        height: 44px;
+    }
+}
+@media (max-width: 639px) {
+    .guide {
+        width: auto;
+        max-height: 70vh;
+    }
+    .guide__lines {
+        column-gap: 10px;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .guide {
+        animation: none;
+    }
+}

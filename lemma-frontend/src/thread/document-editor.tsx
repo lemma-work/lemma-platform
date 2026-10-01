@@ -156,11 +156,18 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
             TableHeader,
             TableCell,
             /* On a page the hint follows the caret, so an empty line always
-               says what it can become — and an empty title says what it is. */
+               says what it can become — and an empty title says what it is.
+               The first line under the title of a page with nothing else in
+               it names the blocks a doc anywhere else does not have: that is
+               where somebody decides what this page is for. */
             Placeholder.configure({
-                placeholder: ({ node }) => !asPage ? "Write here…"
-                    : node.type.name === "heading" ? (node.attrs.level === 1 ? "Untitled" : "Heading")
-                    : "Write, or press / for blocks…",
+                placeholder: ({ editor, node, pos }) => {
+                    if (!asPage) return "Write here…";
+                    if (node.type.name === "heading") return node.attrs.level === 1 ? "Untitled" : "Heading";
+                    const doc = editor.state.doc;
+                    const firstLine = doc.childCount <= 2 && doc.firstChild?.type.name === "heading" && pos === doc.firstChild.nodeSize;
+                    return firstLine ? "Write, or press / for a live table, a chart, a sub-page…" : "Write, or press / for blocks…";
+                },
             }),
             Markdown.configure({ html: false, transformPastedText: true, transformCopiedText: true }),
         ],

@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 170 |
 | `gap` | 2 |
-| `manual` | 20 |
+| `manual` | 21 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **192** |
+| **total** | **193** |
 
 Scenario tests declaring a promise: 424.
 
@@ -169,6 +169,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
 | `PS-ONB-070` A new person is shown what Lemma is and where everything is | `manual` | — |
+| `PS-ONB-071` A person can ask how the place they are in works | `manual` | — |
 | `PS-ONB-060` A visitor can learn about Lemma without signing in | `covered` | `test_public_guides_and_company_pages` |
 | `PS-ONB-061` An AI reader can discover and read the public website | `covered` | `test_machine_readable_site` |
 | `PS-ONB-062` Existing public and workspace entry links keep working | `covered` | `test_existing_links` |

@@ -15,6 +15,7 @@ import { useLibraryWrites } from "@/library/library-writes";
 import { emptyFor, type EmptyPlace } from "./empty-copy";
 import { SpaceEmpty, type EmptyHandlers } from "./empty-state";
 import { AppIdeas } from "@/stage/apps";
+import { guideTitle } from "@/tour/guides";
 
 /** One row, whatever it is: a page, an app, a table or a file. */
 type Row = {
@@ -94,7 +95,7 @@ function Glyph({ kind }: { kind: Row["kind"] }) {
     return <span className={"all__glyph all__glyph--" + kind}>{icon}</span>;
 }
 
-export function AllView({ podId, spaceName, botName, members, view, apps, appsPending = false, onOpenFile, onOpenTable, onOpenApp, onOpenFolder, onNewPage, onNewChat, onAsk }: {
+export function AllView({ podId, spaceName, botName, members, view, apps, appsPending = false, onOpenFile, onOpenTable, onOpenApp, onOpenFolder, onNewPage, onNewChat, onAsk, onLearn }: {
     podId: string;
     spaceName: string;
     /** The space's bot, by name, for the templates that mention it. */
@@ -112,6 +113,8 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
     onNewChat: () => void;
     /** Put words for the teammate in the chat box, to finish or send. */
     onAsk?: (text: string) => void;
+    /** Open the guide to this place. */
+    onLearn?: () => void;
 }) {
     const [query, setQuery] = useState("");
     /* Files has two sides, as Space has "Your items" and "Shared": the
@@ -394,7 +397,8 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
             )}
             {nothing && (
                 <SpaceEmpty empty={emptyFor(place, botName)} on={handlers} dropping={dropping}
-                    busy={making === "page" ? "page" : writes.busy ? "upload" : null} />
+                    busy={making === "page" ? "page" : writes.busy ? "upload" : null}
+                    learn={onLearn && (view === "pages" || view === "tables" || view === "apps") ? { label: guideTitle(view), onOpen: onLearn } : undefined} />
             )}
             {nothing && (templates || ideas) && <div className="all__after-empty">{templates}{ideas}</div>}
             {!loading && rows.length === 0 && query && <p className="all__empty">Nothing matches.</p>}

@@ -48,9 +48,12 @@ function Glyph({ action }: { action: EmptyAction }) {
  *
  *  Drawn instead of the list, never under a list's headings: a header over
  *  nothing is a section somebody has to read to learn it is empty. */
-export function SpaceEmpty({ empty, on, busy = null, compact = false, dropping = false, children }: {
+export function SpaceEmpty({ empty, on, busy = null, compact = false, dropping = false, learn, children }: {
     empty: Empty;
     on: EmptyHandlers;
+    /** The place's guide, for the moment it is most wanted: when there is
+     *  nothing yet to learn from. */
+    learn?: { label: string; onOpen: () => void };
     /** The action in flight, which is disabled and says so. */
     busy?: EmptyAction["kind"] | null;
     /** Beneath a table's own header row, where a picture of a table would
@@ -89,6 +92,7 @@ export function SpaceEmpty({ empty, on, busy = null, compact = false, dropping =
                     ))}
                 </div>
             )}
+            {learn && <button className="empty__learn" onClick={learn.onOpen}>{learn.label}</button>}
             {children}
         </section>
     );
