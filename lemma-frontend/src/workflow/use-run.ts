@@ -69,8 +69,8 @@ export function useWorkflowList(podId: string) {
         staleTime: 5 * 60_000,
         queryFn: async () => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOWS } = await import("@/data/fixtures");
-                return readWorkflows({ items: SAMPLE_WORKFLOWS });
+                const { SAMPLE_WORKFLOWS, hiredHere } = await import("@/data/fixtures");
+                return readWorkflows({ items: hiredHere(podId) ? [] : SAMPLE_WORKFLOWS });
             }
             return readWorkflows(await lemma(podId).workflows.list({ limit: 100 }));
         },
@@ -110,8 +110,8 @@ export function useSpaceRuns(podId: string) {
         staleTime: 15_000,
         queryFn: async (): Promise<RunRow[]> => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOW_RUNS } = await import("@/data/fixtures");
-                return readRuns({ items: Object.values(SAMPLE_WORKFLOW_RUNS).flat() });
+                const { SAMPLE_WORKFLOW_RUNS, hiredHere } = await import("@/data/fixtures");
+                return readRuns({ items: hiredHere(podId) ? [] : Object.values(SAMPLE_WORKFLOW_RUNS).flat() });
             }
             return readRuns(await lemma(podId).request("GET", "/pods/" + podId + "/workflow-runs", { params: { limit: 100 } }));
         },

@@ -109,6 +109,15 @@ function samplePodName(podId: string): string | null {
     return PODS.find((pod) => pod.id === podId)?.name ?? null;
 }
 
+/** Teammates hired in this sample session. They start the way a real hire
+ *  does, with nothing in their space, so the first screens a new teammate
+ *  shows — every list empty, the tour — can be looked at without a session.
+ *  The pods below share one set of example work between them. */
+const HIRED_HERE = new Set<string>();
+export function hiredHere(podId: string | null | undefined): boolean {
+    return Boolean(podId && HIRED_HERE.has(podId));
+}
+
 const PODS: Pod[] = [
     {
         id: "marketing",
@@ -2547,7 +2556,8 @@ export const fixtureSource: PodSource = {
            be reached here at all. */
         return PODS.filter((pod) => pod.orgId === orgId);
     },
-    async listLibrary(_podId, kind, directory) {
+    async listLibrary(podId, kind, directory) {
+        if (hiredHere(podId)) return { items: [] };
         const updated = "2026-09-14T08:00:00Z";
         if (kind === "tables") return { items: SAMPLE_TABLES.map(table => ({
             id: table.name, name: table.name, kind: "table" as const, path: table.name, updated, detail: table.detail,
@@ -2603,7 +2613,7 @@ export const fixtureSource: PodSource = {
         ] as Record<string, unknown>[], truncated: false };
     },
 
-    async listTabs() {
+    async listTabs(podId: string) {
         await wait(40);
         const tabs: Tab[] = [
             { id: "conversation", kind: "conversation", label: "Conversation" },
@@ -2612,7 +2622,7 @@ export const fixtureSource: PodSource = {
             { id: "library", kind: "library", label: "Library" },
             { id: "profile", kind: "profile", label: "Profile" },
         ];
-        return tabs;
+        return hiredHere(podId) ? tabs.filter((tab) => tab.kind !== "app") : tabs;
     },
     /* Hiring is the one thing the sample source does for real — in memory,
        and only until the page reloads. It exists so the flow that is hardest
@@ -2634,6 +2644,7 @@ export const fixtureSource: PodSource = {
             waiting: "",
         };
         PODS.push(pod);
+        HIRED_HERE.add(id);
         return pod;
     },
     async shareFile(_podId: string, path: string, options?: { expiresSeconds?: number; maxHits?: number }) {
@@ -3198,14 +3209,15 @@ export const fixtureSource: PodSource = {
     async widgetEmbedUrl(): Promise<string> {
         throw new Error("The sample source cannot mint an embed URL.");
     },
-    async listConversations() {
-        return (await fixtureSource.listConversationsPage("fixture")).items;
+    async listConversations(podId: string) {
+        return (await fixtureSource.listConversationsPage(podId)).items;
     },
     /* Two pages, so the all-conversations pane has a "More" to press in the one
        mode that can be looked at without a session. Searched the way the
        server searches: titles containing it, then paged. */
-    async listConversationsPage(_podId, cursor, search) {
+    async listConversationsPage(podId, cursor, search) {
         await wait(40);
+        if (hiredHere(podId)) return { items: [], next: null };
         const all = [
             { id: "fixture", title: "Monday launch", at: "10:14", kind: "CHAT", meta: {} },
             { id: "outsiders", title: OUTSIDERS.title, at: "10:03", kind: "CHAT", agentId: OUTSIDERS.agentId, meta: OUTSIDERS.metadata ?? {} },
@@ -3302,6 +3314,7 @@ export const fixtureSource: PodSource = {
        screenshot of a control nobody may press. Until the page reloads. */
     async listSchedules(podId: string) {
         await wait(90);
+        if (hiredHere(podId)) return [];
         const teammate = samplePodName(podId);
         return readSchedules(SCHEDULES).map((job) => (teammate && job.target.kind === "agent" && isPodDefaultAgent(job.target.name)
             ? { ...job, target: { ...job.target, label: teammate } }

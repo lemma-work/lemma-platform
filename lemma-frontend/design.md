@@ -173,6 +173,71 @@ any of its bots is in, from `podGroups`.
 - Only the sample's Marketing has groups; every other sample space opens on
   the first run.
 
+## Empty places
+
+An empty list is most people's first sight of every place in a new space, so
+it teaches the model or it does not. `src/space/empty-copy.ts` holds the words
+for every place, as one set; `SpaceEmpty` draws them.
+
+- Drawn instead of the list, never under its headings. A search or a filter
+  that finds nothing is a different answer and keeps its one line: "Nothing
+  matches."
+- A picture of what the place will hold (`empty-art.tsx`): the page's greys
+  and the one colour its kind wears in the list. Never a face — a teammate's
+  face appears once per altitude.
+- A short title, then one sentence on what belongs here and who makes it —
+  usually the teammate, by name. Never "the bot", never a bare "space".
+- At least one way in that needs no typing: a button (New page, Upload files,
+  New row, New chat), a whole-sentence ask that can be sent as it stands, or
+  the catalog under the place (page templates, app ideas). An ask that ends
+  mid-sentence is for somebody who already knows what they want.
+- Asks go in the floating chat's box and are never sent from here: the person
+  finishes them, or sends them. The run that follows refreshes the space's
+  lists as it ends, so what it made appears where the empty state was.
+- Files take files: the empty state and the list accept a drop, and New has
+  Upload files.
+
+## The tour
+
+What Lemma is, in one card, then where everything is — six stops, each
+lighting the real control rather than a drawing of it (`src/tour/`).
+
+- One sentence per stop. The words echo the landing page's beats; the
+  category word appears only on the welcome and the rail, the teammate's name
+  everywhere else.
+- Offered once, on Home, in an account's first week, after any dialog already
+  up. Asked for any time from the rail's help button or `?tour=1`, which go
+  Home first. Never in the sample source unless asked, never in the landing
+  preview.
+- While it is up nothing underneath can be pressed and the app's shortcuts
+  are held; Escape ends it, the arrow keys move through it, focus stays in
+  the card and goes back where it was.
+- A stop in the sidebar opens the drawer on a phone and unfolds a collapsed
+  sidebar; below 640px the card is a sheet on the edge away from what is lit.
+- When it ends, a line beside the help button says the tour and the guides
+  live there.
+
+## Place guides
+
+How one place works — the gestures nothing on screen advertises — for
+somebody standing in it (`src/tour/guides.ts`, drawn by `PlaceGuide`).
+
+- Three layers, from most to least pushy, and nothing else: the place says
+  it where it is used (a placeholder, a hint, a note under a section); a
+  guide card when asked; a guide learned by trying. Never a popup on a first
+  visit, never a tour per place — somebody who opened a page came to write.
+- Asked for from the help menu, whose first item is the guide to the place
+  on screen, or from the place's empty state. The card sits beside the help
+  button, or along the bottom on a phone; nothing dims or steps, and Escape
+  or a click elsewhere closes it.
+- A line is a gesture, set like a key, and one sentence of what it does; four
+  or five lines, the teammate by name.
+- Trying is real: "Open the guide page" opens the page that explains pages
+  by being one, made from its template the first time; other guides put a
+  whole-sentence ask in the chat box, unsent.
+- A place that already explains each of its parts gets no card: About has a
+  note under every section.
+
 ## Desktop
 
 The workspace also runs inside the Lemma desktop app, which loads it from a

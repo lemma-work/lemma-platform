@@ -53,7 +53,7 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
 
     return (
         <nav className="snav" aria-label={pod.name + "’s space"}>
-            <div className="snav__group">
+            <div className="snav__group" data-tour="places">
                 {/* Where the space opens: whose it is, what is waiting, ways to
                     start, and the box to ask it. One of the places, so in
                     their list rather than a group of its own. */}

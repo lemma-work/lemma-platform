@@ -7,6 +7,8 @@ import { source, type ConversationRef, type Pod } from "@/data";
 import { ChannelIcon } from "@/shell/channels";
 import { ChatIcon, ClockIcon, FileIcon, PlusIcon, SearchIcon, WorkflowIcon, BellIcon } from "@/ui/icons";
 import { originLabel, type ConversationOrigin, type OriginKind } from "@/thread/conversation-origin";
+import { emptyFor } from "./empty-copy";
+import { SpaceEmpty } from "./empty-state";
 
 type Filter = "all" | "chats" | "channels" | "automations" | "docs";
 const FILTERS: { id: Filter; label: string; kinds: OriginKind[] | null }[] = [
@@ -32,12 +34,17 @@ function OriginIcon({ origin }: { origin: ConversationOrigin }) {
  *  channel started, and the ones a schedule or a workflow ran — each saying
  *  where it came from. Paged as you scroll; nothing is capped at a sidebar's
  *  eight. */
-export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew }: {
+export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPages, onAsk }: {
     pod: Pod;
     openId: string | null;
     onOpen: (id: string) => void;
     onOpenRun: (runId: string) => void;
     onNew: () => void;
+    /** Where channels are connected, for a list with none on it yet. */
+    onReach?: () => void;
+    onPages?: () => void;
+    /** Put words for the teammate in the chat box, to finish or send. */
+    onAsk?: (text: string) => void;
 }) {
     const [typed, setTyped] = useState("");
     const [search, setSearch] = useState("");
@@ -90,7 +97,7 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew }: {
                 ))}
             </div>
 
-            <table className="all__table chats-page__table">
+            {shown.length > 0 && <table className="all__table chats-page__table">
                 <thead>
                     <tr><th>Conversation</th><th className="chats-page__col-source">Came from</th><th className="all__col-when">Last activity</th></tr>
                 </thead>
@@ -126,10 +133,14 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew }: {
                         );
                     })}
                 </tbody>
-            </table>
+            </table>}
             {pages.isPending && <p className="all__empty">Loading…</p>}
             {pages.isError && <p className="all__empty">Couldn’t load conversations.</p>}
-            {pages.isSuccess && shown.length === 0 && <p className="all__empty">{search ? "Nothing matches that." : "No conversations here yet."}</p>}
+            {pages.isSuccess && shown.length === 0 && search && <p className="all__empty">Nothing matches that.</p>}
+            {pages.isSuccess && shown.length === 0 && !search && (
+                <SpaceEmpty empty={emptyFor({ place: "chats", filter }, pod.teammate?.name || pod.name)}
+                    on={{ chat: onNew, reach: onReach, pages: onPages, ask: onAsk }} />
+            )}
             {hasNextPage && (
                 <button ref={more} className="chats-page__more" disabled={isFetchingNextPage} onClick={() => void fetchNextPage()}>
                     {isFetchingNextPage ? "Loading more…" : isFetchNextPageError ? "Couldn’t load more — try again" : "Load more"}

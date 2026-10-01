@@ -306,6 +306,19 @@ export function LiveConversation({
         void reloadConversation();
     }, [reloadConversation]);
     const running = state === "running";
+    /* What a run made — a table, a page, an app, a workflow — belongs in the
+       space's lists as soon as the run is over, not whenever their cache next
+       runs out. A list that stays empty while the chat beside it says "done"
+       reads as the work having failed. Once per run, as it stops. */
+    const ranBefore = useRef(false);
+    useEffect(() => {
+        if (running) { ranBefore.current = true; return; }
+        if (!ranBefore.current) return;
+        ranBefore.current = false;
+        for (const touched of [["library", pod.id], ["tabs", pod.id], ["workflows", pod.id], ["schedules", pod.id], ["table", pod.id]]) {
+            void queryClient.invalidateQueries({ queryKey: touched });
+        }
+    }, [running, pod.id, queryClient]);
     /* Taken back here, and hidden until the server's list agrees. The session
        has no way to drop a message it holds, and a reload reads the list the
        server has already changed. */
