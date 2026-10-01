@@ -71,6 +71,14 @@ and desktop HTTP serving remain governed by their existing contracts.
 Request-specific browser binding cookies allow simultaneous first visits.
 Private HTML deep links use the same sign-in bootstrap as the app root, and
 authorized missing-document navigations retain the workspace recovery page.
+Handoff identifiers use the same 43-character base64url constraint in the
+authorization path and redemption body. The generated OpenAPI schema publishes
+both constraints. Hosted reads require `app.read`; private release previews
+also require `app.update`. The app asset cookie grants access only to its own
+origin's assets, and never authenticates general API operations. Parent-session
+expiry or revocation, account ineligibility and permission removal take effect
+on the next asset request. Private responses omit ETags and cannot return 304,
+so browser caches cannot extend access after authorization ends.
 `AppsSettings` owns source/dist/combined upload ceilings and archive-entry,
 expanded-size, and compression-ratio protections.
 

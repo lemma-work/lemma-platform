@@ -19031,6 +19031,7 @@
             "name": "request_id",
             "required": true,
             "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
               "title": "Request Id",
               "type": "string"
             }

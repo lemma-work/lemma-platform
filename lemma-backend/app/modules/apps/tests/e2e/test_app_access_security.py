@@ -166,7 +166,7 @@ async def test_visibility_requires_the_real_app_permission(
     outsider = await signup_user(browser, "private-outsider")
     pending = await offer(browser, app.origin)
     denied = await approve(browser, pending, app.origin, auth_headers(outsider))
-    assert denied.status_code == 404 and app.name not in denied.text
+    assert denied.status_code == 404 and app.name not in denied.text, denied.text
     await establish(browser, authenticated_client, app.origin)
     for path in ["/", "/deep/path?mode=study", "/assets/app.js"]:
         opened = await browser.get(app.origin + path, headers={"If-None-Match": "*"})
@@ -633,6 +633,21 @@ async def test_handoff_paths_do_not_expose_the_general_api(
     )
     assert unauthenticated.status_code == 401
     assert unauthenticated.headers["cache-control"] == "private, no-store"
+
+
+@pytest.mark.parametrize("request_id", ["a" * 42, "a" * 44, "a" * 42 + "!"])
+async def test_authorization_rejects_malformed_request_ids(
+    authenticated_client, hosted_app, request_id
+):
+    response = await approve(authenticated_client, request_id, hosted_app.origin)
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    errors = response.json()["details"]
+    assert any(
+        error["loc"] == ["path", "request_id"]
+        and error["type"] == "string_pattern_mismatch"
+        for error in errors
+    )
 
 
 @pytest.mark.parametrize("parent_state", ["expired", "wrong-user", "missing"])

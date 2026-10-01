@@ -8,7 +8,7 @@ import time
 from typing import Annotated
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Path, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
@@ -176,17 +176,14 @@ async def create_app_access_request(
 )
 async def authorize_app_access_request(
     request: Request,
-    request_id: str,
+    request_id: Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]{43}$")],
     data: AppAccessAuthorizeRequest,
     user: CurrentUser,
     use_cases: AppUseCasesDep,
     store: AppAccessStoreDep,
 ) -> Response:
     try:
-        if (
-            len(request_id) != 43
-            or getattr(request.state, "delegation_claims", None) is not None
-        ):
+        if getattr(request.state, "delegation_claims", None) is not None:
             raise AppAccessInvalidError()
         pending = await asyncio.wait_for(store.get_request(request_id), timeout=5)
         workspace_origin = urlsplit(settings.frontend_url)

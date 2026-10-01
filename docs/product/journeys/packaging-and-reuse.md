@@ -173,29 +173,32 @@ their credentials do not travel with it.
   refuse rather than serving pod data.
 - Where an app uses a hosted HTTPS address, the system shall open public builds
   anonymously.
-- When a person whose identity grants `app.read` opens a private app at its
-  hosted HTTPS address or in a workspace tab, the system shall serve its build,
-  including pod, personal and restricted apps.
+- When a person allowed to view a private app opens its hosted HTTPS address,
+  the system shall show the app, including pod, personal and restricted apps.
+- When a person allowed to view a private app opens it in a workspace tab,
+  the system shall show the app, including pod, personal and restricted apps.
 - When a signed-out person opens a private app, the system shall offer a generic
   sign-in action.
 - When a person signs in from an app's sign-in action, the system shall return
   them to the original app path, query and fragment.
 - While a person is signed out, the system shall reveal no more about an absent
   app than about a private app.
-- When an app asset session's parent session expires, the system shall end its
-  asset access.
-- When an app asset session's parent session is revoked, the system shall end
-  its asset access.
-- When an account becomes ineligible, the system shall end its app asset access.
+- When a person's sign-in expires, the system shall refuse further access to
+  private apps until they sign in again.
+- When a person's sign-in is revoked, the system shall refuse further access
+  to private apps until they sign in again.
+- When an account becomes ineligible, the system shall refuse that person's
+  further access to private apps.
 - When a person's app permission is removed, the system shall end their app
-  asset access.
+  access to that private app.
 - When a person opens a private release preview, the system shall additionally
-  require `app.update`.
-- While HTML or assets are private, the system shall prevent caching them.
-- When an app asset credential is issued, the system shall limit it to that app
-  origin's assets.
-- When an app calls the API, the system shall apply its existing identity and
-  permission checks.
+  require permission to edit that app.
+- When a person loses access to a private app, the system shall refuse to load
+  its pages and files even if they opened them before.
+- When a person opens a private app, the system shall grant no access to other
+  apps merely because they opened it.
+- When an app acts on a person's behalf, the system shall allow only actions
+  that person is permitted to perform.
 
 **Contracts:** `app.get`, `app.asset.get`, `app.access.request.create`, `app.access.request.authorize`, `app.access.redeem`, `app.published`, `app.session_started`
 
