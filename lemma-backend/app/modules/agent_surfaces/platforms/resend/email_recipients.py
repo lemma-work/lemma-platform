@@ -84,6 +84,17 @@ def other_people(
     return people[:MAX_REPLY_CC]
 
 
+def reply_all_recipients(event: object) -> list[str]:
+    """Everybody a reply on this email reaches besides the sender and the pod.
+
+    What ``other_people`` recorded on the event's ``reply_target`` when it was
+    parsed: the reply goes to the sender and is copied to these.
+    """
+    reply_target = getattr(event, "reply_target", None) or {}
+    copied = reply_target.get("cc") if isinstance(reply_target, dict) else None
+    return [str(address) for address in copied or [] if str(address).strip()]
+
+
 def pod_was_addressed(
     *, addressed_to: Iterable[object], cc: Iterable[object], own_address: str
 ) -> bool:

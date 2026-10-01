@@ -91,6 +91,55 @@ _OUTSIDER_SECTION = (
 )
 
 
+def audience_notice(audience: object) -> str | None:
+    """Tell a member's run that people outside the pod will read its answer.
+
+    The run acts with the member's own access, and the answer is posted where
+    people the pod does not know read it too. Said on the message it applies to,
+    with the names where they are known, because "be careful" in general is
+    nothing a model can act on and "Dana from Acme reads this" is.
+    """
+    if not isinstance(audience, dict):
+        return None
+    outsiders = [
+        " ".join(str(name).split()) for name in audience.get("outsiders") or [] if name
+    ]
+    recipients = [
+        " ".join(str(name).split()) for name in audience.get("recipients") or [] if name
+    ]
+    where = " ".join(str(audience.get("where") or "").split()) or "this chat"
+    who = (
+        ", ".join(outsiders)
+        if outsiders
+        else "people outside the pod (the chat is open to them)"
+    )
+    lines = [
+        (
+            "WHO READS YOUR ANSWER (from Lemma, not from the person writing): "
+            f"your reply in {where} is also read by people outside this pod -- "
+            f"{who}."
+        ),
+    ]
+    if recipients:
+        lines.append(f"It goes to everybody on the thread: {', '.join(recipients)}.")
+    lines.append(
+        "You are acting with the access of the member who asked, but the answer "
+        "is not private to them. Share only what they would say in front of "
+        "those people: no pod records, figures, files, or other people's names "
+        "and details they would not share themselves. If answering properly "
+        "needs that, say so briefly and offer to send it to them directly."
+    )
+    return "\n".join(lines)
+
+
+def withheld_background_note(count: int) -> str:
+    """Say that some of a group's lines were left out of the background, and why."""
+    return (
+        f"({count} message(s) in this chat from people outside the pod, or "
+        "answers to them, are not shown to you.)"
+    )
+
+
 def _email_sections(facts: PlatformFacts) -> list[str]:
     """Email delivers one composed reply, so there is no chat delivery to describe."""
     return [

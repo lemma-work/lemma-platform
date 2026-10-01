@@ -17,14 +17,22 @@ import pytest
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.outsiders import OutsiderRunRefused
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
 from app.modules.agent.infrastructure.harnesses.remote_payload import mcp_payload
 from app.modules.agent.services.outsider_runtime import in_process_runtime
 
 pytestmark = pytest.mark.unit
 
-AGENT_HOST = SimpleNamespace(harness_kind=HarnessKind.HARNESS)
-IN_PROCESS = SimpleNamespace(harness_kind=HarnessKind.LEMMA)
+
+def _runtime(kind: HarnessKind, scope: RuntimeProfileScope) -> SimpleNamespace:
+    return SimpleNamespace(harness_kind=kind, profile=SimpleNamespace(scope=scope))
+
+
+AGENT_HOST = _runtime(HarnessKind.HARNESS, RuntimeProfileScope.ORGANIZATION)
+IN_PROCESS = _runtime(HarnessKind.LEMMA, RuntimeProfileScope.ORGANIZATION)
+#: A member's own model: runs here, but billed to them.
+PERSONAL = _runtime(HarnessKind.LEMMA, RuntimeProfileScope.PERSONAL)
 ORGANIZATION = AgentRuntimeConfig(profile_id="organization-default")
 SYSTEM = AgentRuntimeConfig(profile_id="system-default")
 
@@ -80,6 +88,28 @@ async def test_with_nothing_that_runs_here_the_stranger_is_refused():
             AGENT_HOST,
             fallbacks=[ORGANIZATION],
             resolve=_resolving({"organization-default": AGENT_HOST}),
+        )
+
+
+async def test_a_members_personal_model_is_never_spent_on_a_stranger():
+    """The member's own key runs here, but it is theirs, not the pod's."""
+    chosen = await in_process_runtime(
+        PERSONAL,
+        fallbacks=[ORGANIZATION, SYSTEM],
+        resolve=_resolving(
+            {"organization-default": PERSONAL, "system-default": IN_PROCESS}
+        ),
+    )
+
+    assert chosen is IN_PROCESS
+
+
+async def test_with_only_a_personal_model_the_stranger_is_refused():
+    with pytest.raises(OutsiderRunRefused):
+        await in_process_runtime(
+            PERSONAL,
+            fallbacks=[ORGANIZATION],
+            resolve=_resolving({"organization-default": PERSONAL}),
         )
 
 

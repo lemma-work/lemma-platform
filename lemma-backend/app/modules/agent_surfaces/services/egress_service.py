@@ -50,18 +50,13 @@ from app.modules.agent_surfaces.services.display_resource_content import (
     resolve_pod_file_parts,
     resolve_table_preview,
 )
-from app.modules.agent_surfaces.domain.models import SurfaceApprovalRenderPlan
 from app.modules.agent_surfaces.services.display_resource_renderer import (
-    build_approval_render_plan,
     build_ask_user_render_plan,
     build_display_resource_render_plan,
 )
-from app.modules.agent_surfaces.services.approval_preview import (
-    approval_action_summary,
-    redact_card_text,
-)
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
+from app.modules.agent_surfaces.services.approval_cards import approval_plan
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_free_text_answer_wanted,
     tool_call_id_of,
@@ -77,29 +72,6 @@ from app.modules.agent_surfaces.services.surface_sign_in import (
 )
 
 logger = get_logger(__name__)
-
-
-def _approval_plan(
-    pending: PendingInteraction, conversation_id: UUID, tool_call_id: str | None
-) -> SurfaceApprovalRenderPlan:
-    """The approval card for a paused ``request_approval`` call."""
-    tool_args = pending.tool_args
-    # An approve-for-session button only makes sense when the paused call
-    # carries a real permission gate (it lets the exact action skip future
-    # prompts); otherwise it is noise.
-    permission_ids = tool_args.get("permission_ids")
-    return build_approval_render_plan(
-        conversation_id=conversation_id,
-        tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
-        title=redact_card_text(
-            str(tool_args.get("title") or "Action requires your approval")
-        ),
-        reason=redact_card_text(str(tool_args.get("reason") or "")) or None,
-        tool_name=approval_action_summary(
-            str(tool_args.get("tool_name") or ""), tool_args.get("args")
-        ),
-        allow_session=bool(isinstance(permission_ids, list) and permission_ids),
-    )
 
 
 class SurfaceEgress:
@@ -397,7 +369,7 @@ class SurfaceEgress:
             )
             if pending is None or not pending.is_approval:
                 return False
-            plan = _approval_plan(pending, conversation_id, tool_call_id)
+            plan = await approval_plan(self.uow, pending, conversation_id, tool_call_id)
             lead = "I need your approval to go on, but I couldn't show the buttons. Reply here to answer."
         else:
             return False
@@ -518,7 +490,9 @@ class SurfaceEgress:
             target,
             envelope=SurfaceEnvelope(
                 text=narration,
-                decision=_approval_plan(pending, conversation_id, tool_call_id),
+                decision=await approval_plan(
+                    self.uow, pending, conversation_id, tool_call_id
+                ),
                 files=files,
             ),
             metadata=await self.delivery.egress_metadata(target),

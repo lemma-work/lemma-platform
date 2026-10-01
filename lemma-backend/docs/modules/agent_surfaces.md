@@ -281,19 +281,50 @@ is answered *for the pod*, in a group the pod has opened to them.
   opened with `for_outsiders=True` and linked under the shared `~outsiders` key.
   The agent module then runs every turn in it as nobody: an anonymous
   authorization context pinned to the pod, which reads only what the pod marked
-  Public; a toolset cut to pod reads, web search, todos and messaging; no
-  functions, sub-agents, surface tools, sandbox, browser, memory or `view_image`;
-  and a brief that names the owner as who looks after the conversation rather
-  than as the person being answered. `message_user` reaches the owner and no
-  one else, says the answer goes back to the stranger, always expects that
-  answer, carries no hidden `background_instruction` into the owner's run, and
-  stays in view rather than behind tool search; `list_pod_members` refuses,
-  since the directory would be read with the owner's access. Such a turn only
-  ever runs in process: a coding agent on Agent Host keeps a shell and a token
-  minted for the owner, so the runner moves the turn onto the organization's or
-  the system's model, or refuses it (the agent module's
-  `services/outsider_runtime`). The conversation's audience survives any
-  metadata update a client sends.
+  Public. A run is a stranger's when the conversation's metadata *or* that link
+  says so (the agent module's `services/outsider_audience`), asked on every
+  run, so a conversation that lost its mark still never runs as its owner; a
+  client can neither set nor clear the mark, and the binder moves the next
+  stranger to a freshly marked conversation. What such a run may do:
+  - **Tools, by name.** Toolsets are cut to pod reads, web search and
+    messaging, and then each tool is allow-listed one by one
+    (`tools/outsider_tools`): the pod's read tools, `web_search`,
+    `message_user` and `check_messages`. `web_fetch` (it fetches inside the
+    owner's sandbox) and the pod's write tools are withheld by name, and the
+    harness's last capability (`capabilities/outsider_gate`) and the tool
+    dispatcher drop anything not on the list, however it arrived. A workspace
+    -- sandbox, host session, the owner's files -- is never opened for such a
+    run (`refuse_owner_workspace`), and a test fails until any new tool in a
+    kept toolset is classified.
+  - **What it is told.** A brief naming the owner by display name only -- no
+    email, no ids -- as who looks after the conversation; no task list; no
+    sandbox described. The agent's and conversation's own instructions are
+    pod configuration and stay.
+  - **What it remembers.** Nothing a private note started: the owner's note in
+    the strangers' thread, and its run's answer, are left out of every later
+    stranger's history. From the group's log, nothing the bot answered with a
+    member's own access (`answer_withheld_from`).
+  - **Who it reaches.** `message_user` goes to the owner whatever `to` says,
+    with nothing looked up first, so it says nothing about who is in the pod;
+    `check_messages` reads only notifications this conversation sent, for every
+    run; `list_pod_members` refuses.
+  - **Where it runs.** Only in process, on a model the organization or the
+    system provides -- never a coding agent's shell holding a token minted for
+    the owner, and never the owner's personal model (the agent module's
+    `services/outsider_runtime`).
+- **A question passed on is answered only with the owner's say-so.** A
+  notification from the strangers' thread is marked `from_outside` by the
+  service, from the routing link, with the group it came from
+  (`services/outside_questions.py`). The owner reads it framed and quoted by the
+  server -- which group, who asked, their words as a block quote -- and their
+  agent sees it the same way in its open requests. Their answer is recorded only
+  as words they confirmed: typed in the app, or approved exactly as their agent
+  drafted them -- `respond_to_notification` returns `needs_approval`, the agent
+  calls `request_approval`, and the card is the server's
+  (`services/outside_answer_card.py`): the group, every word, approve once,
+  never for the session. A stranger's tap decides nothing, and an agent holding
+  the owner's delegated token cannot answer over the API. Never structured
+  data, and at most `MAX_OUTSIDE_ANSWER_CHARS`.
 - **Nothing a stranger types resolves a pause.** Their conversation belongs to
   the owner, so a typed "approve" would be recorded as the owner's decision;
   `write_inbound_message` never consults a pending interaction for them, and
@@ -311,12 +342,19 @@ is answered *for the pod*, in a group the pod has opened to them.
   once.
 - **The group log** records every group message the bot receives, before
   anything decides whether it was addressed, and every answer once delivered.
-  A run in a group -- a member's or a stranger's -- is handed the recent lines
-  as background, with a stranger's lines marked, because a member's run acts
-  with the member's access and answers where everyone in the group reads it.
-  Each line is one quoted line however many it spanned, so nobody can write a
-  line that reads as somebody else's. Lines older than `GROUP_LOG_RETENTION`
-  go as new ones arrive.
+  A run in a group is handed the recent lines as background, chosen by whose
+  access it acts with (`group_log.group_background`): a stranger's run is not
+  shown answers made with a member's access; a member's run is not shown what
+  strangers wrote, nor the bot's answers to them -- on Slack, lines from another
+  workspace are left out the same way. Each line is one quoted line however many
+  it spanned. Lines older than `GROUP_LOG_RETENTION` go as new ones arrive.
+- **A member answering in front of outsiders is told so.** A member's run keeps
+  the member's access, but when people outside the pod read the answer -- they
+  have spoken in the group, the group answers them, the Slack channel is shared,
+  or an email reply-all copies them -- its message carries who they are and asks
+  for an answer the member would give in front of them
+  (`services/group_audience.py`, rendered by the agent module's
+  `audience_notice`).
 - **Own bots are no different.** A pod's own Telegram bot or WhatsApp number is
   delivered to at `/surfaces/{id}/webhook`; its group messages go through the
   same log, mention check, name addressing and admission as a shared bot's
@@ -348,7 +386,9 @@ is answered *for the pod*, in a group the pod has opened to them.
   sent). A run answers one kind: a note typed while an answer to the platform
   is under way is not steered into it, a message for the platform is not
   steered into a note's run, and the follow-up, resume or retry that answers
-  either keeps its kind.
+  either keeps its kind. `surface_send_message` from a note's run is refused.
+  In the strangers' thread a note is the owner's alone: no later stranger's
+  run reads it.
 
 ## Authorization and security
 

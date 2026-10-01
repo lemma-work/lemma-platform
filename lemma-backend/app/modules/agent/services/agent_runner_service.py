@@ -32,6 +32,8 @@ from app.modules.agent.services.conversation_access import (
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.private_notes import run_is_private
+from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -68,6 +70,7 @@ from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
     select_runtime_history,
+    without_private_runs,
 )
 from app.modules.agent.services.run_context_builder import build_run_context
 from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
@@ -516,6 +519,8 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=pod_id,
                 )
+                # Before anything reads it: the runtime, the context, the tools.
+                conversation = await with_effective_audience(uow, conversation)
                 agent = await resolve_agent(
                     conversation,
                     user_id=user_id,
@@ -528,6 +533,12 @@ class AgentRunnerService:
                     conversation_id=agent_run.conversation_id,
                     run_id=agent_run.id,
                 )
+                if answers_outsiders(conversation) and not run_is_private(
+                    agent_run.metadata
+                ):
+                    messages = without_private_runs(
+                        messages, runs, current_run_id=agent_run.id
+                    )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
 

@@ -228,7 +228,9 @@ class ConversationBinder:
         if link is not None:
             if (
                 for_outsiders
-                and not await self._still_theirs(link, resolved_user.internal_user_id)
+                and not await self._still_the_outsiders_thread(
+                    link, resolved_user.internal_user_id
+                )
             ) or await self._starts_new_conversation(
                 surface=surface,
                 link=link,
@@ -377,14 +379,24 @@ class ConversationBinder:
             external_thread_id=parsed.external_thread_id,
         )
 
-    async def _still_theirs(
+    async def _still_the_outsiders_thread(
         self, link: AgentSurfaceConversationLink, user_id: UUID
     ) -> bool:
-        """Whether the linked conversation still belongs to ``user_id``."""
+        """Whether the linked conversation is still ``user_id``'s strangers' thread.
+
+        Owned by the member who answers for the group, *and* still marked as
+        answering outsiders. A conversation that lost the mark is never handed a
+        stranger again: the run would read it, and a stranger's turn must never
+        be one that thinks it is the owner's.
+        """
         conversation = await agent_conversations.surface_conversation(
             self.uow, link.conversation_id
         )
-        return conversation is not None and conversation.user_id == user_id
+        return (
+            conversation is not None
+            and conversation.user_id == user_id
+            and conversation.answers_outsiders
+        )
 
     async def _starts_new_conversation(
         self,

@@ -34,6 +34,7 @@ from app.modules.agent_surfaces.domain.groups import (
     OUTSIDERS_LINK_USER,
     GroupLine,
     SurfaceGroup,
+    answer_withheld_from,
 )
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
@@ -153,37 +154,86 @@ class GroupLog:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class GroupBackground:
+    """What a run is shown of a group, and how much it was not shown."""
+
+    lines: list[SurfaceContextMessage]
+    #: Lines left out because this run may not read them.
+    withheld: int = 0
+    #: Who, among the lines' authors, is outside the pod -- for a member run's
+    #: notice of who else will read its answer.
+    outside_authors: tuple[str, ...] = ()
+
+
 async def group_background(
     uow: SqlAlchemyUnitOfWork,
     *,
     group: SurfaceGroup,
     membership: SurfacePodMembershipPort,
     agent_display_name: str | None,
+    for_stranger: bool,
     limit: int = GROUP_CONTEXT_LINES,
-) -> list[SurfaceContextMessage]:
+) -> GroupBackground:
     """The group's recent lines, as the background a run is handed.
 
-    Each line says whether its author is outside the pod, which is what lets a
-    member's run -- acting with the member's access -- tell a stranger's words
-    from a colleague's before it acts on either.
+    Different for the two kinds of run, because they act with different access:
+
+    * **A stranger's run** reads as nobody, so it is not shown an answer the bot
+      made with a member's own access (``answer_withheld_from``) -- the log keeps
+      ninety days of them, most from before this person was in the group.
+    * **A member's run** acts with all of the member's access, so it is not
+      shown what strangers wrote, nor the bot's answers to them: nothing a
+      stranger steered reaches it as background. Who they are is kept, so the
+      run can be told that they read what it posts.
     """
     lines = await SurfaceGroupRepository(uow.session).recent_lines(
         group=group, limit=limit
     )
     members = await _members_among(lines, pod_id=group.pod_id, membership=membership)
-    return [
-        SurfaceContextMessage(
-            author=(
-                agent_display_name or "the bot"
-                if line.from_agent
-                else line.author_name or line.author_external_id
-            ),
-            text=line.text,
-            ts=line.created_at.isoformat(),
-            outside_pod=not line.from_agent and line.author_user_id not in members,
+    kept: list[SurfaceContextMessage] = []
+    outside_authors: list[str] = []
+    withheld = 0
+    for line in lines:
+        outside = not line.from_agent and line.author_user_id not in members
+        author = (
+            agent_display_name or "the bot"
+            if line.from_agent
+            else line.author_name or line.author_external_id
         )
-        for line in lines
-    ]
+        if outside and author:
+            outside_authors.append(author)
+        if for_stranger:
+            shown = not answer_withheld_from(line, None)
+        else:
+            shown = not outside and not (line.from_agent and line.answered_from_public)
+        if not shown:
+            withheld += 1
+            continue
+        kept.append(
+            SurfaceContextMessage(
+                author=author,
+                text=line.text,
+                ts=line.created_at.isoformat(),
+                outside_pod=outside,
+            )
+        )
+    return GroupBackground(
+        lines=kept, withheld=withheld, outside_authors=tuple(outside_authors)
+    )
+
+
+def for_member_run(
+    lines: Sequence[dict[str, object]],
+) -> tuple[list[dict[str, object]], int]:
+    """A platform's history as a member's run may see it: strangers' lines out.
+
+    The same rule ``group_background`` applies to the pod's own log, for the
+    platforms whose history is read live (Slack), where a line from another
+    workspace is marked ``outside_pod``.
+    """
+    kept = [line for line in lines if not line.get("outside_pod")]
+    return kept, len(lines) - len(kept)
 
 
 async def _members_among(

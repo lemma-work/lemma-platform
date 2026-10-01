@@ -50,6 +50,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from pydantic_ai.capabilities import ProcessHistory
 
+from app.modules.agent.capabilities.outsider_gate import OutsiderToolGateCapability
 from app.modules.agent.capabilities.run_notices import RunNoticeCapability
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
@@ -315,6 +316,10 @@ class PydanticAIHarness:
         capabilities.extend(
             ProcessHistory(processor) for processor in history_processors
         )
+        # Last, so it sees the final tool list: on a stranger's run, whatever
+        # every assembler above left in, only the allow-listed names survive.
+        if getattr(ctx, "answers_outsider", False):
+            capabilities.append(OutsiderToolGateCapability())
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,
             instructions=_instructions(agent=agent, conversation=conversation, ctx=ctx),

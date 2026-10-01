@@ -43,14 +43,6 @@ OUTSIDERS_LINK_USER = "~outsiders"
 #: some of them strangers -- are told the log exists and how long it lasts.
 GROUP_LOG_RETENTION = timedelta(days=90)
 
-#: Added under what a run answering somebody outside the pod passes on to the
-#: member looking after it. The model's words are its own; this line is not, so
-#: it cannot be talked out of saying where the answer goes. A group's page shows
-#: the question without it, where the page already says so.
-PASSED_ON_FROM_OUTSIDE = (
-    "This came from somebody outside the pod. Your reply is passed back to them."
-)
-
 
 class SurfaceGroup(Entity):
     """One group, on one surface."""
@@ -107,6 +99,19 @@ class GroupLine(BaseModel):
     answered_name: str | None = None
     answered_from_public: bool = False
     answered_user_id: UUID | None = None
+
+
+def answer_withheld_from(line: GroupLine, viewer_id: UUID | None) -> bool:
+    """Whether this line is an answer made with somebody else's access.
+
+    An answer from what is Public is anybody's to read; so is anything a person
+    said. An answer the bot made with a member's own access is that member's --
+    withheld from every other member on the group's page, and from a stranger's
+    run (``viewer_id`` None) in the background it is handed.
+    """
+    if not line.from_agent or line.answered_from_public:
+        return False
+    return viewer_id is None or line.answered_user_id != viewer_id
 
 
 class GroupUpdateKind(StrEnum):

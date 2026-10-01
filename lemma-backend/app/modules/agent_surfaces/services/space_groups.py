@@ -32,9 +32,9 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.groups import (
     OUTSIDERS_LINK_USER,
-    PASSED_ON_FROM_OUTSIDE,
     GroupLine,
     SurfaceGroup,
+    answer_withheld_from,
 )
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
@@ -162,7 +162,7 @@ class SpaceGroups:
             TimelineLine(
                 line=line,
                 in_pod=line.from_agent or line.author_user_id in members,
-                withheld=_withheld_from(line, viewer_id),
+                withheld=answer_withheld_from(line, viewer_id),
             )
             for line in lines
         ]
@@ -249,7 +249,7 @@ class SpaceGroups:
         return [
             WaitingQuestion(
                 notification_id=ask.id,
-                question=_as_asked(ask.body),
+                question=ask.body,
                 asked_at=ask.created_at,
             )
             for ask in asks
@@ -301,19 +301,3 @@ def _people(
         )
         for speaker in sorted(speakers, key=lambda s: s.last_said_at, reverse=True)
     ]
-
-
-def _withheld_from(line: GroupLine, viewer_id: UUID) -> bool:
-    """Whether this line is an answer made with somebody else's access.
-
-    An answer from what is Public is anybody's to read; so is anything a person
-    said. An answer the bot made with a member's own access is that member's.
-    """
-    if not line.from_agent or line.answered_from_public:
-        return False
-    return line.answered_user_id != viewer_id
-
-
-def _as_asked(body: str) -> str:
-    """The question as the bot put it, without the line saying where it came from."""
-    return body.removesuffix(PASSED_ON_FROM_OUTSIDE).rstrip()

@@ -56,6 +56,9 @@ class NotificationRepository:
             origin_kind=entity.origin_kind.value,
             origin_id=entity.origin_id,
             origin_conversation_id=entity.origin_conversation_id,
+            from_outside=entity.from_outside,
+            origin_group_title=entity.origin_group_title,
+            asked_by_name=entity.asked_by_name,
             title=entity.title,
             body=entity.body,
             background_instruction=entity.background_instruction,
@@ -316,15 +319,27 @@ class NotificationRepository:
         return [m.to_entity() for m in result.scalars().all()]
 
     async def list_by_ids(
-        self, *, pod_id: UUID, notification_ids: list[UUID]
+        self,
+        *,
+        pod_id: UUID,
+        origin_conversation_id: UUID | None,
+        notification_ids: list[UUID],
     ) -> list[NotificationEntity]:
-        """Powers ``check_messages``. Pod-scoped so a stray id from another pod
-        reads as absent rather than leaking that it exists."""
+        """Powers ``check_messages``: what *this conversation* sent, by id.
+
+        Scoped to the pod and to the asking conversation, so an id from another
+        pod or another conversation reads as absent rather than handing over
+        someone else's answer -- a stranger's run included, which may have been
+        told an id it has no business reading.
+        """
         if not notification_ids:
             return []
         result = await self.session.execute(
             select(NotificationModel).where(
                 NotificationModel.pod_id == pod_id,
+                NotificationModel.origin_conversation_id.is_not_distinct_from(
+                    origin_conversation_id
+                ),
                 NotificationModel.id.in_(notification_ids),
             )
         )

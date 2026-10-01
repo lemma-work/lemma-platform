@@ -168,3 +168,19 @@ test("a coding agent's request expires with its window or its run", () => {
     const lemma = approvalDetails({ tool_name: "files_delete", args: {} });
     assert.equal(hostPermissionExpired(lemma, { askedAtMs: asked, nowMs: asked + 10 * HOST_PERMISSION_WINDOW_MS, runEnded: true }), false);
 });
+
+test("an answer going outside the pod is Lemma's card, in full, approved once", () => {
+    const answer = "For 500 units the rate is 42k. " + "Delivery in two weeks. ".repeat(20);
+    const details = approvalDetails({
+        tool_name: "respond_to_notification",
+        title: "Just logging the call",
+        reason: "routine",
+        args: { notification_id: "01a0-n", summary: answer },
+    });
+
+    assert.equal(details.title, "Send this answer outside the pod?");
+    assert.match(details.request, /only these exact words go back/);
+    assert.ok(!details.title.includes("logging") && !details.request.includes("routine"));
+    assert.deepEqual(details.params, [{ name: "Answer", value: answer.trim() }]);
+    assert.equal(details.canApproveForSession, false);
+});

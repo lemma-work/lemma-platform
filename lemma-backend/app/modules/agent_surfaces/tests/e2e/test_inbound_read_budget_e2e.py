@@ -41,9 +41,15 @@ pytestmark = pytest.mark.e2e
 #: carry two more than a later message and surfaces one more -- the binder reads
 #: the pod's own surfaces to bound its search. A later message finds its exact
 #: key first and asks neither.
+#:
+#: Every run also asks the links once whether its conversation is the one that
+#: answers people outside the pod (``outsider_audience``). Deliberately asked of
+#: the link and never skipped: the conversation's own mark is metadata a client
+#: can rewrite, and a run that wrongly believed it was a member's would hand a
+#: stranger that member's authority.
 _FIRST_MESSAGE = {
     "agent_surfaces": 7,
-    "agent_surface_conversation_links": 8,
+    "agent_surface_conversation_links": 9,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }

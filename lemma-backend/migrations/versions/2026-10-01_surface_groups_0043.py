@@ -30,6 +30,14 @@ shared with another company, where that company's people are the outsiders.
 because that group then belongs to the pod that created it, whichever pods on
 the shared number its senders are in.
 
+**`notifications`** gains where a question passed on from outside the pod came
+from: `from_outside`, and the title of the group it was asked in and the
+asker's name, as they were then.
+Such a question's answer goes back to the stranger, so it is recorded only once
+the member it was sent to approves the exact words. Every existing row is a
+member's or a workflow's, so `from_outside` defaults false and nothing else is
+filled in.
+
 Both tables are new and nothing is backfilled: a group becomes known the next
 time the bot hears it, which is the only moment the rows are any use.
 
@@ -155,9 +163,27 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("external_message_id IS NOT NULL"),
     )
+    op.add_column(
+        "notifications",
+        sa.Column(
+            "from_outside",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+    )
+    op.add_column(
+        "notifications", sa.Column("origin_group_title", sa.String(255), nullable=True)
+    )
+    op.add_column(
+        "notifications", sa.Column("asked_by_name", sa.String(255), nullable=True)
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("notifications", "asked_by_name")
+    op.drop_column("notifications", "origin_group_title")
+    op.drop_column("notifications", "from_outside")
     op.drop_index(
         "ix_agent_surface_group_message_external",
         table_name="agent_surface_group_messages",

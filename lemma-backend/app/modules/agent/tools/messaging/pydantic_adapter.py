@@ -35,7 +35,6 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.core.authorization.delegation import agent_display_name, effective_agent_id
 from app.modules.agent_surfaces.contracts import notifications as surfaces
 from app.modules.agent_surfaces.contracts.notifications import (
-    PASSED_ON_FROM_OUTSIDE,
     check_notifications,
     resolve_recipient,
     send_notification,
@@ -44,7 +43,9 @@ from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.pod.contracts import directory as pod_directory
 from app.modules.agent.tools.messaging.models import (
+    MAX_OUTSIDER_MESSAGE_CHARS,
     MAX_TITLE_LENGTH,
+    OUTSIDE_QUESTION_TITLE,
     CheckMessagesRequest,
     CheckMessagesResponse,
     ListPodMembersRequest,
@@ -60,27 +61,6 @@ logger = get_logger(__name__)
 
 
 MESSAGE_USER_TOOL_NAME = "message_user"
-
-
-def _outsider_refusal(
-    deps: BaseAgentContext, recipient_user_id: UUID
-) -> MessageUserResponse | None:
-    """Why this message may not go, on a run answering somebody outside the pod.
-
-    Such a run may reach one person: the member who looks after the
-    conversation, so a question can be passed on. Anyone else would be a
-    stranger messaging the pod's people under its bot's name.
-    """
-    if not deps.answers_outsider or recipient_user_id == deps.user_id:
-        return None
-    return MessageUserResponse(
-        success=False,
-        error=(
-            "You are talking to somebody outside the pod, so you can only "
-            "message the person who looks after this conversation "
-            f"(to: {deps.user_id})."
-        ),
-    )
 
 
 def _passes_a_question_on(deps: BaseAgentContext) -> bool:
@@ -107,15 +87,11 @@ def _instruction_for_reply(
     return None if deps.answers_outsider else request.background_instruction
 
 
-def _notification_body(deps: BaseAgentContext, message: str) -> str:
-    """What the recipient reads: the words as written, and on a stranger's run,
-    the line saying where their answer goes."""
-    return (
-        f"{message}\n\n{PASSED_ON_FROM_OUTSIDE}" if deps.answers_outsider else message
-    )
-
-
-def _title_for(request: MessageUserRequest) -> str:
+def _title_for(deps: BaseAgentContext, request: MessageUserRequest) -> str:
+    if deps.answers_outsider:
+        # The inbox label and email subject are the server's, not words a
+        # stranger steered.
+        return OUTSIDE_QUESTION_TITLE
     if request.title:
         return request.title.strip()
     first_line = request.message.strip().splitlines()[0]
@@ -180,6 +156,9 @@ async def message_user(
     `list_pod_members` before choosing.
 
     To answer the person you are already talking to, just reply — don't use this.
+
+    When you are answering someone outside the pod, this reaches the person who
+    looks after the conversation and nobody else; `to` and `channel` are ignored.
     """
     deps = ctx.deps
 
@@ -188,9 +167,24 @@ async def message_user(
             success=False, error="message_user is only available inside a pod."
         )
 
-    recipient_user_id = await resolve_recipient(
-        pod_id=deps.pod_id, reference=request.to
-    )
+    if deps.answers_outsider:
+        # A stranger's run reaches one person, the member who looks after the
+        # conversation, whatever `to` says. Nothing is looked up first: a
+        # different answer for an address that is in the pod and one that is
+        # not would tell the stranger who is.
+        if len(request.message) > MAX_OUTSIDER_MESSAGE_CHARS:
+            return MessageUserResponse(
+                success=False,
+                error=(
+                    "That is too long to pass on. Say what they asked in "
+                    f"{MAX_OUTSIDER_MESSAGE_CHARS} characters or fewer."
+                ),
+            )
+        recipient_user_id = deps.user_id
+    else:
+        recipient_user_id = await resolve_recipient(
+            pod_id=deps.pod_id, reference=request.to
+        )
     if recipient_user_id is None:
         return MessageUserResponse(
             success=False,
@@ -200,10 +194,6 @@ async def message_user(
                 "resolve. Call list_pod_members to look them up."
             ),
         )
-
-    refusal = _outsider_refusal(deps, recipient_user_id)
-    if refusal is not None:
-        return refusal
 
     # No further permission check. Holding this toolset IS the grant to contact
     # colleagues — it is opt-in, withheld from sub-agents, and every message
@@ -217,8 +207,11 @@ async def message_user(
     result = await send_notification(
         pod_id=deps.pod_id,
         recipient_user_id=recipient_user_id,
-        title=_title_for(request),
-        body=_notification_body(deps, request.message),
+        title=_title_for(deps, request),
+        # As written. Whether it came from outside the pod -- and so how the
+        # member reads it -- is the service's to say, from the conversation's
+        # routing link rather than from words the stranger steered.
+        body=request.message,
         actor_user_id=deps.user_id,
         # Normalised, because a delegation token can still name the assistant
         # by the sentinel this module predates -- and that id is not a row in
@@ -240,7 +233,12 @@ async def message_user(
         origin_surface_id=deps.surface_id,
         # Only when the agent asked. Everything above is a default the router
         # applies; this is an instruction it either follows or refuses.
-        channel=request.channel.value if request.channel else None,
+        # A stranger's run does not choose how the member hears from it.
+        channel=(
+            request.channel.value
+            if request.channel and not deps.answers_outsider
+            else None
+        ),
         background_instruction=_instruction_for_reply(deps, request),
         # A stranger's question passed on is always a question: the member's
         # answer is what brings this conversation back to relay it.
@@ -290,15 +288,23 @@ async def check_messages(
             success=False, error="Give at least one notification id."
         )
 
+    # Only what this conversation sent: an id from anywhere else in the pod
+    # matches nothing, however it was learned.
     reports = await check_notifications(
-        pod_id=deps.pod_id, notification_ids=request.notification_ids
+        pod_id=deps.pod_id,
+        conversation_id=deps.conversation_id,
+        notification_ids=request.notification_ids,
     )
     messages = [NotificationStatusReport(**report) for report in reports]
     pending = sum(1 for report in messages if report.status == "OPEN")
     answered = sum(1 for report in messages if report.status == "RESPONDED")
 
     missing = len(request.notification_ids) - len(messages)
-    note = f" {missing} id(s) matched nothing in this pod." if missing > 0 else ""
+    note = (
+        f" {missing} id(s) matched nothing this conversation sent."
+        if missing > 0
+        else ""
+    )
 
     return CheckMessagesResponse(
         success=True,
@@ -342,8 +348,8 @@ async def list_pod_members(
             success=False,
             error=(
                 "You are talking to somebody outside the pod, so its members are "
-                "not yours to list. To pass a question on, message the person "
-                f"who looks after this conversation (to: {deps.user_id})."
+                "not yours to list. To pass a question on, use `message_user`: "
+                "it reaches the person who looks after this conversation."
             ),
         )
 

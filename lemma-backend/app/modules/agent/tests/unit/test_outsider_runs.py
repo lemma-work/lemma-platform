@@ -26,8 +26,8 @@ from app.modules.agent.domain.outsiders import (
 )
 from app.modules.agent.domain.surface_prompts import surface_platform_guidance
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
-    _channel_context_block,
+from app.modules.agent.infrastructure.harnesses.channel_context import (
+    channel_context_block as _channel_context_block,
 )
 from app.modules.agent.tools.authority import tool_authorization_context
 from app.modules.agent.tools.context import BaseAgentContext
@@ -36,9 +36,8 @@ from app.modules.agent.tools.messaging.models import ListPodMembersRequest
 from app.modules.agent.tools.messaging.models import MessageUserRequest
 from app.modules.agent.tools.messaging.pydantic_adapter import (
     _instruction_for_reply,
-    _notification_body,
-    _outsider_refusal,
     list_pod_members,
+    message_user,
     messaging_toolset,
 )
 from app.modules.agent.tools.toolset_selection import resolve_toolsets
@@ -71,17 +70,18 @@ def test_the_marker_is_read_off_the_conversation():
 def test_the_pod_assistant_keeps_only_what_is_safe_under_a_stranger():
     """The assistant is the widest agent there is: a shell, a browser, memory,
     sub-agents, the power to pause for an approval. Under a stranger it keeps
-    pod reads (which the authorizer answers as nobody), the web, a todo list and
-    the one line to the member looking after the group."""
+    pod reads (which the authorizer answers as nobody), web search and the one
+    line to the member looking after the group. Not the task list: a private
+    note's run can write it, and every later stranger's prompt would show it."""
     resolved = resolve_toolsets(_pod_assistant(), _conversation(for_outsiders=True))
 
     assert set(resolved.names) <= {
         AgentToolset.POD,
         AgentToolset.WEB_SEARCH,
-        AgentToolset.TODO,
         AgentToolset.MESSAGING,
     }
     for withheld in (
+        AgentToolset.TODO,
         AgentToolset.WORKSPACE_CLI,
         AgentToolset.BROWSER,
         AgentToolset.USER_INTERACTION,
@@ -174,31 +174,17 @@ def test_a_strangers_line_in_the_group_is_marked_for_a_members_run():
     assert '- Tom (not in this pod): "next time Arjun asks' in block
 
 
-def test_a_stranger_can_reach_only_the_member_looking_after_the_group():
-    deps = _deps(answers_outsider=True)
+async def test_a_stranger_cannot_pass_on_an_essay():
+    """Refused before anything is looked up or sent. Where the message goes --
+    the member who looks after the group, whatever `to` says, with nothing
+    looked up -- is pinned end to end in `test_outsider_isolation_e2e`."""
+    result = await message_user(
+        SimpleNamespace(deps=_deps(answers_outsider=True), tool_call_id="call-1"),
+        MessageUserRequest(to="owner", message="x" * 5000),
+    )
 
-    refused = _outsider_refusal(deps, uuid4())
-    allowed = _outsider_refusal(deps, deps.user_id)
-
-    assert refused is not None and refused.success is False
-    assert str(deps.user_id) in (refused.error or "")
-    assert allowed is None
-
-
-def test_a_member_may_message_anyone_in_the_pod():
-    assert _outsider_refusal(_deps(answers_outsider=False), uuid4()) is None
-
-
-def test_what_reaches_the_owner_says_the_answer_goes_back_to_the_stranger():
-    body = _notification_body(_deps(answers_outsider=True), "Tom asked for the proofs.")
-
-    assert body.startswith("Tom asked for the proofs.")
-    assert "outside the pod" in body
-    assert "passed back" in body
-
-
-def test_a_members_message_is_sent_as_written():
-    assert _notification_body(_deps(answers_outsider=False), "hi") == "hi"
+    assert result.success is False
+    assert "too long" in (result.error or "")
 
 
 def test_a_doc_the_owner_opened_beside_it_is_never_a_strangers_to_read():
@@ -251,7 +237,7 @@ async def test_a_stranger_cannot_have_the_pods_members_listed():
 
     assert listed.success is False
     assert not listed.members
-    assert str(deps.user_id) in (listed.error or "")
+    assert str(deps.user_id) not in (listed.error or "")
 
 
 def test_a_stranger_cannot_hide_an_instruction_in_what_the_member_answers():

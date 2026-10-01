@@ -23,6 +23,7 @@ import json
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.entities import (
     AgentRun,
     Message,
@@ -217,6 +218,37 @@ async def assemble_runtime_history(
         )
     )
     return messages
+
+
+def without_private_runs(
+    messages: list[Message], runs: list[AgentRun], *, current_run_id: UUID
+) -> list[Message]:
+    """The history a stranger's run reads: nothing a private note started.
+
+    In a conversation that answers people outside the pod, the member who looks
+    after it can write the agent a private note -- "our floor is 40k, don't go
+    below it" -- and the run it starts answers in Lemma only. Every later turn
+    in the conversation is a stranger's, and a label asking the model not to
+    repeat the note is not a boundary. So the note, and everything its run
+    said, are not in a stranger's history at all.
+
+    Whole runs go, so a tool call never loses its return. A note queued into
+    another run's history is dropped on its own. The current run is never
+    dropped: a private run reads its own note.
+    """
+    private = {
+        run.id
+        for run in runs
+        if run.id != current_run_id and run_is_private(run.metadata)
+    }
+    return [
+        message
+        for message in messages
+        if message.agent_run_id not in private
+        and not (
+            message.agent_run_id != current_run_id and is_private_note(message.metadata)
+        )
+    ]
 
 
 def select_runtime_history(

@@ -42,6 +42,11 @@ from app.modules.agent_surfaces.services.notification_channels import (
     can_cold_open,
 )
 from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
+from app.modules.agent_surfaces.services.outside_questions import (
+    MAX_OUTSIDE_QUESTION_CHARS,
+    OutsideOriginReader,
+    outside_question_message,
+)
 from app.modules.agent_surfaces.services.notification_rate_limiter import (
     EmailSendLimitExceeded,
 )
@@ -99,10 +104,15 @@ class NotificationService:
         external_user_repository,
         egress: SurfaceNotificationEgressPort,
         pod_membership_port,
+        outside_origin_reader: OutsideOriginReader,
         rate_limiter=None,
         surface_provisioner: SurfaceProvisioner | None = None,
     ):
         self.uow = uow
+        # Required, so no way of building this service can forget it: it is
+        # what marks a question passed on from outside the pod, and an unmarked
+        # one would have its answer recorded without the recipient's say-so.
+        self.outside_origin = outside_origin_reader
         self.notifications = notification_repository
         # The three repositories this used to also hang on `self` are not kept,
         # and neither is the egress collaborator: all four were assigned and
@@ -183,6 +193,12 @@ class NotificationService:
             if actor_user_id
             else None
         )
+        # From the asking conversation's routing link, not from anything the
+        # asking run said: a question passed on from outside the pod is one
+        # whose answer is only recorded as words the recipient approved.
+        outside = await self.outside_origin(origin_conversation_id)
+        if outside is not None and len(body) > MAX_OUTSIDE_QUESTION_CHARS:
+            body = body[:MAX_OUTSIDE_QUESTION_CHARS]
 
         notification = await self.notifications.create(
             NotificationEntity(
@@ -194,6 +210,9 @@ class NotificationService:
                 origin_kind=origin_kind,
                 origin_id=origin_id,
                 origin_conversation_id=origin_conversation_id,
+                from_outside=outside is not None,
+                origin_group_title=outside.group_title if outside else None,
+                asked_by_name=outside.asked_by_name if outside else None,
                 title=title,
                 body=body,
                 background_instruction=background_instruction,
@@ -255,13 +274,20 @@ class NotificationService:
         # Suppressed for a message to its own asker; still handed to `send`
         # below, which puts it in the email `From` where an inbox list needs
         # *some* name and yours is the true one.
-        message = attribute(
-            notification.body,
-            actor_display_name=(
-                None
-                if notification.actor_user_id == notification.recipient_user_id
-                else actor_display_name
-            ),
+        message = (
+            # A stranger's words, framed and quoted by the server: they reach
+            # the member's own thread, where an agent with all of the member's
+            # access reads them.
+            outside_question_message(notification, agent_name=agent_name)
+            if notification.from_outside
+            else attribute(
+                notification.body,
+                actor_display_name=(
+                    None
+                    if notification.actor_user_id == notification.recipient_user_id
+                    else actor_display_name
+                ),
+            )
         )
 
         # First success wins. Three copies of one message across three apps is
@@ -393,8 +419,13 @@ class NotificationService:
         responder_user_id: UUID,
         summary: str,
         data: dict | None = None,
+        owner_confirmed: bool = False,
     ) -> NotificationEntity:
         """Record an answer, and say so if it was the last one outstanding.
+
+        ``owner_confirmed`` is the recipient's own say-so on these exact words:
+        they typed them, or approved them as their agent drafted them. A
+        question from outside the pod is answered only with it.
 
         The domain decides whether the answer is legal. Whether the asking
         conversation should be brought back is decided here and announced as
@@ -410,7 +441,9 @@ class NotificationService:
             notification_id=notification_id,
             user_id=responder_user_id,
         )
-        notification.respond(summary=summary, data=data)
+        notification.respond(
+            summary=summary, data=data, owner_confirmed=owner_confirmed
+        )
         updated = await self.notifications.update(notification)
         await self._announce_if_settled(updated)
         return updated
@@ -516,6 +549,22 @@ class NotificationService:
             )
             expired += 1
         return expired
+
+    async def is_from_outside(
+        self, *, pod_id: UUID, notification_id: UUID, user_id: UUID
+    ) -> bool:
+        """Whether this person's notification is a question from outside the pod.
+
+        False for one that is not theirs, rather than an answer either way: the
+        respond that follows refuses it as not found.
+        """
+        notification = await self.notifications.get(notification_id)
+        return (
+            notification is not None
+            and notification.pod_id == pod_id
+            and notification.recipient_user_id == user_id
+            and notification.from_outside
+        )
 
     async def _owned_by(
         self, *, pod_id: UUID, notification_id: UUID, user_id: UUID

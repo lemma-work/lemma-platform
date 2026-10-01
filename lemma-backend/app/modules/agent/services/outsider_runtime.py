@@ -23,6 +23,7 @@ from uuid import UUID
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.outsiders import OutsiderRunRefused
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
 from app.modules.agent.services import runtime_system_profiles
 from app.modules.agent.services.runtime_profile_service import (
@@ -36,8 +37,9 @@ from app.modules.agent.services.workspace_model_fallback import (
 ResolveRuntime = Callable[[AgentRuntimeConfig], Awaitable[ResolvedAgentRuntime]]
 
 _NO_IN_PROCESS_MODEL = (
-    "This teammate runs on a coding agent, which cannot answer people outside "
-    "the space. Choose a model for the organization in Settings → Models."
+    "This teammate cannot answer people outside the space: that needs a model "
+    "the organization provides, not a coding agent or someone's personal key. "
+    "Choose one for the organization in Settings → Models."
 )
 
 
@@ -47,8 +49,13 @@ async def in_process_runtime(
     fallbacks: Sequence[AgentRuntimeConfig],
     resolve: ResolveRuntime,
 ) -> ResolvedAgentRuntime:
-    """``resolved`` if it runs here, else the first fallback that does."""
-    if resolved.harness_kind is HarnessKind.LEMMA:
+    """``resolved`` if a stranger's run may use it, else the first fallback that may.
+
+    It must run here (``HarnessKind.LEMMA``), and it must not be somebody's
+    personal model: a member's own key, billed to them, is not the pod's to
+    spend on people outside it.
+    """
+    if _usable(resolved):
         return resolved
     for config in fallbacks:
         try:
@@ -56,9 +63,16 @@ async def in_process_runtime(
         except DomainError, RuntimeError:
             # Not configured, retired or unavailable: the next one may be.
             continue
-        if candidate.harness_kind is HarnessKind.LEMMA:
+        if _usable(candidate):
             return candidate
     raise OutsiderRunRefused(_NO_IN_PROCESS_MODEL)
+
+
+def _usable(candidate: ResolvedAgentRuntime) -> bool:
+    return (
+        candidate.harness_kind is HarnessKind.LEMMA
+        and candidate.profile.scope is not RuntimeProfileScope.PERSONAL
+    )
 
 
 async def default_runtimes(

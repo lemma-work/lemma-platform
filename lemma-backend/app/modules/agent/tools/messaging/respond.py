@@ -21,9 +21,11 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent_surfaces.contracts.notifications import (
     notification_form_action,
+    outside_question,
     record_notification_response,
 )
 from app.core.log.log import get_logger
+from app.modules.agent.domain.outsiders import OUTSIDE_ANSWER_TOOL
 from app.modules.agent.tools.context import BaseAgentContext, BaseToolResponse
 from app.modules.workflow.contracts.forms import (
     submit_workflow_form as submit_form,
@@ -48,7 +50,32 @@ class RespondToNotificationRequest(BaseModel):
 
 
 class RespondToNotificationResponse(BaseToolResponse):
-    pass
+    needs_approval: bool = Field(
+        default=False,
+        description=(
+            "Nothing was recorded: the answer goes to someone outside the pod, "
+            "and the person you work for must approve the exact words first."
+        ),
+    )
+    approval: dict[str, object] | None = Field(
+        default=None,
+        description="Pass these straight to `request_approval` as tool_name/args.",
+    )
+
+
+#: The tool whose approval is the recipient's say-so on an answer to a stranger.
+RESPOND_TOOL_NAME = OUTSIDE_ANSWER_TOOL
+
+
+def confirmed_by_approval(deps: BaseAgentContext) -> bool:
+    """Whether this call is the person's own say-so on its exact words.
+
+    True only when the approval executor runs it -- after they approved this
+    tool, with these arguments, on a card that showed them. Approving anything
+    else confirms nothing.
+    """
+    approved = deps.approved_execution
+    return approved is not None and approved.tool_name == RESPOND_TOOL_NAME
 
 
 async def respond_to_notification(
@@ -60,11 +87,47 @@ async def respond_to_notification(
     to it. Record only what they told you: an invented answer is worse than a
     missing one, because the asker acts on it. If they decline, leave the request
     open and say so.
+
+    A question from someone outside the pod is answered only with words the
+    person approves: this returns `needs_approval`, and you then call
+    `request_approval` with the exact `approval` it gives you.
     """
     deps = ctx.deps
     if deps.pod_id is None:
         return RespondToNotificationResponse(
             success=False, error="This tool is only available inside a pod."
+        )
+
+    approved = confirmed_by_approval(deps)
+    if not approved and await outside_question(
+        pod_id=deps.pod_id,
+        notification_id=request.notification_id,
+        recipient_user_id=deps.user_id,
+    ):
+        # The answer goes back to somebody outside the pod, and this run acts
+        # with all of the person's access. Nothing is recorded until they
+        # have read the exact words and said yes.
+        logger.info(
+            "agent.respond_to_notification.outside_relay_needs_approval.observed",
+            notification_id=str(request.notification_id),
+        )
+        return RespondToNotificationResponse(
+            success=False,
+            needs_approval=True,
+            approval={
+                "tool_name": RESPOND_TOOL_NAME,
+                "args": {
+                    "notification_id": str(request.notification_id),
+                    "summary": request.summary,
+                },
+            },
+            error=(
+                "Not sent. This answer goes to someone outside the pod, so the "
+                "person you work for approves the exact words first: call "
+                "`request_approval` with this tool_name and these args, and a "
+                "title saying who it goes to. Write only what they would say "
+                "to a stranger."
+            ),
         )
 
     # No try/except: GracefulToolset turns a raising tool body into an error
@@ -78,6 +141,7 @@ async def respond_to_notification(
         responder_user_id=deps.user_id,
         summary=request.summary,
         data=request.data,
+        owner_confirmed=approved,
     )
 
     return RespondToNotificationResponse(

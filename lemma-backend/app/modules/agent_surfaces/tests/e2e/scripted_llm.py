@@ -109,6 +109,50 @@ async def set_mock_llm_script(
 # ---------------------------------------------------------------------------
 
 
+def record_model_requests(monkeypatch) -> list[dict]:
+    """Everything each model request in this test carried, as the model saw it.
+
+    Wraps the scripted model rather than replacing it: every request still goes
+    to the script, and this keeps a copy of its messages (as JSON text) and the
+    names of the tools it was offered. What a run was *shown* is the question
+    behind "a stranger never reads X", and the stored conversation cannot answer
+    it -- history is assembled per run.
+    """
+    import pydantic_core
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness
+
+    seen: list[dict] = []
+    original = harness.build_mock_model
+
+    def note(messages, info) -> None:
+        seen.append(
+            {
+                "text": pydantic_core.to_json(messages).decode(),
+                "tools": {tool.name for tool in info.function_tools},
+            }
+        )
+
+    def build(conversation):
+        model = original(conversation)
+        function, stream = model.function, model.stream_function
+
+        async def record(messages, info):
+            note(messages, info)
+            return await function(messages, info)
+
+        async def record_stream(messages, info):
+            note(messages, info)
+            async for delta in stream(messages, info):
+                yield delta
+
+        return FunctionModel(record, stream_function=record_stream, model_name="mock")
+
+    monkeypatch.setattr(harness, "build_mock_model", build)
+    return seen
+
+
 async def run_scripted_agent_run(
     db_session: AsyncSession,
     *,

@@ -42,14 +42,34 @@ def test_the_group_tables_upgrade_and_roll_back_cleanly() -> None:
                 assert row is not None
                 return row[0], row[1]
 
+        def origin_columns() -> set[str]:
+            """Where a question passed on from outside the pod came from."""
+            with psycopg.connect(plain_url) as connection:
+                rows = connection.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'notifications' AND column_name IN "
+                    "('from_outside', 'origin_group_title', 'asked_by_name')"
+                ).fetchall()
+            return {row[0] for row in rows}
+
+        everything = {
+            "from_outside",
+            "origin_group_title",
+            "asked_by_name",
+        }
+
         migrate("upgrade", BEFORE)
         assert tables() == (None, None)
+        assert origin_columns() == set()
 
         migrate("upgrade", AFTER)
         assert tables() == ("agent_surface_groups", "agent_surface_group_messages")
+        assert origin_columns() == everything
 
         migrate("downgrade", BEFORE)
         assert tables() == (None, None)
+        assert origin_columns() == set()
 
         migrate("upgrade", "head")
         assert tables() == ("agent_surface_groups", "agent_surface_group_messages")
+        assert origin_columns() == everything
