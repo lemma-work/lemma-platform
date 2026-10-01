@@ -8,6 +8,7 @@ import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { InteractionDock } from "./interaction-dock";
+import type { AnswerWith } from "./interaction-card";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
 import { applyTitle, patchConversationLists, refreshConversationLists } from "./conversation-list";
 import { rememberRequest, Transcript } from "./transcript";
@@ -333,6 +334,11 @@ export function LiveConversation({
        the moment the call arrives. */
     const waitingOn = useMemo(() => openInteraction(turns), [turns]);
     const signingIn = useMemo(() => openSignIn(turns), [turns]);
+    /* Filled by the docked question while it is open: what is typed answers
+       it (see `Questions`). */
+    const answerWith = useRef<AnswerWith | null>(null);
+    /* The composer is holding more than a few lines; the docked card folds. */
+    const [crowded, setCrowded] = useState(false);
 
     /* Held here rather than in the composer because this is what uploads them,
        clears them on success and leaves them alone on failure — a send that
@@ -476,6 +482,7 @@ export function LiveConversation({
 
     const send = useCallback(
         async (text: string) => {
+            if (answerWith.current) return answerWith.current(text);
             const current = createdHere.current ?? session.conversationId;
             if (running && current) return steer(text, current);
             if (sendingRef.current) return;
@@ -689,7 +696,7 @@ export function LiveConversation({
                 onRemember={(text) => void send(rememberRequest(text)).catch(() => undefined)}
                 noModel={modelMissing}
                 modelsAction={pointsAtModels(error)}
-                dockedId={waitingOn?.id}
+                dockedId={waitingOn?.id ?? signingIn?.id}
             />
             <InteractionDock
                 interaction={waitingOn}
@@ -698,24 +705,28 @@ export function LiveConversation({
                 /* Not while the status is still unknown, which reads as idle
                    for a moment after load and would flash "Expired". */
                 runEnded={session.status !== undefined && state !== "running"}
+                signIn={signingIn}
+                conversationId={session.conversationId}
+                crowded={crowded}
+                answerWith={answerWith}
             />
             <FolderChip folder={folder} />
             <Composer
-                placeholder={placeholder ?? "Ask " + (teammate.name || pod.name) + "…"}
+                placeholder={waitingOn?.kind === "question"
+                    ? "Or answer in your own words…"
+                    : placeholder ?? "Ask " + (teammate.name || pod.name) + "…"}
                 note={
                     /* Nothing, when the pause is on the shelf directly above
-                       this line. The note existed to point at a card somewhere
-                       up the transcript; with the card here it would be a
-                       caption on the thing it is sitting under. */
-                    waitingOn
-                        ? undefined
-                        : /* A paused sign-in is answered on another page, so
-                             nothing in this pane is going to change until
-                             somebody goes there. Saying only "waiting on you"
-                             left a blocked run reading as an idle
-                             conversation. */
-                          signingIn
-                          ? "waiting on you to sign in to " + signingIn.host
+                       this line — a sign-in included, which now sits there
+                       too. The note existed to point at a card somewhere up
+                       the transcript; with the card here it would be a caption
+                       on the thing it is sitting under. Except for what typing
+                       does to an approval: the box is not blocked, and a
+                       message sent past a request is heard as declining it. */
+                    waitingOn?.kind === "approval"
+                        ? "sending a message skips this request"
+                        : waitingOn || signingIn
+                          ? undefined
                           : state === "waiting"
                             ? "waiting on you"
                             : /* Below the run's own notes: a call that did
@@ -747,6 +758,7 @@ export function LiveConversation({
                 onAttach={attach}
                 onRemoveAttachment={unattach}
                 onSend={send}
+                onTall={setCrowded}
                 onStop={() => void session.stop()}
                 onVoice={onVoice}
             />

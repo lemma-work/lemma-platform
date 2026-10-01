@@ -1,9 +1,13 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 
 // The landing has a fixed light palette. Validate it separately from the
 // appearance-aware app tokens so this surface participates in every build.
-const file = new URL('../src/app/(marketing)/landing.module.css', import.meta.url);
-const css = (await readFile(file, 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '');
+/* The landing and the product pages share one palette, defined in the
+   landing's stylesheet; the type and motion rules hold for both. */
+const marketing = new URL('../src/app/(marketing)/', import.meta.url);
+const vignettes = (await readdir(new URL('vignettes/', marketing))).filter(name => name.endsWith('.module.css')).map(name => 'vignettes/' + name);
+const files = ['landing.module.css', 'product.module.css', ...vignettes].map(name => new URL(name, marketing));
+const css = (await Promise.all(files.map(file => readFile(file, 'utf8')))).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
 const failures = [];
 const tokens = Object.fromEntries([...css.matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6})\b/gi)].map(match => [match[1], match[2]]));
 

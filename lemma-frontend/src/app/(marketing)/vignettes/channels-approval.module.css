@@ -1,0 +1,90 @@
+/* Only the person who asked can say yes, beat by beat. Base styles are the
+   opening frame, Priya's ask on its own; each `.root[data-bN]` rule is what
+   changes from beat N on, written in beat order so a later beat wins. With
+   reduced motion every beat is on: the ask, the card settled as Done,
+   Rohan's note, Kit's line that it's sent, and Priya's pointer at rest. */
+
+.root { --v-step: 110ms; container-type: inline-size }
+
+.logo { width: 16px; height: 16px; flex: none }
+
+/* The thread reads top to bottom, in the flow, the way Slack lays it out.
+   Messages that arrive later hold their place from the start, so nothing
+   above them shifts when they appear. */
+.thread { display: flex; flex-direction: column; gap: 18px; padding-top: 18px }
+.message { display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 12px; align-items: start }
+.avatar { width: 28px; height: 28px; margin-top: 2px }
+.column { min-width: 0 }
+.who { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 19px; color: var(--ink) }
+.who b { font-weight: 500 }
+.at { display: inline-flex; align-items: center; gap: 4px; align-self: center; font-size: 12px; color: var(--ink-3) }
+.thread .said { margin-top: 1px; font-size: 14px; color: var(--ink-2) }
+.mention { padding: 0 3px; border-radius: 4px; background: var(--violet-soft); color: var(--violet-deep) }
+
+/* ── The approval message ───────────────────────────────────────────── */
+/* Slack draws the app's blocks inline in the thread, not in a box: the ask
+   in one line, "Approval needed:" set in its mrkdwn bold, then the rest. */
+.card { margin-top: 1px }
+.title { font-size: 14px; line-height: 20px; color: var(--ink-2) }
+.title b { font-weight: 500; color: var(--ink) }
+/* What will run: one line, cut short, as a quote with the call in code. */
+.thread .action { display: flex; align-items: center; gap: 6px; height: 22px; margin-top: 6px; padding-left: 9px; border-left: 3px solid var(--line-2); font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.action code { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 1px 5px; border-radius: 4px; background: var(--cream); box-shadow: 0 0 0 1px var(--line); font-family: var(--mono); font-size: 12px; color: var(--ink-2) }
+/* The buttons, and the line that takes their place once it's answered. */
+.choices { position: relative; display: flex; gap: 8px; height: 28px; margin-top: 10px }
+.approve, .deny { transform-origin: 0 50% }
+.done { position: absolute; top: 0; left: 0; display: flex; align-items: center; gap: 6px; height: 28px; font-size: 12px; color: var(--ink-3); opacity: 0 }
+.done svg { color: var(--ok) }
+
+/* ── The note only Rohan sees ───────────────────────────────────────── */
+/* Slack posts it to the person who tapped alone; drawn set apart, on cream. */
+.note { align-self: flex-start; width: 430px; margin: 8px -10px -2px; padding: 8px 10px; border-radius: 10px; background: var(--cream) }
+.thread .note .said { text-wrap: balance }
+
+/* ── Pointers: each one's tip lands on Approve ──────────────────────── */
+.pointer { position: absolute; top: 0; left: 0; z-index: 2; opacity: 0 }
+.pointer svg { display: block; overflow: visible }
+.pointer path { fill: var(--ink); stroke: var(--paper); stroke-width: 1.5; stroke-linejoin: round }
+.pointer span { position: absolute; top: 15px; left: 12px; height: 20px; padding: 0 7px; border-radius: 6px; background: var(--ink); color: var(--paper); font-size: 12px; line-height: 20px; white-space: nowrap; box-shadow: 0 6px 14px -8px rgb(20 20 19 / .5) }
+.priya path { fill: var(--violet-deep) }
+.priya span { background: var(--violet-deep) }
+/* Where each tip lands, in canvas px; each comes in from off to the right. */
+.rohan { left: 125px; top: 206px; transform: translate(410px, 200px) }
+.priya { left: 125px; top: 206px; transform: translate(430px, -110px) }
+
+/* A tap on Approve. Two names for one press, so Priya's tap replays it
+   after Rohan's: an animation only restarts when its name changes. */
+@keyframes tapped { 35% { transform: scale(.94); background-color: var(--ink-2) } }
+@keyframes tappedAgain { 35% { transform: scale(.94); background-color: var(--ink-2) } }
+
+/* ── Arriving ───────────────────────────────────────────────────────── */
+.ask, .note, .sent { opacity: 0; transform: translateY(6px) }
+
+/* 1 · Kit's card under Priya's ask */
+.root[data-b1] .ask { opacity: 1; transform: none }
+/* 2 · Rohan's pointer comes in and taps Approve */
+.root[data-b2] .rohan { opacity: 1; transform: none }
+.root[data-b2] .approve { animation: tapped var(--v-move) var(--ease) var(--v-move) }
+/* 3 · a note only Rohan sees; the card is as it was */
+.root[data-b3] .note { opacity: 1; transform: none }
+/* 4 · Rohan's pointer goes, Priya's comes in and taps Approve */
+.root[data-b4] .rohan { opacity: 0 }
+.root[data-b4] .priya { opacity: 1; transform: none; transition-delay: var(--v-quick) }
+.root[data-b4] .approve { animation: tappedAgain var(--v-move) var(--ease) calc(var(--v-move) + var(--v-quick)) }
+/* 5 · the two buttons fold into one done line */
+.root[data-b5] .approve, .root[data-b5] .deny { opacity: 0; transform: scaleX(.6) }
+.root[data-b5] .deny { transform: translateX(-60px) scaleX(.6) }
+.root[data-b5] .done { opacity: 1; transition-delay: var(--v-step) }
+/* 6 · Kit says it's sent */
+.root[data-b6] .sent { opacity: 1; transform: none }
+
+/* On a phone the vignette shows only the left of the canvas (`phone` in
+   the .tsx), so the thread narrows to it and wraps there, as Slack's own
+   thread does on a phone. Priya's ask and the card's title take a second
+   line each, so Approve sits 40px lower and both pointers land 40px lower
+   to meet it. Below the same 520px the Vignette switches at. */
+@container (width < 520px) {
+    .root .thread { right: 256px }
+    .root .note { width: 360px }
+    .root .rohan, .root .priya { top: 246px }
+}

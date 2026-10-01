@@ -1,0 +1,99 @@
+/* A live list in Deal desk, beat by beat. Base styles are the opening
+   frame; each `.root[data-bN]` rule is what changes from beat N on, written
+   in beat order so a later beat wins over an earlier one. With reduced
+   motion every beat is on, so the last rules here are the finished picture. */
+
+.root {
+    --v-step: 120ms;
+    /* The app's own grey ground for its rail. */
+    --rail: color-mix(in srgb, var(--cream) 60%, var(--paper));
+    /* The new row's highlight, and the trace of it that stays. */
+    --fresh: var(--violet-soft);
+    --fresh-soft: color-mix(in srgb, var(--violet-soft) 72%, var(--paper));
+}
+
+/* ── The app: Deal desk, open on Northstar ──────────────────────────── */
+.app { padding: 0 }
+.head { display: flex; align-items: center; gap: 10px; height: 50px; padding: 0 14px; border-bottom: 1px solid var(--line) }
+.back { display: inline-flex; align-items: center; height: 26px; padding: 0 9px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line-2); font-size: 12px; color: var(--ink); white-space: nowrap }
+.avatar { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--violet-soft); color: var(--violet-deep); font-size: 12px }
+.account { display: flex; flex-direction: column; margin-right: auto; line-height: 1.3 }
+.account span { font-size: 14px; color: var(--ink) }
+.account small { font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.stage { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-2) }
+.select { position: relative; display: inline-flex; align-items: center; height: 26px; padding: 0 22px 0 8px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink) }
+.select::after { content: ""; position: absolute; right: 9px; top: 9px; width: 5px; height: 5px; border: solid var(--ink-2); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg) }
+.value { display: flex; flex-direction: column; align-items: flex-end; font-family: var(--mono); font-size: 13px; line-height: 1.25; color: var(--ink) }
+.value small { font-size: 12px; color: var(--ink-3); white-space: nowrap }
+
+.detail { position: absolute; top: 50px; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 272px 1fr }
+
+/* The follow-ups rail: one entry per account, the selected one ruled. */
+.rail { overflow: hidden; padding-top: 12px; background: var(--rail); border-right: 1px solid var(--line) }
+.railHead { display: flex; justify-content: space-between; padding: 0 14px 10px; font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3) }
+.count { display: inline-grid; letter-spacing: 0 }
+.count > span { grid-area: 1 / 1; text-align: right }
+.three { opacity: 0; transform: translateY(5px) }
+
+.item { display: flex; flex-direction: column; padding: 9px 14px 10px; border-bottom: 1px solid var(--line); line-height: 16px }
+.itemTop { display: flex; justify-content: space-between; gap: 8px }
+.name { font-size: 13px; color: var(--ink) }
+.due { font-size: 12px; color: var(--ink-3) }
+.done { color: var(--ok) }
+.person { margin-top: 1px; font-size: 12px; color: var(--ink-2) }
+.task { margin-top: 3px; font-size: 12px; color: var(--ink-3) }
+/* The account open in the reader: lifted to white, ruled in the accent. */
+.on { background: var(--paper); box-shadow: inset 3px 0 0 var(--violet) }
+
+/* Birch's row, folded away until the table has it; it opens at the calm
+   pace so the arrival reads as a slide, not a jump. */
+.arrive { max-height: 0; overflow: hidden; transition: max-height var(--v-slow) var(--ease) }
+.birch { opacity: 0; transform: translateY(-16px); transition: opacity var(--v-move) var(--ease), transform var(--v-slow) var(--ease), background-color var(--v-slow) var(--ease) }
+
+/* The mail reader beside it, under the conversation. */
+.reader { position: relative; overflow: hidden; padding: 10px 20px 0 }
+.tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink-3) }
+.tabs > span { padding: 4px 0 8px }
+.tabs > .tabOn { color: var(--violet); box-shadow: inset 0 -2px 0 var(--violet) }
+.mailHead { display: flex; align-items: center; gap: 10px; margin-top: 10px }
+.mailHead time { margin-left: auto; font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.small { width: 28px; height: 28px }
+.from { display: flex; flex-direction: column; line-height: 1.3 }
+.from span { font-size: 13px; color: var(--ink) }
+.from small { font-size: 12px; color: var(--ink-3); white-space: nowrap }
+/* `.root` first: the landing's own paragraph reset outranks a bare class. */
+.root .subject { margin-top: 16px; font-size: 15px; color: var(--ink); white-space: nowrap; overflow: hidden }
+.root .mail { margin-top: 8px; font-size: 12px; line-height: 1.75; color: var(--ink-2) }
+.draft { display: flex; justify-content: space-between; height: 90px; margin-top: 16px; padding: 10px 12px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--line-2) }
+.draft span { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--violet) }
+.draft em { font-style: normal; font-size: 12px; color: var(--violet) }
+
+/* ── The conversation with Remy, floating over the app ─────────────── */
+.chat { position: absolute; right: 14px; bottom: 14px; z-index: 2; display: flex; flex-direction: column; width: 340px; height: 246px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 24px 50px -22px rgb(20 20 19 / .35) }
+.chatHead { display: flex; align-items: center; gap: 10px; padding: 12px 14px 6px }
+.chatTitle { display: flex; flex-direction: column; margin-right: auto; line-height: 1.25 }
+.ctl { display: grid; place-items: center; width: 24px; height: 24px; color: var(--ink-3) }
+.chatTitle span { font-size: 13.5px; color: var(--ink) }
+.chatTitle small { font-size: 12px; color: var(--ink-3) }
+.thread { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 6px 14px 0 }
+.asked { align-self: flex-end; max-width: 240px; padding: 7px 12px; border-radius: 14px; background: var(--cream); font-size: 13px; line-height: 1.4; color: var(--ink) }
+.reply { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; opacity: 0; transform: translateY(6px) }
+.replyWho { display: block; font-size: 13px; color: var(--ink) }
+.steps { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin-top: 3px; padding: 0 10px 0 4px; border: 1px solid var(--line); border-radius: 99px; font-size: 12px; color: var(--ink-2) }
+.chev { margin-left: -1px; color: var(--ink-3) }
+.steps i { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--violet-soft); color: var(--violet) }
+.root .replyText { margin-top: 6px; font-size: 13px; color: var(--ink); white-space: nowrap }
+.composer { display: flex; align-items: center; justify-content: space-between; height: 36px; margin: 8px 12px 12px; padding: 0 5px 0 12px; border-radius: 12px; box-shadow: 0 0 0 1px var(--line-2); font-size: 13px; color: var(--ink-3) }
+/* The send button, idle until there is something to send. */
+.send { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--line-2); color: var(--ink-3) }
+
+/* 1 · Remy's reply */
+.root[data-b1] .reply { opacity: 1; transform: none }
+/* 2 · the Birch row slides into the rail, under a highlight, and the count
+       goes from 2 to 3; nothing else on the screen moves */
+.root[data-b2] .arrive { max-height: 72px }
+.root[data-b2] .birch { opacity: 1; transform: none; background-color: var(--fresh) }
+.root[data-b2] .two { opacity: 0; transform: translateY(-5px); transition-delay: calc(2 * var(--v-step)) }
+.root[data-b2] .three { opacity: 1; transform: none; transition-delay: calc(2 * var(--v-step)) }
+/* 3 · the highlight settles, leaving the new row softly marked */
+.root[data-b3] .birch { background-color: var(--fresh-soft) }

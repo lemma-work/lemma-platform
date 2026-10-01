@@ -1,0 +1,202 @@
+/* Seven kinds of step, and one run's path through them, beat by beat. Base
+   styles are the opening frame: seven flat, muted tiles in the order the run
+   will visit them, no route and no dot. Each `.root[data-bN]` rule is what
+   changes from beat N on, in beat order so a later beat wins. With reduced
+   motion every beat is on and nothing moves, so the last rules here are the
+   finished picture: every tile lit, what each one left behind, and the
+   route drawn faintly through them as one line.
+
+   Where the run is, is one number on the root: `--at`, how far along the
+   route the dot has come. The dot sits that far along it (`offset-distance`)
+   and the line is drawn that far (`stroke-dashoffset`), over the same
+   `--leg`, so the line can only ever be the way the dot went. `--arrive` is
+   when, in a beat, the dot gets to its tile, and what lights there waits
+   for it. */
+
+.root {
+    --v-step: 110ms;
+    /* In and out, for the dot: it sets off and settles, it doesn't throw. */
+    --v-glide: cubic-bezier(.45, .05, .3, 1);
+    --at: 0px;
+    --leg: var(--v-move);
+    --arrive: calc(var(--v-step) * 0);
+    --card: 0 18px 40px -22px rgb(20 20 19 / .45), 0 0 0 1px var(--line);
+}
+
+.stage { position: absolute; inset: 36px 0 0 0 }
+.stage p { margin: 0 }
+.heading { position: absolute; top: 12px; left: 22px; font-size: 13px; color: var(--ink-3) }
+
+/* ── How the run stands, in the bar ─────────────────────────────────── */
+/* The run page's status pill. Its words sit on one another and the beats
+   say which shows; its width follows the word. */
+.status { display: inline-flex; align-items: center; gap: 6px; width: 80px; height: 22px; margin-left: 6px; padding: 0 9px; overflow: hidden; border-radius: 99px; background: var(--cream); color: var(--ink-2); white-space: nowrap; transition: width var(--v-move) var(--ease) var(--arrive) }
+.statusDot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--ink-3); transition: background-color var(--v-quick) var(--ease) var(--arrive) }
+.words { display: grid }
+.words > span { grid-area: 1 / 1; opacity: 0; transition: opacity var(--v-quick) var(--ease) var(--arrive) }
+/* A word going out leaves as the dot arrives, and the next waits until it
+   has gone, so two words are never on top of each other. */
+.words > .sayStart { opacity: 1; transition-delay: var(--v-quick) }
+
+
+/* ── The route, and the dot that rides it ───────────────────────────── */
+/* Above the tiles' ground, under their glyphs: it runs through each tile at
+   the height of its glyph, where nothing else is written. */
+.route { position: absolute; top: 0; left: 0; z-index: 1; width: 640px; height: 364px; overflow: visible; pointer-events: none }
+.route path { fill: none; stroke: color-mix(in srgb, var(--violet) 34%, transparent); stroke-width: 1.5px; stroke-linecap: round; stroke-dasharray: 1727.4px; stroke-dashoffset: calc(1727.4px - var(--at)); opacity: 0; transition: opacity var(--v-quick) var(--ease), stroke-dashoffset var(--v-move) var(--v-glide) var(--v-quick) }
+
+/* Placed at the stage's corner so the path's numbers are the stage's. */
+.dot { position: absolute; top: 0; left: 0; z-index: 1; width: 10px; height: 10px; offset-distance: var(--at); offset-rotate: 0deg; opacity: 0; transition: opacity var(--v-quick) var(--ease), offset-distance var(--v-move) var(--v-glide) var(--v-quick) }
+/* Turned about the loop's glyph, 21px to its left, when it circles it. */
+.dot i { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--violet); box-shadow: 0 0 0 3px var(--paper); transform-origin: -16px 5px; transition: none }
+
+/* ── The tiles ──────────────────────────────────────────────────────── */
+/* Muted until the run reaches them: cream, a hairline, grey words. Lit:
+   paper, a card's shadow, ink. `--lit-delay` waits for the dot. */
+.tile {
+    --lit-delay: calc(var(--v-step) * 0);
+    position: absolute; width: 134px; height: 124px; border-radius: 12px; background: var(--cream); box-shadow: 0 0 0 1px var(--line);
+    transition: background-color var(--v-quick) var(--ease) var(--lit-delay), box-shadow var(--v-quick) var(--ease) var(--lit-delay);
+}
+.t1 { top: 44px; left: 22px }
+.t2 { top: 44px; left: 176px }
+.t3 { top: 44px; left: 330px }
+.t4 { top: 44px; left: 484px }
+.t5 { top: 204px; left: 99px }
+.t6 { top: 204px; left: 253px }
+.t7 { top: 204px; left: 407px }
+
+/* The run page's glyph for the kind of step: who does it, or what it does. */
+.glyph {
+    position: absolute; top: 12px; left: 12px; z-index: 2; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px;
+    background: color-mix(in srgb, var(--ink) 5%, var(--cream)); color: color-mix(in srgb, var(--ink-3) 70%, var(--cream));
+    transition: background-color var(--v-quick) var(--ease) var(--lit-delay), color var(--v-quick) var(--ease) var(--lit-delay);
+}
+.bot { overflow: hidden; background: var(--cream) }
+.bot img { width: 28px; height: 28px; border-radius: 8px; background: var(--violet-soft); object-fit: contain; opacity: .45; transition: opacity var(--v-quick) var(--ease) var(--lit-delay) }
+.clock { fill: none; stroke: currentColor; stroke-width: 16px; stroke-linecap: round }
+.hand { transform-box: view-box; transform-origin: 50% 50%; transition: none }
+
+.says { position: absolute; top: 50px; right: 12px; left: 12px; font-size: 13px; line-height: 17px; color: var(--ink-3); text-wrap: balance; transition: color var(--v-quick) var(--ease) var(--lit-delay) }
+/* What the run left in the tile, along its foot. */
+.out { position: absolute; right: 12px; bottom: 12px; left: 12px; font-size: 12px; line-height: 16px; color: var(--ink-2); white-space: nowrap }
+
+/* June's step: the line it reports, typed out. */
+.found { color: var(--ink); clip-path: inset(0 100% 0 0) }
+
+/* The branch's two arms, as the run page draws them: a rule down the left. */
+.arms { display: flex; flex-direction: column; gap: 3px; opacity: 0 }
+.arms > span { padding-left: 8px; border-left: 2px solid var(--line-2) }
+.taken { border-left-color: var(--violet); color: var(--ink) }
+.arms > .other { color: var(--ink-3); opacity: .7 }
+
+/* The loop's pass tag; its three counts sit on one another. */
+.pass { display: inline-grid; right: auto; padding: 1px 8px; border-radius: 99px; background: rgb(20 20 19 / .06); font-style: normal; opacity: 0 }
+.pass > span { grid-area: 1 / 1; opacity: 0; transition: none }
+.pass > span:last-child { opacity: 1 }
+
+.waited { color: var(--ink-3); opacity: 0 }
+
+/* A state, the way a row on the run page says it: the glyph, then a word. */
+.state { display: flex; align-items: center; gap: 6px }
+.ring { display: grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--line-2); color: transparent; transition: background-color var(--v-quick) var(--ease) var(--lit-delay), box-shadow var(--v-quick) var(--ease) var(--lit-delay), color var(--v-quick) var(--ease) var(--lit-delay) }
+.ringDone { background: var(--ok); box-shadow: none; color: var(--paper) }
+.asked { opacity: 0 }
+.flip { display: inline-grid }
+.flip > span { grid-area: 1 / 1 }
+.askWait { color: var(--wait); transition-delay: var(--v-quick) }
+.askDone { opacity: 0 }
+.ran, .finished { opacity: 0 }
+
+/* 1 · the dot enters June's step, and June's line types out under it */
+.root[data-b1] { --at: 65px; --arrive: calc(var(--v-move) * .7) }
+.root[data-b1] .route path { opacity: 1; transition: opacity var(--v-quick) var(--ease), stroke-dashoffset var(--leg) var(--v-glide) }
+.root[data-b1] .dot { opacity: 1; transition: opacity var(--v-quick) var(--ease), offset-distance var(--leg) var(--v-glide) }
+.root[data-b1] .status { width: 84px }
+.root[data-b1] .statusDot { background: var(--violet) }
+.root[data-b1] .sayStart { opacity: 0; transition-delay: var(--arrive) }
+.root[data-b1] .sayRun { opacity: 1; transition-delay: calc(var(--arrive) + var(--v-quick)) }
+.root[data-b1] .t1 { --lit-delay: var(--arrive); background: var(--paper); box-shadow: var(--card) }
+.root[data-b1] .t1 .says { color: var(--ink) }
+.root[data-b1] .t1 .bot img { opacity: 1 }
+.root[data-b1] .found { clip-path: inset(0 0 0 0); transition: clip-path var(--v-move) steps(16, end) var(--v-move) }
+
+/* 2 · on to the branch: one arm lit, the other not taken */
+.root[data-b2] { --at: 219px }
+.root[data-b2] .t2 { --lit-delay: var(--arrive); background: var(--paper); box-shadow: var(--card) }
+.root[data-b2] .t2 .says { color: var(--ink) }
+.root[data-b2] .t2 .glyph { background: color-mix(in srgb, var(--ink) 5%, var(--paper)); color: var(--ink-2) }
+.root[data-b2] .arms { opacity: 1; transition-delay: var(--v-move) }
+
+/* 3 · the loop: three laps of its glyph, the tag counting each pass */
+.root[data-b3] { --at: 373px }
+.root[data-b3] .t3 { --lit-delay: var(--arrive); background: var(--paper); box-shadow: var(--card) }
+.root[data-b3] .t3 .says { color: var(--ink) }
+.root[data-b3] .t3 .glyph { background: color-mix(in srgb, var(--ink) 5%, var(--paper)); color: var(--ink-2) }
+.root[data-b3]:not([data-b4]) .dot i { animation: lap calc(var(--v-move) * 2.2) var(--v-glide) var(--v-move) both }
+.root[data-b3] .pass { opacity: 1; transition-delay: var(--arrive) }
+.root[data-b3]:not([data-b4]) .pass > span:nth-child(1) { animation: pass-first calc(var(--v-move) * 2.2) linear var(--v-move) both }
+.root[data-b3]:not([data-b4]) .pass > span:nth-child(2) { animation: pass-second calc(var(--v-move) * 2.2) linear var(--v-move) both }
+.root[data-b3]:not([data-b4]) .pass > span:nth-child(3) { animation: pass-third calc(var(--v-move) * 2.2) linear var(--v-move) both }
+@keyframes lap {
+    0% { transform: rotate(0deg) }
+    33.333% { transform: rotate(360deg) }
+    66.667% { transform: rotate(720deg) }
+    100% { transform: rotate(1080deg) }
+}
+@keyframes pass-first { 0%, 32% { opacity: 1 } 34%, 100% { opacity: 0 } }
+@keyframes pass-second { 0%, 32% { opacity: 0 } 34%, 65% { opacity: 1 } 67%, 100% { opacity: 0 } }
+@keyframes pass-third { 0%, 65% { opacity: 0 } 67%, 100% { opacity: 1 } }
+
+/* 4 · the wait: the dot rests while the clock's hand goes round once */
+.root[data-b4] { --at: 527px }
+.root[data-b4] .status { width: 138px }
+.root[data-b4] .statusDot { background: var(--ink-3) }
+.root[data-b4] .sayRun { opacity: 0; transition-delay: var(--arrive) }
+.root[data-b4] .sayTimer { opacity: 1; transition-delay: calc(var(--arrive) + var(--v-quick)) }
+.root[data-b4] .t4 { --lit-delay: var(--arrive); background: var(--paper); box-shadow: var(--card) }
+.root[data-b4] .t4 .says { color: var(--ink) }
+.root[data-b4] .t4 .glyph { background: color-mix(in srgb, var(--ink) 5%, var(--paper)); color: var(--ink-2) }
+.root[data-b4]:not([data-b5]) .hand { animation: sweep calc(var(--v-move) * 1.3) var(--v-glide) var(--v-move) both }
+.root[data-b4] .waited { opacity: 1 }
+.root[data-b4]:not([data-b5]) .waited { transition-delay: calc(var(--v-move) * 2.3) }
+@keyframes sweep { to { transform: rotate(360deg) } }
+
+/* 5 · round the end of the row and into the person's step, held amber */
+.root[data-b5] { --at: 1419.4px; --leg: calc(var(--v-slow) * 1.05); --arrive: calc(var(--v-slow) * .88) }
+.root[data-b5] .status { width: 148px }
+.root[data-b5] .statusDot { background: var(--wait) }
+.root[data-b5] .sayTimer { opacity: 0; transition-delay: var(--arrive) }
+.root[data-b5] .sayPerson { opacity: 1; transition-delay: calc(var(--arrive) + var(--v-quick)) }
+.root[data-b5] .t5 { --lit-delay: var(--arrive); background: color-mix(in srgb, var(--wait) 6%, var(--paper)); box-shadow: 0 18px 40px -22px rgb(20 20 19 / .45), 0 0 0 1px color-mix(in srgb, var(--wait) 45%, transparent) }
+.root[data-b5] .t5 .says { color: var(--ink) }
+.root[data-b5] .t5 .glyph { background: color-mix(in srgb, var(--wait) 12%, var(--paper)); color: var(--wait) }
+.root[data-b5] .asked { opacity: 1; transition-delay: var(--arrive) }
+.root[data-b5] .asked .ring { box-shadow: inset 0 0 0 2px var(--wait) }
+
+/* 6 · Dev answers: the ring becomes a tick and the run goes on */
+.root[data-b6] { --arrive: calc(var(--v-step) * 0) }
+.root[data-b6] .status { width: 84px }
+.root[data-b6] .statusDot { background: var(--violet) }
+.root[data-b6] .sayPerson { opacity: 0; transition-delay: var(--arrive) }
+.root[data-b6] .sayRun { opacity: 1; transition-delay: calc(var(--arrive) + var(--v-quick)) }
+.root[data-b6] .t5 { --lit-delay: calc(var(--v-step) * 0); background: var(--paper); box-shadow: var(--card) }
+.root[data-b6] .asked .ring { background: var(--ok); box-shadow: none; color: var(--paper) }
+.root[data-b6] .askWait { opacity: 0; transition-delay: calc(var(--v-step) * 0) }
+.root[data-b6] .askDone { opacity: 1; transition-delay: var(--v-quick) }
+
+/* 7 · past the code step, Done, and onto the end: Finished */
+.root[data-b7] { --at: 1727.4px; --leg: calc(var(--v-move) * 1.7); --arrive: calc(var(--v-move) * 1.2) }
+.root[data-b7] .status { width: 96px }
+.root[data-b7] .statusDot { background: var(--ok) }
+.root[data-b7] .sayRun { opacity: 0; transition-delay: var(--arrive) }
+.root[data-b7] .sayDone { opacity: 1; transition-delay: calc(var(--arrive) + var(--v-quick)) }
+.root[data-b7] .t6 { --lit-delay: calc(var(--v-move) * .4); background: var(--paper); box-shadow: var(--card) }
+.root[data-b7] .t6 .says { color: var(--ink) }
+.root[data-b7] .t6 .glyph { background: var(--violet-soft); color: var(--violet-deep) }
+.root[data-b7] .ran { opacity: 1; transition-delay: calc(var(--v-move) * .55) }
+.root[data-b7] .t7 { --lit-delay: var(--arrive); background: var(--paper); box-shadow: var(--card) }
+.root[data-b7] .t7 .says { color: var(--ink) }
+.root[data-b7] .t7 .glyph { background: color-mix(in srgb, var(--ink) 5%, var(--paper)) }
+.root[data-b7] .t7 .ring { background: var(--ok); box-shadow: none; color: var(--paper) }
+.root[data-b7] .finished { opacity: 1; transition-delay: var(--arrive) }

@@ -1,0 +1,83 @@
+/* The chat ends, the note stays, beat by beat. Base styles are the opening
+   frame: Remy's space, its places down the side and an empty chat open
+   beside them. Each `.root[data-bN]` rule is what changes from beat N on,
+   in beat order, so the last rules are the finished picture: the space with
+   northstar.md in Files, open where the chat was. */
+
+.root { --v-step: 55ms }
+
+/* The space's ground, as the app draws it behind its open things. */
+.ground { position: absolute; inset: 36px 0 0 0; background: var(--cream) }
+
+/* ── The space's places ─────────────────────────────────────────────── */
+.side { position: absolute; top: 50px; left: 10px; width: 152px; display: flex; flex-direction: column }
+.item { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 8px; font-size: 13px; color: var(--ink-2) }
+.item svg { flex: none; color: var(--ink-2) }
+/* The note, once it has landed: a file in Files, with the dot that marks a
+   note changed this week. */
+.note { display: flex; align-items: center; gap: 8px; height: 0; padding: 0 10px 0 36px; overflow: hidden; opacity: 0; font-size: 13px; color: var(--ink); white-space: nowrap }
+.fresh { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--violet) }
+
+/* ── The chat ───────────────────────────────────────────────────────── */
+/* Where the chat was, once it has gone. */
+.outline { position: absolute; top: 44px; left: 172px; width: 458px; height: 346px; border: 1.5px dashed var(--line-2); border-radius: 12px }
+.doc { position: absolute; top: 44px; left: 172px; width: 458px; height: 346px; box-sizing: border-box; padding: 26px 34px; border-radius: 12px; background: var(--paper); box-shadow: 0 0 0 1px var(--line), 0 14px 30px -22px rgb(20 20 19 / .35); opacity: 0; transform: translateY(8px); transition: opacity var(--v-move) var(--ease), transform var(--v-move) var(--ease) }
+.doc :where(p, h3, ul) { margin: 0 }
+.path { font-family: var(--mono); font-size: 12px; color: var(--ink-3) }
+.docTitle { margin-top: 14px; font-size: 24px; font-weight: 500; letter-spacing: -.01em; color: var(--ink) }
+/* A page's measure, not the card's width: it also keeps the note's lines
+   inside the strip a phone shows (canvas x 164–544). */
+.docList { max-width: 322px; margin-top: 12px; padding-left: 18px; font-size: 14px; line-height: 1.6; color: var(--ink) }
+.docList li + li { margin-top: 6px }
+.panel { position: absolute; top: 44px; left: 172px; width: 458px; height: 346px; border-radius: 12px; background: var(--paper); box-shadow: 0 0 0 1px var(--line), 0 14px 30px -22px rgb(20 20 19 / .35); clip-path: inset(-1px -1px -1px -1px round 12px); transition: opacity var(--v-quick) var(--ease), filter var(--v-quick) var(--ease), clip-path var(--v-move) var(--ease) }
+.thread { padding: 20px 22px 0 }
+.thread :where(p) { margin: 0 }
+
+/* Your turn: on the far side, sized by its words. */
+.you { width: fit-content; max-width: 318px; text-wrap: balance; margin-left: auto; padding: 8px 14px; border-radius: 16px; background: var(--cream); font-size: 13px; color: var(--ink); opacity: 0; transform: translateY(10px) }
+
+/* Remy's turn: its face, its name, the step it took, what it said, and the
+   app's grey line saying it wrote a note. */
+.reply { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; margin-top: 16px }
+.face { opacity: 0 }
+.who { margin-top: 3px; font-size: 13px; color: var(--ink); opacity: 0 }
+.steps { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin-top: 5px; padding: 0 9px 0 4px; border: 1px solid var(--line); border-radius: 99px; font-size: 12px; color: var(--ink-2); opacity: 0 }
+.steps i { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--cream); color: var(--ink-2) }
+.steps > svg { color: var(--ink-3) }
+.said { margin-top: 8px; font-size: 13px; line-height: 1.5; text-wrap: balance; color: var(--ink) }
+.word { opacity: 0 }
+.noted { display: flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12px; color: var(--ink-3); opacity: 0 }
+.noted svg { flex: none }
+.noted em { font-style: normal; color: var(--ink-2) }
+
+.composer { position: absolute; left: 20px; right: 20px; bottom: 16px; display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 6px 0 14px; border: 1px solid var(--line-2); border-radius: 20px; background: var(--paper); font-size: 13px; color: var(--ink-3) }
+.composer i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: auto; border-radius: 50%; background: rgb(20 20 19 / .07); color: var(--ink-3) }
+
+/* The note, carried from the chat to the space. It starts on the grey line. */
+.card { position: absolute; top: 236px; left: 232px; z-index: 3; display: flex; align-items: center; gap: 7px; padding: 7px 12px; font-size: 13px; white-space: nowrap; opacity: 0; transform-origin: 0 0 }
+.card > span { display: flex }
+.card b { font-weight: 500; color: var(--ink) }
+/* What the note says, folded into its name as it goes into Files. */
+.gloss { display: inline-block; max-width: 220px; overflow: hidden; color: var(--ink-3); transition: opacity var(--v-quick) var(--ease), max-width var(--v-move) var(--ease) }
+.card svg { flex: none; color: var(--ink-3) }
+
+/* 1 · your message */
+.root[data-b1] .you { opacity: 1; transform: none }
+/* 2 · Remy's reply, typed in */
+.root[data-b2] .face, .root[data-b2] .who, .root[data-b2] .steps { opacity: 1 }
+.root[data-b2] .word { opacity: 1; transition-delay: calc((var(--n) + 4) * var(--v-step)) }
+/* 3 · the grey line: it noted this */
+.root[data-b3] .noted { opacity: 1 }
+/* 4 · the note lifts off that line */
+.root[data-b4] .card { opacity: 1; transform: translateY(34px) }
+/* 5 · carried into Files, where it settles as a file */
+.root[data-b5] .files { background: rgb(20 20 19 / .06); color: var(--ink) }
+.root[data-b5] .card { opacity: 0; transform: translate(-205px, -69px); transition-delay: var(--v-move), 0ms }
+.root[data-b5] .gloss { max-width: 0; opacity: 0 }
+.root[data-b5] .note { height: 28px; opacity: 1; transition-delay: var(--v-move), 0ms, 0ms, 0ms, 0ms, 0ms }
+/* 6 · the chat greys, then folds away */
+.root[data-b6] .panel { filter: grayscale(1); opacity: .55; clip-path: inset(-1px -1px 100% -1px round 12px); transition-delay: 0ms, 0ms, var(--v-quick) }
+/* 7 · the note opens where the chat was, from its place in Files */
+.root[data-b7] .note { background: rgb(20 20 19 / .06); border-radius: 8px }
+.root[data-b7] .files { background: none; color: var(--ink-2) }
+.root[data-b7] .doc { opacity: 1; transform: none }

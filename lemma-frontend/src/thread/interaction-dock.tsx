@@ -1,5 +1,7 @@
-import { InteractionCard, type Resolve } from "./interaction-card";
-import type { Interaction } from "./turns";
+import { useState } from "react";
+import { InteractionCard, type AnswerWith, type Resolve } from "./interaction-card";
+import { SignInCard } from "./tool-card-view";
+import type { Interaction, OpenSignIn } from "./turns";
 
 /** The shelf between the transcript and the composer, holding whatever the run
  *  is blocked on.
@@ -30,14 +32,48 @@ export function InteractionDock({
     teammate,
     onResolve,
     runEnded,
+    signIn,
+    conversationId,
+    crowded,
+    answerWith,
 }: {
     interaction: Interaction | null;
     teammate: string;
     onResolve?: Resolve;
     /** The run is not going any more; see `InteractionCard`. */
     runEnded?: boolean;
+    /** A sign-in the run is stopped on. Docked too, as one line: it was the
+     *  one pause left in the transcript, a tall card that scrolled out of
+     *  sight and left only a grey note under the composer to say the run was
+     *  stopped. */
+    signIn?: OpenSignIn | null;
+    conversationId?: string | null;
+    /** The composer is holding a long draft. The card folds itself rather than
+     *  the two of them squeezing the conversation down to a line — and opens
+     *  again when the draft is gone, unless it was folded by hand. */
+    crowded?: boolean;
+    answerWith?: { current: AnswerWith | null };
 }) {
-    if (!interaction) return null;
+    /* Per pause, so the next question does not arrive already folded. A
+       draft growing long, or emptying, is a newer wish than the last click,
+       so either one hands the fold back to `crowded`. */
+    const [foldedFor, setFoldedFor] = useState<Record<string, boolean>>({});
+    const [crowdedWas, setCrowdedWas] = useState(crowded);
+    if (crowdedWas !== crowded) {
+        setCrowdedWas(crowded);
+        setFoldedFor({});
+    }
+    if (!interaction) {
+        if (!signIn) return null;
+        return (
+            <div className="dock" data-kind="sign-in">
+                <div className="dock__row">
+                    <SignInCard ask={signIn.card} conversationId={conversationId} toolCallId={signIn.toolCallId} docked />
+                </div>
+            </div>
+        );
+    }
+    const folded = foldedFor[interaction.id] ?? Boolean(crowded);
     return (
         <div className="dock" data-kind={interaction.kind}>
             <div className="dock__row">
@@ -51,6 +87,9 @@ export function InteractionDock({
                     onResolve={onResolve}
                     runEnded={runEnded}
                     docked
+                    folded={folded}
+                    onFold={(next) => setFoldedFor((was) => ({ ...was, [interaction.id]: next }))}
+                    answerWith={answerWith}
                 />
             </div>
         </div>

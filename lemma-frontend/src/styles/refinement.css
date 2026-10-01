@@ -973,7 +973,31 @@ button svg, a svg { flex-shrink:0; }
  *  conversation and the box you type into — so the ring was a raised voice
  *  aimed at somebody already looking. The state still reads: a coloured glyph
  *  and a chip that says which kind of waiting this is. */
-.approval[data-docked] { margin:0;max-height:min(52vh,560px);overflow-y:auto;overscroll-behavior:contain;padding-bottom:0; }
+.approval[data-docked] { margin:0;max-height:min(44vh,480px);overflow-y:auto;overscroll-behavior:contain;padding-bottom:0; }
+/* Folded to its heading and the one line being asked, so what the agent said
+   above it can be read. The heading row is the handle: Hide / Show sits at its
+   end, where a reader looks for the way out of a thing in front of them. */
+.approval[data-docked][data-folded] { padding-bottom:12px;overflow:hidden; }
+.approval[data-docked][data-folded] .approval__top { margin-bottom:4px; }
+.approval__fold {
+    margin-left:auto;display:inline-flex;align-items:center;gap:4px;padding:2px 6px;min-height:28px;
+    border:0;border-radius:var(--r-sm);background:none;color:var(--ink-3);font:inherit;font-size:12px;cursor:pointer;
+}
+.approval__fold:hover,.approval__fold:focus-visible { color:var(--ink); }
+.approval__fold + .pill { margin-left:6px; }
+.ask__peek { margin:0;display:flex;align-items:baseline;gap:8px;min-width:0;font-size:13px;line-height:1.5;color:var(--ink-2); }
+.ask__peek > span:last-child { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.ask__peek .ask__step { margin:0;flex:none; }
+
+/* A sign-in the run is stopped on, as one line above the composer. */
+.signin-bar {
+    display:flex;align-items:center;gap:10px;padding:10px 12px;
+    border:1px solid var(--line-2);border-radius:var(--r-lg);background:var(--paper);box-shadow:var(--depth-raise),var(--edge-lit);
+}
+.signin-bar__what { flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;font-size:13px;line-height:1.4; }
+.signin-bar__what b { font-weight:500;color:var(--ink); }
+.signin-bar__what span { color:var(--ink-3);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.signin-bar__fine { color:var(--ink-3);font-size:12px; }
 .approval[data-docked][data-state="open"],
 .approval[data-docked][data-kind="question"][data-state="open"] {
     border-color:var(--line-2);box-shadow:var(--depth-raise),var(--edge-lit);

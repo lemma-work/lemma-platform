@@ -38,7 +38,7 @@ import { TeammatesPage } from "@/space/teammates-page";
 import { owedFrom } from "@/space/teammates";
 import { byAge, gatherAsked } from "@/thread/waiting-on-you";
 import type { SpaceView } from "@/data";
-import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
+import { FloatingChat, moveDocThread, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
 import type { FileContent, LibraryItem, Tab } from "@/data";
 import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
@@ -47,6 +47,7 @@ import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
 import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { renamePage } from "@/docpages/rename";
+import { recordMove } from "@/docpages/moves";
 import { moveComments } from "@/docpages/comments/store";
 import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
@@ -91,6 +92,7 @@ import { tourStops, type Stop } from "@/tour/stops";
 import { guideFor, placeOf } from "@/tour/guides";
 import { PlaceGuide } from "@/tour/place-guide";
 import { atHome, offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
+import { humanizeName } from "@/schedule/schedules";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -704,7 +706,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     );
 
     const openRun = useCallback(
-        (runId: string, label: string) => openTab({ id: "run:" + runId, kind: "run", label: label === "Workflow run" ? label : label + " · run", runId }),
+        (runId: string, label: string) => openTab({ id: "run:" + runId, kind: "run", label: label === "Workflow run" ? label : humanizeName(label) + " · run", runId }),
         [openTab],
     );
     /* A tab rebuilt from an address knows only its id; the page it shows
@@ -721,7 +723,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         [pod],
     );
     const openWorkflow = useCallback(
-        (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: name, name }),
+        (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: humanizeName(name), name }),
         [openTab],
     );
 
@@ -771,6 +773,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             moveComments: (a, b) => moveComments(podId, a, b),
         }, from, title);
         if (to === from) return from;
+        /* Before the tab moves, so the chat beside it finds its conversation
+           under the new name. A failure costs the chat, never the rename. */
+        if (source.label === "live") await moveDocThread(podId, from, to).catch(() => undefined);
+        void queryClient.invalidateQueries({ queryKey: ["resource-thread", podId, "file"] });
+        recordMove(podId, from, to);
         const was = queryClient.getQueryData<FileContent>(["file", podId, from]);
         if (was) queryClient.setQueryData<FileContent>(["file", podId, to], { ...was, path: to, name: to.slice(to.lastIndexOf("/") + 1) });
         const oldId = "file:" + from;
@@ -1781,6 +1788,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onFile={(path) => openFile(path, "space:about")}
                                             onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); }}
+                                            onDeleted={() => goToTeam(null)}
                                         />
                                     ) : tab.view === "chats" ? (
                                         <ChatsPage
