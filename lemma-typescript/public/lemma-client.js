@@ -16829,16 +16829,6 @@ var LemmaClient = (() => {
     }
   };
 
-  // src/openapi_client/models/AnswerBody.ts
-  var AnswerBody;
-  ((AnswerBody2) => {
-    let by;
-    ((by2) => {
-      by2["PERSON"] = "person";
-      by2["AGENT"] = "agent";
-    })(by = AnswerBody2.by || (AnswerBody2.by = {}));
-  })(AnswerBody || (AnswerBody = {}));
-
   // src/openapi_client/services/DecisionsService.ts
   var DecisionsService = class {
     /**
@@ -17165,7 +17155,11 @@ var LemmaClient = (() => {
     /** Answer an open question or correct a machine's answer; it becomes an example. */
     answer(decisionId, answers) {
       return this.client.request(
-        () => DecisionsService.decisionAnswer(this.podId(), decisionId, { answers, by: AnswerBody.by.PERSON })
+        () => (
+          // The literal, not `AnswerBody.by.PERSON`: a value import would bundle
+          // the generated enum object for one string.
+          DecisionsService.decisionAnswer(this.podId(), decisionId, { answers, by: "person" })
+        )
       );
     }
   };

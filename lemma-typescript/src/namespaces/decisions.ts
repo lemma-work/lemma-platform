@@ -3,7 +3,7 @@ import type { DecideBody } from "../openapi_client/models/DecideBody.js";
 import type { DecideRowsBody } from "../openapi_client/models/DecideRowsBody.js";
 import type { DeciderDefinition } from "../openapi_client/models/DeciderDefinition.js";
 import type { DeciderTestBody } from "../openapi_client/models/DeciderTestBody.js";
-import { AnswerBody } from "../openapi_client/models/AnswerBody.js";
+import type { AnswerBody } from "../openapi_client/models/AnswerBody.js";
 import { DecisionsService } from "../openapi_client/services/DecisionsService.js";
 
 /** Asks one decision: a pod decider by name, `system:<name>`, or questions inline. */
@@ -74,7 +74,9 @@ export class DecisionsNamespace {
   /** Answer an open question or correct a machine's answer; it becomes an example. */
   answer(decisionId: string, answers: Record<string, string | string[] | boolean | number>) {
     return this.client.request(() =>
-      DecisionsService.decisionAnswer(this.podId(), decisionId, { answers, by: AnswerBody.by.PERSON }),
+      // The literal, not `AnswerBody.by.PERSON`: a value import would bundle
+      // the generated enum object for one string.
+      DecisionsService.decisionAnswer(this.podId(), decisionId, { answers, by: "person" as AnswerBody.by }),
     );
   }
 }
