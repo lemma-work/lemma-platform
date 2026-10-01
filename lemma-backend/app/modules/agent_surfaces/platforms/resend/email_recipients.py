@@ -10,8 +10,9 @@ replying to all would: to the sender, copying the others.
 
 **Answer when addressed.** Copied is not asked. A pod's address in Cc means
 "so you know", and answering every "thanks!" on the thread is the bot talking
-over people. Addressed means in To, or named at the start of a line ("Kit,
-can you..."), which is how people speak to someone they copied. The name is
+over people. Addressed means in To, reached without being visibly copied (a
+forward, an alias, a Bcc), or spoken to by name ("Kit, can you..."), which is
+how people speak to someone they copied. The name is
 only known once the surface is, so that half is decided in ingress
 (``domain.addressing.names_the_agent``); the parser only records whether the
 pod was in To.
@@ -22,12 +23,45 @@ a conversation the pod should write back to wholesale.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from app.modules.agent_surfaces.platforms.resend.inbound import all_addresses
 
 #: Most people a reply will copy. Past this it is a broadcast, not a thread.
 MAX_REPLY_CC = 10
+
+#: Everything a message may say and still say nothing but thanks.
+_ACKNOWLEDGING = frozenset(
+    {
+        "thanks",
+        "thank",
+        "you",
+        "ty",
+        "thx",
+        "much",
+        "so",
+        "a",
+        "lot",
+        "all",
+        "everyone",
+        "got",
+        "it",
+        "great",
+        "perfect",
+        "ok",
+        "okay",
+        "cheers",
+        "noted",
+        "awesome",
+        "received",
+        "appreciated",
+        "sounds",
+        "good",
+        "many",
+    }
+)
+_SIGNATURE = re.compile(r"^--\s*$", re.MULTILINE)
 
 
 def other_people(
@@ -50,12 +84,31 @@ def other_people(
     return people[:MAX_REPLY_CC]
 
 
-def pod_was_addressed(*, addressed_to: Iterable[object], own_address: str) -> bool:
-    """Whether the pod was in To -- or nobody said, which reads as addressed.
+def pod_was_addressed(
+    *, addressed_to: Iterable[object], cc: Iterable[object], own_address: str
+) -> bool:
+    """Whether the pod was asked: anything but visibly copied.
 
-    A payload with no To list at all (a replay, an older poll) predates this
-    distinction, and treating it as "only copied" would silence mail that has
-    always been answered.
+    Only the pod's own address in Cc means "so you know". Mail that names the
+    pod in neither To nor Cc reached it some other way -- forwarded from
+    ``support@``, through an alias, Bcc'd -- and somebody sent it there on
+    purpose, so it reads as addressed. So does a payload that lists nobody (a
+    replay, an older poll), which predates the distinction.
     """
-    addressed = [a.strip().lower() for a in all_addresses(list(addressed_to))]
-    return not addressed or own_address.strip().lower() in addressed
+    own = own_address.strip().lower()
+    if own in {a.strip().lower() for a in all_addresses(list(addressed_to))}:
+        return True
+    return own not in {a.strip().lower() for a in all_addresses(list(cc))}
+
+
+def only_acknowledges(text: str | None) -> bool:
+    """Whether a message says nothing but thanks: "Thanks!", "Got it, cheers".
+
+    Replying to that copies everybody on the thread with "you're welcome", so a
+    thread with other people on it does not start a run for it. Its words and
+    only those, above any signature: anything else -- "thanks, and can you
+    resend...", a name -- may be asking something.
+    """
+    body = _SIGNATURE.split(text or "", maxsplit=1)[0]
+    words = re.findall(r"[a-z']+", body.lower())
+    return 0 < len(words) <= 8 and all(word in _ACKNOWLEDGING for word in words)

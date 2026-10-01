@@ -52,8 +52,7 @@ from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERROR
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
-from app.modules.agent_surfaces.services.group_names import visible_bot_name
-from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
+from app.modules.agent_surfaces.services.group_hello import hello_for
 from app.modules.agent_surfaces.services.telegram_group_links import (
     GroupLinkClaim,
     redeem_group_link,
@@ -89,7 +88,9 @@ async def claim_telegram_group_join(
         return True
     async with uow_factory() as uow:
         adopted = await _adopt(uow, claim=claim, parsed=parsed)
-    if adopted is not None:
+    # Telegram also tells the bot it was added, and whichever of the two is
+    # first to make the group the pod's is the one that says hello.
+    if adopted is not None and adopted.created:
         await _say_hello(telegram, adopted, parsed=parsed)
     return True
 
@@ -113,8 +114,8 @@ def _telegram_adapter(
 class _Adopted:
     surface: AgentSurfaceEntity
     credentials: dict[str, object]
-    name: str
-    pod: str
+    hello: str
+    created: bool
 
 
 async def _adopt(
@@ -128,7 +129,7 @@ async def _adopt(
     if surface is None or surface.surface_type is not SurfacePlatform.TELEGRAM:
         return None
     groups = SurfaceGroupRepository(uow.session)
-    group = await groups.ensure(
+    group, created = await groups.ensure_noting_creation(
         pod_id=surface.pod_id,
         surface_id=surface.id,
         platform=SurfacePlatform.TELEGRAM.value,
@@ -137,8 +138,7 @@ async def _adopt(
     )
     if group.owner_user_id is None:
         await groups.set_owner(group.id, claim.user_id)
-    name = await visible_bot_name(uow, surface)
-    pod = await pod_name_for(uow, surface.pod_id) or name
+    hello = await hello_for(uow, surface)
     credentials = await SurfaceCredentialResolver(uow=uow).for_surface(surface)
     await uow.commit()
     logger.info(
@@ -146,7 +146,9 @@ async def _adopt(
         group_id=str(group.id),
         surface_id=str(surface.id),
     )
-    return _Adopted(surface=surface, credentials=credentials, name=name, pod=pod)
+    return _Adopted(
+        surface=surface, credentials=credentials, hello=hello, created=created
+    )
 
 
 def _title(parsed: ParsedInboundSurfaceEvent) -> str | None:
@@ -160,15 +162,10 @@ async def _say_hello(
     *,
     parsed: ParsedInboundSurfaceEvent,
 ) -> None:
-    """Tell the group the bot is there and how to ask it. Best-effort."""
-    message = (
-        f"Hi, I'm {adopted.name}. Mention me or reply to me to ask something. "
-        f"People outside {adopted.pod} get answers from what {adopted.pod} "
-        "has made public."
-    )
+    """Tell the group the bot is there, and what it keeps. Best-effort."""
     try:
         await telegram.send_message(
-            credentials=adopted.credentials, event=parsed, message=message
+            credentials=adopted.credentials, event=parsed, message=adopted.hello
         )
     except PLATFORM_TRANSPORT_ERRORS:
         logger.info(

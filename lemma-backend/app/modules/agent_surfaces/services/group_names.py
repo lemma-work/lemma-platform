@@ -18,6 +18,7 @@ from app.core.authorization.delegation import (
     is_pod_default_agent,
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.domain.addressing import names_the_agent
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
@@ -46,3 +47,13 @@ async def names_people_use(
     if _answers_as_the_pod(surface):
         names.append(DEFAULT_RESPONDER_NAME)
     return list(dict.fromkeys(name for name in names if name and name.strip()))
+
+
+async def spoken_to_by_name(
+    uow: SqlAlchemyUnitOfWork, surface: AgentSurfaceEntity, text: str | None
+) -> bool:
+    """Whether a line of ``text`` speaks to this surface's bot by any of its names."""
+    return any(
+        names_the_agent(text or "", name)
+        for name in await names_people_use(uow, surface)
+    )

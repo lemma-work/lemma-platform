@@ -26,6 +26,7 @@ that, and a group that does not welcome outsiders goes through them unchanged.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
@@ -101,20 +102,12 @@ class OutsiderDoor:
         # of them should pay for a lookup that can only answer "not you". Asked
         # the way routing asks it (`SurfaceRouter.matches_user`), so a sender
         # cannot be a member to one and an outsider to the other.
-        if sender.internal_user_id is not None and surface.pod_id in set(
-            await self.membership.get_user_pod_ids(sender.internal_user_id)
-        ):
+        if surface.pod_id in await self._pods_of(sender):
             return None
         group = await self.groups.get(
             surface_id=surface.id, external_channel_id=parsed.external_channel_id
         )
-        if group is None or not group.welcomes_outsiders:
-            return None
-        if parsed.platform is SurfacePlatform.SLACK and not answers_slack_outsider(
-            group.shared_externally, parsed
-        ):
-            return None
-        return group
+        return await self._welcoming(surface, parsed, group)
 
     async def surface_for(
         self,
@@ -122,13 +115,56 @@ class OutsiderDoor:
         parsed: ParsedInboundSurfaceEvent,
         sender: ResolvedSurfaceUser,
     ) -> AgentSurfaceEntity | None:
-        """The first candidate whose group would answer this sender as an outsider."""
-        for surface in candidates:
-            if await self.group_welcoming(
-                surface=surface, parsed=parsed, sender=sender
-            ):
+        """The first candidate whose group would answer this sender as an outsider.
+
+        One read of the sender's pods and one of the chat's groups, whatever the
+        number of candidates: on a shared bot every tenant is one.
+        """
+        if parsed.is_dm or not parsed.external_channel_id or not candidates:
+            return None
+        pods = await self._pods_of(sender)
+        outside = [surface for surface in candidates if surface.pod_id not in pods]
+        groups = {
+            group.surface_id: group
+            for group in await self.groups.list_for_channel(
+                external_channel_id=parsed.external_channel_id,
+                surface_ids=[surface.id for surface in outside],
+            )
+        }
+        for surface in outside:
+            if await self._welcoming(surface, parsed, groups.get(surface.id)):
                 return surface
         return None
+
+    async def _pods_of(self, sender: ResolvedSurfaceUser) -> set[UUID]:
+        if sender.internal_user_id is None:
+            return set()
+        return set(await self.membership.get_user_pod_ids(sender.internal_user_id))
+
+    async def _welcoming(
+        self,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        group: SurfaceGroup | None,
+    ) -> SurfaceGroup | None:
+        """The group, if it answers people outside the pod at all."""
+        if group is None or not group.welcomes_outsiders:
+            return None
+        # The bot's own switch, over every group it is in.
+        if not surface.config.groups.answers_outsiders:
+            return None
+        if parsed.platform is SurfacePlatform.SLACK and not answers_slack_outsider(
+            group.shared_externally, parsed
+        ):
+            return None
+        # A member who has left the pod answers for nobody: every question
+        # passed on would reach somebody who can no longer act on it.
+        owner = group.owner_user_id
+        if owner is None or surface.pod_id not in set(
+            await self.membership.get_user_pod_ids(owner)
+        ):
+            return None
+        return group
 
     async def prepare(
         self,

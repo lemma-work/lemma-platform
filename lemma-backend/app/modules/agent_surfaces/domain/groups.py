@@ -23,7 +23,7 @@ Telegram, WhatsApp -- it is the only record there is.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
@@ -37,6 +37,11 @@ from app.core.domain.entity import Entity
 #: history is one thread per group rather than one per stranger. Not a platform
 #: user id on any platform: none of them starts with "~".
 OUTSIDERS_LINK_USER = "~outsiders"
+
+#: How long the pod keeps what was said in a group. A group's page and the
+#: bot's background read only the recent past, and the people in a group --
+#: some of them strangers -- are told the log exists and how long it lasts.
+GROUP_LOG_RETENTION = timedelta(days=90)
 
 #: Added under what a run answering somebody outside the pod passes on to the
 #: member looking after it. The model's words are its own; this line is not, so
@@ -96,9 +101,12 @@ class GroupLine(BaseModel):
     text: str
     created_at: datetime
     #: On a line the bot wrote: whom it answered, and whether from what is
-    #: Public (somebody outside the pod) or with the asker's own access.
+    #: Public (somebody outside the pod) or with the asker's own access --
+    #: whose, in ``answered_user_id``, the one member a group's page shows
+    #: that answer to.
     answered_name: str | None = None
     answered_from_public: bool = False
+    answered_user_id: UUID | None = None
 
 
 class GroupUpdateKind(StrEnum):

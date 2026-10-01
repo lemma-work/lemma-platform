@@ -37,11 +37,13 @@ async def adopt_joined_group(
     surface: AgentSurfaceEntity,
     parsed: ParsedSurfaceLifecycleEvent,
     owner_user_id: UUID | None,
-) -> bool:
-    """Adopt the group the bot was just added to. True when the event was one.
+) -> bool | None:
+    """Adopt the group the bot was just added to.
 
-    Only for platforms whose groups the pod keeps itself: a Slack channel is
-    configured through its own setup prompt, which this must not pre-empt.
+    None when the event was not one; otherwise whether the group is new to the
+    pod, which is when the bot introduces itself (``group_hello``). Only for
+    platforms whose groups the pod keeps itself: a Slack channel is configured
+    through its own setup prompt, which this must not pre-empt.
     """
     channel_id = parsed.external_channel_id
     if (
@@ -49,9 +51,9 @@ async def adopt_joined_group(
         or not channel_id
         or not keeps_group_log(surface.surface_type.value)
     ):
-        return False
+        return None
     groups = SurfaceGroupRepository(uow.session)
-    group = await groups.ensure(
+    group, created = await groups.ensure_noting_creation(
         pod_id=surface.pod_id,
         surface_id=surface.id,
         platform=surface.surface_type.value,
@@ -66,7 +68,7 @@ async def adopt_joined_group(
         group_id=str(group.id),
         owner_set=group.owner_user_id is None and owner_user_id is not None,
     )
-    return True
+    return created
 
 
 async def adopt_connected_channel(

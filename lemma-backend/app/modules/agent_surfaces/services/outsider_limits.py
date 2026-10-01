@@ -35,12 +35,22 @@ class OutsiderTurnLimiter:
         self._redis = redis
 
     async def allow(self, *, group_id: UUID, sender_external_id: str) -> bool:
-        """Count this turn and say whether it may run."""
+        """Count this turn and say whether it may run.
+
+        The group's day is charged only for turns that will run. A person over
+        their own limit is refused before it, so one person looping cannot use
+        up everybody else's allowance in the group.
+        """
         client = self._redis or get_redis()
+        person_limit = surface_settings.surface_outsider_turns_per_person_per_10_minutes
+        group_limit = surface_settings.surface_outsider_turns_per_group_per_day
         try:
             per_person = await incr_with_ttl(
                 client, f"outsider:turns:{group_id}:{sender_external_id}", _TEN_MINUTES
             )
+            if per_person > person_limit:
+                self._refused(group_id, per_person=True)
+                return False
             per_group = await incr_with_ttl(client, f"outsider:turns:{group_id}", _DAY)
         except (RedisError, OSError) as exc:
             logger.warning(
@@ -48,14 +58,16 @@ class OutsiderTurnLimiter:
                 error_type=type(exc).__name__,
             )
             return False
-        person_limit = surface_settings.surface_outsider_turns_per_person_per_10_minutes
-        group_limit = surface_settings.surface_outsider_turns_per_group_per_day
-        if per_person > person_limit or per_group > group_limit:
-            logger.info(
-                "agent_surfaces.outsider_limits.exceeded.observed",
-                group_id=str(group_id),
-                per_person=per_person > person_limit,
-                per_group=per_group > group_limit,
-            )
+        if per_group > group_limit:
+            self._refused(group_id, per_person=False)
             return False
         return True
+
+    @staticmethod
+    def _refused(group_id: UUID, *, per_person: bool) -> None:
+        logger.info(
+            "agent_surfaces.outsider_limits.exceeded.observed",
+            group_id=str(group_id),
+            per_person=per_person,
+            per_group=not per_person,
+        )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Protocol
 from uuid import UUID
 from pydantic_ai.output import OutputSpec
@@ -30,6 +31,7 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import ConversationNotFoundError
+from app.modules.agent.domain.outsiders import answers_outsiders
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -50,6 +52,10 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
+)
+from app.modules.agent.services.outsider_runtime import (
+    default_runtimes,
+    in_process_runtime,
 )
 from app.modules.agent.services.run_limits import budget_for_run, make_stop_checker
 from app.modules.agent.services.run_message_writer import RunMessageWriter
@@ -191,10 +197,8 @@ class AgentRunnerService:
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
         try:
-            resolved_runtime = await self._resolve_agent_runtime(
-                agent_run.agent_runtime,
-                user_id=user_id,
-                organization_id=conversation.organization_id,
+            resolved_runtime = await self._runtime_for(
+                conversation, agent_run, user_id=user_id
             )
             harness = self.harness_registry.get(resolved_runtime.harness_kind)
             outcome = RunOutcome()
@@ -429,6 +433,34 @@ class AgentRunnerService:
             # success, so a deploy ended every conversation in flight.
             if not isinstance(exc, Exception):
                 raise
+
+    async def _runtime_for(
+        self, conversation: Conversation, agent_run: AgentRun, *, user_id: UUID
+    ) -> ResolvedAgentRuntime:
+        """The run's runtime -- one that runs in this process, for a stranger's turn.
+
+        A stranger's turn never reaches a coding agent's shell, which would hold
+        a token minted for the member who answers for the group; see
+        ``outsider_runtime``.
+        """
+        resolved = await self._resolve_agent_runtime(
+            agent_run.agent_runtime,
+            user_id=user_id,
+            organization_id=conversation.organization_id,
+        )
+        if not answers_outsiders(conversation):
+            return resolved
+        return await in_process_runtime(
+            resolved,
+            fallbacks=await default_runtimes(
+                self.uow_factory, conversation.organization_id
+            ),
+            resolve=partial(
+                self._resolve_agent_runtime,
+                user_id=user_id,
+                organization_id=conversation.organization_id,
+            ),
+        )
 
     async def _resolve_agent_runtime(
         self,

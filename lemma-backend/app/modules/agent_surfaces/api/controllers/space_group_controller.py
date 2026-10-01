@@ -28,8 +28,11 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.contracts.surfaces import account
 from app.modules.agent_surfaces.api.dependencies import get_surface_service
+from app.modules.agent_surfaces.api.group_access import (
+    GroupAccess,
+    tell_previous_owner,
+)
 from app.modules.agent_surfaces.api.surface_config_resolver import (
-    may_perform_surface_agent_action,
     require_surface_agent_action,
 )
 from app.modules.agent_surfaces.domain.entities import (
@@ -59,6 +62,7 @@ from app.modules.agent_surfaces.services.telegram_group_links import (
 )
 from app.modules.agent_surfaces.services.whatsapp_groups import (
     GroupNotOpened,
+    GroupOpenLimitReached,
     WhatsAppGroupOpener,
 )
 
@@ -90,7 +94,26 @@ class GroupResponse(BaseModel):
     )
     answers_outsiders: bool
     welcomes_outsiders: bool = Field(
-        description="Switched on, and somebody answers for them."
+        description=(
+            "People outside the pod are answered here today: the group's switch "
+            "is on, a member of the pod answers for them, and the bot's own "
+            "switch is on."
+        )
+    )
+    bot_answers_outsiders: bool = Field(
+        default=True,
+        description=(
+            "The bot's own switch, over every group it is in. Off, nobody outside "
+            "the pod is answered in any of them."
+        ),
+    )
+    can_manage: bool = Field(
+        default=False,
+        description=(
+            "The reader may switch outsiders for this group or take it over: "
+            "they answer for it, nobody in the pod does, or they are an admin "
+            "of the pod."
+        ),
     )
     people_in_pod: int | None = Field(
         default=None,
@@ -137,7 +160,16 @@ class GroupLineResponse(BaseModel):
     author_external_id: str | None = None
     in_pod: bool
     from_bot: bool
-    text: str
+    text: str | None = Field(
+        default=None, description="None where the line is withheld from the reader."
+    )
+    withheld: bool = Field(
+        default=False,
+        description=(
+            "An answer the bot made with another member's own access: shown to "
+            "that member alone. ``answered_name`` still says whom it was for."
+        ),
+    )
     at: datetime
     answered_name: str | None = Field(
         default=None, description="On the bot's lines: whom it answered."
@@ -181,11 +213,12 @@ class GroupLinkResponse(BaseModel):
     expires_at: datetime
 
 
-def _response(summary: GroupSummary) -> GroupResponse:
+def _response(summary: GroupSummary, *, can_manage: bool = False) -> GroupResponse:
     group = summary.group
+    # A member who has left the pod answers for nobody, and reads as nobody.
     owner = (
         GroupOwnerResponse(user_id=group.owner_user_id, display_name=summary.owner_name)
-        if group.owner_user_id is not None
+        if group.owner_user_id is not None and summary.owner_in_pod
         else None
     )
     return GroupResponse(
@@ -199,7 +232,9 @@ def _response(summary: GroupSummary) -> GroupResponse:
         shared_externally=group.shared_externally,
         owner=owner,
         answers_outsiders=group.answers_outsiders,
-        welcomes_outsiders=group.welcomes_outsiders,
+        welcomes_outsiders=summary.answers_outsiders_now,
+        bot_answers_outsiders=summary.bot_answers_outsiders,
+        can_manage=can_manage,
         people_in_pod=summary.members,
         people_outside=summary.outsiders,
         last_message_at=summary.last_message_at,
@@ -208,9 +243,11 @@ def _response(summary: GroupSummary) -> GroupResponse:
     )
 
 
-def _detail_response(detail: GroupDetail) -> GroupDetailResponse:
+def _detail_response(
+    detail: GroupDetail, *, can_manage: bool = False
+) -> GroupDetailResponse:
     return GroupDetailResponse(
-        **_response(detail).model_dump(),
+        **_response(detail, can_manage=can_manage).model_dump(),
         people=[GroupPersonResponse(**p.model_dump()) for p in detail.people],
         waiting=[GroupWaitingResponse(**w.model_dump()) for w in detail.waiting],
     )
@@ -285,21 +322,14 @@ async def list_groups(
 ) -> GroupListResponse:
     """Every group the pod's bots are in, most recently changed first."""
     summaries = await SpaceGroups(uow).summaries(pod_id=pod_id, viewer_id=user.id)
-    readable: list[GroupResponse] = []
-    agents: dict[UUID, bool] = {}
-    for summary in summaries:
-        surface_id = summary.group.surface_id
-        if surface_id not in agents:
-            surface = await _surface(uow, surface_id)
-            agents[surface_id] = await may_perform_surface_agent_action(
-                ctx=ctx,
-                pod_id=pod_id,
-                agent_id=surface.agent_id,
-                action=Permissions.AGENT_READ,
-            )
-        if agents[surface_id]:
-            readable.append(_response(summary))
-    return GroupListResponse(items=readable)
+    access = GroupAccess(ctx=ctx, uow=uow, pod_id=pod_id, viewer_id=user.id)
+    return GroupListResponse(
+        items=[
+            _response(summary, can_manage=await access.manages(summary))
+            for summary in summaries
+            if await access.reads(summary.group.surface_id)
+        ]
+    )
 
 
 @router.post(
@@ -349,6 +379,10 @@ async def start_group(
                 title=request.title,
                 answers_outsiders=request.answers_outsiders,
             )
+        except GroupOpenLimitReached as reached:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS, detail=str(reached)
+            ) from reached
         except (GroupNotOpened, WhatsAppApiError, *PLATFORM_TRANSPORT_ERRORS) as exc:
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY,
@@ -359,7 +393,7 @@ async def start_group(
     )
     if detail is None:  # pragma: no cover - written just above
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Group not found")
-    return _response(detail)
+    return _response(detail, can_manage=True)
 
 
 @router.post(
@@ -420,7 +454,8 @@ async def get_group(
     detail = await _readable_group(
         pod_id=pod_id, group_id=group_id, ctx=ctx, uow=uow, viewer_id=user.id
     )
-    return _detail_response(detail)
+    access = GroupAccess(ctx=ctx, uow=uow, pod_id=pod_id, viewer_id=user.id)
+    return _detail_response(detail, can_manage=await access.manages(detail))
 
 
 @router.get(
@@ -432,6 +467,7 @@ async def get_group(
 async def group_timeline(
     pod_id: UUID,
     group_id: UUID,
+    user: CurrentUser,
     ctx: PodContextDep,
     uow: UoWDep,
     limit: int = Query(default=60, ge=1, le=200),
@@ -439,22 +475,23 @@ async def group_timeline(
     """What was said in the group, oldest first, as far as the pod kept it.
 
     Kept for WhatsApp and Telegram groups. A Slack channel's history is
-    Slack's; it comes back empty here.
+    Slack's; it comes back empty here. An answer the bot made with one member's
+    own access comes back withheld to everybody else: they may not be able to
+    see what it was made from.
     """
-    lines = await SpaceGroups(uow).timeline(
-        pod_id=pod_id, group_id=group_id, limit=limit
-    )
-    if lines is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Group not found")
     group = await SurfaceGroupRepository(uow.session).get_by_id(group_id)
-    if group is not None:
-        await _require_on_group(
-            uow,
-            ctx=ctx,
-            pod_id=pod_id,
-            surface_id=group.surface_id,
-            action=Permissions.AGENT_READ,
-        )
+    if group is None or group.pod_id != pod_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Group not found")
+    await _require_on_group(
+        uow,
+        ctx=ctx,
+        pod_id=pod_id,
+        surface_id=group.surface_id,
+        action=Permissions.AGENT_READ,
+    )
+    lines = await SpaceGroups(uow).timeline(
+        pod_id=pod_id, group_id=group_id, viewer_id=user.id, limit=limit
+    )
     return GroupTimelineResponse(
         items=[
             GroupLineResponse(
@@ -462,12 +499,13 @@ async def group_timeline(
                 author_external_id=item.line.author_external_id,
                 in_pod=item.in_pod,
                 from_bot=item.line.from_agent,
-                text=item.line.text,
+                text=None if item.withheld else item.line.text,
+                withheld=item.withheld,
                 at=item.line.created_at,
                 answered_name=item.line.answered_name,
                 answered_from_public=item.line.answered_from_public,
             )
-            for item in lines
+            for item in lines or []
         ]
     )
 
@@ -486,11 +524,17 @@ async def update_group(
     ctx: PodContextDep,
     uow: UoWDep,
 ) -> GroupResponse:
-    """Switch outsiders on or off in one group, or take it over."""
-    groups = SurfaceGroupRepository(uow.session)
-    group = await groups.get_by_id(group_id)
-    if group is None or group.pod_id != pod_id:
+    """Switch outsiders on or off in one group, or take it over.
+
+    The member who answers for the group may; so may anybody who configures the
+    bot when nobody in the pod answers for it, and an admin of the pod, whose
+    change the member is told about.
+    """
+    spaces = SpaceGroups(uow)
+    current = await spaces.detail(pod_id=pod_id, group_id=group_id, viewer_id=user.id)
+    if current is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Group not found")
+    group = current.group
     await _require_on_group(
         uow,
         ctx=ctx,
@@ -498,15 +542,47 @@ async def update_group(
         surface_id=group.surface_id,
         action=Permissions.AGENT_UPDATE,
     )
-    if request.take_over or (request.answers_outsiders and group.owner_user_id is None):
+    access = GroupAccess(ctx=ctx, uow=uow, pod_id=pod_id, viewer_id=user.id)
+    if not await access.manages(current):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Only the person who answers for this group, or an admin of the "
+                "space, can change it."
+            ),
+        )
+    takes_over = request.take_over or (
+        bool(request.answers_outsiders) and not current.owner_in_pod
+    )
+    groups = SurfaceGroupRepository(uow.session)
+    if takes_over:
         await groups.set_owner(group.id, user.id)
     if request.answers_outsiders is not None:
         await groups.set_answers_outsiders(
             group.id, answers_outsiders=request.answers_outsiders
         )
-    detail = await SpaceGroups(uow).detail(
-        pod_id=pod_id, group_id=group.id, viewer_id=user.id
-    )
+    if (
+        current.owner_in_pod
+        and group.owner_user_id not in (None, user.id)
+        and (takes_over or request.answers_outsiders is not None)
+    ):
+        await tell_previous_owner(
+            uow,
+            pod_id=pod_id,
+            previous_owner=group.owner_user_id,
+            actor_id=user.id,
+            group=group,
+            what_changed=_what_changed(request, takes_over=takes_over),
+        )
+    detail = await spaces.detail(pod_id=pod_id, group_id=group.id, viewer_id=user.id)
     if detail is None:  # pragma: no cover - read back inside one transaction
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Group not found")
-    return _response(detail)
+    return _response(detail, can_manage=True)
+
+
+def _what_changed(request: GroupUpdateRequest, *, takes_over: bool) -> str:
+    if takes_over:
+        return "now answers for the people outside the space"
+    if request.answers_outsiders:
+        return "switched answering people outside the space on"
+    return "switched answering people outside the space off"

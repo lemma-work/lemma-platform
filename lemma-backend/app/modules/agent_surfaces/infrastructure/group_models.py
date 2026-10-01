@@ -123,3 +123,8 @@ class AgentSurfaceGroupMessageModel(UUIDAuditBase):
     answered_from_public: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    #: The member whose access an answer was made with. The line outlives the
+    #: account, and reads as withheld from everyone once it is gone.
+    answered_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

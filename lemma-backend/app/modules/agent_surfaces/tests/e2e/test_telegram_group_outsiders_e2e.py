@@ -234,3 +234,67 @@ async def test_a_stranger_is_answered_for_the_pod_from_what_is_public(
     assert "@lemmabot what can you tell me?" in said
     assert "I can share the price list." in said
     assert any(line.from_agent for line in lines)
+
+
+async def test_a_reply_in_a_logged_group_still_says_what_it_replies_to(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_telegram,
+    monkeypatch,
+):
+    """The group's log is background; the message replied to is the subject.
+
+    Telegram delivers the replied-to message inline, and the parser keeps it on
+    the message itself -- so it reaches the run however much of the group the
+    pod has logged.
+    """
+    _wire_native_telegram(monkeypatch, fake_telegram)
+    pod_id = test_pod["id"]
+    surface = await _create_surface(
+        authenticated_client, pod_id, config={"type": "TELEGRAM"}
+    )
+    await _seed_external_user(
+        db_session,
+        platform="TELEGRAM",
+        external_user_id=str(MEMBER_TELEGRAM_ID),
+        resolved_user_id=UUID(fixed_test_user["id"]),
+    )
+    group = await _adopt_group(db_session, UUID(surface["id"]))
+    assert group is not None
+    await SurfaceGroupRepository(db_session).append_line(
+        group_id=group.id,
+        body="Proofs are due Friday.",
+        external_message_id="80",
+        author_external_id=str(MEMBER_TELEGRAM_ID),
+        author_name="Arjun",
+    )
+    await db_session.commit()
+    payload = _group_message(
+        text="@lemmabot is that still right?",
+        message_id=82,
+        sender_id=STRANGER_TELEGRAM_ID,
+    )
+    payload["message"]["reply_to_message"] = {
+        "message_id": 80,
+        "from": {"id": MEMBER_TELEGRAM_ID, "is_bot": False, "first_name": "Arjun"},
+        "chat": {"id": GROUP_CHAT, "type": "supergroup", "title": "Launch crew"},
+        "date": 1700000050,
+        "text": "Proofs are due Friday.",
+    }
+
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
+        script=[script_text("Yes, still Friday.")],
+    )
+
+    assert isinstance(context, SurfaceChatContext)
+    messages = await _messages_for_conversation(
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
+    )
+    asked = [message for message in messages if message.get("role") == "user"][-1]
+    assert asked["metadata"]["quoted_message"]["text"] == "Proofs are due Friday."

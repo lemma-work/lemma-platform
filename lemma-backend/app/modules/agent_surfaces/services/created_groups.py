@@ -23,7 +23,6 @@ from collections.abc import Collection, Sequence
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.domain.addressing import names_the_agent
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -35,7 +34,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.group_repository imp
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     bot_creates_groups_on,
 )
-from app.modules.agent_surfaces.services.group_names import names_people_use
+from app.modules.agent_surfaces.services.group_names import spoken_to_by_name
 
 
 async def created_group_surfaces(
@@ -85,9 +84,8 @@ async def named_in_group(
     if not bot_creates_groups_on(parsed.platform.value):
         return parsed
     for surface in surfaces:
-        for name in await names_people_use(uow, surface):
-            if names_the_agent(parsed.message_text, name):
-                return parsed.model_copy(
-                    update={"mentioned_agent": True, "should_start_conversation": True}
-                )
+        if await spoken_to_by_name(uow, surface, parsed.message_text):
+            return parsed.model_copy(
+                update={"mentioned_agent": True, "should_start_conversation": True}
+            )
     return parsed

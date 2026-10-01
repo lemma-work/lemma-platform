@@ -19,6 +19,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfaceChannelRoute,
+    SurfaceConfig,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
@@ -114,7 +115,8 @@ def _door(group: SurfaceGroup) -> OutsiderDoor:
         return group
 
     async def _pod_ids(user_id):
-        return []
+        # The group's owner is in the pod; nobody else here is.
+        return [POD] if user_id == group.owner_user_id else []
 
     async def _allow(*, group_id, sender_external_id):
         return True
@@ -140,7 +142,12 @@ def _slack_group(*, shared: bool) -> SurfaceGroup:
 
 
 def _slack_surface():
-    return SimpleNamespace(id=uuid4(), pod_id=POD, surface_type=SurfacePlatform.SLACK)
+    return SimpleNamespace(
+        id=uuid4(),
+        pod_id=POD,
+        surface_type=SurfacePlatform.SLACK,
+        config=SurfaceConfig(),
+    )
 
 
 def _unknown(external_user_id: str = "U0SENDER") -> ResolvedSurfaceUser:

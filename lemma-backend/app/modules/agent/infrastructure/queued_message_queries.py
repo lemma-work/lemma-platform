@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, update
+from sqlalchemy import delete, func, or_, select, update
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Message as MessageEntity
@@ -31,7 +31,8 @@ from app.modules.agent.domain.queued_messages import (
     STEERED_INTO_RUN,
 )
 from app.modules.agent.domain.value_objects import MessageRole
-from app.modules.agent.infrastructure.models import MessageModel
+from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
 
 
 def stamp(**values: str):
@@ -46,7 +47,9 @@ def in_order(rows) -> list[MessageEntity]:
     return sorted((row.to_entity() for row in rows), key=lambda item: item.sequence)
 
 
-def unclaimed_queued_messages(agent_run_id: UUID):
+def unclaimed_queued_messages(
+    agent_run_id: UUID, *, notes: bool | None = None, as_run: bool = False
+):
     """Messages that arrived after this run started and nobody has read yet.
 
     ``start`` stamps ``during_active_run`` on a message it appends to a run
@@ -59,12 +62,39 @@ def unclaimed_queued_messages(agent_run_id: UUID):
     Compared as text rather than cast to boolean, because the column is free
     JSONB -- a cast would raise on a row where something else wrote a
     non-boolean under that key, and a miscount is the better failure.
+
+    ``as_run`` keeps to messages of the run's own kind, which is what may be
+    steered into it: a private note must not shape an answer that goes to the
+    platform, and a message meant for the platform must not be answered where
+    nobody on it will see. ``notes`` asks for one kind outright -- for a
+    follow-up turn, which has not started yet.
     """
-    return (
+    criteria = (
         MessageModel.agent_run_id == agent_run_id,
         MessageModel.role == MessageRole.USER.value,
         MessageModel.message_metadata[DURING_ACTIVE_RUN].astext == "true",
         MessageModel.message_metadata[STEERED_INTO_RUN].astext.is_(None),
+    )
+    if notes is not None:
+        return (*criteria, _is_note() if notes else ~_is_note())
+    if as_run:
+        run_is_private = (
+            select(
+                func.coalesce(
+                    AgentRunModel.run_metadata[PRIVATE_NOTE_KEY].astext == "true",
+                    False,
+                )
+            )
+            .where(AgentRunModel.id == agent_run_id)
+            .scalar_subquery()
+        )
+        return (*criteria, _is_note() == func.coalesce(run_is_private, False))
+    return criteria
+
+
+def _is_note():
+    return func.coalesce(
+        MessageModel.message_metadata[PRIVATE_NOTE_KEY].astext == "true", False
     )
 
 
@@ -87,7 +117,7 @@ class QueuedMessageRepository:
             await self.session.execute(
                 update(MessageModel)
                 .where(
-                    *unclaimed_queued_messages(agent_run_id),
+                    *unclaimed_queued_messages(agent_run_id, as_run=True),
                     MessageModel.message_metadata[STEER_DISPATCHED_AT].astext.is_(None),
                 )
                 .values(message_metadata=stamp(**{STEER_DISPATCHED_AT: now}))

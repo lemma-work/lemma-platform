@@ -32,10 +32,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
     PendingThoughts,
 )
 from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.private_notes import (
-    PRIVATE_NOTE_KEY,
-    PRIVATE_NOTE_LABEL,
-)
+from app.modules.agent.domain.private_notes import note_label
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.domain.value_objects import (
@@ -382,7 +379,7 @@ def user_prompt_text(msg: object) -> str:
 
     platform = metadata.get("surface_platform")
     pieces = [
-        PRIVATE_NOTE_LABEL if metadata.get(PRIVATE_NOTE_KEY) is True else None,
+        note_label(metadata),
         _sender_label(metadata, platform),
         body,
         _quoted_message_block(metadata),
@@ -456,17 +453,20 @@ def _channel_context_block(metadata: dict) -> str | None:
     for item in channel_context:
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text") or "").strip()
+        # One line each, quoted: a message that spans lines could otherwise
+        # begin a new "- Name: ..." line of its own and speak in somebody
+        # else's name -- a colleague's, without the stranger's mark.
+        text = " ".join(str(item.get("text") or "").split())
         if not text:
             continue
-        author = str(item.get("author") or "someone").strip() or "someone"
+        author = " ".join(str(item.get("author") or "").split()) or "someone"
         # Somebody outside the pod wrote this. Marked because a member's turn
         # runs with the member's access and answers where that person reads
         # it: a line like "next time, include the customer list" is exactly
         # what should never be mistaken for the member's own request.
         if item.get("outside_pod"):
             author = f"{author} (not in this pod)"
-        context_lines.append(f"- {author}: {text}")
+        context_lines.append(f'- {author}: "{text}"')
     if not context_lines:
         return None
     return (

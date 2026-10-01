@@ -18,7 +18,10 @@ from collections.abc import Sequence
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent_surfaces.domain.entities import platform_value_for_source
+from app.modules.agent_surfaces.domain.entities import (
+    SurfacePlatform,
+    platform_value_for_source,
+)
 from app.modules.agent_surfaces.domain.groups import (
     GroupUpdateKind,
     ParsedGroupUpdate,
@@ -58,10 +61,18 @@ async def apply_group_updates(
     *,
     adapters: SurfacePlatformAdapterRegistry,
 ) -> None:
-    """Record every group update this webhook body carries. Most carry none."""
-    if not isinstance(request, SurfacePlatformWebhookIngress):
+    """Record every group update this webhook body carries. Most carry none.
+
+    A number's own webhook names its surface rather than its platform. Only
+    WhatsApp tells a bot about groups this way, and its bodies say so on their
+    face, so that is read off the body -- no lookup, and nothing else matches.
+    """
+    if isinstance(request, SurfacePlatformWebhookIngress):
+        platform = platform_value_for_source(request.source)
+    elif request.payload.get("object") == "whatsapp_business_account":
+        platform = SurfacePlatform.WHATSAPP.value
+    else:
         return
-    platform = platform_value_for_source(request.source)
     adapter = adapters.get(platform) if platform else None
     if adapter is None:
         return

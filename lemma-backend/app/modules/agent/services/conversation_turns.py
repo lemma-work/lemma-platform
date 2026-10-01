@@ -24,7 +24,12 @@ from app.core.log.log import get_logger
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Conversation, Message
-from app.modules.agent.domain.private_notes import run_metadata_for
+from app.modules.agent.domain.private_notes import (
+    NOTE_IN_DM_KEY,
+    PRIVATE_NOTE_KEY,
+    is_private_note,
+    run_metadata_for,
+)
 from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
@@ -52,6 +57,12 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
 from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.services.queued_followups import (
+    LEFTOVERS_KEY,
+    leftover_sources,
+    next_queue,
+    still_waiting,
+)
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
@@ -173,6 +184,12 @@ class TurnCoordinator:
         }
         metadata.pop("author_user_id", None)
         metadata.pop("agent_run_id", None)
+        metadata.pop(NOTE_IN_DM_KEY, None)
+        if (
+            is_private_note(metadata)
+            and (conversation.metadata or {}).get("conversation_kind") == "DM"
+        ):
+            metadata[NOTE_IN_DM_KEY] = True
 
         saved_user_message = await self.conversation_repository.append_message(
             conversation_id=conversation.id,
@@ -268,10 +285,17 @@ class TurnCoordinator:
             # and the queue does not need it: their answer starts a run whose
             # history rebuild picks these messages up along the way.
             return None
-        if not await self.conversation_repository.count_queued_user_messages(
+        completed_run = await self.conversation_repository.get_agent_run(
             completed_run_id
-        ):
+        )
+        sources = [
+            completed_run_id,
+            *leftover_sources(completed_run.metadata if completed_run else None),
+        ]
+        queue = await next_queue(self.conversation_repository, sources)
+        if queue is None:
             return None
+        answering, notes = queue
 
         await self.conversation_repository.lock_conversation(conversation.id)
         if await self.conversation_repository.get_active_agent_run_for_update(
@@ -289,8 +313,8 @@ class TurnCoordinator:
             conversation=conversation,
             user_id=conversation.user_id,
         )
-        completed_run = await self.conversation_repository.get_agent_run(
-            completed_run_id
+        leftovers = await still_waiting(
+            self.conversation_repository, sources, answering=answering, notes=notes
         )
         agent_runtime = (
             (completed_run.agent_runtime if completed_run is not None else None)
@@ -309,7 +333,10 @@ class TurnCoordinator:
             agent_runtime=agent_runtime,
             metadata={
                 "source": "queued_messages",
-                "queued_behind_agent_run_id": str(completed_run_id),
+                "queued_behind_agent_run_id": str(answering),
+                # One kind per run: a note's answer stays in Lemma.
+                **({PRIVATE_NOTE_KEY: True} if notes else {}),
+                **({LEFTOVERS_KEY: leftovers} if leftovers else {}),
             },
         )
         # Claimed by the run that will answer them, in the same transaction
@@ -317,7 +344,7 @@ class TurnCoordinator:
         # messages its prompt has to carry -- all of them, not only the newest
         # -- and what tells the person's client they are no longer waiting.
         claimed = await self.conversation_repository.claim_queued_user_messages(
-            completed_run_id, into_run_id=followup_run.id
+            answering, into_run_id=followup_run.id, notes=notes
         )
         self.uow.collect_events(
             [

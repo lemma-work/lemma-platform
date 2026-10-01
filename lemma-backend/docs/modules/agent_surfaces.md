@@ -201,8 +201,16 @@ is answered *for the pod*, in a group the pod has opened to them.
   it (Telegram's `my_chat_member`, handled on the lifecycle path). That member
   becomes the group's owner: the person who answers for its outsiders. Owners
   and the "answers people outside" switch are managed through
-  `/pods/{pod_id}/groups`; switching outsiders on where nobody answers for them
-  makes the caller the owner.
+  `/pods/{pod_id}/groups` (`api/group_access.py`): by the owner; by anybody who
+  may configure the bot when nobody in the pod answers for the group, which
+  makes them its owner; or by an admin of the pod, whose change lands in the
+  owner's inbox. A member who has left the pod answers for nobody -- their
+  groups read as ownerless and answer no strangers until someone takes them on.
+- **The bot introduces itself.** When it is added to a Telegram group -- either
+  way, and once -- it says how to ask it, that people outside the pod are
+  answered from what is Public, and that the pod keeps what is said there for
+  `GROUP_LOG_RETENTION` (90 days); a WhatsApp group it creates carries the same
+  words as its description (`services/group_hello.py`).
 - **The pod's groups are one page** (`services/space_groups.py`, read by every
   member). It is assembled from rows other parts already keep: the registry and
   its log for who has spoken and what was said, the `~outsiders` thread links
@@ -210,7 +218,10 @@ is answered *for the pod*, in a group the pod has opened to them.
   conversations sent the reader for what is waiting on them. A member's own
   conversation with the bot and a private note are never part of it. Each of
   the bot's lines in the log records whom it answered and whether that was from
-  what is Public (`group_log.answered_in_group`), so the page can say so.
+  what is Public (`group_log.answered_in_group`), so the page can say so -- and
+  an answer made with one member's own access shows its words to that member
+  alone; every other reader sees whom it was for. The list asks each of its
+  reads once for all of the pod's groups (`group_page_repository`).
 - **A Telegram group can be added from Lemma.** `POST /pods/{pod_id}/groups/links`
   mints a one-use, hour-long code in Redis and returns
   `t.me/<bot>?startgroup=<code>` (`services/telegram_group_links.py`); Telegram
@@ -251,9 +262,11 @@ is answered *for the pod*, in a group the pod has opened to them.
   (`services/created_groups.py`), and a group no surface knows is dropped.
 - **Nothing marks a mention on WhatsApp.** Meta documents no mention field and
   no reply context for groups, so the bot is addressed when the text
-  `@`-mentions the business number, quotes the bot's own message, or names the
-  agent at the start of a line or after an `@` (`domain/addressing.py`, read in
-  ingress once the surface's agent is known). The name is the one the app shows
+  `@`-mentions the business number, quotes the bot's own message, or speaks to
+  the agent by name -- "Kit, ...", "hey Kit: ...", "Kit can you ...", "@Kit";
+  a name merely at the start of a line ("Sales numbers are up") is not enough
+  (`domain/addressing.py`, read in ingress once the surface's agent is known).
+  The name is the one the app shows
   (`services/group_names.py`): the pod's own name for the pod's assistant --
   "Sales, ..." -- with the older "Lem" still heard, and an agent's own name
   otherwise. A group message nobody put to the bot is logged and left alone.
@@ -273,8 +286,14 @@ is answered *for the pod*, in a group the pod has opened to them.
   and a brief that names the owner as who looks after the conversation rather
   than as the person being answered. `message_user` reaches the owner and no
   one else, says the answer goes back to the stranger, always expects that
-  answer, and stays in view rather than behind tool search; `list_pod_members`
-  refuses, since the directory would be read with the owner's access.
+  answer, carries no hidden `background_instruction` into the owner's run, and
+  stays in view rather than behind tool search; `list_pod_members` refuses,
+  since the directory would be read with the owner's access. Such a turn only
+  ever runs in process: a coding agent on Agent Host keeps a shell and a token
+  minted for the owner, so the runner moves the turn onto the organization's or
+  the system's model, or refuses it (the agent module's
+  `services/outsider_runtime`). The conversation's audience survives any
+  metadata update a client sends.
 - **Nothing a stranger types resolves a pause.** Their conversation belongs to
   the owner, so a typed "approve" would be recorded as the owner's decision;
   `write_inbound_message` never consults a pending interaction for them, and
@@ -283,12 +302,26 @@ is answered *for the pod*, in a group the pod has opened to them.
   could go -- and the run is told so.
 - **Limits**: `SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES` and
   `SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY`, counted in Redis and failing
-  closed.
+  closed. Only a turn that runs is charged to the group, so one person looping
+  cannot spend everybody's day. A member opens at most
+  `OPENS_PER_MEMBER_PER_DAY` WhatsApp groups on one bot a day, and only one who
+  may configure the bot may open any.
+- **The bot's own switch.** `config.groups.answers_outsiders` on a surface,
+  on by default, closes every group that bot is in to people outside the pod at
+  once.
 - **The group log** records every group message the bot receives, before
   anything decides whether it was addressed, and every answer once delivered.
   A run in a group -- a member's or a stranger's -- is handed the recent lines
   as background, with a stranger's lines marked, because a member's run acts
   with the member's access and answers where everyone in the group reads it.
+  Each line is one quoted line however many it spanned, so nobody can write a
+  line that reads as somebody else's. Lines older than `GROUP_LOG_RETENTION`
+  go as new ones arrive.
+- **Own bots are no different.** A pod's own Telegram bot or WhatsApp number is
+  delivered to at `/surfaces/{id}/webhook`; its group messages go through the
+  same log, mention check, name addressing and admission as a shared bot's
+  (`services/group_ingress.py`), and WhatsApp's confirmations are applied from
+  there too.
 - **A Slack group DM needs no channel route.** Somebody started it with the bot
   in it, so -- like a Telegram group -- being in it is the authorization
   (`is_slack_group_dm`): no allow-list entry, still only answered when the bot
@@ -300,15 +333,22 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **An email thread with other people on it is a group.** The inbound
   normalizer keeps To and Cc; a reply goes to the sender and copies the others
   (at most `MAX_REPLY_CC`). Copied is not asked: an email that only Cc's the
-  pod is answered only when a line speaks to the agent by name
-  (`platforms/resend/email_recipients.py`).
+  pod is answered only when a line speaks to the agent by a name it goes by.
+  Mail that names the pod in neither To nor Cc -- forwarded, an alias, a Bcc --
+  was sent to it on purpose and is answered. A message that says nothing but
+  thanks on a thread with others on it starts no run, and a refusal or sign-up
+  reply goes to the sender alone (`platforms/resend/email_recipients.py`).
 - **A private note stays in Lemma.** Every run in a conversation that lives on a
   platform answers there. A message written in Lemma with
   `metadata.private_note = true` starts a run marked private (see the agent
   module's `domain/private_notes`); the run observer then sends nothing of it to
   the platform -- no stream, no typing, no answer, no approval card -- and
-  `display_resource` delivers only in Lemma. Later turns see the note labelled
-  as unseen in the chat.
+  `display_resource` delivers only in Lemma, on Agent Host too. Later turns see
+  the note labelled as unseen in the chat (in a person's own DM, only as not
+  sent). A run answers one kind: a note typed while an answer to the platform
+  is under way is not steered into it, a message for the platform is not
+  steered into a note's run, and the follow-up, resume or retry that answers
+  either keeps its kind.
 
 ## Authorization and security
 

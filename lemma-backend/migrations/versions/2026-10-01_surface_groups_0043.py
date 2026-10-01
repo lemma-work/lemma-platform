@@ -136,6 +136,12 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("false"),
         ),
+        sa.Column(
+            "answered_user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
     )
     op.create_index(
         "ix_agent_surface_group_message_recent",

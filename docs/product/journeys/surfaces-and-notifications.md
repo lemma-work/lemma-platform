@@ -288,9 +288,18 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
 - The system shall let the member pass a question on: the bot may message the
   member answering for the group, and no one else, and relays what they say.
 - The system shall limit how often one person outside the pod, and one group in
-  a day, can put the bot to work.
+  a day, can put the bot to work, and shall charge the group only for turns
+  that run.
 - Where nobody answers for a group, or it has been closed to outsiders, the
-  system shall not answer people outside the pod there at all.
+  system shall not answer people outside the pod there at all. A member who has
+  left the pod answers for nobody.
+- The system shall let a member who may configure a bot close all of its groups
+  to people outside the pod at once.
+- The system shall never answer somebody outside the pod on a coding agent's
+  runtime, which holds a member's credentials in a shell of its own; it shall
+  use a model that runs in Lemma, or not answer.
+- The system shall treat a group on a pod's own bot or number exactly as one on
+  a shared bot.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.group.list`,
 `agent.group.update`
@@ -319,10 +328,17 @@ Lemma, and what the agent says in it goes to the platform.
 
 - Where a person writes in Lemma into a conversation that lives on a chat
   platform, the system shall let them mark it as a note to the agent alone.
+- The system shall start the composer on a note in a group or channel, and on
+  a reply in the person's own direct chat or email thread, and shall remember
+  the last choice made in that conversation on that device.
 - When the agent answers a note, the system shall keep that answer in Lemma and
   send nothing of it to the platform — no reply, no progress, no attachment.
 - The system shall tell the agent in every later turn that the note was not seen
-  in the chat, so it acts on it without repeating it there.
+  in the chat, so it acts on it without repeating it there -- except in the
+  person's own direct chat, where it only says the note was not sent.
+- The system shall answer a note and a message for the platform in separate
+  runs: a note never shapes an answer that goes to the chat, and a run that
+  continues a note -- resumed, retried or following on -- stays in Lemma.
 
 **Contracts:** `agent.conversation.message.send`
 
@@ -336,6 +352,11 @@ Lemma, and what the agent says in it goes to the platform.
   and shall not copy more than a handful.
 - Where the pod's address is only copied on an email, the system shall answer
   only if a line of it speaks to the agent by name.
+- When an email reaches the pod without naming it in To or Cc -- forwarded, sent
+  to an alias, or Bcc'd -- the system shall answer it.
+- Where other people are on a thread, the system shall not answer a message
+  that says nothing but thanks, and shall send a refusal or a sign-up reply to
+  the sender alone.
 
 **Contracts:** `surface.webhook.handle_platform`
 
@@ -536,13 +557,19 @@ remember where the bot is, who is in there, or what is waiting on them.
 - Where the pod keeps its own record of a group, the system shall show a member
   what was said there, marking who is in the pod, and for each of the bot's
   answers, whom it answered and whether it answered from what the pod made
-  Public.
+  Public. An answer made with one member's own access shall show its words to
+  that member alone.
+- The system shall keep its record of a group for 90 days, and the bot shall say
+  so in the group when it arrives.
 - The system shall never show a member's private conversation with the bot, or
   a note written to the agent in Lemma, as part of a group.
-- When a member who may configure the bot switches a group's people outside the
-  pod off, the system shall stop answering them there; when it is switched on
-  with nobody answering for them, the system shall make that member the one
-  who does. Such a member may also take a group over.
+- When the member who answers for a group switches its people outside the pod
+  off, the system shall stop answering them there; when it is switched on with
+  nobody answering for them, the system shall make the member who switched it
+  the one who does.
+- The system shall let only the member who answers for a group, or an admin of
+  the pod, change it or take it over, and shall tell that member when an admin
+  does.
 
 **Contracts:** `agent.group.list`, `agent.group.get`, `agent.group.timeline`,
 `agent.group.update`
@@ -600,6 +627,8 @@ remember where the bot is, who is in there, or what is waiting on them.
   group message that speaks to the bot by the name the app shows it under -- the
   pod's own name for the pod's assistant, an agent's own name otherwise -- as
   put to the bot, and shall still answer the pod's assistant as "Lem".
+- The system shall not take a name merely at the start of a line ("Sales
+  numbers are up") as speaking to the bot.
 
 **Contracts:** `surface.webhook.handle_platform`
 

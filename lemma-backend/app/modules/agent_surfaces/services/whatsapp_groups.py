@@ -25,7 +25,17 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from redis.exceptions import RedisError
+
+from app.core.authorization.context import ResourceRef, ResourceType
+from app.core.authorization.delegation import is_pod_default_agent
+from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.infrastructure.redis.client import get_redis
+from app.core.infrastructure.redis.counters import incr_with_ttl
+from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
@@ -40,6 +50,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.client import (
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
+from app.modules.agent_surfaces.services.group_hello import hello_for
 
 #: How long the member's turn waits for Meta to confirm the group. Confirmation
 #: is usually a second or two; past this the turn moves on and says so.
@@ -62,6 +73,42 @@ class GroupNotOpened(RuntimeError):
     """Meta took the request but named no request to wait on."""
 
 
+class GroupOpenLimitReached(RuntimeError):
+    """This member has opened as many groups on this bot today as one may."""
+
+
+#: Groups one member may open on one bot in a day. A shared Meta number is
+#: everybody's, and every group it creates is one more chat it answers in.
+OPENS_PER_MEMBER_PER_DAY = 10
+_DAY = 86_400
+
+
+async def may_configure_bot(
+    uow: SqlAlchemyUnitOfWork, *, user_id: UUID, surface: AgentSurfaceEntity
+) -> bool:
+    """Whether this member may change the bot's setup -- the bar for opening groups.
+
+    Asked of the member's own rights, as the Groups API asks it of the caller,
+    not of the run's: the run acts for the member, and opening a group in their
+    name is something the member must be able to do.
+    """
+    ctx = await create_authorization_data_service(uow).build_user_context(
+        user_id=user_id, pod_id=surface.pod_id
+    )
+    if surface.agent_id is None or is_pod_default_agent(
+        surface.agent_id, pod_id=surface.pod_id
+    ):
+        return await ctx.can(Permissions.AGENT_UPDATE)
+    return await ctx.can(
+        Permissions.AGENT_UPDATE,
+        ResourceRef(
+            resource_type=ResourceType.AGENT,
+            resource_id=surface.agent_id,
+            pod_id=surface.pod_id,
+        ),
+    )
+
+
 class WhatsAppGroupOpener:
     def __init__(
         self,
@@ -69,10 +116,12 @@ class WhatsAppGroupOpener:
         *,
         wait_seconds: float = CONFIRMATION_WAIT_SECONDS,
         poll_seconds: float = _POLL_SECONDS,
+        redis=None,
     ) -> None:
         self.uow_factory = uow_factory
         self.wait_seconds = wait_seconds
         self.poll_seconds = poll_seconds
+        self.redis = redis
 
     async def open(
         self, *, surface_id: UUID, owner_user_id: UUID, title: str
@@ -105,11 +154,20 @@ class WhatsAppGroupOpener:
             if surface is None:
                 raise LookupError("This bot is no longer connected to WhatsApp")
             credentials = await SurfaceCredentialResolver(uow=uow).for_surface(surface)
+            # The group's description is the bot's hello: how to ask it, and
+            # that the pod keeps what is said there (see group_hello).
+            description = await hello_for(uow, surface)
+        if not await self._within_daily_limit(
+            surface_id=surface_id, owner_user_id=owner_user_id
+        ):
+            raise GroupOpenLimitReached(
+                f"One person can open {OPENS_PER_MEMBER_PER_DAY} groups a day here."
+            )
         # Meta is called with no connection held, as every platform call is.
         client = WhatsAppClient.from_credentials(credentials)
         phone_number_id = str(credentials.get("phone_number_id") or "")
         request_id = await client.create_group(
-            phone_number_id=phone_number_id, subject=name
+            phone_number_id=phone_number_id, subject=name, description=description
         )
         if not request_id:
             raise GroupNotOpened("WhatsApp accepted the request but named none")
@@ -125,6 +183,20 @@ class WhatsAppGroupOpener:
             )
             await uow.commit()
         return await self._confirmed(group), False
+
+    async def _within_daily_limit(
+        self, *, surface_id: UUID, owner_user_id: UUID
+    ) -> bool:
+        """Count this opening; fails closed, since a group not opened can be retried."""
+        try:
+            opened = await incr_with_ttl(
+                self.redis or get_redis(),
+                f"whatsapp:group_opens:{surface_id}:{owner_user_id}",
+                _DAY,
+            )
+        except RedisError, OSError:
+            return False
+        return opened <= OPENS_PER_MEMBER_PER_DAY
 
     async def _confirmed(self, group: SurfaceGroup) -> SurfaceGroup:
         """The group once Meta has confirmed it, or as it stands at the deadline."""

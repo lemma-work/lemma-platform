@@ -9,14 +9,18 @@ a run's background context can use.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.domain.groups import GroupLine, SurfaceGroup
+from app.modules.agent_surfaces.domain.groups import (
+    GROUP_LOG_RETENTION,
+    GroupLine,
+    SurfaceGroup,
+)
 from app.modules.agent_surfaces.infrastructure.group_models import (
     AgentSurfaceGroupMessageModel,
     AgentSurfaceGroupModel,
@@ -108,13 +112,33 @@ class SurfaceGroupRepository:
         external_channel_id: str,
         title: str | None = None,
     ) -> SurfaceGroup:
-        """The group's row, created on first sight.
+        """The group's row, created on first sight."""
+        group, _ = await self.ensure_noting_creation(
+            pod_id=pod_id,
+            surface_id=surface_id,
+            platform=platform,
+            external_channel_id=external_channel_id,
+            title=title,
+        )
+        return group
+
+    async def ensure_noting_creation(
+        self,
+        *,
+        pod_id: UUID,
+        surface_id: UUID,
+        platform: str,
+        external_channel_id: str,
+        title: str | None = None,
+    ) -> tuple[SurfaceGroup, bool]:
+        """The group's row, and whether this call is what created it.
 
         ``ON CONFLICT DO NOTHING`` then a read, rather than read-then-insert:
         two first messages in a new group arrive together often enough, and the
-        unique index is the only thing both of them can agree on.
+        unique index is the only thing both of them can agree on -- which is
+        also what makes "created" true for exactly one of them.
         """
-        await self.session.execute(
+        inserted = await self.session.execute(
             insert(AgentSurfaceGroupModel)
             .values(
                 pod_id=pod_id,
@@ -126,7 +150,9 @@ class SurfaceGroupRepository:
             .on_conflict_do_nothing(
                 index_elements=["surface_id", "external_channel_id"]
             )
+            .returning(AgentSurfaceGroupModel.id)
         )
+        created = inserted.scalars().first() is not None
         group = await self.get(
             surface_id=surface_id, external_channel_id=external_channel_id
         )
@@ -135,7 +161,7 @@ class SurfaceGroupRepository:
         if title and group.title != title:
             await self._update(group.id, title=title)
             group = group.model_copy(update={"title": title})
-        return group
+        return group, created
 
     async def surface_ids_for_channel(
         self, *, platform: str, external_channel_id: str
@@ -275,11 +301,23 @@ class SurfaceGroupRepository:
         from_agent: bool = False,
         answered_name: str | None = None,
         answered_from_public: bool = False,
+        answered_user_id: UUID | None = None,
     ) -> None:
-        """Add one line; a message already logged is left as it was."""
+        """Add one line; a message already logged is left as it was.
+
+        Lines past the log's retention go as each new one arrives: one indexed
+        range per group, which finds nothing almost every time.
+        """
         text = body.strip()
         if not text:
             return
+        await self.session.execute(
+            delete(AgentSurfaceGroupMessageModel).where(
+                AgentSurfaceGroupMessageModel.group_id == group_id,
+                AgentSurfaceGroupMessageModel.created_at
+                < datetime.now(timezone.utc) - GROUP_LOG_RETENTION,
+            )
+        )
         await self.session.execute(
             insert(AgentSurfaceGroupMessageModel)
             .values(
@@ -291,6 +329,7 @@ class SurfaceGroupRepository:
                 from_agent=from_agent,
                 answered_name=(answered_name or "")[:255] or None,
                 answered_from_public=answered_from_public,
+                answered_user_id=answered_user_id,
             )
             .on_conflict_do_nothing(
                 index_elements=["group_id", "external_message_id"],
@@ -337,6 +376,7 @@ class SurfaceGroupRepository:
                 created_at=model.created_at,
                 answered_name=model.answered_name,
                 answered_from_public=model.answered_from_public,
+                answered_user_id=model.answered_user_id,
             )
             for model in models
         ]

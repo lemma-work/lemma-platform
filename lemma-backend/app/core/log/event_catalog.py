@@ -295,6 +295,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.file_ingest.attachment_over_cap': EventSpec('info', frozenset({'cap_bytes', 'platform'})),
     'agent_surfaces.file_ingest.attachment_over_cap_after_read.degraded': EventSpec('warning', frozenset({'cap_bytes', 'platform', 'size_bytes'})),
     'agent_surfaces.file_ingest.attachment_store_failed.degraded': EventSpec('warning', frozenset({'platform'})),
+    'agent_surfaces.group_hello.send_failed.observed': EventSpec('info', frozenset({'surface_id'})),
     'agent_surfaces.group_registry.group_adopted.observed': EventSpec('info', frozenset({'group_id', 'owner_set', 'surface_id'})),
     'agent_surfaces.group_updates.creation_refused.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent_surfaces.group_updates.invite_link_lookup.observed': EventSpec('info', frozenset()),

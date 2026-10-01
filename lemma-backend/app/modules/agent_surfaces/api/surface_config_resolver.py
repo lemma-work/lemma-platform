@@ -15,6 +15,7 @@ from app.modules.agent_surfaces.api.schemas import (
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceChannelRoute,
     SurfaceConfig,
+    SurfaceGroupPolicy,
     SurfaceIdentityPolicy,
     SurfacePlatform,
     SurfaceSendPolicy,
@@ -280,5 +281,9 @@ async def merge_surface_config(
             platform=platform,
             app_name=config_input.slack.app_name,
             ctx=ctx,
+        )
+    if "groups" in config_input.model_fields_set:
+        updates["groups"] = SurfaceGroupPolicy(
+            answers_outsiders=config_input.groups.answers_outsiders
         )
     return existing.model_copy(update=updates)

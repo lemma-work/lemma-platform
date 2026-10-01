@@ -31,6 +31,7 @@ from app.modules.agent.services.surface_context import (
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
 from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 from app.modules.agent.services.mcp_content import (
     tool_call_error,
@@ -401,6 +402,11 @@ class ConversationMCPService:
                 # The same answer the runner gives: a remote harness answering
                 # somebody outside the pod authorizes as nobody too.
                 answers_outsider=answers_outsiders(conversation),
+                # And a run a private note started delivers nothing to the
+                # platform from here either -- `display_resource` included.
+                delivers_to_surface=not run_is_private(
+                    run.metadata if run is not None else None
+                ),
                 # The runner computes these for the in-process harness, and this
                 # bridge has to as well -- it is the tool path for *every*
                 # remote harness, so anything left at its default is a default

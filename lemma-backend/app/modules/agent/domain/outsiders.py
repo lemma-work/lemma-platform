@@ -21,6 +21,7 @@ runner, the MCP bridge, the approval executor -- already reads the conversation.
 
 from __future__ import annotations
 
+from app.core.domain.errors import DomainError
 from app.modules.agent.domain.entities import Conversation
 
 #: The metadata key, and the one value of it that means "outsiders".
@@ -34,3 +35,37 @@ def answers_outsiders(conversation: Conversation | None) -> bool:
         return False
     metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
     return metadata.get(AUDIENCE_KEY) == OUTSIDERS
+
+
+def with_audience_kept(
+    existing: dict[str, object] | None, incoming: dict[str, object] | None
+) -> dict[str, object] | None:
+    """``incoming`` metadata, with whom the conversation answers kept as stored.
+
+    The audience is written once, by the surface that opened the conversation,
+    and it is what makes every run in it authorize as nobody. A client that
+    replaces the metadata wholesale -- or anything holding the owner's token,
+    the owner's own agent talked into it included -- must not be able to drop
+    it, and have the next stranger's turn run with the owner's authority.
+    Metadata cleared where there is no audience to keep stays cleared.
+    """
+    previous = (existing or {}).get(AUDIENCE_KEY)
+    if incoming is None and previous is None:
+        return None
+    kept = dict(incoming or {})
+    kept.pop(AUDIENCE_KEY, None)
+    if previous is not None:
+        kept[AUDIENCE_KEY] = previous
+    return kept
+
+
+class OutsiderRunRefused(DomainError):
+    """A run answering somebody outside the pod was about to get more than it may.
+
+    Raised where the outsider rules cannot be kept -- no runtime that runs in
+    this process, or an Agent Host payload being built for such a run -- so the
+    stranger goes unanswered rather than answered with the member's reach.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="outsider_run_refused", status_code=409)

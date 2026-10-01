@@ -214,6 +214,7 @@ class SurfaceDelivery:
             adapter=adapter,
             event=parsed_event,
             credentials=await self.egress_credentials(surface, event=parsed_event),
+            conversation_user_id=conversation.user_id,
         )
 
     async def egress_metadata(
@@ -325,6 +326,6 @@ class SurfaceDelivery:
                 surface=target.surface,
                 external_channel_id=target.link.external_channel_id,
                 text=envelope.text,
-                answered=answered_in_group(target.link),
+                answered=answered_in_group(target.link, target.conversation_user_id),
             )
         return True

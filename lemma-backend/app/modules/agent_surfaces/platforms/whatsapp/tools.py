@@ -19,9 +19,14 @@ from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     GROUP_SUBJECT_MAX_CHARS,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+    SurfaceRepository,
+)
 from app.modules.agent_surfaces.services.whatsapp_groups import (
+    GroupOpenLimitReached,
     OpenedGroup,
     WhatsAppGroupOpener,
+    may_configure_bot,
 )
 
 
@@ -84,7 +89,23 @@ async def _open(
     surface_id: UUID,
     title: str,
 ) -> OpenWhatsAppGroupResult:
-    group = await opener.open(
-        surface_id=surface_id, owner_user_id=ctx.deps.user_id, title=title
-    )
+    async with opener.uow_factory() as uow:
+        surface = await SurfaceRepository(uow).get(surface_id)
+        allowed = surface is not None and await may_configure_bot(
+            uow, user_id=ctx.deps.user_id, surface=surface
+        )
+    if not allowed:
+        return OpenWhatsAppGroupResult(
+            success=False,
+            error=(
+                "Only someone who can change this bot's settings can open groups "
+                "with it. Ask an admin of the space."
+            ),
+        )
+    try:
+        group = await opener.open(
+            surface_id=surface_id, owner_user_id=ctx.deps.user_id, title=title
+        )
+    except GroupOpenLimitReached as reached:
+        return OpenWhatsAppGroupResult(success=False, error=str(reached))
     return OpenWhatsAppGroupResult(success=True, group=group)

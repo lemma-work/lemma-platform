@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.errors import (
 from app.modules.agent_surfaces.domain.surface_config import (
     SurfaceChannelRoute,
     SurfaceConfig,
+    SurfaceGroupPolicy,
     SurfaceIdentityPolicy,
     SurfaceSendPolicy,
     SurfaceSlackConfig,
@@ -25,6 +26,7 @@ from app.modules.agent_surfaces.domain.surface_config import (
 __all__ = [
     "SurfaceChannelRoute",
     "SurfaceConfig",
+    "SurfaceGroupPolicy",
     "SurfaceIdentityPolicy",
     "SurfaceSendPolicy",
     "SurfaceSlackConfig",

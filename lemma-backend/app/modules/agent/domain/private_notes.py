@@ -31,6 +31,17 @@ PRIVATE_NOTE_LABEL = (
     "act on it, but never quote or reveal it there.)"
 )
 
+#: The same, for a note in a person's own direct chat with the bot. The only
+#: other reader there is the person who wrote it, so there is nothing to keep
+#: from anybody -- only the fact that it was not sent.
+PRIVATE_NOTE_IN_DM_LABEL = (
+    "(A note to you, written in Lemma by the person in this chat. It was not "
+    "sent to the chat.)"
+)
+
+#: Stamped on a note written in a direct chat, read when its label is chosen.
+NOTE_IN_DM_KEY = "private_note_in_dm"
+
 
 def is_private_note(message_metadata: Mapping[str, object] | None) -> bool:
     """Whether a person marked this message as a note to the agent alone."""
@@ -48,3 +59,21 @@ def run_metadata_for(message_metadata: Mapping[str, object] | None) -> JsonObjec
 def run_is_private(run_metadata: Mapping[str, object] | None) -> bool:
     """Whether this run's answer stays in Lemma rather than going to the platform."""
     return bool(run_metadata and run_metadata.get(PRIVATE_NOTE_KEY) is True)
+
+
+def privacy_of(run_metadata: Mapping[str, object] | None) -> JsonObject:
+    """The mark a run carries on to the run that continues it.
+
+    A resume, a retry, a follow-up: each continues answering what the earlier
+    run answered, so each answers where it would have -- a note's in Lemma.
+    """
+    return {PRIVATE_NOTE_KEY: True} if run_is_private(run_metadata) else {}
+
+
+def note_label(message_metadata: Mapping[str, object]) -> str | None:
+    """What heads a note in the history every later turn reads; None otherwise."""
+    if not is_private_note(message_metadata):
+        return None
+    if message_metadata.get(NOTE_IN_DM_KEY) is True:
+        return PRIVATE_NOTE_IN_DM_LABEL
+    return PRIVATE_NOTE_LABEL

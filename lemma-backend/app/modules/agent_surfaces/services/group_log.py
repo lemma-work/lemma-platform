@@ -54,20 +54,28 @@ class Answered:
     #: For somebody outside the pod, from what the pod made Public -- rather
     #: than for a member, with that member's own access.
     from_public: bool
+    #: The member whose access it was made with; None when from Public.
+    user_id: UUID | None = None
 
 
-def answered_in_group(link: AgentSurfaceConversationLink) -> Answered:
+def answered_in_group(
+    link: AgentSurfaceConversationLink, conversation_user_id: UUID | None = None
+) -> Answered:
     """Who a delivery into a group answered, read off the thread it answered in.
 
     The link is keyed by the person asking, and a conversation answering people
     outside the pod shares one key for all of them -- so its last inbound event
-    is what names the particular stranger this answer was for.
+    is what names the particular stranger this answer was for. Any other
+    conversation in a group is one member's, run with their access: the group's
+    page shows what it said to that member alone.
     """
     last_event = link.last_event or {}
     name = last_event.get("sender_display_name")
+    from_public = link.external_user_id == OUTSIDERS_LINK_USER
     return Answered(
         name=name if isinstance(name, str) and name.strip() else None,
-        from_public=link.external_user_id == OUTSIDERS_LINK_USER,
+        from_public=from_public,
+        user_id=None if from_public else conversation_user_id,
     )
 
 
@@ -141,6 +149,7 @@ class GroupLog:
             from_agent=True,
             answered_name=answered.name if answered else None,
             answered_from_public=answered.from_public if answered else False,
+            answered_user_id=answered.user_id if answered else None,
         )
 
 

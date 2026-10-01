@@ -16,21 +16,29 @@ from __future__ import annotations
 import re
 
 
+#: What follows a name that is spoken to rather than about: "Kit, ...",
+#: "Kit: ...", "Kit - ...", "Kit?" -- or a request, "Kit can you ...".
+_SPOKEN_TO = r"(?:[ \t]*[,:!?\-\u2013\u2014]|[ \t]+(?:(?:can|could|would|will)[ \t]+you\b|please\b|pls\b))"
+#: A greeting that may come first: "hey Kit, ...".
+_GREETING = r"(?:(?:hey|hi|hello|ok|okay|yo|dear)[ \t,]+)?"
+
+
 def names_the_agent(text: str, agent_name: str | None) -> bool:
     """Whether a line of the message speaks to the agent by name.
 
-    "Kit, send them the invoice" or "@Kit ...": the name at the start of a
-    line, or after an @. Word-bounded, so an agent called "Lem" is not woken by
-    "Lemma".
+    "Kit, send them the invoice", "hey Kit: ...", "Kit can you ...", or "@Kit"
+    anywhere. A name merely at the start of a line is not enough: a space
+    called "Sales" would otherwise be woken by "Sales numbers are up", and
+    answer it with the writer's access, in front of the group. Word-bounded, so
+    an agent called "Lem" is not woken by "Lemma".
     """
     name = (agent_name or "").strip()
     if not name or not text:
         return False
-    pattern = re.compile(
-        rf"(^|\n)[ \t>]*@?{re.escape(name)}\b|@{re.escape(name)}\b",
-        re.IGNORECASE,
-    )
-    return bool(pattern.search(text))
+    escaped = re.escape(name)
+    spoken_to = rf"(?:^|\n)[ \t>]*{_GREETING}@?{escaped}{_SPOKEN_TO}"
+    mentioned = rf"@{escaped}\b"
+    return bool(re.search(rf"{spoken_to}|{mentioned}", text, re.IGNORECASE))
 
 
 def mentions_number(text: str, number: str | None) -> bool:

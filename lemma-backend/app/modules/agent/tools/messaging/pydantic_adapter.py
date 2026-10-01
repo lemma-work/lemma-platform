@@ -93,6 +93,20 @@ def _passes_a_question_on(deps: BaseAgentContext) -> bool:
     return bool(getattr(deps, "answers_outsider", False))
 
 
+def _instruction_for_reply(
+    deps: BaseAgentContext, request: MessageUserRequest
+) -> str | None:
+    """What the run handling the reply is told to do with it, unseen by the person.
+
+    Never from a run answering somebody outside the pod. Its words are the
+    stranger's to steer, and the instruction lands in the member's own run --
+    which acts with all of the member's access -- without the member ever
+    reading it. Their answer still comes back without one: it is recorded on the
+    notification, and the stranger's conversation relays it.
+    """
+    return None if deps.answers_outsider else request.background_instruction
+
+
 def _notification_body(deps: BaseAgentContext, message: str) -> str:
     """What the recipient reads: the words as written, and on a stranger's run,
     the line saying where their answer goes."""
@@ -227,7 +241,7 @@ async def message_user(
         # Only when the agent asked. Everything above is a default the router
         # applies; this is an instruction it either follows or refuses.
         channel=request.channel.value if request.channel else None,
-        background_instruction=request.background_instruction,
+        background_instruction=_instruction_for_reply(deps, request),
         # A stranger's question passed on is always a question: the member's
         # answer is what brings this conversation back to relay it.
         expects_response=request.expects_response or _passes_a_question_on(deps),

@@ -29,18 +29,17 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
 from app.modules.agent_surfaces.services.surface_candidates import (
     admitted_surfaces,
     fan_in_candidates,
-    needs_mention_verification,
 )
 from app.modules.agent_surfaces.services.delivery_claims import (
     hand_back_delivery_claim,
     take_delivery_claim,
 )
-from app.modules.agent_surfaces.services.created_groups import (
-    created_group_surfaces,
-    named_in_group,
+from app.modules.agent_surfaces.services.created_groups import created_group_surfaces
+from app.modules.agent_surfaces.services.group_ingress import (
+    logged_and_addressed,
+    own_bot_group_message,
 )
-from app.modules.agent_surfaces.services.group_log import GroupLog
-from app.modules.agent_surfaces.domain.addressing import names_the_agent
+from app.modules.agent_surfaces.services.group_names import spoken_to_by_name
 from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -203,16 +202,13 @@ class SurfaceInboundMixin:
             )
         if receiver_surface_ids is not None and not surfaces:
             return None
-        # Before anything decides whether this is for the bot: most of a group
-        # is not, and all of it is what the log is for. Committed at once so no
-        # write is held open across the platform calls that follow.
-        if await GroupLog(self.uow).note_inbound(surfaces, parsed):
-            await commit_now(self.uow)
-
-        if needs_mention_verification(platform, parsed, surfaces):
-            async with connection_released(self.uow.session):  # Telegram API
-                parsed = await self.router.enrich_telegram_mention(parsed, surfaces[0])
-        parsed = await named_in_group(self.uow, parsed, surfaces)
+        parsed = await logged_and_addressed(
+            self.uow,
+            router=self.router,
+            surfaces=surfaces,
+            parsed=parsed,
+            platform=platform,
+        )
 
         candidates = await admitted_surfaces(
             surfaces, parsed, links=self.conversation_link_repository
@@ -318,6 +314,15 @@ class SurfaceInboundMixin:
 
         async with connection_released(self.uow.session):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
+        if parsed is not None and not parsed.is_dm:
+            parsed = await own_bot_group_message(
+                self.uow,
+                router=self.router,
+                surface_repository=self.surface_repository,
+                links=self.conversation_link_repository,
+                surface=surface,
+                parsed=parsed,
+            )
         if parsed is None:
             return None
 
@@ -418,11 +423,12 @@ class SurfaceInboundMixin:
         if self.router.is_self_addressed(surface=surface, parsed=parsed):
             return None
         # Copied on a thread is not asked (see `email_recipients`), unless a
-        # line names the agent -- which needs the body, so it is asked here.
+        # line speaks to the agent by a name people call it -- which needs the
+        # body, so it is asked here.
         if (
             parsed.platform.is_email
             and not parsed.should_start_conversation
-            and not names_the_agent(parsed.message_text, fallback_agent_display_name)
+            and not await spoken_to_by_name(self.uow, surface, parsed.message_text)
         ):
             return None
 

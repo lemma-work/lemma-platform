@@ -127,9 +127,12 @@ def test_a_group_welcomes_outsiders_only_with_somebody_answering_for_them():
 # ------------------------------------------------------------- who is outside
 
 
-def _surface():
+def _surface(*, answers_outsiders: bool = True):
+    config = SurfaceConfig.model_validate(
+        {"groups": {"answers_outsiders": answers_outsiders}}
+    )
     return SimpleNamespace(
-        id=uuid4(), pod_id=POD, surface_type=SurfacePlatform.TELEGRAM
+        id=uuid4(), pod_id=POD, surface_type=SurfacePlatform.TELEGRAM, config=config
     )
 
 
@@ -150,11 +153,19 @@ def _event(*, is_dm: bool = False) -> ParsedInboundSurfaceEvent:
     )
 
 
-def _door(*, group: SurfaceGroup | None, member_of_pod: bool = False, allow=True):
+def _door(
+    *,
+    group: SurfaceGroup | None,
+    member_of_pod: bool = False,
+    allow=True,
+    owner_in_pod: bool = True,
+):
     async def _get(*, surface_id, external_channel_id):
         return group
 
     async def _pod_ids(user_id):
+        if user_id == OWNER:
+            return [POD] if owner_in_pod else [uuid4()]
         return [POD] if member_of_pod else [uuid4()]
 
     async def _allow(*, group_id, sender_external_id):
@@ -392,3 +403,64 @@ def test_an_answer_whose_asker_went_unnamed_names_nobody():
     answered = answered_in_group(_thread(OUTSIDERS_LINK_USER, last_sender=None))
 
     assert answered.name is None
+
+
+# ------------------------------------------------------------- how often
+
+
+class _Counters:
+    """Redis as the limiter's counter script uses it: increment, return."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, int] = {}
+
+    async def eval(self, _script, _numkeys, key, _ttl):
+        self.values[key] = self.values.get(key, 0) + 1
+        return self.values[key]
+
+
+async def test_one_person_looping_does_not_spend_the_groups_day(monkeypatch):
+    from app.modules.agent_surfaces.config import surface_settings
+    from app.modules.agent_surfaces.services.outsider_limits import (
+        OutsiderTurnLimiter,
+    )
+
+    monkeypatch.setattr(
+        surface_settings, "surface_outsider_turns_per_person_per_10_minutes", 2
+    )
+    monkeypatch.setattr(surface_settings, "surface_outsider_turns_per_group_per_day", 3)
+    counters = _Counters()
+    limiter = OutsiderTurnLimiter(redis=counters)
+    group_id = uuid4()
+
+    looping = [
+        await limiter.allow(group_id=group_id, sender_external_id="777")
+        for _ in range(5)
+    ]
+
+    assert looping == [True, True, False, False, False]
+    # Only the two turns that ran were charged to the group, so another
+    # person in it is still answered.
+    assert counters.values[f"outsider:turns:{group_id}"] == 2
+    assert await limiter.allow(group_id=group_id, sender_external_id="778")
+
+
+async def test_a_bot_switched_off_for_outsiders_answers_none_of_them():
+    door = _door(group=_welcoming_group())
+
+    found = await door.group_welcoming(
+        surface=_surface(answers_outsiders=False), parsed=_event(), sender=_stranger()
+    )
+
+    assert found is None
+
+
+async def test_a_group_whose_owner_left_the_pod_answers_nobody_outside_it():
+    """Every question passed on would reach somebody who can no longer act."""
+    door = _door(group=_welcoming_group(), owner_in_pod=False)
+
+    found = await door.group_welcoming(
+        surface=_surface(), parsed=_event(), sender=_stranger()
+    )
+
+    assert found is None

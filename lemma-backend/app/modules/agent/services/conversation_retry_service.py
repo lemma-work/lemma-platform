@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
+from app.modules.agent.domain.private_notes import privacy_of
 from app.modules.agent.domain.errors import ConversationStateError
 from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.value_objects import (
@@ -76,6 +77,7 @@ class ConversationRetryService(ConversationService):
             metadata={
                 "source": "manual_retry",
                 "retried_agent_run_id": str(failed_run.id),
+                **privacy_of(failed_run.metadata),
             },
         )
         self.uow.collect_events(

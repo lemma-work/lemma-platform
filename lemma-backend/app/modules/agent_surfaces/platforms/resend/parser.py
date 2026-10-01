@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.platforms.email_identity import (
 from app.modules.agent_surfaces.platforms.email_text import inbound_email_text
 from app.modules.agent_surfaces.platforms.resend.email_recipients import (
     other_people,
+    only_acknowledges,
     pod_was_addressed,
 )
 from app.modules.agent_surfaces.platforms.resend.inbound import (
@@ -80,7 +81,7 @@ def merge_received_email(
         sender=identity.email or event.sender_email or "",
         own_address=str(event.external_channel_id or ""),
         otherwise=event.should_start_conversation,
-    )
+    ) and not (reply_target.get("cc") and only_acknowledges(message_text))
 
     return event.model_copy(
         update={
@@ -119,7 +120,7 @@ def _fetched_recipients(
     reply_target["cc"] = other_people(
         addressed_to=to, cc=cc, sender=sender, own_address=own_address
     )
-    return pod_was_addressed(addressed_to=to, own_address=own_address)
+    return pod_was_addressed(addressed_to=to, cc=cc, own_address=own_address)
 
 
 def _first_non_empty(*candidates: Any) -> list:
@@ -211,7 +212,9 @@ class ResendInboundParser:
             own_address=destination,
         )
         addressed = pod_was_addressed(
-            addressed_to=payload.get("addressed_to") or [], own_address=destination
+            addressed_to=payload.get("addressed_to") or [],
+            cc=payload.get("cc") or [],
+            own_address=destination,
         )
 
         return ParsedInboundSurfaceEvent(
@@ -238,7 +241,8 @@ class ResendInboundParser:
             is_dm=True,
             # Copied rather than addressed: answered only if a line names the
             # agent, which ingress decides once it knows the agent's name.
-            should_start_conversation=addressed,
+            should_start_conversation=addressed
+            and not (others and only_acknowledges(message_text)),
             reply_target={
                 "recipient_email": sender,
                 "subject": subject,

@@ -61,6 +61,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.services.configuration_prompt import (
     prompt_for_configuration,
 )
+from app.modules.agent_surfaces.services.group_hello import say_hello_in_group
 from app.modules.agent_surfaces.services.group_registry import (
     adopt_connected_channel,
     adopt_joined_group,
@@ -544,9 +545,18 @@ class AppEventHandler:
             return
         if not parsed.actor_external_user_id or not parsed.external_channel_id:
             return
-        if await adopt_joined_group(
+        created = await adopt_joined_group(
             self.uow, surface=surface, parsed=parsed, owner_user_id=ctx.user_id
-        ):
+        )
+        if created is not None:
+            if created:
+                await say_hello_in_group(
+                    self.uow,
+                    surface=surface,
+                    adapter=adapter,
+                    credentials=credentials,
+                    channel_id=parsed.external_channel_id,
+                )
             return
         if surface.channel_route_for(
             channel_id=parsed.external_channel_id, channel_name=""

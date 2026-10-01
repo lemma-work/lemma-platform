@@ -62,3 +62,18 @@ def test_an_ordinary_message_carries_no_such_label():
     message = SimpleNamespace(text="what's open for Thursday?", metadata={})
 
     assert PRIVATE_NOTE_LABEL not in user_prompt_text(message)
+
+
+def test_a_note_in_a_persons_own_chat_is_not_kept_from_them():
+    """The only other reader of a direct chat is the person who wrote the note."""
+    from app.modules.agent.domain.private_notes import (
+        PRIVATE_NOTE_IN_DM_LABEL,
+        note_label,
+    )
+
+    assert note_label({"private_note": True, "private_note_in_dm": True}) == (
+        PRIVATE_NOTE_IN_DM_LABEL
+    )
+    assert "reveal" not in PRIVATE_NOTE_IN_DM_LABEL
+    assert note_label({"private_note": True}) == PRIVATE_NOTE_LABEL
+    assert note_label({}) is None
