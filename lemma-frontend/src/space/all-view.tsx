@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { source, type LibraryItem, type Member, type SpaceView, type Tab } from "@/data";
-import { AppIcon, ChevronDownIcon, FileIcon, GlobeIcon, LibraryIcon, LockIcon, PeopleIcon, PlusIcon, SearchIcon, TableIcon } from "@/ui/icons";
+import { AppIcon, ChevronDownIcon, FileIcon, GlobeIcon, LibraryIcon, LockIcon, PeopleIcon, PlusIcon, SearchIcon, TableIcon, UploadIcon } from "@/ui/icons";
 import { isDoc } from "@/docs/doc-space";
 import { useQueryClient } from "@tanstack/react-query";
 import { PAGE_TEMPLATES, makePage, type PageTemplate } from "@/docpages/templates";
@@ -11,6 +11,11 @@ import { AppsIcon as GridIcon, CheckCircleIcon, MenuIcon as ListIcon, SparkleIco
 import { docTitle, fileKind } from "@/library/doc-title";
 import { useMaking } from "./making";
 import { key } from "@/session/storage";
+import { useLibraryWrites } from "@/library/library-writes";
+import { emptyFor, type EmptyPlace } from "./empty-copy";
+import { SpaceEmpty, type EmptyHandlers } from "./empty-state";
+import { AppIdeas } from "@/stage/apps";
+import { guideTitle } from "@/tour/guides";
 
 /** One row, whatever it is: a page, an app, a table or a file. */
 type Row = {
@@ -90,7 +95,7 @@ function Glyph({ kind }: { kind: Row["kind"] }) {
     return <span className={"all__glyph all__glyph--" + kind}>{icon}</span>;
 }
 
-export function AllView({ podId, spaceName, botName, members, view, apps, onOpenFile, onOpenTable, onOpenApp, onOpenFolder, onNewPage, onNewChat }: {
+export function AllView({ podId, spaceName, botName, members, view, apps, appsPending = false, onOpenFile, onOpenTable, onOpenApp, onOpenFolder, onNewPage, onNewChat, onAsk, onLearn }: {
     podId: string;
     spaceName: string;
     /** The space's bot, by name, for the templates that mention it. */
@@ -98,12 +103,18 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
     members: Member[];
     view: SpaceView;
     apps: Extract<Tab, { kind: "app" }>[];
+    /** The app list is still on its way, so no apps is not yet an answer. */
+    appsPending?: boolean;
     onOpenFile: (path: string) => void;
     onOpenTable: (name: string) => void;
     onOpenApp: (id: string) => void;
     onOpenFolder: () => void;
     onNewPage: () => Promise<void>;
     onNewChat: () => void;
+    /** Put words for the teammate in the chat box, to finish or send. */
+    onAsk?: (text: string) => void;
+    /** Open the guide to this place. */
+    onLearn?: () => void;
 }) {
     const [query, setQuery] = useState("");
     /* Files has two sides, as Space has "Your items" and "Shared": the
@@ -119,6 +130,34 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
     const cache = useQueryClient();
     const maker = useMaking();
     const making = maker.busy;
+    /* Files come in here as well as going out: uploaded into the folder on
+       screen, from the button or by dropping them on the list. */
+    const writes = useLibraryWrites(podId, directory);
+    const picker = useRef<HTMLInputElement>(null);
+    const upload = async (chosen: File[]) => {
+        if (chosen.length === 0) return;
+        await writes.upload(chosen);
+        void cache.invalidateQueries({ queryKey: ["library", podId] });
+    };
+    const [dropping, setDropping] = useState(false);
+    const dragDepth = useRef(0);
+    const carriesFiles = (event: React.DragEvent) => Array.from(event.dataTransfer.types).includes("Files");
+    const dropProps = view !== "files" ? {} : {
+        onDragEnter: (event: React.DragEvent) => { if (!carriesFiles(event)) return; dragDepth.current += 1; setDropping(true); },
+        onDragOver: (event: React.DragEvent) => { if (carriesFiles(event)) event.preventDefault(); },
+        onDragLeave: (event: React.DragEvent) => {
+            if (!carriesFiles(event)) return;
+            dragDepth.current = Math.max(0, dragDepth.current - 1);
+            if (dragDepth.current === 0) setDropping(false);
+        },
+        onDrop: (event: React.DragEvent) => {
+            if (!carriesFiles(event)) return;
+            event.preventDefault();
+            dragDepth.current = 0;
+            setDropping(false);
+            void upload(Array.from(event.dataTransfer.files));
+        },
+    };
 
     const wantsFiles = view === "all" || view === "pages" || view === "files";
     const files = useQuery({
@@ -215,10 +254,46 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
         return shown.sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? ""));
     }, [files.data, pagesFolder.data, tables.data, apps, view, query, scope, onOpenFile, onOpenTable, onOpenApp, onOpenFolder]);
 
-    const loading = (wantsFiles && files.isPending) || ((view === "all" || view === "tables") && tables.isPending);
+    const loading = (wantsFiles && files.isPending) || ((view === "all" || view === "tables") && tables.isPending) || ((view === "all" || view === "apps") && appsPending);
+
+    /* Nothing to list, and nothing asked for: the place says what belongs in
+       it instead of drawing an empty table. A search that finds nothing is a
+       different answer and keeps its one line. */
+    const nothing = !loading && rows.length === 0 && !query;
+    const place: EmptyPlace = view === "files" ? { place: "files", scope, folder: trail.length > 0 }
+        : view === "pages" || view === "apps" || view === "tables" ? { place: view }
+        : { place: "all" };
+    const handlers: EmptyHandlers = {
+        page: () => void maker.run("page", onNewPage),
+        upload: () => picker.current?.click(),
+        ask: onAsk,
+    };
+    /* Apps keep the idea catalog under whatever is listed: the ready-made
+       way to a first app, and to the next one. */
+    const ideas = view === "apps" && !query && onAsk && (
+        <AppIdeas name={botName} onAsk={onAsk} title={nothing ? "Or start from an idea" : "App ideas"} />
+    );
+    const templates = view === "pages" && !query && (
+        <section className="all__templates" aria-label="Start with a template">
+            <h2>{nothing ? "Or start from a template" : "Start with a template"}</h2>
+            <div className="all__template-row">
+                {PAGE_TEMPLATES.map((template) => (
+                    <button key={template.id} className="all__template" data-template={template.id} disabled={Boolean(making)} onClick={() => void fromTemplate(template)}>
+                        <span className="all__template-icon"><TemplateGlyph id={template.id} /></span>
+                        <b>{making === template.id ? "Making…" : template.title}</b>
+                        <small>{template.blurb}</small>
+                    </button>
+                ))}
+            </div>
+        </section>
+    );
 
     return (
-        <div className="all">
+        <div className={"all" + (dropping && !nothing ? " all--drop" : "")} {...dropProps}>
+            {view === "files" && (
+                <input ref={picker} type="file" multiple hidden tabIndex={-1} aria-hidden="true"
+                    onChange={(event) => { void upload(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+            )}
             <header className="all__head">
                 <h1>{TITLES[view]}</h1>
                 <label className="all__search">
@@ -235,6 +310,9 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
                     </button>
                     {newOpen && (
                         <div className="all__menu" role="menu" onMouseLeave={() => setNewOpen(false)}>
+                            {view === "files" && <button role="menuitem" onClick={() => { setNewOpen(false); picker.current?.click(); }}><UploadIcon size={16} /> Upload files</button>}
+                            {view === "tables" && onAsk && <button role="menuitem" onClick={() => { setNewOpen(false); onAsk("Set up a table to track "); }}><TableIcon size={16} /> Table</button>}
+                            {view === "apps" && onAsk && <button role="menuitem" onClick={() => { setNewOpen(false); onAsk("Build an app that "); }}><AppIcon size={16} /> App</button>}
                             <button role="menuitem" onClick={() => { setNewOpen(false); void maker.run("page", onNewPage); }}><FileIcon size={16} /> Page</button>
                             <button role="menuitem" onClick={() => { setNewOpen(false); onNewChat(); }}><PlusIcon size={16} /> Conversation</button>
                         </div>
@@ -247,6 +325,14 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
                     <button onClick={maker.clear} aria-label="Dismiss">×</button>
                 </p>
             )}
+            {writes.problem && (
+                <p className="all__error" role="alert">
+                    {writes.problem}
+                    <button onClick={writes.clearProblem} aria-label="Dismiss">×</button>
+                </p>
+            )}
+            {writes.busy && <p className="all__busy" role="status">Uploading {writes.busy}…</p>}
+            {dropping && !nothing && <p className="all__drop-note">Drop to upload them here.</p>}
             {view === "files" && (
                 <div className="all__scopes">
                     <div className="all__tabs" role="tablist" aria-label="Whose files">
@@ -270,21 +356,8 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
                     )}
                 </div>
             )}
-            {view === "pages" && !query && (
-                <section className="all__templates" aria-label="Start with a template">
-                    <h2>Start with a template</h2>
-                    <div className="all__template-row">
-                        {PAGE_TEMPLATES.map((template) => (
-                            <button key={template.id} className="all__template" data-template={template.id} disabled={Boolean(making)} onClick={() => void fromTemplate(template)}>
-                                <span className="all__template-icon"><TemplateGlyph id={template.id} /></span>
-                                <b>{making === template.id ? "Making…" : template.title}</b>
-                                <small>{template.blurb}</small>
-                            </button>
-                        ))}
-                    </div>
-                </section>
-            )}
-            {layout === "grid" ? (
+            {!nothing && templates}
+            {rows.length === 0 ? null : layout === "grid" ? (
                 <div className="all__grid">
                     {rows.map((row) => (
                         <button key={row.key} className="all__card" onClick={row.open} title={row.file}>
@@ -322,9 +395,14 @@ export function AllView({ podId, spaceName, botName, members, view, apps, onOpen
                 </tbody>
             </table>
             )}
-            {!loading && rows.length === 0 && (
-                <p className="all__empty">{query ? "Nothing matches." : view === "pages" ? "No pages yet. New → Page starts one." : "Nothing here yet."}</p>
+            {nothing && (
+                <SpaceEmpty empty={emptyFor(place, botName)} on={handlers} dropping={dropping}
+                    busy={making === "page" ? "page" : writes.busy ? "upload" : null}
+                    learn={onLearn && (view === "pages" || view === "tables" || view === "apps") ? { label: guideTitle(view), onOpen: onLearn } : undefined} />
             )}
+            {nothing && (templates || ideas) && <div className="all__after-empty">{templates}{ideas}</div>}
+            {!loading && rows.length === 0 && query && <p className="all__empty">Nothing matches.</p>}
+            {!nothing && !loading && ideas}
             {loading && <p className="all__empty">Loading…</p>}
         </div>
     );

@@ -108,6 +108,7 @@ export function WaitingInbox({ pods }: {
             <button
                 ref={anchor}
                 className="icon-button wf-inbox__open"
+                data-tour="needs"
                 title={count ? count + " waiting on you" : "Workflows waiting on you"}
                 aria-label={count ? "Workflows waiting on you, " + count : "Workflows waiting on you"}
                 aria-expanded={open}

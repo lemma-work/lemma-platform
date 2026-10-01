@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 170 |
 | `gap` | 2 |
-| `manual` | 18 |
+| `manual` | 21 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **190** |
+| **total** | **193** |
 
 Scenario tests declaring a promise: 424.
 
@@ -120,6 +120,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-041` A pod always has at least one admin | `covered` | `test_the_last_pod_admin_cannot_step_down`, `test_the_last_pod_admin_cannot_remove_themselves`, `test_an_organization_owner_cannot_be_the_admin_who_steps_down` |
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_repeated_deletion_still_reports_success`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
+| `PS-POD-060` An empty place says what belongs there and offers a way to start | `manual` | — |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
 
@@ -167,6 +168,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_an_editor_cannot_reach_over_an_owner`, `test_an_editor_removes_members_and_editors`, `test_a_member_manages_nobody`, `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
+| `PS-ONB-070` A new person is shown what Lemma is and where everything is | `manual` | — |
+| `PS-ONB-071` A person can ask how the place they are in works | `manual` | — |
 | `PS-ONB-060` A visitor can learn about Lemma without signing in | `covered` | `test_public_guides_and_company_pages` |
 | `PS-ONB-061` An AI reader can discover and read the public website | `covered` | `test_machine_readable_site` |
 | `PS-ONB-062` Existing public and workspace entry links keep working | `covered` | `test_existing_links` |

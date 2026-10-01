@@ -398,6 +398,57 @@ are shown with a retry action rather than an indefinite loading message.
 
 **Contracts:** `users.ensure_first_workspace`
 
+## Capability: Find your way around
+
+### PS-ONB-070 — A new person is shown what Lemma is and where everything is
+**Status:** manual
+
+> **Verified by:** signing up on a live deployment, hiring the first teammate
+> and opening its Home: the tour opens once, after the first-profile step, and
+> not again on reload. Then taking it again from the help button and with
+> `?tour=1`, at desktop and phone widths. `npm test` in `lemma-frontend` checks
+> the stops and when the tour is offered (`tests/app-tour.test.ts`); the overlay
+> itself needs a browser.
+
+- When a person whose account is less than a week old first opens a teammate's
+  Home in a browser, the system shall offer a tour that says what Lemma is and
+  where everything is.
+- The tour shall point at the real controls: the teammates, the places in a
+  teammate's space, the box to ask in, where requests for the person's answer
+  or approval arrive, sharing, and the teammate's own page.
+- The system shall offer the tour once per person per browser, whether it was
+  finished or dismissed.
+- While another dialog is open, the system shall wait for it to close before
+  offering the tour.
+- If the person is in a conversation, then the system shall not interrupt it to
+  offer the tour.
+- The system shall let a person end the tour at any stop, and take it again at
+  any time from the help menu.
+- While the tour is showing, the system shall not act on clicks or shortcuts
+  meant for the workspace beneath it.
+
+### PS-ONB-071 — A person can ask how the place they are in works
+**Status:** manual
+
+> **Verified by:** opening the help menu on Pages, a page, Workflows, a
+> workflow run, Tables, a table and Apps, and from the empty Workflows and
+> Pages, at desktop and phone widths. `npm test` in `lemma-frontend` checks
+> each guide's lines and which place gets which guide
+> (`tests/place-guides.test.ts`); the card itself needs a browser.
+
+- Where a place has things to do that nothing on screen advertises, the
+  system shall offer a short guide to it from the help menu, as the menu's
+  first item while the person is in that place.
+- When a place is empty, the system shall link to its guide beside the ways
+  to make the first thing.
+- The guide shall say each thing as a gesture and what it does, by the name of
+  the teammate that does the work.
+- Where a place can be learned by trying, the guide shall offer it: a real
+  page that explains pages, or a request put in the chat box for the person to
+  send.
+- The system shall not open a guide on its own.
+- If the person goes to another place, then the system shall close the guide.
+
 ## Capability: Explore the public website
 
 ### PS-ONB-060 — A visitor can learn about Lemma without signing in
