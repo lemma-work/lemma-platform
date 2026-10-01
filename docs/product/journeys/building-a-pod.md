@@ -293,6 +293,34 @@ Existing apps shall remain reachable in their own tabs.
 
 ---
 
+## Capability: Start from an empty pod
+
+### PS-POD-060 — An empty place says what belongs there and offers a way to start
+**Status:** manual
+
+> **Verified by:** hiring a teammate in the sample workspace
+> (`NEXT_PUBLIC_DATA=sample`), where a new hire starts empty, and opening its
+> Pages, Apps, Tables, Files, Workflows and Chats, and a table with no rows.
+> `npm test` in `lemma-frontend` checks the words and actions of every empty
+> place (`tests/empty-copy.test.ts`) and that a sample hire starts empty
+> (`tests/sample-hire.test.ts`).
+
+- While a place in a pod — its pages, apps, tables, files, workflows,
+  conversations, or a table's rows — holds nothing the person can see, the
+  system shall say in one sentence what belongs there and who makes it, instead
+  of showing an empty list.
+- The system shall offer at least one way to make the first thing that needs no
+  typing.
+- When a person chooses a suggested request, the system shall put it in the
+  chat box for them to change or send, and shall not send it.
+- Where files can be added, the system shall accept files dropped on the place.
+- When the pod's agent finishes work, the system shall show what it made in the
+  pod's lists without a reload.
+- If a search or a filter finds nothing, then the system shall say that nothing
+  matches rather than that the place is empty.
+
+---
+
 ## Not covered here
 
 | Concern | Where it lives |

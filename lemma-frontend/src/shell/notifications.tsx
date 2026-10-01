@@ -127,6 +127,7 @@ export function Notifications({ podId }: { podId: string }) {
             <button
                 ref={bell}
                 className="icon-button notify__bell"
+                data-tour="needs"
                 title={count ? count + " unread" : "Notifications"}
                 aria-label={count ? "Notifications, " + count + " unread" : "Notifications"}
                 aria-expanded={open}

@@ -10,6 +10,9 @@ import { RunRowButton } from "@/workflow/run-row";
 import { useSpaceRuns, useWorkflowList } from "@/workflow/use-run";
 import { useSchedules } from "@/schedule/queries";
 import { ChevronRightIcon, WorkflowIcon } from "@/ui/icons";
+import { emptyFor } from "./empty-copy";
+import { SpaceEmpty } from "./empty-state";
+import { guideTitle } from "@/tour/guides";
 
 type View = "workflows" | "waiting" | "running" | "recent";
 
@@ -19,11 +22,15 @@ type View = "workflows" | "waiting" | "running" | "recent";
  *  there; what is waiting on me; what is going right now; what happened.
  *  Every run in every view opens its own page — the list is never a dead end
  *  that only leads back to the workflow. */
-export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun }: {
+export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun, onAsk, onLearn }: {
     pod: Pod;
     pods: Pod[];
     onOpenWorkflow: (name: string) => void;
     onOpenRun: (runId: string, label: string) => void;
+    /** Put words for the teammate in the chat box, to finish or send. */
+    onAsk?: (text: string) => void;
+    /** Open the guide to workflows. */
+    onLearn?: () => void;
 }) {
     const [view, setView] = useState<View>("workflows");
     const flows = useWorkflowList(pod.id);
@@ -76,7 +83,10 @@ export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun }: {
                 <>
                     {flows.isPending && <p className="all__empty">Loading…</p>}
                     {flows.isError && <p className="all__empty">{isForbidden(flows.error) ? "You may not list the workflows here." : "Couldn’t load workflows."}</p>}
-                    {flows.isSuccess && flows.data.length === 0 && <p className="all__empty">No workflows yet. Ask {pod.teammate?.name || pod.name} to make one.</p>}
+                    {flows.isSuccess && flows.data.length === 0 && (
+                        <SpaceEmpty empty={emptyFor({ place: "workflows" }, pod.teammate?.name || pod.name)} on={{ ask: onAsk }}
+                            learn={onLearn ? { label: guideTitle("workflows"), onOpen: onLearn } : undefined} />
+                    )}
                     <ul className="wfindex">
                         {(flows.data ?? []).map((flow) => (
                             <FlowRow key={flow.id} flow={flow} runs={byFlow.get(flow.id) ?? []}
