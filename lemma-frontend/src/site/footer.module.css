@@ -86,16 +86,9 @@
     .brand {
         grid-column: 1 / -1;
     }
-    .footer .brand p {
-        display: none;
-    }
-    .oss {
-        margin-top: 16px;
-    }
     .bottom {
         flex-direction: column;
     }
 }
 
 .brand :global(.lemma-wordmark) { color: #20211f; font-size: 25px; }
-.brand :global(.lemma-brand-mark i) { background: #4a35c9; }
