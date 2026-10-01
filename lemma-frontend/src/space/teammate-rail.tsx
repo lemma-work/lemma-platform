@@ -60,6 +60,20 @@ export function TeammateRail({ pods, activeId, atTeam, hiring = false, owed, org
         setTip({ top: box.top + box.height / 2, left: box.right + 10, name, line });
     };
     const hide = () => setTip(null);
+    /* The foot is handed in by the shell, so its buttons cannot be given
+       `hint` directly. Anything in it that wants the rail's tip says so with
+       `data-tip` (and `data-tip-line`), and the foot listens for all of them. */
+    const footHint = (event: SyntheticEvent<HTMLElement>) => {
+        const asking = (event.target as HTMLElement).closest<HTMLElement>("[data-tip]");
+        if (!asking || !event.currentTarget.contains(asking)) { hide(); return; }
+        const box = asking.getBoundingClientRect();
+        const name = asking.dataset.tip ?? "";
+        const line = asking.dataset.tipLine ?? "";
+        const top = box.top + box.height / 2;
+        const left = box.right + 10;
+        setTip((now) => now && now.name === name && now.line === line && now.top === top && now.left === left
+            ? now : { top, left, name, line });
+    };
     const hint = (name: string, line: string) => ({
         onMouseEnter: show(name, line),
         onFocus: show(name, line),
@@ -110,7 +124,7 @@ export function TeammateRail({ pods, activeId, atTeam, hiring = false, owed, org
                     <span className="trail__slot trail__plus"><PlusIcon size={16} /></span>
                 </button>
             )}
-            <div className="trail__foot">{foot}</div>
+            <div className="trail__foot" onMouseOver={footHint} onFocus={footHint} onMouseLeave={hide} onBlur={hide} onClick={hide}>{foot}</div>
             {tip && (
                 <span className="trail__tip" role="tooltip" style={{ top: tip.top, left: tip.left }}>
                     {tip.name}

@@ -402,6 +402,8 @@ export function Transcript({
                                                 return <PlanCard key={item.id} steps={item.steps} />;
                                             }
                                             if (item.kind === "tool-card") {
+                                                /* An open sign-in is on the shelf above the composer. */
+                                                if (item.id === dockedId) return null;
                                                 return (
                                                     <ToolCardView
                                                         key={item.id}

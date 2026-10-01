@@ -6,7 +6,7 @@ import { isLandingPreview } from "@/marketing/preview-mode";
 import type { Message, Pod } from "@/data";
 import type { ApprovalDecision } from "./approval";
 import { NEW_CONVERSATION } from "@/data";
-import { buildTurns, openInteraction } from "./turns";
+import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { Transcript } from "./transcript";
 import { Composer } from "./composer";
 import { InteractionDock } from "./interaction-dock";
@@ -106,6 +106,8 @@ export function ConversationPane({
        session, so a docked card the sample cannot draw is a docked card nobody
        looks at until an agent happens to ask for something. */
     const waitingOn = useMemo(() => openInteraction(turns), [turns]);
+    const signingIn = useMemo(() => openSignIn(turns), [turns]);
+    const [crowded, setCrowded] = useState(false);
 
     const open = conversationId && conversationId !== NEW_CONVERSATION ? conversationId : conversation.data?.id ?? null;
 
@@ -151,17 +153,33 @@ export function ConversationPane({
                 /* Drawn here too, so the control can be looked at; sending is
                    what the sample cannot do, and it says so the same way. */
                 onRemember={() => setError("This is the sample source — connect a session to send anything.")}
-                dockedId={waitingOn?.id}
+                dockedId={waitingOn?.id ?? signingIn?.id}
                 onOpenApp={onOpenApp}
                 onOpenFile={onOpenFile}
                 onOpenTable={onOpenTable}
                 emptyBody={emptyHint?.body ?? "Send a message to start a new conversation."}
             />
-            <InteractionDock interaction={waitingOn} teammate={teammate.name} onResolve={resolve} />
+            <InteractionDock
+                interaction={waitingOn}
+                teammate={teammate.name}
+                onResolve={resolve}
+                signIn={signingIn}
+                conversationId={open}
+                crowded={crowded}
+            />
             <Composer
-                placeholder={reply.placeholder ?? placeholder ?? "Ask " + (teammate.name || pod.name) + "…"}
-                choices={reply.choices}
-                note={waitingOn || isLandingPreview() ? undefined : pod.waiting || undefined}
+                placeholder={waitingOn?.kind === "question"
+                    ? "Or answer in your own words…"
+                    : reply.placeholder ?? placeholder ?? "Ask " + (teammate.name || pod.name) + "…"}
+                choices={
+                    /* What is typed while a question is docked answers it and
+                       goes nowhere else, so where it goes is not asked. */
+                    waitingOn?.kind === "question" ? undefined : reply.choices
+                }
+                note={waitingOn?.kind === "approval"
+                    ? "sending a message skips this request"
+                    : waitingOn || signingIn || isLandingPreview() ? undefined : pod.waiting || undefined}
+                onTall={setCrowded}
                 busy={false}
                 canStop={false}
                 fill={fill}

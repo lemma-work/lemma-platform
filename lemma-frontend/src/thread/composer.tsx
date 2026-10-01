@@ -55,6 +55,10 @@ function Choices({ choices }: { choices: ComposerChoices }) {
     );
 }
 
+/** About four lines at the chat size: past this a draft is a paragraph, and the
+ *  card docked above the composer gives way to it. */
+const TALL_PX = 110;
+
 export function Composer({
     placeholder,
     note,
@@ -73,6 +77,7 @@ export function Composer({
     queuedNote,
     onWithdraw,
     choices,
+    onTall,
 }: {
     placeholder: string;
     note?: string;
@@ -107,6 +112,10 @@ export function Composer({
     /** Where the message goes, in a conversation that also lives on a chat
      *  platform. Absent everywhere else, and then nothing is drawn. */
     choices?: ComposerChoices;
+    /** Told when the draft grows past a few lines, and when it is back under.
+     *  A long draft and a docked card together left the conversation a line
+     *  tall; the card folds on this. */
+    onTall?: (tall: boolean) => void;
 }) {
     const hintId = useId();
     const chosen = choices?.options.find((option) => option.id === choices.value) ?? null;
@@ -130,12 +139,20 @@ export function Composer({
         // Keyed on the ask, so the same text asked for twice fills twice.
     }, [fill?.id]);
 
+    const tallNow = useRef(false);
+    const onTallRef = useRef(onTall);
+    onTallRef.current = onTall;
     useLayoutEffect(() => {
         const field = input.current;
         if (!field) return;
         const resize = () => {
             field.style.height = "auto";
             field.style.height = Math.min(field.scrollHeight, 200) + "px";
+            const tall = field.scrollHeight > TALL_PX;
+            if (tall !== tallNow.current) {
+                tallNow.current = tall;
+                onTallRef.current?.(tall);
+            }
         };
         resize();
         const observer = new ResizeObserver(resize);

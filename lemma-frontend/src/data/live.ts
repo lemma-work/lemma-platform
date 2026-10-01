@@ -1303,6 +1303,11 @@ export const liveSource: PodSource = {
         forgetPod(podId);
     },
 
+    async deletePod(podId: string): Promise<void> {
+        await lemma(podId).pods.delete(podId);
+        forgetPod(podId);
+    },
+
     async uploadIcon(file: File): Promise<string> {
         const uploaded = (await lemma().icons.upload(file)) as { url?: string; icon_url?: string; path?: string };
         const url = uploaded.url ?? uploaded.icon_url ?? uploaded.path;

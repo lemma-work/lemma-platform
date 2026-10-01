@@ -1,4 +1,4 @@
-import { githubUrl } from "@/site/links";
+import { discordUrl, githubUrl } from "@/site/links";
 import { absoluteUrl } from "@/site/seo/site-url";
 
 /**
@@ -46,5 +46,6 @@ Open source (AGPLv3 core, Apache-2.0 SDKs). Runs on your own machine, your own s
 - [Changelog](${absoluteUrl("/changelog")}): every release, newest first.
 - [Blog](${absoluteUrl("/blog")})
 - [GitHub](${githubUrl}): source, issues, and the license split.
+- [Discord](${discordUrl}): talk to the team and other people building with Lemma.
 `;
 }

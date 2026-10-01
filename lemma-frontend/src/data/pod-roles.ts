@@ -18,6 +18,11 @@ export const POD_ROLES = [
  *  decides who holds it, and this app only stops offering what it will refuse. */
 export const MANAGE_MEMBERS = "pod.member.manage";
 
+/** The action the server checks before a pod is deleted. A pod admin holds
+ *  it, and so does the organization's owner without being a member at all —
+ *  which is why this is asked of the server rather than read off a role. */
+export const DELETE_POD = "pod.delete";
+
 /** A member's roles, said as the roster says them. A custom role this build
  *  does not know is still a role, so it is shown tidied rather than dropped. */
 export function readPodRoles(roles: readonly string[] | null | undefined): { role: string; can: string } {
