@@ -10,7 +10,7 @@ import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { InteractionDock } from "./interaction-dock";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
 import { applyTitle, patchConversationLists, refreshConversationLists } from "./conversation-list";
-import { Transcript } from "./transcript";
+import { rememberRequest, Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
 import { splitQueued, withdrawFailure, withoutSent } from "./queued";
@@ -591,6 +591,9 @@ export function LiveConversation({
                only cost a round trip. Anything else finished inline, and the
                return is already there for the card to find. */
             const queued = resolution?.status === "queued";
+            /* Answered, so no longer owed: the rail and Home drop it now
+               rather than at the next minute's refetch. */
+            void queryClient.invalidateQueries({ queryKey: ["conversation-asks"] });
             if (!queued) {
                 void loadMessages({ conversationId: conversation, limit: 100 }).catch(() => undefined);
             }
@@ -602,7 +605,7 @@ export function LiveConversation({
                 .resumeIfRunning(conversation, { expectRun: queued ? "queued" : true, force: true })
                 .catch(() => undefined);
         },
-        [session, client, pod.id, loadMessages],
+        [session, client, pod.id, loadMessages, queryClient],
     );
 
     /* ── the call layer ───────────────────────────────────────────────
@@ -670,6 +673,7 @@ export function LiveConversation({
                 onOpenTable={onOpenTable}
                 onResolve={resolve}
                 onRetry={failure.retryable && !modelMissing ? () => void session.retryFailedRun() : undefined}
+                onRemember={(text) => void send(rememberRequest(text)).catch(() => undefined)}
                 noModel={modelMissing}
                 modelsAction={pointsAtModels(error)}
                 dockedId={waitingOn?.id}

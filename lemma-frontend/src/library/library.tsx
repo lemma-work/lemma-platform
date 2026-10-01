@@ -256,7 +256,7 @@ export function TableView({ podId, name, onOpenRecord }: {
        match are not the rows that were on screen. */
     const onScreen = matches.slice(0, drawn);
     const undrawn = matches.length - onScreen.length;
-    return <section className={"library-view table-view" + (full ? " is-expanded" : "")} ref={view}><header className="library-heading"><div><h1>{readableName(name)}{(detail.data as { enable_rls?: boolean } | undefined)?.enable_rls && <span className="rls-badge" title="Row-level security: everyone in this space opens the table, and each person sees only their own rows">RLS</span>}</h1><p>{(detail.data as { enable_rls?: boolean } | undefined)?.enable_rls ? "Row-level security on · each person sees their own rows · " : ""}{allRows.length} rows loaded</p></div>
+    return <section className={"library-view table-view" + (full ? " is-expanded" : "")} ref={view}><header className="library-heading"><div><h1>{readableName(name)}{(detail.data as { enable_rls?: boolean } | undefined)?.enable_rls && <span className="rls-badge" title="Row-level security: everyone here opens the table, and each person sees only their own rows">RLS</span>}</h1><p>{(detail.data as { enable_rls?: boolean } | undefined)?.enable_rls ? "Row-level security on · each person sees their own rows · " : ""}{allRows.length} rows loaded</p></div>
         {/* Values are this button; the table's *shape* is the Ask action in the
             view toolbar. Two buttons for the second thing, one here and one up
             there, would be two places to change the wording and two chances for

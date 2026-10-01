@@ -1,0 +1,37 @@
+<!-- Lemma quick widget v1: the whole shape of a widget on the page kit.
+     The page supplies the --lemma-widget-* tokens and window.lemma:
+       data:  lemma.query(sql) -> rows, lemma.records(table, opts), lemma.client()
+       draw:  lemma.stats / bars / line / scatter / table / record  (see SKILL.md)
+       talk:  lemma.canCompose(), lemma.compose(text)
+       text:  lemma.esc / num / money / pct / date
+     So a widget is a finding line, one query and one draw call. -->
+<section class="w">
+  <p class="w-finding" id="w-finding">Loading…</p>
+  <div id="w-chart"></div>
+  <button class="w-ask" id="w-ask" hidden>Why are customers cooling?</button>
+</section>
+<style>
+.w { font: 14px/1.45 var(--lemma-widget-font, system-ui, sans-serif); color: var(--lemma-widget-text, #1f1f1f); }
+.w-finding { font-size: 16px; font-weight: 500; margin: 0 0 12px; }
+.w-finding[data-kind="error"] { color: var(--lemma-widget-danger, #b3261e); font-size: 14px; }
+.w-ask { margin-top: 12px; font: inherit; font-size: 12.5px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--lemma-widget-accent-line, #c9d6f7); background: var(--lemma-widget-accent-soft, #eef3fd); color: inherit; cursor: pointer; }
+</style>
+<script>
+  lemma.query("select health, count(*) as customers from customers group by health order by customers desc")
+    .then(function (rows) {
+      var finding = document.getElementById("w-finding");
+      if (!rows.length) { finding.textContent = "No customers yet."; return; }
+      var total = rows.reduce(function (a, r) { return a + Number(r.customers); }, 0);
+      finding.textContent = rows[0].health + " is the largest group: " + lemma.pct(rows[0].customers / total) + " of " + lemma.num(total) + " customers.";
+      lemma.bars("w-chart", rows, { label: "health", value: "customers" });
+      lemma.canCompose().then(function (ok) {
+        var ask = document.getElementById("w-ask");
+        ask.hidden = !ok;
+        ask.onclick = function () { lemma.compose(ask.textContent); };
+      });
+    }, function (error) {
+      var finding = document.getElementById("w-finding");
+      finding.dataset.kind = "error";
+      finding.textContent = error.message;
+    });
+</script>

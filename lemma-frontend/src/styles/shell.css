@@ -5432,6 +5432,15 @@ a.reach { text-decoration: none; }
 .message-text > .message-actions .copy-control__button { background: var(--chrome); }
 .message-actions .copy-control__button { width: 28px; height: 28px; background: var(--paper); color: var(--ink-3); }
 .message-actions .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
+.message-actions { gap: 2px; }
+.message-actions .copy-control__button:disabled { cursor: default; color: var(--ok); }
+/* The platform saying the teammate wrote a note: quiet, under the reply,
+   never a bubble. */
+.noted { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; margin: 6px 0 0; font-size: 12.5px; line-height: 1.4; color: var(--ink-3); }
+.noted > svg { flex: none; align-self: center; }
+.noted .linkish { line-height: inherit; padding: 0; }
+.noted__topic { white-space: nowrap; }
+.noted .linkish { font-size: inherit; color: var(--ink-2); }
 .copy-control__button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 8px; background: var(--paper); color: var(--ink-2); cursor: pointer; }
 .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
 /* The copy button floats over the block's top-right corner instead of

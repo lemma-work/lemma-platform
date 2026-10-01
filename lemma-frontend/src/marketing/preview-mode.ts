@@ -17,9 +17,15 @@ export function readTourStep(data: unknown): number | null {
 }
 
 export function previewTabForStep(step: number): string {
-    /* "It learns how you work": the teammate's own page, open at what it has
-       been taught. */
-    if (step === 2) return "space:about";
-    if (step === 3) return "app:launch";
+    /* "It builds what the job needs": the app it made. */
+    if (step === 2) return "app:launch";
+    /* "It writes down what it learns": the teammate's own page, open at what
+       it remembers. */
+    if (step === 3) return "space:about";
     return "conversation";
+}
+
+/** Which part of About a tour step opens, if it opens About at all. */
+export function previewAboutForStep(step: number): "memory" | null {
+    return step === 3 ? "memory" : null;
 }

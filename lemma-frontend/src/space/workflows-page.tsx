@@ -140,9 +140,9 @@ function FlowRow({ flow, runs, schedules, agentNames, onOpen }: {
                 <span className="wfindex__body">
                     <span className="wfindex__title">
                         <b>{flow.name}</b>
-                        <em title={flow.perPerson ? "Runs separately for each person, as them" : "Runs once for the whole space"}>{flow.perPerson ? "Each person" : "Admin"}</em>
+                        <em title={flow.perPerson ? "Runs separately for each person, as them" : "Runs once, for everyone here"}>{flow.perPerson ? "Each person" : "Admin"}</em>
                         {!flow.active && <em>Paused</em>}
-                        {missing.length > 0 && <em data-warn title={"Hands work to " + missing.join(", ") + ", which is not in this space"}>Needs setup</em>}
+                        {missing.length > 0 && <em data-warn title={"Hands work to " + missing.join(", ") + ", which is not here"}>Needs setup</em>}
                     </span>
                     <small>{flow.description || flow.steps + (flow.steps === 1 ? " step" : " steps")}</small>
                 </span>
