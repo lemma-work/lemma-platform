@@ -20,21 +20,24 @@ class GroupLineResponse:
         at (datetime.datetime):
         from_bot (bool):
         in_pod (bool):
-        text (str):
         answered_from_public (bool | Unset): On the bot's lines: answered from what the pod made Public. Default: False.
         answered_name (None | str | Unset): On the bot's lines: whom it answered.
         author_external_id (None | str | Unset):
         author_name (None | str | Unset):
+        text (None | str | Unset): None where the line is withheld from the reader.
+        withheld (bool | Unset): An answer the bot made with another member's own access: shown to that member alone.
+            ``answered_name`` still says whom it was for. Default: False.
     """
 
     at: datetime.datetime
     from_bot: bool
     in_pod: bool
-    text: str
     answered_from_public: bool | Unset = False
     answered_name: None | str | Unset = UNSET
     author_external_id: None | str | Unset = UNSET
     author_name: None | str | Unset = UNSET
+    text: None | str | Unset = UNSET
+    withheld: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -43,8 +46,6 @@ class GroupLineResponse:
         from_bot = self.from_bot
 
         in_pod = self.in_pod
-
-        text = self.text
 
         answered_from_public = self.answered_from_public
 
@@ -66,6 +67,14 @@ class GroupLineResponse:
         else:
             author_name = self.author_name
 
+        text: None | str | Unset
+        if isinstance(self.text, Unset):
+            text = UNSET
+        else:
+            text = self.text
+
+        withheld = self.withheld
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -73,7 +82,6 @@ class GroupLineResponse:
                 "at": at,
                 "from_bot": from_bot,
                 "in_pod": in_pod,
-                "text": text,
             }
         )
         if answered_from_public is not UNSET:
@@ -84,6 +92,10 @@ class GroupLineResponse:
             field_dict["author_external_id"] = author_external_id
         if author_name is not UNSET:
             field_dict["author_name"] = author_name
+        if text is not UNSET:
+            field_dict["text"] = text
+        if withheld is not UNSET:
+            field_dict["withheld"] = withheld
 
         return field_dict
 
@@ -95,8 +107,6 @@ class GroupLineResponse:
         from_bot = d.pop("from_bot")
 
         in_pod = d.pop("in_pod")
-
-        text = d.pop("text")
 
         answered_from_public = d.pop("answered_from_public", UNSET)
 
@@ -129,15 +139,27 @@ class GroupLineResponse:
 
         author_name = _parse_author_name(d.pop("author_name", UNSET))
 
+        def _parse_text(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        text = _parse_text(d.pop("text", UNSET))
+
+        withheld = d.pop("withheld", UNSET)
+
         group_line_response = cls(
             at=at,
             from_bot=from_bot,
             in_pod=in_pod,
-            text=text,
             answered_from_public=answered_from_public,
             answered_name=answered_name,
             author_external_id=author_external_id,
             author_name=author_name,
+            text=text,
+            withheld=withheld,
         )
 
         group_line_response.additional_properties = d

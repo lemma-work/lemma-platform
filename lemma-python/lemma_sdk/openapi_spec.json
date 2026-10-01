@@ -8169,6 +8169,18 @@
             "title": "Answers Outsiders",
             "type": "boolean"
           },
+          "bot_answers_outsiders": {
+            "default": true,
+            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
+            "title": "Bot Answers Outsiders",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "description": "The reader may switch outsiders for this group or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
           "external_channel_id": {
             "anyOf": [
               {
@@ -8300,7 +8312,7 @@
             "type": "integer"
           },
           "welcomes_outsiders": {
-            "description": "Switched on, and somebody answers for them.",
+            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
             "title": "Welcomes Outsiders",
             "type": "boolean"
           }
@@ -8374,14 +8386,27 @@
             "type": "boolean"
           },
           "text": {
-            "title": "Text",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None where the line is withheld from the reader.",
+            "title": "Text"
+          },
+          "withheld": {
+            "default": false,
+            "description": "An answer the bot made with another member's own access: shown to that member alone. ``answered_name`` still says whom it was for.",
+            "title": "Withheld",
+            "type": "boolean"
           }
         },
         "required": [
           "in_pod",
           "from_bot",
-          "text",
           "at"
         ],
         "title": "GroupLineResponse",
@@ -8509,6 +8534,18 @@
             "title": "Answers Outsiders",
             "type": "boolean"
           },
+          "bot_answers_outsiders": {
+            "default": true,
+            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
+            "title": "Bot Answers Outsiders",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "description": "The reader may switch outsiders for this group or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
           "external_channel_id": {
             "anyOf": [
               {
@@ -8626,7 +8663,7 @@
             "type": "integer"
           },
           "welcomes_outsiders": {
-            "description": "Switched on, and somebody answers for them.",
+            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
             "title": "Welcomes Outsiders",
             "type": "boolean"
           }
@@ -14249,6 +14286,9 @@
             "description": "Ignored. The DM reset window is a deployment-wide setting (SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so existing pod bundles and clients keep working.",
             "title": "Dm Conversation Reset After Hours"
           },
+          "groups": {
+            "$ref": "#/components/schemas/SurfaceGroupsConfig"
+          },
           "identity": {
             "$ref": "#/components/schemas/SurfaceIdentityConfigInput"
           },
@@ -14332,6 +14372,9 @@
             },
             "title": "Channels",
             "type": "array"
+          },
+          "groups": {
+            "$ref": "#/components/schemas/SurfaceGroupsConfig"
           },
           "identity": {
             "$ref": "#/components/schemas/SurfaceIdentityConfigResponse"
@@ -14626,6 +14669,20 @@
         ],
         "title": "SurfaceCredentialMode",
         "type": "string"
+      },
+      "SurfaceGroupsConfig": {
+        "additionalProperties": false,
+        "description": "How the bot treats people outside the pod in its groups. Mirrored.",
+        "properties": {
+          "answers_outsiders": {
+            "default": true,
+            "description": "Answer people outside the pod in this bot's groups, from what the pod made Public. Off, the bot answers only the pod's members, whatever a group's own switch says.",
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          }
+        },
+        "title": "SurfaceGroupsConfig",
+        "type": "object"
       },
       "SurfaceIdentityConfigInput": {
         "additionalProperties": false,
@@ -30662,7 +30719,7 @@
         }
       },
       "patch": {
-        "description": "Switch outsiders on or off in one group, or take it over.",
+        "description": "Switch outsiders on or off in one group, or take it over.\n\nThe member who answers for the group may; so may anybody who configures the\nbot when nobody in the pod answers for it, and an admin of the pod, whose\nchange the member is told about.",
         "operationId": "agent.group.update",
         "parameters": [
           {
@@ -30736,7 +30793,7 @@
     },
     "/pods/{pod_id}/groups/{group_id}/timeline": {
       "get": {
-        "description": "What was said in the group, oldest first, as far as the pod kept it.\n\nKept for WhatsApp and Telegram groups. A Slack channel's history is\nSlack's; it comes back empty here.",
+        "description": "What was said in the group, oldest first, as far as the pod kept it.\n\nKept for WhatsApp and Telegram groups. A Slack channel's history is\nSlack's; it comes back empty here. An answer the bot made with one member's\nown access comes back withheld to everybody else: they may not be able to\nsee what it was made from.",
         "operationId": "agent.group.timeline",
         "parameters": [
           {

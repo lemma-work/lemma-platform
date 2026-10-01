@@ -16,5 +16,12 @@ export type GroupLineResponse = {
     author_name?: (string | null);
     from_bot: boolean;
     in_pod: boolean;
-    text: string;
+    /**
+     * None where the line is withheld from the reader.
+     */
+    text?: (string | null);
+    /**
+     * An answer the bot made with another member's own access: shown to that member alone. ``answered_name`` still says whom it was for.
+     */
+    withheld?: boolean;
 };

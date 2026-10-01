@@ -10,6 +10,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.surface_channel_route_response import SurfaceChannelRouteResponse
+    from ..models.surface_groups_config import SurfaceGroupsConfig
     from ..models.surface_identity_config_response import SurfaceIdentityConfigResponse
     from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
     from ..models.surface_slack_config_response import SurfaceSlackConfigResponse
@@ -25,6 +26,7 @@ class SurfaceConfigResponse:
 
     Attributes:
         channels (list[SurfaceChannelRouteResponse] | Unset):
+        groups (SurfaceGroupsConfig | Unset): How the bot treats people outside the pod in its groups. Mirrored.
         identity (SurfaceIdentityConfigResponse | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
         slack (SurfaceSlackConfigResponse | Unset): Slack settings as read back.
@@ -32,6 +34,7 @@ class SurfaceConfigResponse:
     """
 
     channels: list[SurfaceChannelRouteResponse] | Unset = UNSET
+    groups: SurfaceGroupsConfig | Unset = UNSET
     identity: SurfaceIdentityConfigResponse | Unset = UNSET
     send_policy: SurfaceSendPolicyConfig | Unset = UNSET
     slack: SurfaceSlackConfigResponse | Unset = UNSET
@@ -45,6 +48,10 @@ class SurfaceConfigResponse:
             for channels_item_data in self.channels:
                 channels_item = channels_item_data.to_dict()
                 channels.append(channels_item)
+
+        groups: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.groups, Unset):
+            groups = self.groups.to_dict()
 
         identity: dict[str, Any] | Unset = UNSET
         if not isinstance(self.identity, Unset):
@@ -67,6 +74,8 @@ class SurfaceConfigResponse:
         field_dict.update({})
         if channels is not UNSET:
             field_dict["channels"] = channels
+        if groups is not UNSET:
+            field_dict["groups"] = groups
         if identity is not UNSET:
             field_dict["identity"] = identity
         if send_policy is not UNSET:
@@ -81,6 +90,7 @@ class SurfaceConfigResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.surface_channel_route_response import SurfaceChannelRouteResponse
+        from ..models.surface_groups_config import SurfaceGroupsConfig
         from ..models.surface_identity_config_response import (
             SurfaceIdentityConfigResponse,
         )
@@ -99,6 +109,13 @@ class SurfaceConfigResponse:
                 )
 
                 channels.append(channels_item)
+
+        _groups = d.pop("groups", UNSET)
+        groups: SurfaceGroupsConfig | Unset
+        if isinstance(_groups, Unset):
+            groups = UNSET
+        else:
+            groups = SurfaceGroupsConfig.from_dict(_groups)
 
         _identity = d.pop("identity", UNSET)
         identity: SurfaceIdentityConfigResponse | Unset
@@ -130,6 +147,7 @@ class SurfaceConfigResponse:
 
         surface_config_response = cls(
             channels=channels,
+            groups=groups,
             identity=identity,
             send_policy=send_policy,
             slack=slack,

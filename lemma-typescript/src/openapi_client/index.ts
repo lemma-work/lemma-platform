@@ -348,6 +348,7 @@ export { SurfaceConnectionStatus } from './models/SurfaceConnectionStatus.js';
 export type { SurfaceConnectorSetupGuide } from './models/SurfaceConnectorSetupGuide.js';
 export type { SurfaceCreateRequest } from './models/SurfaceCreateRequest.js';
 export { SurfaceCredentialMode } from './models/SurfaceCredentialMode.js';
+export type { SurfaceGroupsConfig } from './models/SurfaceGroupsConfig.js';
 export type { SurfaceIdentityConfigInput } from './models/SurfaceIdentityConfigInput.js';
 export type { SurfaceIdentityConfigResponse } from './models/SurfaceIdentityConfigResponse.js';
 export { SurfacePlatform } from './models/SurfacePlatform.js';

@@ -79,7 +79,9 @@ def sync_detailed(
      What was said in the group, oldest first, as far as the pod kept it.
 
     Kept for WhatsApp and Telegram groups. A Slack channel's history is
-    Slack's; it comes back empty here.
+    Slack's; it comes back empty here. An answer the bot made with one member's
+    own access comes back withheld to everybody else: they may not be able to
+    see what it was made from.
 
     Args:
         pod_id (UUID):
@@ -119,7 +121,9 @@ def sync(
      What was said in the group, oldest first, as far as the pod kept it.
 
     Kept for WhatsApp and Telegram groups. A Slack channel's history is
-    Slack's; it comes back empty here.
+    Slack's; it comes back empty here. An answer the bot made with one member's
+    own access comes back withheld to everybody else: they may not be able to
+    see what it was made from.
 
     Args:
         pod_id (UUID):
@@ -154,7 +158,9 @@ async def asyncio_detailed(
      What was said in the group, oldest first, as far as the pod kept it.
 
     Kept for WhatsApp and Telegram groups. A Slack channel's history is
-    Slack's; it comes back empty here.
+    Slack's; it comes back empty here. An answer the bot made with one member's
+    own access comes back withheld to everybody else: they may not be able to
+    see what it was made from.
 
     Args:
         pod_id (UUID):
@@ -192,7 +198,9 @@ async def asyncio(
      What was said in the group, oldest first, as far as the pod kept it.
 
     Kept for WhatsApp and Telegram groups. A Slack channel's history is
-    Slack's; it comes back empty here.
+    Slack's; it comes back empty here. An answer the bot made with one member's
+    own access comes back withheld to everybody else: they may not be able to
+    see what it was made from.
 
     Args:
         pod_id (UUID):

@@ -31,7 +31,12 @@ class GroupDetailResponse:
         surface_name (str):
         updated_at (datetime.datetime):
         waiting (list[GroupWaitingResponse]):
-        welcomes_outsiders (bool): Switched on, and somebody answers for them.
+        welcomes_outsiders (bool): People outside the pod are answered here today: the group's switch is on, a member of
+            the pod answers for them, and the bot's own switch is on.
+        bot_answers_outsiders (bool | Unset): The bot's own switch, over every group it is in. Off, nobody outside the
+            pod is answered in any of them. Default: True.
+        can_manage (bool | Unset): The reader may switch outsiders for this group or take it over: they answer for it,
+            nobody in the pod does, or they are an admin of the pod. Default: False.
         external_channel_id (None | str | Unset):
         invite_link (None | str | Unset):
         last_message_at (datetime.datetime | None | Unset):
@@ -52,6 +57,8 @@ class GroupDetailResponse:
     updated_at: datetime.datetime
     waiting: list[GroupWaitingResponse]
     welcomes_outsiders: bool
+    bot_answers_outsiders: bool | Unset = True
+    can_manage: bool | Unset = False
     external_channel_id: None | str | Unset = UNSET
     invite_link: None | str | Unset = UNSET
     last_message_at: datetime.datetime | None | Unset = UNSET
@@ -88,6 +95,10 @@ class GroupDetailResponse:
             waiting.append(waiting_item)
 
         welcomes_outsiders = self.welcomes_outsiders
+
+        bot_answers_outsiders = self.bot_answers_outsiders
+
+        can_manage = self.can_manage
 
         external_channel_id: None | str | Unset
         if isinstance(self.external_channel_id, Unset):
@@ -155,6 +166,10 @@ class GroupDetailResponse:
                 "welcomes_outsiders": welcomes_outsiders,
             }
         )
+        if bot_answers_outsiders is not UNSET:
+            field_dict["bot_answers_outsiders"] = bot_answers_outsiders
+        if can_manage is not UNSET:
+            field_dict["can_manage"] = can_manage
         if external_channel_id is not UNSET:
             field_dict["external_channel_id"] = external_channel_id
         if invite_link is not UNSET:
@@ -210,6 +225,10 @@ class GroupDetailResponse:
             waiting.append(waiting_item)
 
         welcomes_outsiders = d.pop("welcomes_outsiders")
+
+        bot_answers_outsiders = d.pop("bot_answers_outsiders", UNSET)
+
+        can_manage = d.pop("can_manage", UNSET)
 
         def _parse_external_channel_id(data: object) -> None | str | Unset:
             if data is None:
@@ -307,6 +326,8 @@ class GroupDetailResponse:
             updated_at=updated_at,
             waiting=waiting,
             welcomes_outsiders=welcomes_outsiders,
+            bot_answers_outsiders=bot_answers_outsiders,
+            can_manage=can_manage,
             external_channel_id=external_channel_id,
             invite_link=invite_link,
             last_message_at=last_message_at,

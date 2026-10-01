@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         PodSchedules,
         PodNotifications,
         PodSurfaces,
+        PodGroups,
         PodTables,
         PodWorkflows,
         Table,
@@ -153,6 +154,12 @@ class Pod:
         from .resources import PodSurfaces
 
         return self._resource(PodSurfaces)
+
+    @cached_property
+    def groups(self) -> "PodGroups":
+        from .resources import PodGroups
+
+        return self._resource(PodGroups)
 
     @cached_property
     def connectors(self) -> "BoundConnectors":

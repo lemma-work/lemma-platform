@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { SurfaceChannelRouteInput } from './SurfaceChannelRouteInput.js';
+import type { SurfaceGroupsConfig } from './SurfaceGroupsConfig.js';
 import type { SurfaceIdentityConfigInput } from './SurfaceIdentityConfigInput.js';
 import type { SurfaceSendPolicyConfig } from './SurfaceSendPolicyConfig.js';
 import type { SurfaceSlackConfigInput } from './SurfaceSlackConfigInput.js';
@@ -14,6 +15,7 @@ export type SurfaceBehaviorConfigInput = {
      * @deprecated
      */
     dm_conversation_reset_after_hours?: (number | null);
+    groups?: SurfaceGroupsConfig;
     identity?: SurfaceIdentityConfigInput;
     send_policy?: SurfaceSendPolicyConfig;
     slack?: SurfaceSlackConfigInput;

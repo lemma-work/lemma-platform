@@ -5,6 +5,14 @@
 import type { GroupOwnerResponse } from './GroupOwnerResponse.js';
 export type GroupResponse = {
     answers_outsiders: boolean;
+    /**
+     * The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.
+     */
+    bot_answers_outsiders?: boolean;
+    /**
+     * The reader may switch outsiders for this group or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.
+     */
+    can_manage?: boolean;
     external_channel_id?: (string | null);
     id: string;
     invite_link?: (string | null);
@@ -38,7 +46,7 @@ export type GroupResponse = {
      */
     waiting_for_you?: number;
     /**
-     * Switched on, and somebody answers for them.
+     * People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.
      */
     welcomes_outsiders: boolean;
 };

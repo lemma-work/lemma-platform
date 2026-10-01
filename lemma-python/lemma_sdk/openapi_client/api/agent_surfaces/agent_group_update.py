@@ -78,6 +78,10 @@ def sync_detailed(
 
      Switch outsiders on or off in one group, or take it over.
 
+    The member who answers for the group may; so may anybody who configures the
+    bot when nobody in the pod answers for it, and an admin of the pod, whose
+    change the member is told about.
+
     Args:
         pod_id (UUID):
         group_id (UUID):
@@ -115,6 +119,10 @@ def sync(
 
      Switch outsiders on or off in one group, or take it over.
 
+    The member who answers for the group may; so may anybody who configures the
+    bot when nobody in the pod answers for it, and an admin of the pod, whose
+    change the member is told about.
+
     Args:
         pod_id (UUID):
         group_id (UUID):
@@ -146,6 +154,10 @@ async def asyncio_detailed(
     """Update Group
 
      Switch outsiders on or off in one group, or take it over.
+
+    The member who answers for the group may; so may anybody who configures the
+    bot when nobody in the pod answers for it, and an admin of the pod, whose
+    change the member is told about.
 
     Args:
         pod_id (UUID):
@@ -181,6 +193,10 @@ async def asyncio(
     """Update Group
 
      Switch outsiders on or off in one group, or take it over.
+
+    The member who answers for the group may; so may anybody who configures the
+    bot when nobody in the pod answers for it, and an admin of the pod, whose
+    change the member is told about.
 
     Args:
         pod_id (UUID):

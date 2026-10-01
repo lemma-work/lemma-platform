@@ -445,6 +445,7 @@ _NAME_TO_MODULE = {
     'SurfaceConnectorSetupGuide': 'surface_connector_setup_guide',
     'SurfaceCreateRequest': 'surface_create_request',
     'SurfaceCredentialMode': 'surface_credential_mode',
+    'SurfaceGroupsConfig': 'surface_groups_config',
     'SurfaceIdentityConfigInput': 'surface_identity_config_input',
     'SurfaceIdentityConfigResponse': 'surface_identity_config_response',
     'SurfacePlatform': 'surface_platform',
@@ -997,6 +998,7 @@ if TYPE_CHECKING:
     from .surface_connector_setup_guide import SurfaceConnectorSetupGuide
     from .surface_create_request import SurfaceCreateRequest
     from .surface_credential_mode import SurfaceCredentialMode
+    from .surface_groups_config import SurfaceGroupsConfig
     from .surface_identity_config_input import SurfaceIdentityConfigInput
     from .surface_identity_config_response import SurfaceIdentityConfigResponse
     from .surface_platform import SurfacePlatform
@@ -1562,6 +1564,7 @@ __all__ = [
     'SurfaceConnectorSetupGuide',
     'SurfaceCreateRequest',
     'SurfaceCredentialMode',
+    'SurfaceGroupsConfig',
     'SurfaceIdentityConfigInput',
     'SurfaceIdentityConfigResponse',
     'SurfacePlatform',
