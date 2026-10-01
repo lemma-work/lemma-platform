@@ -224,6 +224,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/users/me/first-workspace` | `users.ensure_first_workspace` | Ensure The Current User Has A Workspace |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
 
+## mcp_access
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| DELETE | `/oauth/grants/{grant_id}` | `mcp_access.grants.revoke` | Disconnect an MCP client |
+| GET | `/oauth/grants` | `mcp_access.grants.list` | MCP clients you have connected |
+| GET | `/oauth/mcp-endpoint/{pod_id}` | `mcp_access.endpoint.get` | The MCP URL for a pod |
+
 ## pod
 
 | Method | Path | Operation ID | Summary |

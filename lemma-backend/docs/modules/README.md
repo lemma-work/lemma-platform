@@ -1,6 +1,6 @@
 # Lemma backend module guide
 
-This directory describes the 14 open-source runtime modules registered in
+This directory describes the open-source runtime modules registered in
 `app/core/registry/installed.py`. A module document explains the behavior that
 exists today; it is not a product roadmap. Review findings and proposed work
 live in the pull request that introduces them.
@@ -25,7 +25,7 @@ flowchart LR
 
 The canonical registration order is identity, pod, pod bundle, datastore,
 schedule, connectors, agent, function, apps, workflow, agent surfaces, icon,
-usage, and workspace. Order affects router and lifespan registration, but
+usage, workspace, web login, MCP access, and analytics. Order affects router and lifespan registration, but
 modules should communicate through explicit ports or domain events rather than
 depending on import order.
 
@@ -47,6 +47,7 @@ depending on import order.
 | [icon](icon.md) | Public raster icon upload and retrieval | None; bytes live in public object/local storage |
 | [usage](usage.md) | Model-usage metering, reservations, limits, and reporting | `usage_records`, `usage_limit_counters` |
 | [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |
+| [mcp_access](mcp_access.md) | Outside MCP clients: the OAuth authorization server, consent, and connected clients | `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens`; pending authorizations and codes are short-lived Redis keys |
 
 ## Tables owned by core
 

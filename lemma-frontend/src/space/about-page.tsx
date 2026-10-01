@@ -115,7 +115,7 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
                 </Section>
 
                 <p className="aboutpage__foot">
-                    Coding agents, the models {orgName} can use, and usage are in{" "}
+                    AI tools, the models {orgName} can use, and usage are in{" "}
                     <button className="linkish" onClick={onSettings}>Settings</button>.
                 </p>
             </div>

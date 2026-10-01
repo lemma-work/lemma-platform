@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 import time
 import zipfile
@@ -37,6 +38,7 @@ pytestmark = [
 #: PS-AGENT-016's budgets, in seconds.
 QUICK = 30.0
 FILE_OR_WEB = 45.0
+WIDGET_OF_ITS_OWN = 60.0
 DOCUMENT = 90.0
 RESEARCH = 120.0
 
@@ -323,3 +325,63 @@ async def test_something_is_remembered(desk):
                 found = True
                 break
     assert found, f"{marker} is in no memory file"
+
+
+async def _the_widget(person, pod, transcript: str) -> str:
+    """The HTML of the widget the run displayed, read back from the pod."""
+    shown = [
+        m.get("tool_args") or {}
+        for m in json.loads(transcript)
+        if m.get("kind") == "TOOL_CALL" and m.get("tool_name") == "display_resource"
+    ]
+    widget = next((a for a in shown if str(a.get("type")).upper() == "WIDGET"), None)
+    assert widget is not None, f"no widget was displayed:\n{transcript[-1500:]}"
+    if widget.get("path"):
+        return (await person.downloads(widget["path"], in_pod=pod)).decode()
+    return str(widget.get("content") or "")
+
+
+@scenario("A widget of the pod's data is shown while the person waits")
+@proves("PS-AGENT-016")
+@covers(
+    "agent.conversation.create",
+    "agent.conversation.message.append",
+    "agent.conversation.get",
+)
+async def test_a_widget_is_shown(desk):
+    person, pod, table = desk
+
+    transcript = await _asks(
+        person,
+        pod,
+        f"Show me units by status in {table} as a widget.",
+        budget=QUICK,
+    )
+
+    widget = await _the_widget(person, pod, transcript)
+    # Drawn on the page it is served in: the query and the drawing come from
+    # `window.lemma`, not from a loader or a token block pasted into the widget.
+    assert table in widget and "lemma." in widget, widget
+    assert "lemma-client.js" not in widget and "--lemma-widget-bg:" not in widget, widget
+
+
+@scenario("A widget in a shape of its own is shown while the person waits")
+@proves("PS-AGENT-016")
+@covers(
+    "agent.conversation.create",
+    "agent.conversation.message.append",
+    "agent.conversation.get",
+)
+async def test_a_widget_of_its_own_design(desk):
+    person, pod, table = desk
+
+    transcript = await _asks(
+        person,
+        pod,
+        f"Show the orders in {table} as a kanban board by status, one card per order.",
+        budget=WIDGET_OF_ITS_OWN,
+    )
+
+    widget = await _the_widget(person, pod, transcript)
+    # Live from the table, or the seven orders carried in the page: both show them.
+    assert table in widget or all(o["customer"] in widget for o in ORDERS), widget

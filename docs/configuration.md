@@ -474,6 +474,23 @@ SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_SAME_SITE=lax
 ```
 
+## Outside MCP clients
+
+Pods are served to Claude, ChatGPT and other MCP clients at
+`<API_URL>/mcp/<pod id>`, with an OAuth authorization server under `/oauth`
+([how it works](architecture/mcp-connector.md)). `API_URL` is the OAuth issuer
+and the base of every pod's MCP URL, so it must be the address clients reach —
+and for Claude and ChatGPT, one reachable from the public internet.
+
+```dotenv
+MCP_ACCESS_ENABLED=true
+MCP_ACCESS_REQUESTS_PER_MINUTE=300           # per connected client, per pod
+MCP_ACCESS_AUTHORIZE_REQUESTS_PER_MINUTE=60  # sign-in requests, per source IP
+MCP_ACCESS_REGISTRATIONS_PER_HOUR=300        # dynamic registrations, per source IP
+MCP_ACCESS_TOKEN_REQUESTS_PER_MINUTE=600     # token + revoke, per client per source IP
+MCP_ACCESS_TOKEN_REQUESTS_PER_ADDRESS_PER_MINUTE=6000  # token + revoke, per source IP, any client
+```
+
 ## Authentication and email
 
 Email transport, sender identity, and the sign-up abuse controls are covered in
@@ -930,6 +947,7 @@ authoritative answer for anything this document does not name.
 | Datastore and document processing | `lemma-backend/app/modules/datastore/config.py` |
 | Pod bundles | `lemma-backend/app/modules/pod_bundle/config.py` |
 | Apps, icons, schedules | `app/modules/{apps,icon,schedule}/config.py` |
+| Outside MCP clients | `lemma-backend/app/modules/mcp_access/config.py` |
 | Event transport | `lemma-backend/app/core/infrastructure/events/config.py` |
 
 Settings whose description begins with `TEST HOOK ONLY` exist for the end-to-end

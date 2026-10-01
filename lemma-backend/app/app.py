@@ -58,7 +58,8 @@ from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
 from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
-from app.mcp_server import get_pod_mcp_app
+from app.mcp_server import PublicPodMCPApp, get_pod_mcp_app
+from app.modules.mcp_access.contracts import MCP_MOUNT_PATH, mcp_access_enabled
 from app.core.infrastructure.db.session import get_engine
 from app.core.request_context import (
     create_background_task,
@@ -397,6 +398,8 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     pod_mcp_app = get_pod_mcp_app()
     app.state.pod_mcp_app = pod_mcp_app
     app.mount("/agent-runtime/pods", pod_mcp_app)
+    if mcp_access_enabled():
+        app.mount(MCP_MOUNT_PATH, PublicPodMCPApp(pod_mcp_app))
 
     # Middleware
     # SuperTokens middleware might not be needed on main app if all auth routes are in sub-app?

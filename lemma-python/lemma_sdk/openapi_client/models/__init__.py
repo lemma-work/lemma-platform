@@ -115,6 +115,8 @@ _NAME_TO_MODULE = {
     'ConnectRequestInitiateSchemaConnectionFieldsType0': 'connect_request_initiate_schema_connection_fields_type_0',
     'ConnectRequestResponseSchema': 'connect_request_response_schema',
     'ConnectedAccountSummary': 'connected_account_summary',
+    'ConnectedClientResponse': 'connected_client_response',
+    'ConnectedClientsResponse': 'connected_clients_response',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete': 'connector_auth_config_delete_response_connector_auth_config_delete',
     'ConnectorDetailResponseSchema': 'connector_detail_response_schema',
     'ConnectorDetailResponseSchemaOperations': 'connector_detail_response_schema_operations',
@@ -275,6 +277,7 @@ _NAME_TO_MODULE = {
     'LoopNodeResponsePositionType0': 'loop_node_response_position_type_0',
     'ManualWorkflowStartInput': 'manual_workflow_start_input',
     'ManualWorkflowStartOutput': 'manual_workflow_start_output',
+    'McpEndpointResponse': 'mcp_endpoint_response',
     'MessageKind': 'message_kind',
     'MessageListResponse': 'message_list_response',
     'MessageResponse': 'message_response',
@@ -401,6 +404,7 @@ _NAME_TO_MODULE = {
     'ScheduledWorkflowStartConfigType': 'scheduled_workflow_start_config_type',
     'ScheduledWorkflowStartInput': 'scheduled_workflow_start_input',
     'ScheduledWorkflowStartOutput': 'scheduled_workflow_start_output',
+    'Scope': 'scope',
     'SearchFreshness': 'search_freshness',
     'SearchMethod': 'search_method',
     'SearchResult': 'search_result',
@@ -651,6 +655,8 @@ if TYPE_CHECKING:
     from .connect_request_initiate_schema_connection_fields_type_0 import ConnectRequestInitiateSchemaConnectionFieldsType0
     from .connect_request_response_schema import ConnectRequestResponseSchema
     from .connected_account_summary import ConnectedAccountSummary
+    from .connected_client_response import ConnectedClientResponse
+    from .connected_clients_response import ConnectedClientsResponse
     from .connector_auth_config_delete_response_connector_auth_config_delete import ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete
     from .connector_detail_response_schema import ConnectorDetailResponseSchema
     from .connector_detail_response_schema_operations import ConnectorDetailResponseSchemaOperations
@@ -811,6 +817,7 @@ if TYPE_CHECKING:
     from .loop_node_response_position_type_0 import LoopNodeResponsePositionType0
     from .manual_workflow_start_input import ManualWorkflowStartInput
     from .manual_workflow_start_output import ManualWorkflowStartOutput
+    from .mcp_endpoint_response import McpEndpointResponse
     from .message_kind import MessageKind
     from .message_list_response import MessageListResponse
     from .message_response import MessageResponse
@@ -937,6 +944,7 @@ if TYPE_CHECKING:
     from .scheduled_workflow_start_config_type import ScheduledWorkflowStartConfigType
     from .scheduled_workflow_start_input import ScheduledWorkflowStartInput
     from .scheduled_workflow_start_output import ScheduledWorkflowStartOutput
+    from .scope import Scope
     from .search_freshness import SearchFreshness
     from .search_method import SearchMethod
     from .search_result import SearchResult
@@ -1200,6 +1208,8 @@ __all__ = [
     'ConnectRequestInitiateSchemaConnectionFieldsType0',
     'ConnectRequestResponseSchema',
     'ConnectedAccountSummary',
+    'ConnectedClientResponse',
+    'ConnectedClientsResponse',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete',
     'ConnectorDetailResponseSchema',
     'ConnectorDetailResponseSchemaOperations',
@@ -1360,6 +1370,7 @@ __all__ = [
     'LoopNodeResponsePositionType0',
     'ManualWorkflowStartInput',
     'ManualWorkflowStartOutput',
+    'McpEndpointResponse',
     'MessageKind',
     'MessageListResponse',
     'MessageResponse',
@@ -1486,6 +1497,7 @@ __all__ = [
     'ScheduledWorkflowStartConfigType',
     'ScheduledWorkflowStartInput',
     'ScheduledWorkflowStartOutput',
+    'Scope',
     'SearchFreshness',
     'SearchMethod',
     'SearchResult',
