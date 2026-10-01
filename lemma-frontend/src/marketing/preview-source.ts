@@ -103,6 +103,7 @@ export const previewSource: PodSource = {
     },
     async renamePod(id, name) { const person = teammates.find(item => item.id === id); if (person) person.name = name; },
     async describePod(id, description) { const person = teammates.find(item => item.id === id); if (person) person.role = description.trim() || person.role; },
+    async deletePod(id) { const at = teammates.findIndex(item => item.id === id); if (at >= 0) teammates.splice(at, 1); },
     async listSurfaces(id) { const person = teammateFor(id); return [{ id: id + "-email", platform: "RESEND", name: "email", mine: true, agentName: person.name, handle: person.id + "@acme.example.invalid", email: person.id + "@acme.example.invalid", active: true }]; },
     /* The general sample has spent the org's shared WhatsApp number, to
        exercise that sentence. A visitor to the landing has not. */

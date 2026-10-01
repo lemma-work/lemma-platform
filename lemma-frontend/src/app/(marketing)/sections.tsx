@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { githubUrl } from "@/site/links";
+import { discordUrl, githubUrl } from "@/site/links";
 import s from "./landing.module.css";
 
 /* Every screen on this page is a real capture of the sample workspace,
@@ -204,6 +204,7 @@ export function OpenSource() {
                     <a href={githubUrl} target="_blank" rel="noreferrer">Explore the code on GitHub ↗</a>
                     <a href="/docs/getting-started">Self-host Lemma ↗</a>
                     <a href={githubUrl + "/blob/main/CONTRIBUTING.md"} target="_blank" rel="noreferrer">Start contributing ↗</a>
+                    <a href={discordUrl} target="_blank" rel="noreferrer">Talk to us on Discord ↗</a>
                 </div>
                 <small className={s.license}>AGPLv3 core · Apache 2.0 SDKs</small>
             </div>

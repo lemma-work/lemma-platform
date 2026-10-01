@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { githubUrl } from "./links";
+import { discordUrl, githubUrl } from "./links";
 import styles from "./footer.module.css";
 import type { ReactNode } from "react";
 import { LemmaLogo } from "@/ui/icons";
@@ -25,6 +25,7 @@ export function SiteFooter() {
             title: "Build with us",
             links: [
                 ["GitHub ↗", githubUrl],
+                ["Discord ↗", discordUrl],
                 ["Report an issue ↗", githubUrl + "/issues"],
                 ["Contribute ↗", githubUrl + "/blob/main/CONTRIBUTING.md"],
                 ["Open-source license ↗", githubUrl + "/blob/main/LICENSE"],
@@ -130,6 +131,7 @@ export function SiteHeader() {
                 <Link href="/docs">Docs</Link>
                 <HostedOnly><Link href="/download" data-nav="download">Download</Link></HostedOnly>
                 <a href={githubUrl} data-nav="github">GitHub ↗</a>
+                <a href={discordUrl} data-nav="discord">Discord ↗</a>
                 <Link href="/t">Get started ↗</Link>
             </nav>
         </header>

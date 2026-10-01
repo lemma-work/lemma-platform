@@ -94,6 +94,27 @@ export type FloatingChatState = ReturnType<typeof useFloatingChat>;
 /** The resource's standing conversation, found and never created here: it
  *  begins on the first message, carrying `createWith`, so opening forty docs
  *  does not leave forty empty conversations behind. */
+/** A doc's conversation goes with it when it is renamed.
+ *
+ *  Bound by path, so a page that followed its title to a new name opened
+ *  beside an empty chat — the conversation about it still waiting under the
+ *  old name, and still reading the old file into every run. Moved before the
+ *  new name is looked up, or the lookup finds nothing and remembers that. The
+ *  instructions, which name the file too, are brought up to date by the lookup
+ *  itself the next time it is opened. */
+export async function moveDocThread(podId: string, from: string, to: string): Promise<void> {
+    type Found = { id: string; metadata?: Record<string, unknown> | null };
+    const found = await lemma(podId).request<{ items?: Found[] }>(
+        "GET",
+        `/pods/${podId}/conversations`,
+        { params: findQuery("file", from) },
+    );
+    const thread = found?.items?.[0];
+    if (!thread) return;
+    const metadata = { ...thread.metadata, [RESOURCE_KEY]: resourceKey("file", to), [ATTACHED_FILE_KEY]: to };
+    await lemma(podId).request("PATCH", `/pods/${podId}/conversations/${thread.id}`, { body: { metadata } });
+}
+
 function useResourceThread(podId: string, resource: ChatResource | null, live: boolean) {
     return useQuery({
         queryKey: ["resource-thread", podId, resource?.kind, resource?.name],
