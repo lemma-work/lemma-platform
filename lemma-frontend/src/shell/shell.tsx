@@ -35,7 +35,6 @@ import { RunPage } from "@/space/run-page";
 import { AboutPage, isAboutSection, type AboutSection } from "@/space/about-page";
 import { TeammateRail } from "@/space/teammate-rail";
 import { TeammatesPage } from "@/space/teammates-page";
-import { TeammateFace } from "@/space/teammate-face";
 import { owedByPod } from "@/space/teammates";
 import type { SpaceView } from "@/data";
 import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
@@ -1193,15 +1192,13 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                     <div className="side__space" role="group" aria-label={(pod?.name ?? "This teammate") + "’s space"}>
                         {pod && <>
                             <div className="side__head">
-                                {/* The top of a space is whose it is. Its face opens
-                                    the teammate itself; switching is the rail's. */}
+                                {/* The top of a space is whose it is, by name alone:
+                                    the face is the rail's, beside it on the same
+                                    line, and the description is Home's. The name
+                                    opens the teammate itself; switching is the rail's. */}
                                 <button className="side__mate" aria-current={activeTab?.id === "space:about" ? "page" : undefined}
-                                    title={"About " + pod.name} onClick={() => { openAbout(null); setMobileOpen(false); }}>
-                                    <TeammateFace pod={pod} size={36} />
-                                    <span className="side__mate-text">
-                                        <span>{pod.name}</span>
-                                        {pod.description && <small>{pod.description}</small>}
-                                    </span>
+                                    aria-label={"About " + pod.name} onClick={() => { openAbout(null); setMobileOpen(false); }}>
+                                    <span className="side__mate-name">{pod.name}</span>
                                 </button>
                                 {/* On a phone the toolbar is already full; the
                                     drawer has space for it. */}
@@ -1501,15 +1498,20 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 {activeOrg?.name ?? "Teammates"}
                             </button>
                             <span className="crumb__sep crumb__sep--org">/</span>
-                            <button type="button" className="crumb__up crumb__mate" onClick={() => pickTab("space:home")}>
-                                <TeammateFace pod={pod} size={18} />{pod.name}
-                            </button>
-                            <span className="crumb__sep">/</span>
-                            {cameFrom && <>
-                                <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom.id)}>{cameFrom.label}</button>
-                                <span className="crumb__sep crumb__sep--from">/</span>
+                            {/* By name: the face is already on the rail. Home is
+                                the teammate's own page, so there the name is
+                                where you are rather than a step above it. */}
+                            {activeTab?.id === "space:home" ? (
+                                <span className="crumb__here">{pod.name}</span>
+                            ) : <>
+                                <button type="button" className="crumb__up crumb__mate" onClick={() => pickTab("space:home")}>{pod.name}</button>
+                                <span className="crumb__sep">/</span>
+                                {cameFrom && <>
+                                    <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom.id)}>{cameFrom.label}</button>
+                                    <span className="crumb__sep crumb__sep--from">/</span>
+                                </>}
+                                <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
                             </>}
-                            <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
                         </div>
                             {activeTab?.kind !== "space" && <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
                                 onNew={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}

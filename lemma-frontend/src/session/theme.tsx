@@ -5,11 +5,14 @@ import { key } from "./storage";
 import { CHAT_TEXT_SIZES, readChatTextSize, type ChatTextSize } from "./chat-text";
 
 export type Theme = "system" | "light" | "dark";
-export type Accent = "violet" | "coral" | "forest" | "ocean" | "amber" | "plum" | "slate" | "ink";
+export type Accent = "mono" | "violet" | "coral" | "forest" | "ocean" | "amber" | "plum" | "slate" | "ink";
 export type Corners = "sharp" | "soft" | "round";
 
 const THEME_KEY = key("theme");
-const ACCENT_KEY = key("accent");
+/* A new key rather than the old one: every accent stored under `accent` was
+ * picked while the app ignored it, so none of them is a look anybody has
+ * seen. Starting everyone on Mono is starting them on what they already had. */
+const ACCENT_KEY = key("app-accent");
 const CORNERS_KEY = key("corners");
 const CHAT_TEXT_KEY = key("chat-text-size");
 
@@ -19,11 +22,12 @@ function readTextSize(): ChatTextSize {
 }
 
 export const ACCENTS: { value: Accent; label: string; swatch: string }[] = [
+    { value: "mono", label: "Mono", swatch: "#0d0d0d" },
     { value: "violet", label: "Violet", swatch: "#6b4fe0" },
-    { value: "coral", label: "Coral", swatch: "#dd5238" },
+    { value: "coral", label: "Coral", swatch: "#d54024" },
     { value: "forest", label: "Forest", swatch: "#2d7a58" },
     { value: "ocean", label: "Ocean", swatch: "#1f6f9e" },
-    { value: "amber", label: "Amber", swatch: "#b06f12" },
+    { value: "amber", label: "Amber", swatch: "#a56811" },
     { value: "plum", label: "Plum", swatch: "#9c3f6d" },
     { value: "slate", label: "Slate", swatch: "#4a5568" },
     { value: "ink", label: "Ink", swatch: "#26262c" },
@@ -51,9 +55,9 @@ function readTheme(): Theme {
 function readAccent(): Accent {
     try {
         const stored = localStorage.getItem(ACCENT_KEY);
-        return ACCENTS.some((entry) => entry.value === stored) ? (stored as Accent) : "violet";
+        return ACCENTS.some((entry) => entry.value === stored) ? (stored as Accent) : "mono";
     } catch {
-        return "violet";
+        return "mono";
     }
 }
 
