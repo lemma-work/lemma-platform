@@ -5389,7 +5389,7 @@ button.filecard__open {
    with the placeholder highest and the voice icon lowest. Everything is
    centred on one line height instead. */
 .composer__box { align-items: flex-end; --composer-line: 38px; }
-textarea.composer__input { resize: none; line-height: 1.5; min-height: var(--composer-line); padding-block: calc((var(--composer-line) - 1.5em) / 2); max-height: 200px; overflow-y: auto; overflow-wrap: anywhere; }
+textarea.composer__input { resize: none; line-height: 1.5; min-height: var(--composer-line); padding-block: calc((var(--composer-line) - 1.5em) / 2); max-height: min(200px, 28vh); overflow-y: auto; overflow-wrap: anywhere; }
 .composer__attach { margin-block-end: calc((var(--composer-line) - 34px) / 2); }
 .composer__wave { margin-block-end: calc((var(--composer-line) - 30px) / 2); }
 a.reach { text-decoration: none; }

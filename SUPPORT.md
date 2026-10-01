@@ -6,6 +6,7 @@
 |---|---|
 | Understand a feature or setting | [Documentation](docs/README.md) · [lemma.work/docs](https://lemma.work/docs) |
 | Ask "how do I…", or discuss an idea | [Discussions](https://github.com/lemma-work/lemma-platform/discussions) |
+| Chat with the team and other builders | [Discord](https://discord.gg/x2NVyNPQR) |
 | Report something broken | [Open an issue](https://github.com/lemma-work/lemma-platform/issues/new/choose) |
 | Report a vulnerability | [Private advisory](https://github.com/lemma-work/lemma-platform/security/advisories/new) — **never a public issue**. See [SECURITY.md](SECURITY.md) |
 | Contribute a change | [CONTRIBUTING.md](CONTRIBUTING.md) |

@@ -11,6 +11,7 @@ import { Prose } from "./markdown";
 import { editableKind, lockedBecause, sayLocked } from "./document-save";
 import { splitFrontmatter } from "@/skills/skill-frontmatter";
 import { appThemeMessage, onAppearanceChange, widgetThemeMessage } from "./widget-theme";
+import { useCurrentPath } from "@/docpages/moves";
 
 /** A page taking the whole pane.
  *
@@ -131,7 +132,7 @@ function formatOf(name: string): string {
  *  from the stage. */
 export function FileView({
     podId,
-    path,
+    path: named,
     full,
     onOpenTab,
 }: {
@@ -140,6 +141,9 @@ export function FileView({
     full?: boolean;
     onOpenTab?: (path: string) => void;
 }) {
+    /* Where the file is now. A card the agent put on screen keeps the path it
+       was given, and a page renamed since would otherwise read as missing. */
+    const path = useCurrentPath(podId, named);
     const [expanded, setExpanded] = useState(full ?? false);
     /* If the browser refuses the bytes, the card below is the answer — a link
        the reader can follow beats a broken-image glyph or a dead player. It

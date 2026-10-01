@@ -446,6 +446,11 @@ export interface PodSource {
     /** Change the one line that says what a teammate is for. The pod's
      *  `description`, which hiring fills with the job it was given. */
     describePod(podId: string, description: string): Promise<void>;
+    /** Delete a teammate. A soft delete on the server: the pod stops being
+     *  listed or reachable, its schedules are disarmed, it leaves every channel
+     *  it answered on, and its email address and pooled number are released.
+     *  Repeating it is safe — a second call reports the same success. */
+    deletePod(podId: string): Promise<void>;
     /** Put a picture somewhere the platform will serve it, and hand back the
      *  URL to store in `icon_url`. */
     uploadIcon(file: File): Promise<string>;

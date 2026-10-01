@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { githubUrl } from "@/site/links";
+import { discordUrl, githubUrl } from "@/site/links";
 import { SiteFooter, JsonLd } from '@/site/chrome';
 import { organizationSchema, webSiteSchema } from '@/site/seo/structured-data';
 import { pageMetadata } from '@/site/metadata';
@@ -31,6 +31,7 @@ export default function Home() {
                         <Link href="/docs">Docs</Link>
                         <Link href="/templates">Templates</Link>
                         <a href={githubUrl} target="_blank" rel="noreferrer">GitHub</a>
+                        <a href={discordUrl} target="_blank" rel="noreferrer">Discord</a>
                         <Link href="/t">Sign in</Link>
                         <Link href="/t" className={s.navStart}>Get started</Link>
                     </nav>
@@ -40,6 +41,7 @@ export default function Home() {
                             <Link href="/docs">Docs</Link>
                             <Link href="/templates">Templates</Link>
                             <a href={githubUrl} target="_blank" rel="noreferrer">GitHub ↗</a>
+                            <a href={discordUrl} target="_blank" rel="noreferrer">Discord ↗</a>
                             <Link href="/t">Sign in</Link>
                         </div>
                     </details>

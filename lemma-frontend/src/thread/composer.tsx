@@ -8,6 +8,10 @@ import {
 } from "./attachments";
 import { composerActions, type Queued } from "./queued";
 
+/** About four lines at the chat size: past this a draft is a paragraph, and the
+ *  card docked above the composer gives way to it. */
+const TALL_PX = 110;
+
 export function Composer({
     placeholder,
     note,
@@ -25,6 +29,7 @@ export function Composer({
     queued,
     queuedNote,
     onWithdraw,
+    onTall,
 }: {
     placeholder: string;
     note?: string;
@@ -56,6 +61,10 @@ export function Composer({
     /** Says when they will be heard, which depends on the teammate. */
     queuedNote?: string;
     onWithdraw?: (id: string) => void;
+    /** Told when the draft grows past a few lines, and when it is back under.
+     *  A long draft and a docked card together left the conversation a line
+     *  tall; the card folds on this. */
+    onTall?: (tall: boolean) => void;
 }) {
     const [draft, setDraft] = useState("");
     const [over, setOver] = useState(false);
@@ -77,12 +86,20 @@ export function Composer({
         // Keyed on the ask, so the same text asked for twice fills twice.
     }, [fill?.id]);
 
+    const tallNow = useRef(false);
+    const onTallRef = useRef(onTall);
+    onTallRef.current = onTall;
     useLayoutEffect(() => {
         const field = input.current;
         if (!field) return;
         const resize = () => {
             field.style.height = "auto";
             field.style.height = Math.min(field.scrollHeight, 200) + "px";
+            const tall = field.scrollHeight > TALL_PX;
+            if (tall !== tallNow.current) {
+                tallNow.current = tall;
+                onTallRef.current?.(tall);
+            }
         };
         resize();
         const observer = new ResizeObserver(resize);
