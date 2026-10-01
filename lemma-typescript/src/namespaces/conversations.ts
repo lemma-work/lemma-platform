@@ -5,6 +5,7 @@ import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/A
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
 import type { AgentRunStartResponse } from "../openapi_client/models/AgentRunStartResponse.js";
 import type { ConversationListResponse } from "../openapi_client/models/ConversationListResponse.js";
+import type { ConversationStatus } from "../openapi_client/models/ConversationStatus.js";
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
 import type { HarnessKind } from "../openapi_client/models/HarnessKind.js";
@@ -171,6 +172,9 @@ export class ConversationsNamespace {
     // PROJECT). `type` filters by CHAT / TASK / PROJECT and composes with it.
     parent_id?: string | null;
     type?: ConversationType | null;
+    // Only conversations in this lifecycle state, e.g. WAITING for the ones
+    // paused on somebody. Mirrors the Python SDK's `status`.
+    status?: ConversationStatus | `${ConversationStatus}` | null;
     // The archive is a separate list, not a tail on this one: omit for the
     // history, pass true for what has been put away.
     archived?: boolean | null;
@@ -187,6 +191,7 @@ export class ConversationsNamespace {
           : options.agent_name,
         parent_id: options.parent_id,
         type: options.type,
+        status: options.status,
         archived: options.archived,
         search: options.search,
         limit: options.limit ?? 20,

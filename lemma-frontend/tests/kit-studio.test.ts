@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initialStudio, editAsset, saveAsset, approveAsset, blockers, isDirty, nextStep } from "../src/marketing/kit/model.ts";
 import { previewSource } from "../src/marketing/preview-source.ts";
+import { isMemoryPath } from "../src/thread/memory-notes.ts";
 
 test("editing an approved asset requires a saved new revision and fresh approval", () => {
     let state = approveAsset(initialStudio(), "landing");
@@ -46,9 +47,19 @@ test("the release plan names what each asset is waiting on", () => {
 test("sample chats display useful widgets without the handoff narration", async () => {
     for (const id of ["kit", "remy", "june", "scout"]) {
         const conversation = await previewSource.getConversation(id);
-        assert.equal(conversation.messages.length, 3);
+        assert.equal(conversation.messages.length, 7);
         assert.equal(conversation.messages[2].tool_name, "display_resource");
         assert.equal((conversation.messages[2].tool_args as { type: string }).type, "WIDGET");
         assert.doesNotMatch(JSON.stringify(conversation), /From Scout|To June|To Scout|To Kit/);
+    }
+});
+
+test("each sample chat ends with a correction the teammate writes down", async () => {
+    for (const id of ["kit", "remy", "june", "scout"]) {
+        const [, , , told, , write] = (await previewSource.getConversation(id)).messages;
+        assert.equal(told.role, "user");
+        assert.equal(write.tool_name, "pod_write_file");
+        // A write to memory is what draws "noted this" under the reply.
+        assert.equal(isMemoryPath((write.tool_args as { path: string }).path), true);
     }
 });

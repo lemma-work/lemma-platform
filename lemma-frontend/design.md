@@ -7,7 +7,8 @@
   metadata. Font weight stays at or below 500 except documented allowances.
 - Pair fills with their ink tokens: `--field-ink`, `--on-accent`, `--on-ok`,
   `--on-bad`. Measure contrast in both themes; never assume white text works.
-- Use Phosphor icons and local brand SVGs. Keep human and teammate identities
+- The Lemma mark is the three rising bars of `app/icon.svg`, in
+  `--brand-bars`, everywhere the logo appears. Use Phosphor icons and local brand SVGs. Keep human and teammate identities
   distinct. Never invent user information or connected state.
 - Show explicit loading, empty, error and retry states. Keep sample work labeled.
 - Respect reduced motion. Provide accessible names, visible keyboard focus,
@@ -19,27 +20,32 @@ For visual changes, inspect 1440, 1024, 768 and 375px widths, light/dark themes,
 and reduced motion. Run the checks listed in [README.md](README.md); authenticated
 flows also need a live session. Design checks: `npm run check:design`.
 
-The embedded hero opens on Conversation without a separate demo header, footer,
-or passive waiting summary below the composer. Keep the space for the workspace;
-full-screen access lives beside the tour steps.
+The landing page is for a founder or a small team deciding whether to try
+it. Its art direction is Anthropic's calm (warm ground, a serif for big type,
+a lot of air), Linear's precision (real screens at one scale, the live
+workspace on a dark band) and PostHog's wit (the cast, used sparingly). It
+runs: the claim over a looping film, where it answers, Kit's live space, how it
+works, the apps it builds, who sees what, how it learns, trust, open source,
+and one way in.
 
-The embedded workspace takes the wheel only after a click. Until then a clear
-layer over it lets the page scroll, with a "Click to explore" hint on hover
-(always shown on touch). Once clicked, the frame is ringed; leaving it, clicking
-outside, or scrolling it mostly out of view hands scrolling back to the page.
-
-Touching the embedded workspace pauses the tour only for the current step.
-Scrolling into another step, or choosing one, restores that step's planned
-screen: conversation, tabs, dialogs, sidebar and the open app's first view.
-The workspace sidebar is open while hiring and collapsed for every later step.
-
-The four work examples follow Kit's Thursday launch: channel request, mobile
-follow-up, Launch studio review, and a scheduled readiness check. Messaging uses
-one phone-framed conversation; the surrounding copy names both supported channels.
-
-All four work tabs share one sage stage, explanation column, framed preview, and
-fixed stage height per breakpoint. Marketing copy describes all Lemma teammates;
-named teammates appear only within examples.
+- The headline is "Hire an AI teammate. Give it a space." The line under it
+  says what the space is — the docs, lists and apps for its job, where your
+  people work with it — so "space" never stands alone.
+- The hero film shows adults at work, never children, and fills only the
+  right of the hero so the words sit on clean ground. It plays forward and back
+  so it never seams; with reduced motion it stays on its poster.
+- The live workspace is the real sample at `/demo/landing`, put on a screen by
+  the Try buttons under it. It takes the wheel only after a click: until then a
+  clear layer lets the page scroll, with "Click to look around". Once clicked
+  the frame is ringed; leaving it, clicking outside, or scrolling it mostly out
+  of view hands scrolling back to the page. Nothing follows the scroll.
+- Every other picture is a real screen from the sample workspace, captured at
+  2x by `scripts/capture-landing-shots.mjs` into `public/landing/`. When the
+  product changes, run the script; never edit or draw the images.
+- The cast appears in four places only: Kit on the live workspace, the three
+  steps, the open-source picture and the closing line-up.
+- Claims stay inside what the code does ("approvals where a person should
+  decide", not "approvals on everything").
 
 Appearance includes Chat text size: Small (14px), Default (15px), and Large
 (17px), with a live preview and a browser-local preference restored before paint.
@@ -79,6 +85,9 @@ you talk to, the space is what you share. The app has two altitudes.
   its face, its job (the pod's `description`), one line of news (what is
   waiting on you, or its latest conversation) and the people in its space.
   Those that need you come first; there are never more than two groups.
+- About is long, so a row of jumps (People, Channels, Taught, Remembers,
+  Standing work, Hands work to, Runs on) stays at the top while it scrolls
+  and marks the section in view.
 - Zoomed in, `/t/{pod}/…`: one teammate's space. Its face and job head the
   sidebar and open About (`/t/{pod}/about`), which holds everything about how
   it works — people, channels, skills, standing work, the agents it hands work
@@ -91,8 +100,43 @@ Faces tell the three apart: a teammate is its character on its own tint in a
 rounded square, a person is initials in a circle, an agent is its initial on
 a plain tile. The space's own agent is the teammate — named as the teammate
 everywhere, never "Lem", "main bot" or "assistant". Say "space" only where the
-place is the point (who can open something, where it is kept); everywhere
-else the teammate's name does the work.
+place is the point (who can open something, where it is kept), and never bare:
+"Kit's space", "its space", or "here". A bare "space" now reads as ChatGPT
+Space. Everywhere else the teammate's name does the work.
+
+### Over time
+
+Time shows up three ways, and each gets its own words: tenure ("Hired 12
+March by Priya", on About, from the pod's `created_at` and `user_id`),
+reliability (run history on standing work, never called learning), and
+learning (what it wrote down).
+
+- About has "What Kit remembers" beside "What Kit has been taught". Taught is
+  skills, which people write; remembers is memory, which the teammate writes
+  under `/memory`, `/memory/agents/pod-default` and, privately,
+  `/me/agents/pod-default`. One line a note, indexes (`AGENTS.md`) left out,
+  a filled dot for a note changed this week. Shared and Personal are two
+  tabs, the words and the split the Files view already uses.
+- Under a reply, "Kit noted this · Pricing" appears when the turn wrote a
+  memory note and the write came back successful. It is drawn from the tool
+  call, not from the model saying so; the model still writes silently.
+- Any message can be sent back as "Remember this": an ordinary message, so
+  what follows is visible the usual way.
+- Nothing here claims more than the files show. No counts of lessons, no
+  "gets better" figures, no attribution ("from Priya") and no undo until
+  memory has a revision history that records who changed what.
+
+"Needs you" is one queue in two parts: workflow forms, and conversations
+paused on a question or an approval (scheduled runs included). The rail
+badge, the Teammates page and Home all read both. An ask left for more than a
+week goes quiet: it stops counting on the rail and the Teammates page, and
+Home folds it behind "N older". Any ask can be dismissed from Home, which
+archives the conversation — the same put-away the chat list offers, so it
+leaves every device and stays readable under Archived.
+
+Memory folders are found by walking down from ones that exist (`/`, then
+`/memory`, then `agents`…; `/me` for private notes). Listing a folder nobody
+created is a 400, not an empty list, so paths are never asked for blind.
 
 ## Desktop
 

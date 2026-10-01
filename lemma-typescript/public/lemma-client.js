@@ -11680,6 +11680,7 @@ var LemmaClient = (() => {
           agent_name: options.agent_name === null ? POD_DEFAULT_AGENT_SELECTOR : options.agent_name,
           parent_id: options.parent_id,
           type: options.type,
+          status: options.status,
           archived: options.archived,
           search: options.search,
           limit: (_a = options.limit) != null ? _a : 20,
