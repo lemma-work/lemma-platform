@@ -53,7 +53,10 @@ export function StandingWork({ podId, teammate, members = [], orgId = null, onOp
     const [opened, setOpened] = useState<string | null>(null);
     const [writing, setWriting] = useState(false);
 
-    const jobs = schedules.data ?? [];
+    /* A schedule aimed at the space's own agent is aimed at the teammate, and
+       says so by name: the shared label is the old "Lem", which this page is
+       the one place still able to correct. */
+    const jobs = (schedules.data ?? []).map((job) => isPodDefaultAgent(job.target.name) ? { ...job, target: { ...job.target, label: teammate } } : job);
 
     return (
         <div className="sched">
@@ -83,7 +86,7 @@ export function StandingWork({ podId, teammate, members = [], orgId = null, onOp
             {me === null && jobs.length > 0 && <p className="empty-row" role="status">Loading…</p>}
             {me !== null && [
                 { key: "mine", title: "Yours", rows: jobs.filter((job) => !job.ownerId || job.ownerId === me) },
-                { key: "space", title: "Shared in the space", rows: jobs.filter((job) => job.ownerId && job.ownerId !== me) },
+                { key: "space", title: "Shared with everyone here", rows: jobs.filter((job) => job.ownerId && job.ownerId !== me) },
             ].filter((group) => group.rows.length > 0).map((group) => (
                 <section key={group.key} className="sched-group">
                     {jobs.some((job) => job.ownerId && job.ownerId !== me) && <h3 className="sched-group__title">{group.title}</h3>}
@@ -110,7 +113,7 @@ export function StandingWork({ podId, teammate, members = [], orgId = null, onOp
             ))}
             {schedules.isSuccess && (
                 <p className="sched-privacy">
-                    Personal schedules are private to whoever made them. Share one with the space and others can set up their own copy — it still runs as you.
+                    Personal schedules are private to whoever made them. Share one with everyone here and they can set up their own copy — it still runs as you.
                 </p>
             )}
 
@@ -251,10 +254,10 @@ function ShareToggle({ podId, job }: { podId: string; job: StandingJob }) {
             disabled={sample || !may(job, SCHEDULE_EDIT) || flip.isPending}
             title={shared
                 ? "Only you will see it. It keeps running as you."
-                : "Everyone in the space can see it and set up their own copy. It still runs as you."}
+                : "Everyone here can see it and set up their own copy. It still runs as you."}
             onClick={() => flip.mutate()}
         >
-            {flip.isPending ? "…" : shared ? "Make private" : "Share with space"}
+            {flip.isPending ? "…" : shared ? "Make private" : "Share with everyone"}
         </button>
     );
 }

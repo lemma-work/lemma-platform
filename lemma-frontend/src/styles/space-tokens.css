@@ -133,10 +133,6 @@
     --tone-gone: var(--ink-3);
     /* The app's own mark — the three rising bars of `app/icon.svg`. */
     --brand-bars: #5a3fd4;
-    /* The three dots of the mark: identity, which does not move with the theme. */
-    --brand-dot-1: #e85ad8;
-    --brand-dot-2: #2ed3e6;
-    --brand-dot-3: #1a73ff;
     /* What kind of thing a row is, at a glance. */
     --glyph-page: #1a73ff;
     --glyph-app: #9b51e0;

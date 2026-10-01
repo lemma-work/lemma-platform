@@ -111,7 +111,7 @@ export function WorkflowsView({ podId, teammate, onDiscuss, onOpenRun, agentName
                                         every row is a tag that says nothing. */}
                                     {!flow.active && <i className="wf-tag">paused</i>}
                                     <i className="wf-tag wf-tag--scope" data-scope={flow.perPerson ? "person" : "space"}
-                                        title={flow.perPerson ? "Runs separately for each person, as them" : "Runs once for the whole space"}>
+                                        title={flow.perPerson ? "Runs separately for each person, as them" : "Runs once, for everyone here"}>
                                         {flow.perPerson ? "Each person" : "Admin"}
                                     </i>
                                     {missingOf(flow, agentNames).length > 0 && (

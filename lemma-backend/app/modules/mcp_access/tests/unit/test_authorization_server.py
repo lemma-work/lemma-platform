@@ -155,3 +155,24 @@ async def test_a_code_belongs_to_the_client_it_was_issued_to_and_redeems_once():
     with pytest.raises(TokenError) as raised:
         await server.exchange_authorization_code(_client(), loaded)
     assert raised.value.error == "invalid_grant"
+
+
+@pytest.mark.parametrize(
+    "auth_frontend_url",
+    [
+        # The portal itself: what deployments set, and what the CLI uses.
+        "https://app.example.com/auth",
+        "https://app.example.com/auth/",
+        # The bare site: what the configuration guide shows.
+        "https://app.example.com",
+        "https://app.example.com/",
+    ],
+)
+def test_the_consent_page_is_on_the_portal_however_its_url_is_given(auth_frontend_url):
+    """A deployment that sets the portal URL got /auth/auth/authorize -- a 404."""
+    from app.modules.mcp_access.services.authorization_server import consent_page_url
+
+    assert (
+        consent_page_url(auth_frontend_url, "r1")
+        == "https://app.example.com/auth/authorize?request=r1"
+    )

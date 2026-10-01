@@ -73,18 +73,18 @@ export function CommentsPanel({ podId, path, status, threads, loading, members, 
 
             {status === "missing" && (
                 <div className="cpanel__setup">
-                    <p>Comments aren’t on in this space yet. Turning them on adds one table, <code>doc_comments</code>, that everyone here can read — and where {askable(bots)} can be asked to answer.</p>
+                    <p>Comments aren’t on here yet. Turning them on adds one table, <code>doc_comments</code>, that everyone here can read — and where {askable(bots)} can be asked to answer.</p>
                     <button className="cpanel__primary" disabled={enable.isPending} onClick={() => enable.mutate()}>
                         {enable.isPending ? "Turning on…" : "Turn on comments"}
                     </button>
                     {enable.isError && (
                         <p className="cpanel__problem">
-                            {isForbidden(enable.error) ? "Only an editor of this space can turn comments on." : "Couldn’t turn comments on."}
+                            {isForbidden(enable.error) ? "Only an editor here can turn comments on." : "Couldn’t turn comments on."}
                         </p>
                     )}
                 </div>
             )}
-            {status === "forbidden" && <p className="cpanel__quiet">You can’t read comments in this space.</p>}
+            {status === "forbidden" && <p className="cpanel__quiet">You can’t read comments here.</p>}
 
             {status === "ready" && (
                 <div className="cpanel__list">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
@@ -14,12 +14,14 @@ import { AtTheDoor } from "@/shell/at-the-door";
 import { AddPeople } from "@/shell/add-people";
 import { ChevronRightIcon, EditIcon, LockIcon, PlusIcon } from "@/ui/icons";
 import { AgentMark } from "./agent-mark";
+import { WhatItRemembers } from "./what-it-remembers";
+import { sayHired } from "./teammates";
 import { TeammateFace } from "./teammate-face";
 
 /** Where a link into About lands. Each is a section of the one page. */
-export type AboutSection = "people" | "channels" | "skills" | "schedules" | "agents" | "model";
+export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "model";
 
-const SECTIONS: readonly string[] = ["people", "channels", "skills", "schedules", "agents", "model"] satisfies AboutSection[];
+const SECTIONS: readonly string[] = ["people", "channels", "skills", "memory", "schedules", "agents", "model"] satisfies AboutSection[];
 
 /** Whether a word from an address is one of About's sections. */
 export function isAboutSection(value: string | null | undefined): value is AboutSection {
@@ -65,6 +67,7 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
         <div className="aboutpage" ref={page}>
             <div className="aboutpage__column">
                 <Hero pod={pod} orgId={orgId} onAsk={onAsk} />
+                <Jumps page={page} />
 
                 <Section id="people" title="People" note={"Everyone here can open what is in " + pod.name + "’s space."}>
                     <AddPeople pod={pod} orgId={orgId} />
@@ -86,6 +89,10 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
                             + "write the instructions, and publish it under /skills. Ask me what it should do first."
                         )}
                     />
+                </Section>
+
+                <Section id="memory" title={"What " + pod.name + " remembers"} note="Written down as it works. Open a note to read or fix it.">
+                    <WhatItRemembers pod={pod} onFile={onFile} />
                 </Section>
 
                 <Section id="schedules" title="Standing work" note="What it does without being asked, on a time or an event.">
@@ -116,6 +123,63 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
     );
 }
 
+/** The page's sections, as a row that stays at the top while you scroll.
+ *  About grew to seven sections; this is how you get to the fifth without
+ *  scrolling past the first four. The section in view is marked. */
+const JUMPS: { id: AboutSection; label: string }[] = [
+    { id: "people", label: "People" },
+    { id: "channels", label: "Channels" },
+    { id: "skills", label: "Taught" },
+    { id: "memory", label: "Remembers" },
+    { id: "schedules", label: "Standing work" },
+    { id: "agents", label: "Hands work to" },
+    { id: "model", label: "Runs on" },
+];
+
+function Jumps({ page }: { page: RefObject<HTMLDivElement | null> }) {
+    const [at, setAt] = useState<AboutSection | null>(null);
+    /* The jump just taken stays marked until the person scrolls themselves:
+       while the page glides there, and at the bottom, where the last
+       sections can never reach the bar because the page runs out first. */
+    const asked = useRef<AboutSection | null>(null);
+    useEffect(() => {
+        const root = page.current;
+        if (!root) return;
+        const pick = () => {
+            if (asked.current) { setAt(asked.current); return; }
+            /* The one nearest the top of the viewport, below the bar itself. */
+            const top = root.getBoundingClientRect().top + 72;
+            let current: AboutSection | null = null;
+            for (const jump of JUMPS) {
+                const section = root.querySelector(`[data-about="${jump.id}"]`);
+                if (section && section.getBoundingClientRect().top <= top) current = jump.id;
+            }
+            setAt(current);
+        };
+        const mine = () => { asked.current = null; };
+        pick();
+        root.addEventListener("scroll", pick, { passive: true });
+        for (const kind of ["wheel", "touchstart", "keydown"] as const) root.addEventListener(kind, mine, { passive: true });
+        return () => {
+            root.removeEventListener("scroll", pick);
+            for (const kind of ["wheel", "touchstart", "keydown"] as const) root.removeEventListener(kind, mine);
+        };
+    }, [page]);
+    const go = (id: AboutSection) => {
+        asked.current = id;
+        setAt(id);
+        const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        page.current?.querySelector(`[data-about="${id}"]`)?.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+    };
+    return (
+        <nav className="aboutpage__jumps" aria-label="On this page">
+            {JUMPS.map((jump) => (
+                <button key={jump.id} aria-current={at === jump.id ? "true" : undefined} onClick={() => go(jump.id)}>{jump.label}</button>
+            ))}
+        </nav>
+    );
+}
+
 /** The face, the name and the job — and the one place to change the last two. */
 function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: () => void }) {
     const cache = useQueryClient();
@@ -137,6 +201,8 @@ function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: ()
             setEditing(false);
         },
     });
+
+    const hired = sayHired(pod);
 
     return (
         <header className="aboutpage__hero">
@@ -167,6 +233,7 @@ function Hero({ pod, orgId, onAsk }: { pod: Pod; orgId: string | null; onAsk: ()
                     {pod.description
                         ? <p className="aboutpage__job">{pod.description}</p>
                         : <p className="aboutpage__job aboutpage__job--none">No job written down yet.</p>}
+                    {hired && <p className="aboutpage__hired">{hired}</p>}
                     <div className="aboutpage__acts">
                         <button className="pill-button" onClick={onAsk}>Ask {pod.name}</button>
                         <button className="ghost-pill" onClick={() => setEditing(true)}><EditIcon size={14} /> Edit</button>

@@ -52,6 +52,15 @@ export const AI_MATES = AI_MATE + "s";
  *  So the word is said only where the place is the point — who can open a
  *  thing, where a thing is kept — and everywhere else the name does the work.
  *
+ *  And never bare. Since September 2026 "a space" and "the space" read as
+ *  ChatGPT Space, where each person brings their own assistant into a shared
+ *  folder. Here the space belongs to the teammate, and the possessive is the
+ *  whole difference: "Kit's space", "its space". Where no name is in reach,
+ *  "here" says the same thing ("Everyone here can see it").
+ *
+ *  Never "business agent" either, in any copy: Meta's Business Agent is a
+ *  customer-facing bot on WhatsApp, a channel this app is also on.
+ *
  *  The agents a teammate hands work to are agents. There are no bots here:
  *  the word only ever named the teammate's own agent, which is the teammate. */
 export const SPACE = "space";
