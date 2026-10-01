@@ -17,6 +17,7 @@ import { AgentMark } from "./agent-mark";
 import { WhatItRemembers } from "./what-it-remembers";
 import { sayHired } from "./teammates";
 import { TeammateFace } from "./teammate-face";
+import { DeleteTeammate } from "./delete-teammate";
 
 /** Where a link into About lands. Each is a section of the one page. */
 export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "model";
@@ -38,7 +39,7 @@ export function isAboutSection(value: string | null | undefined): value is About
  *  is the same working component Settings stacked before — nothing here is a
  *  second copy of how a schedule or a channel works. What is left in
  *  Settings is about the space rather than the teammate. */
-export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onAskFor, onOpenRun, onOpenConversation, onFile, onSettings }: {
+export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onAskFor, onOpenRun, onOpenConversation, onFile, onSettings, onDeleted }: {
     pod: Pod;
     orgId: string | null;
     orgName: string;
@@ -56,6 +57,8 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
     onOpenConversation: (id: string) => void;
     onFile: (path: string) => void;
     onSettings: () => void;
+    /** The teammate has just been deleted: leave its space. */
+    onDeleted: () => void;
 }) {
     const page = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -118,6 +121,11 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
                     AI tools, the models {orgName} can use, and usage are in{" "}
                     <button className="linkish" onClick={onSettings}>Settings</button>.
                 </p>
+
+                {/* Last, and after everything that says how it works: the one
+                    act on this page that cannot be taken back. Not one of the
+                    jumps — nobody should arrive here by a shortcut. */}
+                <DeleteTeammate pod={pod} orgId={orgId} onDeleted={onDeleted} />
             </div>
         </div>
     );

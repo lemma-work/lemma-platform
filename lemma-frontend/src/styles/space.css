@@ -6474,6 +6474,7 @@ samp,
     gap: 8px;
 }
 .trail .human-profile {
+    position: relative;
     width: 32px;
     height: 32px;
     min-height: 32px;
@@ -6481,9 +6482,33 @@ samp,
     justify-content: center;
     border-radius: 50%;
 }
-.trail .human-profile__text,
-.trail .human-profile__chevron {
+.trail .human-profile__text {
     display: none;
+}
+/* The account face is also the only way into settings, and initials alone
+   never said so. A gear in its corner, cut out of the face the way a
+   teammate's badge is, says it without a label the rail has no space for. */
+.trail .human-profile__gear {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    width: 16px;
+    height: 16px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line-2);
+    border-radius: 50%;
+    background: var(--paper);
+    color: var(--ink-2);
+    box-shadow: 0 0 0 2px var(--chrome);
+}
+.trail .human-profile__gear svg {
+    width: 10px;
+    height: 10px;
+}
+.trail .human-profile:hover .human-profile__gear,
+.trail .human-profile:focus-visible .human-profile__gear {
+    color: var(--ink);
 }
 .trail .allowance--compact {
     width: 32px;
@@ -7264,6 +7289,45 @@ samp,
     border-top: 1px solid var(--line);
     font-size: 13px;
     color: var(--ink-3);
+}
+/* Deleting sits clear of the footnote above it, so it reads as its own
+   decision rather than one more line about Settings. Only the button is
+   red: a red heading and rule would shout at everybody who scrolls to the
+   bottom, and most of them came for something else. */
+.aboutpage__delete {
+    margin-top: 40px;
+}
+.aboutpage__delete .btn--danger:disabled {
+    opacity: 0.45;
+    cursor: default;
+    filter: none;
+}
+.deleteteammate p {
+    margin: 0 0 10px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.deleteteammate ul {
+    margin: 0 0 12px;
+    padding-left: 20px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.deleteteammate li + li {
+    margin-top: 4px;
+}
+.deleteteammate .field {
+    margin-top: 16px;
+}
+.deleteteammate__name {
+    color: var(--ink);
+}
+.deleteteammate .btn--danger:disabled {
+    opacity: 0.45;
+    cursor: default;
+    filter: none;
 }
 
 /* ── Home: the teammate's desk ─────────────────────────────────────── */

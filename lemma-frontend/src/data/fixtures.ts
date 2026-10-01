@@ -2260,6 +2260,15 @@ export const fixtureSource: PodSource = {
         if (clean) pod.description = clean;
         else delete pod.description;
     },
+    /* Real, in memory, for the reason renaming is: what deleting is judged by
+       is the rail losing a face and the team page closing over the gap, and a
+       refusal shows neither. Gone until the page reloads, like a hire. */
+    async deletePod(podId: string) {
+        await wait(320);
+        const at = PODS.findIndex((candidate) => candidate.id === podId);
+        if (at >= 0) PODS.splice(at, 1);
+        HIRED_HERE.delete(podId);
+    },
     async uploadIcon(file: File) {
         await wait(200);
         return await new Promise<string>((resolve, reject) => {

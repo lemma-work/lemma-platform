@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckIcon, ChevronDownIcon, DenyIcon, QuestionIcon, ShieldIcon } from "@/ui/icons";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, DenyIcon, QuestionIcon, ShieldIcon } from "@/ui/icons";
 import {
     HOST_PERMISSION_WINDOW_MS,
     decisionLabel,
@@ -41,6 +41,11 @@ import type { Interaction } from "./turns";
 
 export type Resolve = (id: string, decision: ApprovalDecision, response?: Record<string, unknown>) => Promise<void>;
 
+/** Answers the open question with a sentence typed into the composer. Throws
+ *  when the answer did not go through, so the composer can give the sentence
+ *  back rather than lose it. */
+export type AnswerWith = (text: string) => Promise<void>;
+
 const OTHER = "__other__";
 
 function useDecision(id: string, onResolve?: Resolve) {
@@ -50,14 +55,16 @@ function useDecision(id: string, onResolve?: Resolve) {
 
     const decide = useCallback(
         async (decision: ApprovalDecision, response?: Record<string, unknown>) => {
-            if (!onResolve || deciding || submitted) return;
+            if (!onResolve || deciding || submitted) return false;
             setDeciding(decision);
             setError(null);
             try {
                 await onResolve(id, decision, response);
                 setSubmitted(decision);
+                return true;
             } catch (problem) {
                 setError(problem instanceof Error ? problem.message : "That decision did not go through.");
+                return false;
             } finally {
                 setDeciding(null);
             }
@@ -149,10 +156,14 @@ function Questions({
     interaction,
     questions,
     onResolve,
+    folded,
+    answerWith,
 }: {
     interaction: Interaction;
     questions: AskQuestion[];
     onResolve?: Resolve;
+    folded?: boolean;
+    answerWith?: { current: AnswerWith | null };
 }) {
     const { deciding, submitted, error, decide } = useDecision(interaction.id, onResolve);
 
@@ -232,6 +243,32 @@ function Questions({
         void decide("APPROVE_ONCE", { answers });
     };
 
+    /* Typing into the composer while a question is open answers it, rather
+       than sending a message past it. A message past it used to be read as
+       the question being skipped — the server denies a pause nobody answered
+       before it starts the next run — so somebody who answered in their own
+       words found the agent going on as if they had said nothing. The
+       sentence is the answer to the question on screen; what was already
+       picked for the others goes with it. */
+    useEffect(() => {
+        if (!answerWith) return;
+        if (closed) {
+            answerWith.current = null;
+            return;
+        }
+        answerWith.current = async (text: string) => {
+            const answers: Record<string, unknown> = {};
+            for (const question of questions) {
+                const value = answerFor(question);
+                if (value !== null) answers[question.header] = value;
+            }
+            const kept = (picked[here.header] ?? []).filter((label) => label !== OTHER);
+            answers[here.header] = here.multiSelect ? [...kept, text] : text;
+            if (!(await decide("APPROVE_ONCE", { answers }))) throw new Error("That answer did not go through.");
+        };
+        return () => { answerWith.current = null; };
+    }, [answerWith, closed, questions, answerFor, picked, here, decide]);
+
     /* Answered, and no longer a form. Every question folds to what it got. */
     if (closed) {
         return (
@@ -248,6 +285,18 @@ function Questions({
     }
 
     const chosen = picked[here.header] ?? [];
+
+    /* Folded to the one line that says what is being asked, so the reply it is
+       asking about can be read above it. Still mounted: what was picked stays
+       picked when it opens again. */
+    if (folded) {
+        return (
+            <p className="ask__peek">
+                {questions.length > 1 && <span className="ask__step">{step + 1} of {questions.length}</span>}
+                <span>{here.question || here.header}</span>
+            </p>
+        );
+    }
 
     return (
         <>
@@ -330,6 +379,9 @@ export function InteractionCard({
     onResolve,
     docked,
     runEnded,
+    folded,
+    onFold,
+    answerWith,
 }: {
     interaction: Interaction;
     /** Who is asking. Only reached when the call named itself nothing, which
@@ -344,6 +396,11 @@ export function InteractionCard({
     /** The run that asked is over. A coding agent's request waits inside its
      *  run, so once the run has ended nobody is left to hear the answer. */
     runEnded?: boolean;
+    /** Docked and folded to its heading; see `InteractionDock`. */
+    folded?: boolean;
+    onFold?: (folded: boolean) => void;
+    /** Filled while a question is open; see `Questions`. */
+    answerWith?: { current: AnswerWith | null };
 }) {
     const { deciding, submitted, error, decide } = useDecision(interaction.id, onResolve);
     const question = interaction.kind === "question";
@@ -395,6 +452,18 @@ export function InteractionCard({
                               : "needs approval"}
                     </span>
                 )}
+                {onFold && (
+                    <button
+                        type="button"
+                        className="approval__fold"
+                        aria-expanded={!folded}
+                        title={folded ? "Show" : "Hide, to read the conversation"}
+                        onClick={() => onFold(!folded)}
+                    >
+                        {folded ? "Show" : "Hide"}
+                        {folded ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
+                    </button>
+                )}
     </>);
     const details = (<>
 
@@ -437,13 +506,14 @@ export function InteractionCard({
             data-kind={question ? "question" : "approval"}
             data-state={expired ? "expired" : settled ? (denied ? "denied" : "done") : "open"}
             data-docked={docked ? "" : undefined}
+            data-folded={folded ? "" : undefined}
         >
             <div className="approval__top">{header}</div>
-            {details}
+            {!folded && details}
 
             {question && questions.length > 0 ? (
-                <Questions interaction={interaction} questions={questions} onResolve={onResolve} />
-            ) : (
+                <Questions interaction={interaction} questions={questions} onResolve={onResolve} folded={folded} answerWith={answerWith} />
+            ) : folded ? null : (
                 <>
                     {expired && <p className="approval__after">{EXPIRED_NOTE}</p>}
                     {interaction.open && !submitted && !expired && deadline !== undefined && (

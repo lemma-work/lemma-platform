@@ -59,7 +59,7 @@
 .navInner { display: flex; align-items: center; justify-content: space-between; gap: 24px; height: 76px }
 .wordmark { display: inline-flex; align-items: center }
 .navLinks { display: flex; align-items: center; gap: 30px; font-size: 15px; color: var(--ink-2) }
-.navLinks > a:hover { color: var(--ink) }
+.navLinks > a:not(.navStart):hover { color: var(--ink) }
 .navStart { display: inline-flex; align-items: center; height: 40px; padding: 0 18px; border-radius: 99px; background: var(--ink); color: var(--paper) }
 .mobileMenu { display: none; position: relative }
 .mobileMenu summary { list-style: none; cursor: pointer; padding: 8px 14px; border: 1px solid var(--line-2); border-radius: 99px; font-size: 14px; background: rgb(255 254 251 / .7) }
