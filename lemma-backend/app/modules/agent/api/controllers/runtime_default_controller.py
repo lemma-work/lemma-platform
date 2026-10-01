@@ -15,7 +15,6 @@ from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.context import ResourceRef
 from app.core.authorization.dependencies import OrgContextDep
 from app.core.authorization.permissions import Permissions
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.api.controllers.runtime_config_controller import (
     _load_profile_or_404,
@@ -42,9 +41,7 @@ _DEFAULT_PATH = "/organizations/{organization_id}/agent-runtime/default"
 
 
 def _default_service(uow: UoWDep) -> OrganizationDefaultService:
-    return OrganizationDefaultService(
-        AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
-    )
+    return OrganizationDefaultService(AgentRuntimeProfileRepository(uow))
 
 
 @router.put(

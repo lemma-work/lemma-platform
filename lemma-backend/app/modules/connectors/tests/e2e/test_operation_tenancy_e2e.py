@@ -33,6 +33,7 @@ from app.modules.connectors.infrastructure.repositories.auth_config_operation_re
 from app.modules.connectors.infrastructure.repositories.connector_operation_repository import (
     ConnectorOperationRepository,
 )
+from app.modules.connectors.tests.support.stored_secrets import auth_config_secret
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -66,7 +67,11 @@ async def _install(db_session, connector_id: str, organization_id, label: str):
         kind="mcp",
         config_source="SYSTEM_DEFAULT",
         status="ACTIVE",
-        config={"server_url": f"https://{label}.internal.test"},
+        config_secret_id=await auth_config_secret(
+            db_session,
+            organization_id=organization_id,
+            config={"server_url": f"https://{label}.internal.test"},
+        ),
     )
     db_session.add(auth_config)
     await db_session.commit()

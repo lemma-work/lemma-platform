@@ -9,7 +9,6 @@ from uuid import UUID
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.core.crypto import get_secret_cipher
 from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -27,12 +26,17 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurface,
 )
+from app.modules.agent_surfaces.infrastructure.surface_webhook_secrets import (
+    reveal_webhook_secret,
+    store_webhook_secret,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql import (
     active_surfaces_of_type,
     in_a_live_pod,
     routing_surfaces,
 )
 from app.modules.pod.contracts.orm import Pod
+from app.modules.vault.contracts import Vault, vault_for
 from app.modules.agent.contracts.conversations import (
     merge_conversation_metadata as merge_agent_conversation_metadata,
 )
@@ -58,11 +62,20 @@ def _identity_claim_lock_key(
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
     """Repository for agent surface installations."""
 
-    def __init__(self, uow: IUnitOfWork, message_bus: Any = None):
+    def __init__(
+        self, uow: IUnitOfWork, message_bus: Any = None, *, vault: Vault | None = None
+    ):
         self.uow = uow
         self.session: Session = uow.session
+        # The vault on this repository's own transaction, so a webhook secret
+        # lands with the surface row that points at it or not at all.
+        self._vault = vault
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
+
+    @property
+    def vault(self) -> Vault:
+        return self._vault or vault_for(self.uow.session)
 
     def _collect_events(self, entity: AgentSurfaceEntity) -> None:
         events = entity.collect_events()
@@ -408,8 +421,9 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             surface_identity_username=entity.surface_identity_username,
             status=entity.status.value,
             surface_identity_email=entity.surface_identity_email,
-            webhook_secret=get_secret_cipher().encrypt_str(entity.webhook_secret),
         )
+        if entity.webhook_secret:
+            await store_webhook_secret(self.vault, model, entity.webhook_secret)
         self.session.add(model)
         await self.session.flush()
         self._collect_events(entity)
@@ -436,10 +450,29 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.surface_identity_username = entity.surface_identity_username
         model.status = entity.status.value
         model.surface_identity_email = entity.surface_identity_email
-        model.webhook_secret = get_secret_cipher().encrypt_str(entity.webhook_secret)
+        # Only a freshly minted secret is written. The entity's plaintext is
+        # write-only -- reads never fill it in -- so None means "unchanged", not
+        # "clear it", and an ordinary edit leaves the stored secret alone.
+        if entity.webhook_secret:
+            await store_webhook_secret(self.vault, model, entity.webhook_secret)
         await self.session.flush()
+        entity.webhook_secret_id = model.webhook_secret_id
         self._collect_events(entity)
         return entity
+
+    async def reveal_webhook_secret(self, surface: AgentSurfaceEntity) -> str | None:
+        """The surface's stored webhook secret, or None when it has none.
+
+        Scoped by the row, not the entity: the organization is only on the row,
+        and `session.get` answers from the identity map when the surface was
+        just read on this session, so the usual caller pays no extra query.
+        """
+        if surface.webhook_secret_id is None:
+            return None
+        model = await self.session.get(AgentSurface, surface.id)
+        if model is None:
+            return None
+        return await reveal_webhook_secret(self.vault, model)
 
     async def delete(self, id: UUID) -> None:
         model = await self.session.get(AgentSurface, id)

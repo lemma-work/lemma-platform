@@ -28,7 +28,6 @@ from uuid import UUID
 import pytest
 from sqlalchemy import select, update
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
 from app.modules.agent.domain.vision import AgentVisionMode
@@ -99,7 +98,7 @@ async def _profile_for_a_host_that(db_session, scenario, *, reports_images: bool
 
     uow = SqlAlchemyUnitOfWork(db_session)
     service = AgentRuntimeProfileService(
-        AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+        AgentRuntimeProfileRepository(uow),
         AgentHostRepository(uow),
     )
     profile = await service.create_agent_host_profile(

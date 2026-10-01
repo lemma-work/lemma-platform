@@ -962,3 +962,51 @@ async def test_a_number_reassignment_keeps_the_person_in_their_conversation(
         "the reassigned number started a new conversation, so the person lost "
         "the history they were still looking at"
     )
+
+
+async def test_a_numbers_secrets_live_in_the_vault_and_leave_with_the_row(
+    db_session,
+) -> None:
+    """At rest the secrets are one sealed vault row; `remove` takes it too.
+
+    Nothing in `remove` deletes the secret by hand -- the owner trigger on
+    `credentials_secret_id` does, whatever path the row goes by -- so this is
+    the test that notices if the trigger is ever missing from the schema.
+    """
+    from sqlalchemy import text
+
+    from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (
+        WhatsAppNumber,
+    )
+
+    await _number(db_session, phone_number_id="pool-vaulted", token="sealed-token")
+    secret_id = await db_session.scalar(
+        select(WhatsAppNumber.credentials_secret_id).where(
+            WhatsAppNumber.phone_number_id == "pool-vaulted"
+        )
+    )
+    assert secret_id is not None
+    stored = (
+        await db_session.execute(
+            text(
+                "SELECT purpose, organization_id, ciphertext FROM vault_secrets "
+                "WHERE id = :id"
+            ),
+            {"id": secret_id},
+        )
+    ).one()
+    assert stored.purpose == "agent_surfaces.whatsapp_number.credentials"
+    assert stored.organization_id is None
+    assert b"sealed-token" not in bytes(stored.ciphertext)
+
+    repository = WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session))
+    found = await repository.get_by_phone_number_id("pool-vaulted")
+    assert found is not None and found.access_token == "sealed-token"
+
+    assert await repository.remove("pool-vaulted") is True
+    await db_session.commit()
+    remaining = await db_session.scalar(
+        text("SELECT count(*) FROM vault_secrets WHERE id = :id"),
+        {"id": secret_id},
+    )
+    assert remaining == 0

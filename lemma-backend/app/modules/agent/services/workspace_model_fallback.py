@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -143,9 +142,7 @@ async def resolve_workspace_runtime(
     # with the result happens after the connection is back in the pool.
     async with create_uow_from_session_maker(async_session_maker) as uow:
         service = AgentRuntimeProfileService(
-            repository=AgentRuntimeProfileRepository(
-                uow, encryption=get_secret_cipher()
-            ),
+            repository=AgentRuntimeProfileRepository(uow),
             host_repository=AgentHostRepository(uow),
         )
         pod_default = (
@@ -183,7 +180,7 @@ async def organization_default_runtime(
     Organization-wide providers only. A run in a shared pod must not land on one
     member's personal key because that member happened to add it.
     """
-    repository = AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
+    repository = AgentRuntimeProfileRepository(uow)
     profiles = await repository.get_visible(
         organization_id=organization_id, user_id=ORGANIZATION_WIDE_VIEWER
     )

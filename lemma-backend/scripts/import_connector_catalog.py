@@ -85,7 +85,6 @@ def _load_model_registry() -> None:
 
 
 from app.core.config import reveal_secret
-from app.core.crypto import get_secret_cipher
 from app.core.config import settings
 from app.modules.connectors.config import connector_settings
 from app.core.infrastructure.db.session import async_session_maker
@@ -1965,7 +1964,7 @@ async def _run_unmanaged_composio_default_sweep(*, dry_run: bool) -> int:
         try:
             swept = await _disable_unmanaged_composio_defaults(
                 ConnectorRepository(uow),
-                AccountRepository(uow, encryption=get_secret_cipher()),
+                AccountRepository(uow),
                 session,
             )
             if dry_run:

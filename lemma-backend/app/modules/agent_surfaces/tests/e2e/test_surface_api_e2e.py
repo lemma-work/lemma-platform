@@ -17,7 +17,10 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _ensure_connector,
     _ensure_connector_account,
     _load_slack_dm_fixture,
+    merge_auth_config_values,
+    stored_account_credentials,
 )
+from app.modules.test_support.e2e.vault_helpers import seed_account_credentials
 
 pytestmark = pytest.mark.e2e
 
@@ -715,10 +718,9 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
         for field in action["fields"]
     )
 
-    auth_config.config = {
-        **(auth_config.config or {}),
-        "signing_secret": "custom-signing-secret",
-    }
+    await merge_auth_config_values(
+        db_session, auth_config, {"signing_secret": "custom-signing-secret"}
+    )
     await db_session.commit()
     repaired = (
         await authenticated_client.get(f"/pods/{pod_id}/surfaces/slack/setup")
@@ -1096,7 +1098,9 @@ async def _second_account_on_the_same_bot(
         auth_config_id=first.auth_config_id,
         connector_id=first.connector_id,
         provider_account_id=provider_account_id,
-        credentials=dict(first.credentials or {}),
+    )
+    await seed_account_credentials(
+        db_session, account, await stored_account_credentials(db_session, first)
     )
     db_session.add(account)
     await db_session.commit()
@@ -1240,15 +1244,21 @@ async def test_a_second_slack_app_in_one_workspace_is_allowed(
     )
     # Its own app in the same workspace: a different bot user, and a different
     # app id, which is what makes the two distinguishable on the way back in.
-    second.credentials = {
-        **(first.credentials or {}),
-        "access_token": "xoxb-second-app",
-        "raw_response": {
-            **((first.credentials or {}).get("raw_response") or {}),
-            "bot_user_id": "U0SECONDBOT",
-            "app_id": "A0SECONDAPP",
+    first_credentials = await stored_account_credentials(db_session, first)
+    first_raw = first_credentials.get("raw_response")
+    await seed_account_credentials(
+        db_session,
+        second,
+        {
+            **first_credentials,
+            "access_token": "xoxb-second-app",
+            "raw_response": {
+                **(first_raw if isinstance(first_raw, dict) else {}),
+                "bot_user_id": "U0SECONDBOT",
+                "app_id": "A0SECONDAPP",
+            },
         },
-    }
+    )
     await db_session.commit()
 
     assert (

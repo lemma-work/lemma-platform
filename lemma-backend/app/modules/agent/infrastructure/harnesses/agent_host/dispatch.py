@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from collections.abc import Sequence
 from uuid import UUID
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -27,6 +26,7 @@ from app.modules.agent.capabilities.open_notifications import (
 from app.modules.agent.domain.queued_messages import is_queued
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
+from app.modules.agent.infrastructure.agent_host.mcp_frame import seal_mcp_frame
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
@@ -61,6 +61,7 @@ from app.modules.agent.tools.final_answer.final_answer_toolset import (
     final_answer_expected,
 )
 from app.modules.agent.services.workspace_location import resolve_workspace_location
+from app.modules.vault.contracts import VaultUnavailable
 
 logger = get_logger(__name__)
 
@@ -96,16 +97,20 @@ async def refresh_credential[DepsT: AgentContext](
                 else []
             ),
         )
-        encrypted = await get_secret_cipher().encrypt_json_async(mcp)
-        if encrypted is None:
-            raise RuntimeError("could not encrypt the refreshed MCP configuration")
+        encrypted = await seal_mcp_frame(mcp, run_id=agent_run_id)
         async with uow_factory() as uow:
             command = await AgentHostDispatchRepository(uow).enqueue_credential_refresh(
                 run_id=agent_run_id,
                 encrypted_mcp_payload=encrypted,
             )
             await uow.commit()
-    except (AgentHostRepositoryError, RuntimeError, ValueError, KeyError) as exc:
+    except (
+        AgentHostRepositoryError,
+        VaultUnavailable,
+        RuntimeError,
+        ValueError,
+        KeyError,
+    ) as exc:
         logger.warning(
             "agent.harnesses.agent_host.credential_refresh_failed.degraded",
             agent_run_id=str(agent_run_id),
@@ -304,9 +309,7 @@ async def _admit[DepsT: AgentContext](
             else []
         ),
     )
-    encrypted_mcp = await get_secret_cipher().encrypt_json_async(mcp)
-    if encrypted_mcp is None:
-        raise RuntimeError("could not encrypt MCP configuration")
+    encrypted_mcp = await seal_mcp_frame(mcp, run_id=agent_run_id)
     # A conversation is one provider session, and a session keeps its own
     # history — so instructions delivered when it opened are still there on
     # every later turn. Re-sending them each time put another copy of a

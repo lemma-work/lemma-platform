@@ -364,7 +364,6 @@ class ResumeToolReturnBuilder:
         from app.modules.agent.services.host_execution_selection import (
             recorded_host_workspace,
         )
-        from app.core.crypto import get_secret_cipher
         from app.modules.agent.services.workspace_location import resolve_pod_cwd
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
@@ -380,7 +379,7 @@ class ResumeToolReturnBuilder:
         )
         async with uow_factory() as uow:
             profile_service = AgentRuntimeProfileService(
-                AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
+                AgentRuntimeProfileRepository(uow)
             )
             resolved = await profile_service.resolve(
                 runtime=selected_runtime,

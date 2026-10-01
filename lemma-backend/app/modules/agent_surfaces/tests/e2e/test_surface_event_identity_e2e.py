@@ -24,15 +24,15 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.events.inbox import provide_domain_event_inbox
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.events.handlers import _process_surface_webhook
-from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.test_support.e2e.vault_helpers import seed_account_credentials
 from app.modules.agent_surfaces.tests.e2e.helpers import (
+    stored_webhook_secret,
     _create_agent,
     _create_surface,
     _ensure_connector_account,
@@ -98,7 +98,11 @@ async def _a_telegram_bot(
             auth_config_id=account.auth_config_id,
             connector_id=account.connector_id,
             provider_account_id=f"e2e-telegram-{surface_name}",
-            credentials={"bot_token": bot_token, "api_base_url": f"{api_base}/bot"},
+        )
+        await seed_account_credentials(
+            db_session,
+            connected,
+            {"bot_token": bot_token, "api_base_url": f"{api_base}/bot"},
         )
         db_session.add(connected)
         await db_session.commit()
@@ -116,9 +120,8 @@ async def _a_telegram_bot(
         name=surface_name,
         agent_name=owner["name"],
     )
-    row = await db_session.get(AgentSurface, UUID(surface["id"]))
-    assert row is not None and row.webhook_secret
-    return surface["id"], get_secret_cipher().decrypt_str(row.webhook_secret), connected
+    secret = await stored_webhook_secret(db_session, surface["id"])
+    return surface["id"], secret, connected
 
 
 async def _delivered(

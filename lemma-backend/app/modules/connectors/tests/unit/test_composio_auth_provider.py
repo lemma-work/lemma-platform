@@ -33,8 +33,9 @@ from app.modules.connectors.domain.errors import (
     ConnectorReauthRequiredError,
     ConnectorValidationError,
 )
-from app.modules.connectors.infrastructure.repositories.account_repository import (
-    AccountRepository,
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    credentials_expiry,
+    serialize_credentials,
 )
 from app.modules.connectors.services.auth.composio_auth_provider import (
     ComposioAuthProvider,
@@ -320,7 +321,7 @@ async def test_connect_with_credentials_rejects_oauth_apps():
 def test_account_repository_serializes_expires_at_as_json_string():
     expires_at = datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc)
 
-    serialized = AccountRepository._serialize_credentials(
+    serialized = serialize_credentials(
         OAuthCredentials(
             access_token="access-token",
             refresh_token="refresh-token",
@@ -332,6 +333,8 @@ def test_account_repository_serializes_expires_at_as_json_string():
     assert serialized is not None
     assert serialized["expires_at"] == "2026-03-16T12:00:00Z"
     assert serialized["connection_id"] == "ca_test_connection"
+    # And the vault row learns when it expires, as an aware UTC instant.
+    assert credentials_expiry(serialized) == expires_at
 
 
 def _provider_recording_which_id_it_fetched(fetched: list[str]) -> ComposioAuthProvider:

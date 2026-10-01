@@ -265,7 +265,16 @@ class AgentSurfaceEntity(AggregateRoot):
     surface_identity_username: str | None = None
     #: The address this surface receives on, and the one it replies from.
     surface_identity_email: str | None = None
-    webhook_secret: str | None = None
+    #: The vault secret holding this surface's webhook secret (Telegram's
+    #: `secret_token`), or None when it has none. Only the id: surfaces are read
+    #: on every routing decision, and nearly none of those need the value --
+    #: the few that do reveal it (`SurfaceRepository.reveal_webhook_secret`).
+    webhook_secret_id: UUID | None = None
+    #: A secret just minted and not yet stored. Write-only: the repository puts
+    #: it into the vault on create/update, and no read ever fills it in, so a
+    #: surface in hand never carries a plaintext secret it did not itself make.
+    #: Excluded from dumps so it cannot reach a response, a cache or an event.
+    webhook_secret: str | None = Field(default=None, exclude=True, repr=False)
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
     @property
@@ -320,7 +329,6 @@ class AgentSurfaceEntity(AggregateRoot):
             external_tenant_id=external_tenant_id,
             external_channel_id=external_channel_id,
             surface_identity_id=surface_identity_id,
-            webhook_secret=None,
             status=initial_status,
         )
         # `SurfaceRepository.create` already drains this via `_collect_events`;
@@ -360,6 +368,11 @@ class AgentSurfaceEntity(AggregateRoot):
     def configure_webhook_secret(self, *, secret: str) -> None:
         self.webhook_secret = secret
         self.updated_at = datetime.now(timezone.utc)
+
+    @property
+    def has_webhook_secret(self) -> bool:
+        """Stored, or minted and about to be."""
+        return self.webhook_secret_id is not None or bool(self.webhook_secret)
 
     def update_config(
         self,

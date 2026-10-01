@@ -22,6 +22,7 @@ from uuid import uuid4
 from fastapi import status
 from sqlalchemy import select
 
+from app.modules.test_support.e2e.vault_helpers import seed_account_credentials
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connector import Connector
@@ -284,8 +285,8 @@ async def seed_connector_operation(
             organization_id=organization_id,
             auth_config_id=auth_config.id,
             user_id=user_id,
-            credentials={"api_key": api_key},
         )
+        await seed_account_credentials(db_session, account, {"api_key": api_key})
         db_session.add(account)
     await db_session.commit()
     return account

@@ -7,6 +7,7 @@ import pytest
 from fastapi import status
 from sqlalchemy import select
 
+from app.modules.test_support.e2e.vault_helpers import seed_account_credentials
 from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_ID,
     DEFAULT_POD_AGENT_NAME,
@@ -146,8 +147,8 @@ async def _seed_agent_owned_connector(
         user_id=account_user_id,
         organization_id=organization_id,
         auth_config_id=auth_config_id,
-        credentials={"api_key": api_key},
     )
+    await seed_account_credentials(db_session, account, {"api_key": api_key})
     operation = ConnectorOperation(
         id=f"{connector_id}:echo",
         connector_id=connector_id,

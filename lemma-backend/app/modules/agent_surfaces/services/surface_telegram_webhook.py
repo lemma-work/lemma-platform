@@ -70,9 +70,12 @@ def _telegram_transition(
     # The account, and only the account. This also compared `event_mode`, which
     # had one member -- so the second half of the `or` was always False.
     binding_changed = previous.account_id != current.account_id
+    # Whether a secret is *stored*, not its value: a surface read back from the
+    # database carries only the vault id, and asking for the plaintext here
+    # would re-register every enabled bot on every unrelated edit.
     return _TelegramWebhookTransition(
         register=is_enabled
-        and (not was_enabled or binding_changed or not current.webhook_secret),
+        and (not was_enabled or binding_changed or not current.has_webhook_secret),
         disable=was_enabled and (not is_enabled or binding_changed),
     )
 
@@ -95,7 +98,10 @@ class SurfaceTelegramWebhookMixin:
         """Validate the Telegram account and mint a webhook secret.
 
         Returns the bot credentials so the caller can register the webhook after
-        the surface (and its secret) are persisted.
+        the surface (and its secret) are persisted. The secret stays on
+        ``surface.webhook_secret`` -- the entity the caller passed in -- which is
+        where the registration reads it from: the repository stores it in the
+        vault and never hands a plaintext back on the entity it returns.
         """
         credentials = await self._telegram_credentials(surface)
         self._assert_public_webhook_url_or_raise()

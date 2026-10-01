@@ -28,9 +28,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import get_secret_cipher
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
+    stored_webhook_secret,
     _conversation_by_external_thread,
     _create_surface,
     _ensure_connector_account,
@@ -179,9 +179,7 @@ async def test_telegram_webhook_surface_registers_and_replies_with_real_agent(
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
 
-    surface_row = await db_session.get(AgentSurface, UUID(surface_id))
-    assert surface_row is not None and surface_row.webhook_secret
-    secret = get_secret_cipher().decrypt_str(surface_row.webhook_secret)
+    secret = await stored_webhook_secret(db_session, surface_id)
 
     payload = _telegram_payload(text="Hi there!", message_id=1, sender_id=sender_id)
     response = await authenticated_client.post(
@@ -248,9 +246,7 @@ async def test_telegram_webhook_multi_turn_reuses_conversation_with_real_agent(
         external_user_id=str(sender_id),
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
-    surface_row = await db_session.get(AgentSurface, UUID(surface_id))
-    assert surface_row is not None and surface_row.webhook_secret
-    secret = get_secret_cipher().decrypt_str(surface_row.webhook_secret)
+    secret = await stored_webhook_secret(db_session, surface_id)
 
     async def _send(text: str, message_id: int) -> None:
         payload = _telegram_payload(
@@ -1290,9 +1286,7 @@ async def test_a_telegram_photo_is_saved_as_something_the_agent_can_open(
         external_user_id=str(sender_id),
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
-    surface_row = await db_session.get(AgentSurface, UUID(surface_id))
-    assert surface_row is not None and surface_row.webhook_secret
-    secret = get_secret_cipher().decrypt_str(surface_row.webhook_secret)
+    secret = await stored_webhook_secret(db_session, surface_id)
 
     response = await authenticated_client.post(
         f"/surfaces/{surface_id}/webhook",

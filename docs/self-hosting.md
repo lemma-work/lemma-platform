@@ -185,10 +185,13 @@ S3, GCS or Azure see
 
 ### Secrets
 
-`SECRET_ENCRYPTION_KEY` encrypts connector credentials, auth-config payloads and
-runtime-profile credentials at rest. Lose it and those rows are unreadable; leak
-it and they are plaintext. It is generated once, by `bootstrap.sh`, and belongs
-in the same backup as the database — not in a different one, and not in neither.
+`SECRET_ENCRYPTION_KEY` is the root key of the secrets vault: it protects the
+keys that encrypt connector credentials, install configs, model-provider keys
+and webhook secrets. Lose it and those secrets are unreadable; leak it together
+with a database dump and they are plaintext. It is generated once, by
+`bootstrap.sh`, and belongs in the same backup as the database — not in a
+different one, and not in neither. Upgrading from a release before the vault
+moves every stored secret in one migration that cannot be undone: back up first.
 
 `WORKSPACE_RUNTIME_CREDENTIAL_KEY` signs the token each sandbox uses to call
 back. Rotating it invalidates running sandboxes, which are rebuilt.

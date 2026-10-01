@@ -302,11 +302,21 @@ async def test_resend_webhook_resolves_surface_before_publishing():
 @pytest.mark.asyncio
 async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
     surface = SimpleNamespace(id=uuid4(), surface_type=SurfacePlatform.WHATSAPP)
-    service = SimpleNamespace(get_surface=AsyncMock(return_value=surface))
+    factory = _CountingUowFactory()
+    scopes_open_at_reveal: list[int] = []
+
+    async def reveal_webhook_secret(revealed_for):
+        assert revealed_for is surface
+        scopes_open_at_reveal.append(factory.open_scopes)
+        return "stored-secret"
+
+    service = SimpleNamespace(
+        get_surface=AsyncMock(return_value=surface),
+        reveal_webhook_secret=reveal_webhook_secret,
+    )
     security = SimpleNamespace(verify_surface_request=AsyncMock())
     body = json.dumps({"id": "provider-event-1"}).encode()
 
-    factory = _CountingUowFactory()
     with (
         patch(
             "app.modules.agent_surfaces.api.controllers.webhook_controller."
@@ -326,7 +336,14 @@ async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
     assert result == {"message": "Webhook received"}
     assert (factory.scopes, factory.open_scopes) == (1, 0)
     service.get_surface.assert_awaited_once_with(surface.id)
+    # The secret is decrypted on the lookup's own session, inside its scope --
+    # not in a second one, and not after the scope has let the connection go.
+    assert scopes_open_at_reveal == [1]
     security.verify_surface_request.assert_awaited_once()
+    assert (
+        security.verify_surface_request.await_args.kwargs["webhook_secret"]
+        == "stored-secret"
+    )
     event = publish.await_args.args[1]
     assert event.surface_id == surface.id
     assert event.source_event_id == f"whatsapp:{surface.id}:provider-event-1"

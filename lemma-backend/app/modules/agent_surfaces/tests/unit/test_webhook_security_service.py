@@ -47,14 +47,61 @@ async def test_verify_surface_request_uses_surface_telegram_secret(monkeypatch):
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(type="TELEGRAM"),
-        webhook_secret="surface-secret",
+        webhook_secret_id=uuid4(),
     )
 
     await service.verify_surface_request(
         surface=surface,
         headers={"x-telegram-bot-api-secret-token": "surface-secret"},
         raw_body=b"{}",
+        webhook_secret="surface-secret",
     )
+
+
+def _telegram_surface() -> AgentSurfaceEntity:
+    return AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        name="telegram",
+        surface_type=SurfacePlatform.TELEGRAM,
+        config=SurfaceConfig(type="TELEGRAM"),
+    )
+
+
+async def test_verify_surface_request_rejects_a_telegram_header_that_differs(
+    monkeypatch,
+):
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+
+    with pytest.raises(SurfaceWebhookAuthenticationError) as rejected:
+        await SurfaceWebhookSecurityService().verify_surface_request(
+            surface=_telegram_surface(),
+            headers={"x-telegram-bot-api-secret-token": "someone-elses"},
+            raw_body=b"{}",
+            webhook_secret="surface-secret",
+        )
+    assert rejected.value.status_code == 401
+
+
+async def test_a_telegram_surface_without_a_stored_secret_is_unconfigured(
+    monkeypatch,
+):
+    """No secret is a 503, never "any header will do".
+
+    What a surface whose secret was never stored -- or a caller that forgot to
+    reveal it -- reaches. Refusing everything is the only safe answer, and the
+    status says it is the deployment's fault rather than the sender's.
+    """
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+
+    with pytest.raises(SurfaceWebhookAuthenticationError) as rejected:
+        await SurfaceWebhookSecurityService().verify_surface_request(
+            surface=_telegram_surface(),
+            headers={"x-telegram-bot-api-secret-token": ""},
+            raw_body=b"{}",
+        )
+    assert rejected.value.status_code == 503
 
 
 async def test_surface_webhook_auth_exclusion_matches_only_uuid_webhook_paths():

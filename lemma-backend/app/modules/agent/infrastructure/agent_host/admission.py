@@ -50,7 +50,7 @@ async def enqueue_run(
     harness_id: UUID,
     runtime_profile_id: UUID,
     run_spec: AgentHostRunSpec,
-    encrypted_mcp_payload: dict,
+    encrypted_mcp_payload: str,
     now: datetime | None = None,
     command_ttl_seconds: int = DEFAULT_COMMAND_TTL_SECONDS,
 ) -> AgentHostCommandModel:
@@ -98,8 +98,8 @@ async def enqueue_run(
     )
     payload = run_spec.model_dump(mode="json")
     # The MCP configuration carries run-scoped credentials, so it rests
-    # encrypted inside the command and is decrypted only when the command is
-    # delivered to the host.
+    # sealed to this run inside the command (see mcp_frame) and is opened only
+    # when the command is delivered to the host.
     payload["encrypted_mcp"] = encrypted_mcp_payload
     command = AgentHostCommandModel(
         host_id=host_id,

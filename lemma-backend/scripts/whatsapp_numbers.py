@@ -32,8 +32,10 @@ Usage::
     # Drop a number the deployment no longer owns
     uv run python scripts/whatsapp_numbers.py remove --phone-number-id 1234...
 
-Any credential left unset is stored as NULL, which means "fall back to
-``surface_settings.whatsapp_*``" -- the state a one-number deployment is in.
+The credentials that are set are stored together as one vault secret; any
+left unset is simply absent from it (and with none set there is no secret at
+all), which means "fall back to ``surface_settings.whatsapp_*``" -- the state a
+one-number deployment is in.
 """
 
 from __future__ import annotations
@@ -68,7 +70,7 @@ def _from_environment(name: str) -> str | None:
     """A secret, or None when the operator did not set one.
 
     Empty is None rather than an empty secret: an unset variable and one set to
-    nothing are the same intention, and an empty string stored in the column
+    nothing are the same intention, and an empty string stored in the vault
     would read as "this number declares its own token" while matching nothing.
     """
     return (os.environ.get(name) or "").strip() or None

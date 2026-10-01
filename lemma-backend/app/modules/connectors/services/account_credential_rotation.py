@@ -68,7 +68,7 @@ async def rotate_account_credentials(
     # a typed credential. The repository serialises both, so nothing broke, but
     # the two paths storing different shapes for the same connector is the kind
     # of difference that surfaces much later as a puzzling `AttributeError`.
-    account.credentials = AccountEntity.model_validate(
+    validated = AccountEntity.model_validate(
         {
             **account.model_dump(),
             "credentials": validated_account_credentials(
@@ -76,9 +76,11 @@ async def rotate_account_credentials(
             ),
         }
     ).credentials
+    # The person is replacing the credential on purpose, so no version check:
+    # theirs wins over whatever is stored.
+    await service.account_repository.replace_credentials(account.id, validated)
     # A credential that was rejected is what put the account here, and a new one
     # deserves the benefit of the doubt: the next call decides.
-    account.status = AccountStatus.CONNECTED
-    updated = await service.account_repository.update(account)
+    await service.account_repository.set_status(account.id, AccountStatus.CONNECTED)
     await service.uow.commit()
-    return updated
+    return await service.get_account(account_id, user_id, organization_id)

@@ -45,6 +45,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
+from app.modules.agent.infrastructure.agent_host.mcp_frame import seal_mcp_frame
 from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
     RemoteHarness,
     AgentHostRunConfig,
@@ -83,6 +84,12 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
+
+# What a real dispatch seals into START_RUN: a run-scoped Lemma credential.
+_DISPATCH_MCP_FRAME = {
+    "url": "https://lemma.test/mcp",
+    "headers": {"Authorization": "Bearer dispatch-credential"},
+}
 
 # A 1x1 PNG, so the artifact path is exercised with bytes that really are one.
 _PNG = base64.b64encode(
@@ -574,7 +581,7 @@ async def test_a_run_outlives_the_credential_it_was_dispatched_with(
         "no replacement credential was issued, so the run would have been cut "
         "short at the expiry it was dispatched with"
     )
-    assert "encrypted_mcp" in queued.payload, (
+    assert str(queued.payload.get("encrypted_mcp", "")).startswith("lvs1:"), (
         "a credential must never be queued in the clear"
     )
     # The run ended on its own terms rather than on its credential.
@@ -945,7 +952,9 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
         run_spec=run_spec,
-        encrypted_mcp_payload={"encrypted": True},
+        encrypted_mcp_payload=await seal_mcp_frame(
+            _DISPATCH_MCP_FRAME, run_id=run_spec.agent_run_id
+        ),
         now=now,
     )
     assert admitted.kind == AgentHostCommandKind.START_RUN
@@ -955,7 +964,7 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
         run_spec=run_spec,
-        encrypted_mcp_payload={},
+        encrypted_mcp_payload=await seal_mcp_frame({}, run_id=run_spec.agent_run_id),
         now=now,
     )
     assert again.id == admitted.id
@@ -973,9 +982,9 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
     )
     started = [c for c in polled if c.kind == AgentHostCommandKind.START_RUN]
     assert len(started) == 1, list(polled)
-    # The wire command carries the decrypted MCP config (the encrypted blob
-    # stays in the DB), and names the run it is for.
-    assert "mcp" in started[0].payload
+    # The wire command carries the opened MCP config (the sealed frame stays
+    # in the DB), and names the run it is for.
+    assert started[0].payload["mcp"] == _DISPATCH_MCP_FRAME
     assert started[0].payload["agent_run_id"] == str(run_id)
     await db_session.commit()
 
@@ -1105,7 +1114,7 @@ async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
         run_spec=run_spec,
-        encrypted_mcp_payload={},
+        encrypted_mcp_payload=await seal_mcp_frame({}, run_id=run_spec.agent_run_id),
         now=now,
     )
     await db_session.commit()

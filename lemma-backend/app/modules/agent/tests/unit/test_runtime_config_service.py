@@ -38,6 +38,7 @@ from app.modules.agent.services.runtime_profile_editor import (
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
     _runtime_profile_model,
 )
+from app.modules.test_support.vault_fake import FakeVault
 
 
 def _test_profile(
@@ -320,8 +321,8 @@ async def test_resolve_unwraps_credentials_for_harness():
 
 
 def test_credentials_survive_persist_load_round_trip():
-    """Mirrors the repository's persist (reveal_credentials -> encrypt) and load
-    (decrypt -> model_validate) path. The real key must survive — serializing
+    """Mirrors the repository's persist (reveal_credentials -> vault) and load
+    (vault -> model_validate) path. The real key must survive — serializing
     credentials with model_dump(mode='json') would have stored the masked
     '**********' and silently corrupted the key on save."""
     from app.modules.agent.domain.runtime_profiles import (
@@ -338,11 +339,11 @@ def test_credentials_survive_persist_load_round_trip():
         update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")}
     )
 
-    # Persist side: what the repository hands to encrypt_json.
+    # Persist side: what the repository hands to the vault.
     stored = reveal_credentials(profile.credentials)
     assert stored == {"api_key": "persist-key"}
 
-    # Load side: rebuild the entity from the decrypted plaintext dict.
+    # Load side: rebuild the entity from the revealed plaintext dict.
     data = profile.model_dump(mode="json", exclude={"credentials"})
     data["credentials"] = stored
     reloaded = AgentRuntimeProfile.model_validate(data)
@@ -1804,7 +1805,8 @@ async def test_one_unreadable_row_does_not_blank_the_whole_listing():
 
         def __init__(self, *, identifier, entity):
             self.id = identifier
-            self.credentials = None
+            self.organization_id = organization_id
+            self.secrets_secret_id = None
             self._entity = entity
 
         def to_entity(self):
@@ -1831,7 +1833,8 @@ async def test_one_unreadable_row_does_not_blank_the_whole_listing():
                 metadata={},
             )
 
-        credentials = None
+        organization_id = None
+        secrets_secret_id = None
 
     rows = [_Row(identifier=readable.id, entity=readable), _Broken()]
 
@@ -1843,13 +1846,13 @@ async def test_one_unreadable_row_does_not_blank_the_whole_listing():
         async def execute(self, _stmt):
             return _Result()
 
-    class _Encryption:
-        def decrypt_json(self, _value):
-            return None
+    class _UnitOfWork:
+        session = _Session()
 
-    repository = AgentRuntimeProfileRepository.__new__(AgentRuntimeProfileRepository)
-    repository.session = _Session()
-    repository.encryption = _Encryption()
+    repository = AgentRuntimeProfileRepository(
+        _UnitOfWork(),  # type: ignore[arg-type]
+        vault=FakeVault(),
+    )
 
     listed = await repository.get_visible(
         organization_id=organization_id, user_id=uuid4()

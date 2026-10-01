@@ -26,7 +26,7 @@ OWN_SECRET = "the-orgs-own-signing-secret"
 DEPLOYMENT_SECRET = "lemmas-own-signing-secret"
 
 
-def _surface(*, webhook_secret: str | None = None) -> AgentSurfaceEntity:
+def _surface() -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
@@ -36,7 +36,6 @@ def _surface(*, webhook_secret: str | None = None) -> AgentSurfaceEntity:
         account_id=uuid4(),
         config=SurfaceConfig(),
         is_active=True,
-        webhook_secret=webhook_secret,
     )
 
 
@@ -60,9 +59,10 @@ async def test_a_workspaces_own_slack_app_verifies_against_its_own_secret(monkey
     body = b'{"type":"event_callback"}'
 
     await SurfaceWebhookSecurityService().verify_surface_request(
-        surface=_surface(webhook_secret=OWN_SECRET),
+        surface=_surface(),
         headers=_signed(OWN_SECRET, body),
         raw_body=body,
+        webhook_secret=OWN_SECRET,
     )
 
 
@@ -77,9 +77,10 @@ async def test_the_deployments_secret_cannot_sign_for_a_custom_app(monkeypatch):
     # which is the exact failure they exist to notice.
     with pytest.raises(SurfaceWebhookAuthenticationError):
         await SurfaceWebhookSecurityService().verify_surface_request(
-            surface=_surface(webhook_secret=OWN_SECRET),
+            surface=_surface(),
             headers=_signed(DEPLOYMENT_SECRET, body),
             raw_body=body,
+            webhook_secret=OWN_SECRET,
         )
 
 
@@ -90,9 +91,10 @@ async def test_a_surface_without_its_own_secret_still_uses_the_deployments(monke
     body = b'{"type":"event_callback"}'
 
     await SurfaceWebhookSecurityService().verify_surface_request(
-        surface=_surface(webhook_secret=None),
+        surface=_surface(),
         headers=_signed(DEPLOYMENT_SECRET, body),
         raw_body=body,
+        webhook_secret=None,
     )
 
 
@@ -113,8 +115,7 @@ async def test_a_custom_app_delivers_to_the_same_shared_endpoint(monkeypatch):
     )
 
     shared_url = "https://api.example.test/surfaces/webhooks/slack"
-    assert computed_webhook_url(_surface(webhook_secret=OWN_SECRET)) == shared_url
-    assert computed_webhook_url(_surface(webhook_secret=None)) == shared_url
+    assert computed_webhook_url(_surface()) == shared_url
 
 
 async def test_the_manifest_needs_no_surface(monkeypatch):

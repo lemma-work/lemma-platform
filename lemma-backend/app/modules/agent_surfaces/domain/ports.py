@@ -196,6 +196,10 @@ class SurfaceInstallationRepositoryPort(Protocol):
 
     async def delete(self, id: UUID) -> None: ...
 
+    async def reveal_webhook_secret(
+        self, surface: AgentSurfaceEntity
+    ) -> str | None: ...
+
 
 class SurfaceAccountBindingPort(Protocol):
     """Validates the connected account for a platform and derives the

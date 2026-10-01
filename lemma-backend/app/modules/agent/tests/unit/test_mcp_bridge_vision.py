@@ -65,7 +65,6 @@ async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monke
         bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object()
     )
     monkeypatch.setattr(bridge, "AgentHostRepository", lambda *a, **k: object())
-    monkeypatch.setattr(bridge, "get_secret_cipher", object)
 
     service = bridge.ConversationMCPService.__new__(bridge.ConversationMCPService)
     run = SimpleNamespace(
@@ -105,7 +104,6 @@ async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(
         bridge, "AgentRuntimeProfileRepository", lambda *a, **k: object()
     )
     monkeypatch.setattr(bridge, "AgentHostRepository", lambda *a, **k: object())
-    monkeypatch.setattr(bridge, "get_secret_cipher", object)
 
     service = bridge.ConversationMCPService.__new__(bridge.ConversationMCPService)
     run = SimpleNamespace(

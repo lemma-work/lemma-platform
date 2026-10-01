@@ -13,25 +13,28 @@ Stubbed session rather than Postgres so they stay in the unit lane, the same way
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
-from app.core.crypto import get_secret_cipher
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
     WhatsAppNumberEntity,
     WhatsAppNumberStatus,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    CREDENTIALS_PURPOSE,
     WhatsAppNumberRepository,
 )
 from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (
     WhatsAppNumber,
 )
 from app.modules.test_support.mappers import configure_test_mappers
+from app.modules.test_support.vault_fake import FakeVault
+from app.modules.vault.contracts import Revealed, SecretScope
 
 # Compiling a statement configures the mappers, and a partial model graph fails
 # to resolve its relationship targets by name -- so without this the file passes
@@ -106,11 +109,36 @@ class _Uow:
         self.session = _Session(rows)
 
 
+class _CountingVault(FakeVault):
+    """The fake vault, counting batch reads -- "one per list" is the claim."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.batches: list[set[UUID]] = []
+
+    async def reveal_many(
+        self, expected: Mapping[UUID, SecretScope], *, purpose: str
+    ) -> dict[UUID, Revealed]:
+        self.batches.append(set(expected))
+        return await super().reveal_many(expected, purpose=purpose)
+
+
+async def _stored_credentials(vault: FakeVault, **secrets: str) -> UUID:
+    """A number's secret as the repository writes it: one JSON object."""
+    ref = await vault.put(
+        scope=SecretScope.system(),
+        purpose=CREDENTIALS_PURPOSE,
+        value=dict(secrets),
+        owner_table="surface_whatsapp_numbers",
+    )
+    return ref.id
+
+
 def _row(
     phone_number_id: str,
     *,
     status: WhatsAppNumberStatus = WhatsAppNumberStatus.AVAILABLE,
-    access_token: str | None = None,
+    credentials_secret_id: UUID | None = None,
 ) -> WhatsAppNumber:
     """A detached pool row, complete enough for ``to_entity()`` to run."""
     now = datetime.now(timezone.utc)
@@ -121,7 +149,7 @@ def _row(
         phone_number_id=phone_number_id,
         display_phone_number=f"+1555{phone_number_id}",
         waba_id="waba-1",
-        access_token=access_token,
+        credentials_secret_id=credentials_secret_id,
         status=status.value,
     )
 
@@ -192,14 +220,14 @@ async def test_a_deployment_with_no_rows_has_no_cold_open_line_of_its_own():
     assert oldest is None
 
 
-async def test_secrets_are_encrypted_on_the_way_in_and_readable_on_the_way_out():
-    """The column holds an envelope; the entity holds the token.
+async def test_secrets_go_into_the_vault_on_the_way_in_and_come_back_out():
+    """The row holds a vault id; the entity holds the token.
 
-    Written as a round trip rather than as "encrypt was called" because the
-    failure that matters is asymmetric: a write that skips encryption stores a
-    Meta access token in plaintext, and a read that skips decryption hands the
-    envelope to the Graph API, where it fails as a bad credential rather than as
-    a bug in this file.
+    Written as a round trip rather than as "put was called" because the failure
+    that matters is asymmetric: a write that skips the vault loses the token
+    (the columns are gone), and a read that skips the reveal hands `None` to
+    the Graph API, where it silently falls back to the deployment's token and
+    sends as the wrong number.
     """
     entity = WhatsAppNumberEntity(
         phone_number_id="pn-1",
@@ -210,22 +238,144 @@ async def test_secrets_are_encrypted_on_the_way_in_and_readable_on_the_way_out()
         verify_token="verify-secret",
     )
     uow = _Uow()
-    repository = WhatsAppNumberRepository(uow)
+    vault = FakeVault()
+    repository = WhatsAppNumberRepository(uow, vault=vault)
 
     stored = await repository.create(entity)
 
     model = uow.session.added[0]
-    for column, plaintext in (
-        ("access_token", "EAAG-secret-token"),
-        ("app_secret", "app-secret"),
-        ("verify_token", "verify-secret"),
-    ):
-        written = getattr(model, column)
-        assert written != plaintext, f"{column} reached the column in plaintext"
-        assert get_secret_cipher().decrypt_str(written) == plaintext
+    assert model.credentials_secret_id is not None
+    secret = vault.secrets[model.credentials_secret_id]
+    # Deployment-scoped, one JSON object for all three, bound to its purpose.
+    assert secret.scope == SecretScope.system()
+    assert secret.purpose == CREDENTIALS_PURPOSE
+    assert secret.owner_table == "surface_whatsapp_numbers"
+    assert secret.value == {
+        "access_token": "EAAG-secret-token",
+        "app_secret": "app-secret",
+        "verify_token": "verify-secret",
+    }
     assert stored.access_token == "EAAG-secret-token"
-    assert stored.app_secret == "app-secret"
-    assert stored.verify_token == "verify-secret"
+
+    # And back out through a read, which reveals rather than trusting the write.
+    reader = WhatsAppNumberRepository(_Uow([model]), vault=vault)
+    found = await reader.get_by_phone_number_id("pn-1")
+    assert found is not None
+    assert (found.access_token, found.app_secret, found.verify_token) == (
+        "EAAG-secret-token",
+        "app-secret",
+        "verify-secret",
+    )
+
+
+async def test_only_the_secrets_a_number_declares_are_stored():
+    """A missing key means "fall back to settings" -- so it stays missing.
+
+    Stored as an empty string it would read as "this number has its own verify
+    token" and match nothing, which is the one-number deployment's handshake
+    broken by a number that never meant to override it.
+    """
+    uow = _Uow()
+    vault = FakeVault()
+    repository = WhatsAppNumberRepository(uow, vault=vault)
+
+    stored = await repository.create(
+        WhatsAppNumberEntity(
+            phone_number_id="pn-1",
+            display_phone_number="+15551234567",
+            waba_id="waba-1",
+            access_token="EAAG-only-this",
+        )
+    )
+
+    model = uow.session.added[0]
+    assert vault.value_of(model.credentials_secret_id) == {
+        "access_token": "EAAG-only-this"
+    }
+    assert (stored.app_secret, stored.verify_token) == (None, None)
+
+
+async def test_a_number_with_no_secrets_has_no_vault_secret_and_falls_back():
+    """Declaring nothing writes nothing, and reads back as all-None.
+
+    None on every field is what the resolver and the webhook routes read as
+    "use `surface_settings.whatsapp_*`" -- the state a number shares with every
+    deployment that has no pool at all.
+    """
+    uow = _Uow()
+    vault = FakeVault()
+    repository = WhatsAppNumberRepository(uow, vault=vault)
+
+    stored = await repository.create(
+        WhatsAppNumberEntity(
+            phone_number_id="pn-1",
+            display_phone_number="+15551234567",
+            waba_id="waba-1",
+        )
+    )
+
+    assert uow.session.added[0].credentials_secret_id is None
+    assert vault.secrets == {}
+    assert (stored.access_token, stored.app_secret, stored.verify_token) == (
+        None,
+        None,
+        None,
+    )
+
+    reader = WhatsAppNumberRepository(_Uow([uow.session.added[0]]), vault=vault)
+    found = await reader.get_by_phone_number_id("pn-1")
+    assert found is not None
+    assert (found.access_token, found.app_secret, found.verify_token) == (
+        None,
+        None,
+        None,
+    )
+
+
+async def test_listing_the_pool_reveals_every_number_in_one_batch():
+    """One vault read for the page, not one per number.
+
+    The admin list and the allocation candidates both map a page of rows; a
+    reveal per row would turn a pool of dozens into dozens of round trips. A row
+    with no secret is left out of the batch and still listed.
+    """
+    vault = _CountingVault()
+    first = await _stored_credentials(vault, access_token="token-1")
+    second = await _stored_credentials(
+        vault, access_token="token-2", verify_token="verify-2"
+    )
+    rows = [
+        _row("pn-1", credentials_secret_id=first),
+        _row("pn-2", credentials_secret_id=second),
+        _row("pn-3"),
+    ]
+    repository = WhatsAppNumberRepository(_Uow(rows), vault=vault)
+
+    numbers = await repository.list_all()
+
+    assert vault.batches == [{first, second}]
+    assert [(n.phone_number_id, n.access_token, n.verify_token) for n in numbers] == [
+        ("pn-1", "token-1", None),
+        ("pn-2", "token-2", "verify-2"),
+        ("pn-3", None, None),
+    ]
+
+
+async def test_allocation_candidates_carry_their_secrets_before_any_claim():
+    """The claim receives a usable entity, revealed outside every savepoint."""
+    vault = _CountingVault()
+    secret_id = await _stored_credentials(vault, access_token="token-1")
+    uow = _Uow([_row("pn-1", credentials_secret_id=secret_id)])
+    repository = WhatsAppNumberRepository(uow, vault=vault)
+    claimed: list[WhatsAppNumberEntity] = []
+
+    async def _claim(number):
+        claimed.append(number)
+
+    await repository.allocate_for_organization(organization_id=uuid4(), claim=_claim)
+
+    assert [number.access_token for number in claimed] == ["token-1"]
+    assert vault.batches == [{secret_id}]
 
 
 async def test_a_number_this_organisation_already_holds_is_not_offered():

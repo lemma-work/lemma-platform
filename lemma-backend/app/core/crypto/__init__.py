@@ -1,42 +1,25 @@
-"""System-wide secret encryption + signing.
+"""Stateless cryptography shared across the backend.
 
-A single, pluggable facility used across the whole backend to encrypt secrets at
-rest and to sign short-lived tokens, with first-class key rotation.
+- :mod:`app.core.crypto.aead` / :mod:`~app.core.crypto.aad` -- AES-256-GCM with
+  canonical associated data. The only cipher secrets go through.
+- :mod:`app.core.crypto.roots` -- the root key (Cloud KMS, a keyset, the OS
+  keychain) that protects the vault's key-encryption keys.
+- :func:`get_secret_signer` -- HMAC signing of short-lived tokens with
+  per-purpose, rotatable keys.
 
-Public surface (import these, not the internals):
-
-    from app.core.crypto import get_secret_cipher, get_secret_signer
-
-``get_secret_cipher()`` returns a :class:`SecretCipher` (``encrypt_json`` /
-``decrypt_json`` / ``encrypt_str`` / ``decrypt_str``). ``get_secret_signer()``
-returns a :class:`SecretSigner` (``sign`` / ``verify``). Both are cached
-singletons backed by the configured :class:`KeyProvider` ("KMS").
+Secrets themselves are stored by the vault module
+(``app.modules.vault.contracts``); nothing here touches the database.
 """
 
 from __future__ import annotations
 
-from app.core.crypto.factory import (
-    get_key_provider,
-    get_secret_cipher,
-    get_secret_signer,
-    reset_crypto_caches,
-)
-from app.core.crypto.ports import (
-    KeyProvider,
-    Keyring,
-    KeyMaterial,
-    SecretCipher,
-    SecretSigner,
-)
+from app.core.crypto.factory import get_secret_signer, reset_crypto_caches
+from app.core.crypto.ports import Keyring, KeyMaterial, SecretSigner
 
 __all__ = [
-    "KeyProvider",
     "Keyring",
     "KeyMaterial",
-    "SecretCipher",
     "SecretSigner",
-    "get_key_provider",
-    "get_secret_cipher",
     "get_secret_signer",
     "reset_crypto_caches",
 ]

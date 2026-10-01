@@ -36,6 +36,10 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.repositories.runtime_profile_repository import (
+    put_profile_secrets,
+)
+from app.modules.vault.contracts import vault_for
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
@@ -313,7 +317,11 @@ async def _create_mock_safe_runtime(db_session, fixed_test_org) -> dict:
             }
         ],
         config={"base_url": "https://mock-safe-provider.test/v1"},
-        credentials={"api_key": "mock-safe-secret"},
+        secrets_secret_id=await put_profile_secrets(
+            vault_for(db_session),
+            organization_id=UUID(fixed_test_org["id"]),
+            credentials={"api_key": "mock-safe-secret"},
+        ),
         status="ACTIVE",
         profile_metadata={"source": "e2e"},
     )
@@ -2552,7 +2560,11 @@ class TestAgentRuntimeConfigApis:
                 }
             ],
             config={"base_url": "https://org-provider.test/v1"},
-            credentials={"api_key": "org-secret"},
+            secrets_secret_id=await put_profile_secrets(
+                vault_for(db_session),
+                organization_id=UUID(fixed_test_org["id"]),
+                credentials={"api_key": "org-secret"},
+            ),
             status="ACTIVE",
             profile_metadata={"source": "e2e"},
         )
@@ -2900,7 +2912,11 @@ class TestAgentRuntimeConfigApis:
                 for name in ("vendor/first", "vendor/second")
             ],
             config={"base_url": "https://org-provider.test/v1"},
-            credentials={"api_key": "org-secret"},
+            secrets_secret_id=await put_profile_secrets(
+                vault_for(db_session),
+                organization_id=UUID(fixed_test_org["id"]),
+                credentials={"api_key": "org-secret"},
+            ),
             status="ACTIVE",
             profile_metadata={"source": "e2e"},
         )

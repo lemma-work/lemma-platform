@@ -5,7 +5,6 @@ from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.authorization.factory import create_authorization_data_service
@@ -75,19 +74,11 @@ def _connector_repository(uow: UoWDep) -> ConnectorRepository:
 
 
 def _account_repository(uow: UoWDep) -> AccountRepository:
-    return AccountRepository(
-        uow=uow,
-        encryption=get_secret_cipher(),
-        message_bus=get_message_bus(),
-    )
+    return AccountRepository(uow=uow, message_bus=get_message_bus())
 
 
 def _auth_config_repository(uow: UoWDep) -> AuthConfigRepository:
-    return AuthConfigRepository(
-        uow=uow,
-        encryption=get_secret_cipher(),
-        message_bus=get_message_bus(),
-    )
+    return AuthConfigRepository(uow=uow, message_bus=get_message_bus())
 
 
 def _connect_request_repository(uow: UoWDep) -> ConnectRequestRepository:

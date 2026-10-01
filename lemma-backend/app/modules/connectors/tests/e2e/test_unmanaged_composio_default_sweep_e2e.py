@@ -17,7 +17,6 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import select
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.auth_config import (
@@ -103,7 +102,7 @@ async def _sweep(db_session) -> int:
     uow = SqlAlchemyUnitOfWork(db_session)
     return await importer._disable_unmanaged_composio_defaults(
         ConnectorRepository(uow),
-        AccountRepository(uow, encryption=get_secret_cipher()),
+        AccountRepository(uow),
         db_session,
     )
 

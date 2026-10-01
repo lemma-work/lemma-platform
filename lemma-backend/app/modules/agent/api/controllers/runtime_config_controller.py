@@ -46,7 +46,6 @@ from app.modules.agent.services.runtime_profile_editor import (
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
-from app.core.crypto import get_secret_cipher
 
 logger = get_logger(__name__)
 
@@ -154,10 +153,7 @@ async def _load_profile_or_404(
 
 def _runtime_profile_service(uow: UoWDep) -> AgentRuntimeProfileService:
     return AgentRuntimeProfileService(
-        repository=AgentRuntimeProfileRepository(
-            uow,
-            encryption=get_secret_cipher(),
-        ),
+        repository=AgentRuntimeProfileRepository(uow),
         host_repository=AgentHostRepository(uow),
     )
 

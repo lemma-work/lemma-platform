@@ -208,28 +208,45 @@ uv run python scripts/import_connector_catalog.py --generate-skills  # needs FIR
 
 The curated Composio allowlist is in the script (`DEFAULT_COMPOSIO_CONNECTOR_IDS`); add more with `COMPOSIO_EXTRA_APP_IDS=linear,notion`.
 
-## Secret encryption & key rotation
+## Secrets vault & key rotation
 
-Secrets at rest (connector credentials, OAuth provider configs, agent runtime
-credentials, surface webhook secrets) and short-lived signed tokens (widget
-embeds, datastore file URLs) all go through [`app/core/crypto`](app/core/crypto/),
-which supports versioned envelopes and **key rotation without data loss**.
+Every secret the platform stores -- connector credentials, install configs,
+model-provider keys and headers, surface webhook secrets, the WhatsApp pool --
+lives in one place: [`app/modules/vault`](app/modules/vault/). Owning rows keep
+only a `*_secret_id`. Each secret is sealed with AES-256-GCM under its own data
+key, bound to its owner's scope and purpose (so a value copied onto another
+tenant's row does not decrypt). Data keys are wrapped by a key-encryption key
+(KEK) in `vault_keys`, and KEKs by a **root key that never enters Postgres**.
+Short-lived signed tokens (widget embeds, file URLs) use
+[`app/core/crypto`](app/core/crypto/)'s signer.
 
-**Env (env-only, no KMS in prod for now):**
+**The root key** (`SECRET_KEY_PROVIDER`, default `auto`):
 
-| Var | Meaning |
-|-----|---------|
-| `SECRET_ENCRYPTION_KEY` | Primary Fernet key. **Falls back to `CONNECTOR_ENCRYPTION_KEY`** when unset, then to a local dev seed in local/testing. Generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
-| `SECRET_ENCRYPTION_KEYSET` | Optional JSON `[{"kid","key","primary"}]` for rotation (primary encrypts new writes; retired keys still decrypt) |
-| `SECRET_KEY_PROVIDER` | `auto` (default) → `static` env keys. (`gcp_kms` / `gcp_secret_manager` / `keychain` also available.) |
+| Provider | Where the root lives | Use |
+|----------|----------------------|-----|
+| `gcp_kms` | A Cloud KMS symmetric key (`GCP_KMS_KEY_NAME`), used through the process's service account (ADC) -- no key in env. Grant `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key. Optional `GCP_KMS_KEY_VERSION` pins a version. | Hosted |
+| `static` | `SECRET_ENCRYPTION_KEYSET` (JSON `[{"kid","key","primary"}]`) or `SECRET_ENCRYPTION_KEY`. Generate a key: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` | Self-host, Desktop |
+| `gcp_secret_manager` | The keyset JSON in a Secret Manager secret | Hosted |
+| `keychain` | The OS keychain (refused outside local mode) | A checkout |
 
-**Rotation** is keyset-driven via `SECRET_ENCRYPTION_KEYSET` (a JSON list with one
-`primary` that encrypts new writes; retired keys still decrypt) — add a new
-primary, let writes re-envelope over time, then drop the old key once nothing
-references it. The old `CONNECTOR_ENCRYPTION_KEY` is also still read, so releasing
-onto an existing DB needs no key change: old `fernet-json-v1` values decrypt and
-new writes use the v2 envelope. Apply migrations first (`make migrate`) — they
-widen `agent_surfaces.webhook_secret` to Text for the v2 envelope.
+`auto` picks `gcp_kms` when `GCP_KMS_KEY_NAME` is set, otherwise `static`.
+Outside local mode a process whose root cannot work refuses to start. The root
+is used once per KEK at start and when a KEK is created -- never per secret.
+
+**Back up the root with the database.** Without it, no secret can be read.
+
+**Rotation.** Root: rotate the KMS key in Cloud KMS, or add a new primary
+keyset entry and restart (processes rewrap their KEKs on load; keep the old
+entry until they have). KEK and signing key: `scripts/vault_admin.py
+rotate-kek` then `rewrap` (moves 60-byte data keys only), `retire-kek` once
+`status` shows it empty; `rotate-sign-key` for signing. See
+[`docs/operators/secrets-vault.md`](docs/operators/secrets-vault.md).
+
+**Upgrading onto an existing database:** migration `0044_vault_cutover` reads every
+old encrypted column one last time and moves it into the vault, so it needs the
+same key configuration as the backend (the old `SECRET_ENCRYPTION_KEY(SET)` or
+`CONNECTOR_ENCRYPTION_KEY` to read, and the root to write). It cannot be
+downgraded once secrets have moved -- take a backup first.
 
 ## Docker images
 

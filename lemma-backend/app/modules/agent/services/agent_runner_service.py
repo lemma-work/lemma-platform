@@ -89,7 +89,6 @@ from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer import get_final_answer_tool
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
-from app.core.crypto import get_secret_cipher
 from app.modules.agent.services.run_input_settings import (
     profile_model_settings,
     run_input_text,
@@ -439,12 +438,7 @@ class AgentRunnerService:
     ) -> ResolvedAgentRuntime:
         with run_phase("resolve_runtime"):
             async with self.uow_factory() as uow:
-                service = AgentRuntimeProfileService(
-                    AgentRuntimeProfileRepository(
-                        uow,
-                        encryption=get_secret_cipher(),
-                    )
-                )
+                service = AgentRuntimeProfileService(AgentRuntimeProfileRepository(uow))
                 return await service.resolve(
                     runtime=agent_runtime,
                     organization_id=organization_id,

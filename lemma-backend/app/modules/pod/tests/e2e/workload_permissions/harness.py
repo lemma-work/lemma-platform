@@ -259,17 +259,14 @@ async def seed_account(
     connector_id: str,
 ) -> str:
     """Create a connected account for ``user_id`` via the real repository (so
-    credentials are encrypted the same way production writes them)."""
-    from app.core.crypto import get_secret_cipher
+    credentials are stored the same way production writes them)."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.connectors.domain.account import AccountEntity
     from app.modules.connectors.infrastructure.repositories.account_repository import (
         AccountRepository,
     )
 
-    repo = AccountRepository(
-        SqlAlchemyUnitOfWork(db_session), encryption=get_secret_cipher()
-    )
+    repo = AccountRepository(SqlAlchemyUnitOfWork(db_session))
     entity = AccountEntity(
         user_id=UUID(user_id),
         organization_id=UUID(organization_id),
@@ -282,7 +279,6 @@ async def seed_account(
 
 
 def build_account_resolution_service(db_session):
-    from app.core.crypto import get_secret_cipher
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.connectors.infrastructure.repositories.account_repository import (
         AccountRepository,
@@ -294,6 +290,6 @@ def build_account_resolution_service(db_session):
 
     uow = SqlAlchemyUnitOfWork(db_session)
     return AccountResolutionService(
-        account_repository=AccountRepository(uow, encryption=get_secret_cipher()),
+        account_repository=AccountRepository(uow),
         authorization_service=create_authorization_data_service(uow),
     )

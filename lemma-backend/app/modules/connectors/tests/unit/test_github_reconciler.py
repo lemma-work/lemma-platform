@@ -43,12 +43,15 @@ class _Cache:
 
 
 class _Repository:
-    def __init__(self) -> None:
-        self.updated: list[object] = []
+    """Records targeted writes. There is no ``update``: binding must not
+    rewrite the whole row from an entity read before a token refresh."""
 
-    async def update(self, account):
-        self.updated.append(account)
-        return account
+    def __init__(self) -> None:
+        self.bound: list[tuple[object, str]] = []
+
+    async def set_external_ref(self, account_id, external_ref):
+        self.bound.append((account_id, external_ref))
+        return True
 
 
 class _Service:
@@ -104,7 +107,7 @@ async def test_an_installation_made_out_of_band_is_picked_up(answers):
 
     assert outcome.state is InstallState.READY
     assert account.external_ref == "158040062"
-    assert service.account_repository.updated == [account]
+    assert service.account_repository.bound == [(account.id, account.external_ref)]
     assert service.commits == 1
 
 
@@ -195,7 +198,7 @@ async def test_an_ambiguous_answer_binds_nothing(answers):
     await GithubInstallationReconciler(service, _Cache()).outcome(account)
 
     assert account.external_ref is None
-    assert service.account_repository.updated == []
+    assert service.account_repository.bound == []
 
 
 async def test_a_credential_with_no_token_is_not_a_missing_installation(answers):
