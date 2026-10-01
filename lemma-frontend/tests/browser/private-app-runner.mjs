@@ -18,7 +18,8 @@ try {
     const redemptions = [];
     if (config.mode === "concurrent") {
         await context.route("**/_lemma/app-access/requests", async route => {
-            assert.ok(!route.request().headers().cookie?.includes("__Host-lemmaAppAccessBinding"));
+            const headers = await route.request().allHeaders();
+            assert.ok(!headers.cookie?.includes("__Host-lemmaAppAccessBinding"));
             offers.push(route);
             if (offers.length === 2) await Promise.all(offers.map(offer => offer.continue()));
         });

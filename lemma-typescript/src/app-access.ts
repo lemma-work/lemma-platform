@@ -156,7 +156,8 @@ export async function startAppAccess(options: AppAccessBootstrapOptions): Promis
     if (kind === "signed-out") {
       // Parent replies are accepted only from the configured workspace, and
       // the link must still belong to the configured authentication service.
-      const candidate = signInUrl && new URL(signInUrl, options.authUrl);
+      let candidate: URL | undefined;
+      try { candidate = signInUrl ? new URL(signInUrl, options.authUrl) : undefined; } catch { candidate = undefined; }
       signIn.href = candidate && candidate.origin === new URL(options.authUrl).origin ? candidate.href : signInUrlForApp(options.authUrl, window.location.href);
       signIn.target = window.parent === window ? "_self" : "_top";
       signIn.hidden = false;

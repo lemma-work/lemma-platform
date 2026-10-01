@@ -11832,7 +11832,9 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          401: `Unauthorized`,
+          422: `Validation Error`,
+          503: `Service Unavailable`
         }
       });
     }
@@ -11849,7 +11851,10 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          401: `Unauthorized`,
+          422: `Validation Error`,
+          429: `Too Many Requests`,
+          503: `Service Unavailable`
         }
       });
     }
@@ -11870,7 +11875,11 @@ var LemmaClient = (() => {
         body: requestBody,
         mediaType: "application/json",
         errors: {
-          422: `Validation Error`
+          401: `Unauthorized`,
+          403: `Forbidden`,
+          404: `Not Found`,
+          422: `Validation Error`,
+          503: `Service Unavailable`
         }
       });
     }
@@ -18398,7 +18407,12 @@ var LemmaClient = (() => {
       status.textContent = kind === "signed-out" ? "Sign in to open this app." : kind === "denied" ? "This app isn\u2019t available to your account." : "We couldn\u2019t check your access. Try again.";
       retry.hidden = kind === "signed-out";
       if (kind === "signed-out") {
-        const candidate = signInUrl && new URL(signInUrl, options.authUrl);
+        let candidate;
+        try {
+          candidate = signInUrl ? new URL(signInUrl, options.authUrl) : void 0;
+        } catch {
+          candidate = void 0;
+        }
         signIn.href = candidate && candidate.origin === new URL(options.authUrl).origin ? candidate.href : signInUrlForApp(options.authUrl, window.location.href);
         signIn.target = window.parent === window ? "_self" : "_top";
         signIn.hidden = false;

@@ -15,6 +15,7 @@ from redis.exceptions import RedisError
 from supertokens_python.exceptions import SuperTokensError
 
 from app.core.api.dependencies import CurrentUser
+from app.core.api.schemas import ErrorResponse
 from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.modules.apps.api.dependencies import AppUseCasesDep
@@ -114,6 +115,11 @@ def _require_same_origin(request: Request, origin: str) -> None:
     "/_lemma/app-access/requests",
     response_model=AppAccessRequestResponse,
     operation_id="app.access.request.create",
+    responses={
+        401: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
 )
 async def create_app_access_request(
     request: Request, data: AppAccessCreateRequest, store: AppAccessStoreDep
@@ -161,6 +167,12 @@ async def create_app_access_request(
     "/apps/access/requests/{request_id}/authorize",
     response_model=AppAccessAuthorizeResponse,
     operation_id="app.access.request.authorize",
+    responses={
+        401: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+    },
 )
 async def authorize_app_access_request(
     request: Request,
@@ -227,6 +239,7 @@ async def authorize_app_access_request(
     "/_lemma/app-access/redeem",
     response_model=AppAccessRedeemResponse,
     operation_id="app.access.redeem",
+    responses={401: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
 )
 async def redeem_app_access(
     request: Request, data: AppAccessRedeemRequest, store: AppAccessStoreDep

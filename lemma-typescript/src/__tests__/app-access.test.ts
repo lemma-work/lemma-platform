@@ -122,6 +122,27 @@ describe("app access frame", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["http://[", "https://other.example.test/auth"])("uses the local sign-in link when a parent supplies %s", async signInUrl => {
+    document.body.innerHTML = '<iframe></iframe><p id="app-access-status"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button>';
+    const parent = document.querySelector("iframe")!.contentWindow!;
+    vi.spyOn(window, "parent", "get").mockReturnValue(parent);
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ request_id: requestId })));
+    vi.spyOn(parent, "postMessage").mockImplementation(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: parent, origin: "https://workspace.example.test",
+        data: { type: "lemma:app-access:result", requestId, error: "signed-out", signInUrl },
+      }));
+    });
+    await startAppAccess({ ...options, parentOrigin: "https://workspace.example.test" });
+    const signIn = document.getElementById("app-access-sign-in") as HTMLAnchorElement;
+    const destination = new URL(signIn.href);
+    expect(signIn.hidden).toBe(false);
+    expect(document.getElementById("app-access-status")?.textContent).toBe("Sign in to open this app.");
+    expect(destination.origin).toBe("https://workspace.example.test");
+    expect(destination.pathname).toBe("/auth");
+    expect(destination.searchParams.get("redirect_uri")).toBe(window.location.href);
+  });
+
   it("does not reload when the browser rejects the app cookie", async () => {
     document.body.innerHTML = '<p id="app-access-status"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button>';
     vi.mocked(fetch)

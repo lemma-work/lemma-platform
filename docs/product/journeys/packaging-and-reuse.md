@@ -171,18 +171,31 @@ their credentials do not travel with it.
   carries, and shall not let the app widen it.
 - If someone without access to the pod opens an app, then the system shall
   refuse rather than serving pod data.
-- On hosted HTTPS app addresses, public builds shall open anonymously. Private
-  builds shall open for people whose identity grants `app.read`, including pod,
-  personal and restricted apps, both through direct links and workspace tabs.
-- A signed-out person shall see a generic sign-in action that returns to their
-  original app path, query and fragment. Before sign-in, an absent app shall
-  reveal no more than a private app.
-- An app's asset access shall end when its parent session expires or is revoked,
-  the account becomes ineligible, or its app permission is removed. A private
-  release preview shall additionally require `app.update`.
-- Private HTML and assets shall not be cached. The credential used to load them
-  shall authorize only that app origin's assets; app API calls shall retain
-  their existing identity and permission checks.
+- Where an app uses a hosted HTTPS address, the system shall open public builds
+  anonymously.
+- When a person whose identity grants `app.read` opens a private app at its
+  hosted HTTPS address or in a workspace tab, the system shall serve its build,
+  including pod, personal and restricted apps.
+- When a signed-out person opens a private app, the system shall offer a generic
+  sign-in action.
+- When a person signs in from an app's sign-in action, the system shall return
+  them to the original app path, query and fragment.
+- While a person is signed out, the system shall reveal no more about an absent
+  app than about a private app.
+- When an app asset session's parent session expires, the system shall end its
+  asset access.
+- When an app asset session's parent session is revoked, the system shall end
+  its asset access.
+- When an account becomes ineligible, the system shall end its app asset access.
+- When a person's app permission is removed, the system shall end their app
+  asset access.
+- When a person opens a private release preview, the system shall additionally
+  require `app.update`.
+- While HTML or assets are private, the system shall prevent caching them.
+- When an app asset credential is issued, the system shall limit it to that app
+  origin's assets.
+- When an app calls the API, the system shall apply its existing identity and
+  permission checks.
 
 **Contracts:** `app.get`, `app.asset.get`, `app.access.request.create`, `app.access.request.authorize`, `app.access.redeem`, `app.published`, `app.session_started`
 

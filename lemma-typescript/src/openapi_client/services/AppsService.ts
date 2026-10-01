@@ -36,7 +36,9 @@ export class AppsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                401: `Unauthorized`,
                 422: `Validation Error`,
+                503: `Service Unavailable`,
             },
         });
     }
@@ -55,7 +57,10 @@ export class AppsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                401: `Unauthorized`,
                 422: `Validation Error`,
+                429: `Too Many Requests`,
+                503: `Service Unavailable`,
             },
         });
     }
@@ -79,7 +84,11 @@ export class AppsService {
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                401: `Unauthorized`,
+                403: `Forbidden`,
+                404: `Not Found`,
                 422: `Validation Error`,
+                503: `Service Unavailable`,
             },
         });
     }

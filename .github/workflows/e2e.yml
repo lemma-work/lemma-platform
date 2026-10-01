@@ -86,6 +86,9 @@ jobs:
           filters: |
             backend:
               - 'lemma-backend/**'
+              - 'lemma-frontend/tests/browser/private-app-runner.mjs'
+              - 'lemma-frontend/package.json'
+              - 'lemma-frontend/package-lock.json'
               # Vendored into the sandbox images and imported by the e2e
               # fixtures, so a change here can turn the suite red without
               # touching lemma-backend. These mirror _SANDBOX_BUILD_INPUTS in
