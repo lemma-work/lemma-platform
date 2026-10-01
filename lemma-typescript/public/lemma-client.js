@@ -9108,7 +9108,6 @@ var LemmaClient = (() => {
     composeInConversation: () => composeInConversation,
     getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
-    registerAppAccessFrame: () => registerAppAccessFrame,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
     setTestingToken: () => setTestingToken,
     startAppAccess: () => startAppAccess,
@@ -11820,70 +11819,6 @@ var LemmaClient = (() => {
 
   // src/openapi_client/services/AppsService.ts
   var AppsService = class {
-    /**
-     * Redeem App Access
-     * @param requestBody
-     * @returns AppAccessRedeemResponse Successful Response
-     * @throws ApiError
-     */
-    static appAccessRedeem(requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/_lemma/app-access/redeem",
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          401: `Unauthorized`,
-          422: `Validation Error`,
-          503: `Service Unavailable`
-        }
-      });
-    }
-    /**
-     * Create App Access Request
-     * @param requestBody
-     * @returns AppAccessRequestResponse Successful Response
-     * @throws ApiError
-     */
-    static appAccessRequestCreate(requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/_lemma/app-access/requests",
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          401: `Unauthorized`,
-          422: `Validation Error`,
-          429: `Too Many Requests`,
-          503: `Service Unavailable`
-        }
-      });
-    }
-    /**
-     * Authorize App Access Request
-     * @param requestId
-     * @param requestBody
-     * @returns AppAccessAuthorizeResponse Successful Response
-     * @throws ApiError
-     */
-    static appAccessRequestAuthorize(requestId, requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/apps/access/requests/{request_id}/authorize",
-        path: {
-          "request_id": requestId
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          401: `Unauthorized`,
-          403: `Forbidden`,
-          404: `Not Found`,
-          422: `Validation Error`,
-          503: `Service Unavailable`
-        }
-      });
-    }
     /**
      * List Apps
      * @param podId
@@ -18272,20 +18207,10 @@ var LemmaClient = (() => {
 
   // src/app-access.ts
   var import_session3 = __toESM(require_session2(), 1);
-  var REQUEST_MESSAGE = "lemma:app-access:request";
-  var RESULT_MESSAGE = "lemma:app-access:result";
-  var OPAQUE_VALUE = /^[A-Za-z0-9_-]{43}$/;
-  function isRecord(value) {
-    return typeof value === "object" && value !== null;
-  }
   function failureKind(error) {
-    if (error instanceof ApiError && error.code === "APP_ACCESS_INVALID") return "unavailable";
     if (error instanceof ApiError && error.statusCode === 401) return "signed-out";
-    if (error instanceof ApiError && [403, 404, 410].includes(error.statusCode)) return "denied";
+    if (error instanceof ApiError && [403, 404].includes(error.statusCode)) return "denied";
     return "unavailable";
-  }
-  function accessTransport(options) {
-    return new HttpClient(options.apiUrl, new AuthManager(options.apiUrl, options.authUrl), { timeoutMs: 1e4, maxRetries: 0 });
   }
   function signInUrlForApp(authUrl, redirectUri) {
     const url = new URL(authUrl);
@@ -18303,95 +18228,26 @@ var LemmaClient = (() => {
       clearTimeout(timer);
     }
   }
-  async function authorize(http, requestId, appOrigin, signal) {
-    const send = () => http.request("POST", `/apps/access/requests/${requestId}/authorize?superTokensDoNotDoInterception=true`, {
-      body: { app_origin: appOrigin },
-      headers: { rid: "session" },
-      signal
-    });
-    let result;
+  async function requestTicket(options) {
+    const http = new HttpClient(options.apiUrl, new AuthManager(options.apiUrl, options.authUrl), { timeoutMs: 1e4, maxRetries: 0 });
+    const send = () => http.request("POST", "/apps/access/tickets?superTokensDoNotDoInterception=true", { headers: { rid: "session" } });
     try {
-      result = await send();
+      return await send();
     } catch (error) {
-      if (!(error instanceof ApiError) || error.statusCode !== 401 || error.code === "APP_ACCESS_INVALID" || !await refreshMainSession()) throw error;
-      result = await send();
+      if (!(error instanceof ApiError) || error.statusCode !== 401 || !await refreshMainSession()) throw error;
+      return await send();
     }
-    if (!OPAQUE_VALUE.test(result.code)) throw new Error("Invalid app access response");
-    return result;
   }
-  function registerAppAccessFrame(frame, options) {
-    const appOrigin = new URL(options.appOrigin).origin;
-    const http = accessTransport(options);
-    const abort = new AbortController();
-    const pending = /* @__PURE__ */ new Set();
-    let inFlight = 0;
-    let active = true;
-    const listener = (event) => {
-      if (event.source !== frame.contentWindow || event.origin !== appOrigin || !isRecord(event.data)) return;
-      const data = event.data;
-      if (data.type !== REQUEST_MESSAGE || typeof data.requestId !== "string" || !OPAQUE_VALUE.test(data.requestId) || pending.has(data.requestId) || inFlight >= 4) return;
-      const requestId = data.requestId;
-      pending.add(requestId);
-      if (pending.size > 64) pending.delete(pending.values().next().value);
-      inFlight++;
-      const respond = (result) => {
-        var _a;
-        if (active) (_a = frame.contentWindow) == null ? void 0 : _a.postMessage({ type: RESULT_MESSAGE, requestId, ...result }, appOrigin);
-      };
-      void authorize(http, requestId, appOrigin, abort.signal).then(
-        (result) => respond({ code: result.code }),
-        (error) => respond({ error: failureKind(error), signInUrl: signInUrlForApp(options.authUrl, window.location.href) })
-      ).finally(() => {
-        inFlight--;
-      });
-    };
-    window.addEventListener("message", listener);
-    return () => {
-      active = false;
-      abort.abort();
-      window.removeEventListener("message", listener);
-    };
-  }
-  function base64url(bytes) {
-    return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  }
-  async function localRequest(path, body) {
-    const response = await fetch(path, {
+  async function redeem(ticket) {
+    const response = await fetch("/_lemma/app-access/redeem", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ticket }),
       credentials: "same-origin",
       cache: "no-store",
       signal: AbortSignal.timeout(1e4)
     });
-    if (!response.ok) throw new ApiError(response.status, "App access could not be established");
-    return response.json();
-  }
-  function authorizeThroughParent(requestId, parentOrigin) {
-    return new Promise((resolve2, reject) => {
-      const stop = () => {
-        clearTimeout(timer);
-        window.removeEventListener("message", listener);
-      };
-      const listener = (event) => {
-        if (event.source !== window.parent || event.origin !== parentOrigin || !isRecord(event.data)) return;
-        const data = event.data;
-        if (data.type !== RESULT_MESSAGE || data.requestId !== requestId) return;
-        if (typeof data.code === "string" && OPAQUE_VALUE.test(data.code)) {
-          stop();
-          resolve2({ code: data.code, expires_in_seconds: 60 });
-        } else if (["signed-out", "denied", "unavailable"].includes(String(data.error))) {
-          stop();
-          resolve2({ error: data.error, signInUrl: typeof data.signInUrl === "string" ? data.signInUrl : void 0 });
-        }
-      };
-      const timer = setTimeout(() => {
-        stop();
-        reject(new Error("The workspace did not answer"));
-      }, 1e4);
-      window.addEventListener("message", listener);
-      window.parent.postMessage({ type: REQUEST_MESSAGE, requestId }, parentOrigin);
-    });
+    if (!response.ok) throw new Error("App access could not be established");
   }
   async function startAppAccess(options) {
     const status = document.getElementById("app-access-status");
@@ -18404,32 +18260,18 @@ var LemmaClient = (() => {
     retry.hidden = true;
     signIn.hidden = true;
     status.textContent = "Checking your access\u2026";
-    const showFailure = (kind, signInUrl) => {
+    const showFailure = (kind) => {
       status.textContent = kind === "signed-out" ? "Sign in to open this app." : kind === "denied" ? "This app isn\u2019t available to your account." : "We couldn\u2019t check your access. Try again.";
       retry.hidden = kind === "signed-out";
       if (kind === "signed-out") {
-        let candidate;
-        try {
-          candidate = signInUrl ? new URL(signInUrl, options.authUrl) : void 0;
-        } catch {
-          candidate = void 0;
-        }
-        signIn.href = candidate && candidate.origin === new URL(options.authUrl).origin ? candidate.href : signInUrlForApp(options.authUrl, window.location.href);
+        signIn.href = signInUrlForApp(options.authUrl, window.location.href);
         signIn.target = window.parent === window ? "_self" : "_top";
         signIn.hidden = false;
       }
     };
     try {
-      const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
-      const challenge = base64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
-      const started = await localRequest("/_lemma/app-access/requests", { challenge });
-      if (!OPAQUE_VALUE.test(started.request_id)) throw new Error("Invalid handoff request");
-      const authorized = window.parent === window ? await authorize(accessTransport(options), started.request_id, window.location.origin) : await authorizeThroughParent(started.request_id, options.parentOrigin);
-      if ("error" in authorized) {
-        showFailure(authorized.error, authorized.signInUrl);
-        return;
-      }
-      await localRequest("/_lemma/app-access/redeem", { request_id: started.request_id, code: authorized.code, verifier });
+      const { ticket } = await requestTicket(options);
+      await redeem(ticket);
       const verified = await fetch("/", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/octet-stream" }, signal: AbortSignal.timeout(1e4) });
       if (verified.status === 401) {
         status.textContent = "Your browser blocked app access. Allow cookies for this site, then try again.";
@@ -18437,7 +18279,7 @@ var LemmaClient = (() => {
         return;
       }
       if (!verified.ok) {
-        showFailure(verified.status === 404 ? "denied" : "unavailable");
+        showFailure("unavailable");
         return;
       }
       window.location.reload();
@@ -18539,7 +18381,6 @@ var LemmaClient = (() => {
   if (typeof globalThis !== "undefined") {
     const scope = globalThis;
     const surface = {
-      registerAppAccessFrame,
       startAppAccess,
       LemmaClient,
       AuthManager,

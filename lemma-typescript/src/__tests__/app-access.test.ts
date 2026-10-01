@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAppAccessFrame, startAppAccess } from "../app-access.js";
+import { startAppAccess } from "../app-access.js";
 import Session from "supertokens-web-js/recipe/session/index.js";
 
 vi.mock("../auth.js", async importOriginal => {
@@ -12,146 +12,112 @@ vi.mock("../auth.js", async importOriginal => {
 });
 vi.mock("supertokens-web-js/recipe/session/index.js", () => ({ default: { attemptRefreshingSession: vi.fn().mockResolvedValue(false) } }));
 
-const options = { apiUrl: "https://api.example.test", authUrl: "https://workspace.example.test/auth", appOrigin: "https://orders.apps.example.test" };
-const requestId = "r".repeat(43);
-const code = "c".repeat(43);
-let cleanups: Array<() => void> = [];
+const options = { apiUrl: "https://api.example.test", authUrl: "https://workspace.example.test/auth" };
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const issued = () => json({ ticket: "signed-ticket", expires_in_seconds: 60 });
+const refused = (status: number) => json({ message: "No" }, status);
+const reload = vi.fn();
 
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(Session.attemptRefreshingSession).mockResolvedValue(false); document.body.innerHTML = "<iframe></iframe>"; vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ code, expires_in_seconds: 60 }), { headers: { "Content-Type": "application/json" } }))); });
-afterEach(() => { for (const cleanup of cleanups) cleanup(); cleanups = []; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+const statusText = () => document.getElementById("app-access-status")?.textContent;
+const signIn = () => document.getElementById("app-access-sign-in") as HTMLAnchorElement;
+const retry = () => document.getElementById("app-access-retry") as HTMLButtonElement;
 
-function send(frame: HTMLIFrameElement, overrides: Partial<MessageEventInit> = {}) {
-  window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow, origin: options.appOrigin, data: { type: "lemma:app-access:request", requestId }, ...overrides }));
-}
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(Session.attemptRefreshingSession).mockResolvedValue(false);
+  document.body.innerHTML = '<p id="app-access-status"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button>';
+  vi.stubGlobal("fetch", vi.fn());
+  vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, href: window.location.href, reload } as Location);
+});
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-describe("app access frame", () => {
-  it("authorizes only the registered frame and replies to its exact origin", async () => {
-    const frame = document.querySelector("iframe")!;
-    const reply = vi.spyOn(frame.contentWindow!, "postMessage");
-    cleanups.push(registerAppAccessFrame(frame, options));
-    send(frame, { origin: "https://other.apps.example.test" });
-    send(frame, { source: window });
-    send(frame, { data: { type: "lemma:app-access:request", requestId: "invalid" } });
-    expect(fetch).not.toHaveBeenCalled();
-    send(frame);
-    await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ type: "lemma:app-access:result", requestId, code }, options.appOrigin));
-    expect(fetch).toHaveBeenCalledWith(expect.stringContaining(`/apps/access/requests/${requestId}/authorize`), expect.objectContaining({ credentials: "include", body: JSON.stringify({ app_origin: options.appOrigin }) }));
+describe("app access sign-in page", () => {
+  it("trades a ticket for this host's cookie, confirms it, then reloads", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(issued())
+      .mockResolvedValueOnce(json({ expires_in_seconds: 43200 }))
+      .mockResolvedValueOnce(new Response("ok"));
+    await startAppAccess(options);
+
+    const [ticketUrl, ticketInit] = vi.mocked(fetch).mock.calls[0];
+    expect(String(ticketUrl)).toContain("https://api.example.test/apps/access/tickets");
+    expect(ticketInit).toMatchObject({ method: "POST", credentials: "include" });
+    const [redeemUrl, redeemInit] = vi.mocked(fetch).mock.calls[1];
+    expect(redeemUrl).toBe("/_lemma/app-access/redeem");
+    expect(redeemInit).toMatchObject({ method: "POST", credentials: "same-origin", body: JSON.stringify({ ticket: "signed-ticket" }) });
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores repeated offers and stops authorizing after teardown", async () => {
-    const frame = document.querySelector("iframe")!;
-    const cleanup = registerAppAccessFrame(frame, options);
-    cleanups.push(cleanup);
-    send(frame); send(frame);
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-    cleanup();
-    send(frame, { data: { type: "lemma:app-access:request", requestId: "s".repeat(43) } });
-    expect(fetch).toHaveBeenCalledTimes(1);
-  });
+  it("offers sign-in, returning here, once a session refresh fails", async () => {
+    vi.mocked(fetch).mockResolvedValue(refused(401));
+    await startAppAccess({ ...options, authUrl: "https://workspace.example.test" });
 
-  it("reports permission denial without handing back a credential", async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ message: "Not found" }), { status: 404, headers: { "Content-Type": "application/json" } }));
-    const frame = document.querySelector("iframe")!;
-    const reply = vi.spyOn(frame.contentWindow!, "postMessage");
-    cleanups.push(registerAppAccessFrame(frame, options));
-    send(frame);
-    await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(expect.objectContaining({ error: "denied" }), options.appOrigin));
-    expect(reply.mock.calls[0][0]).not.toHaveProperty("code");
-  });
-
-  it("does not refresh the main session for an expired or forged handoff", async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ message: "Expired", code: "APP_ACCESS_INVALID" }), { status: 401, headers: { "Content-Type": "application/json" } }));
-    const frame = document.querySelector("iframe")!;
-    const reply = vi.spyOn(frame.contentWindow!, "postMessage");
-    cleanups.push(registerAppAccessFrame(frame, options));
-    send(frame);
-    await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(expect.objectContaining({ error: "unavailable" }), options.appOrigin));
-    expect(Session.attemptRefreshingSession).not.toHaveBeenCalled();
-    expect(fetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns a sign-in action after one unsuccessful session refresh", async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ message: "Sign in" }), { status: 401, headers: { "Content-Type": "application/json" } }));
-    const frame = document.querySelector("iframe")!;
-    const reply = vi.spyOn(frame.contentWindow!, "postMessage");
-    cleanups.push(registerAppAccessFrame(frame, options));
-    send(frame);
-    await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(expect.objectContaining({ error: "signed-out" }), options.appOrigin));
-    const destination = new URL(reply.mock.calls[0][0].signInUrl);
-    expect(destination.origin).toBe(new URL(options.authUrl).origin);
+    const destination = new URL(signIn().href);
+    expect(destination.origin).toBe("https://workspace.example.test");
     expect(destination.pathname).toBe("/auth");
     expect(destination.searchParams.get("redirect_uri")).toBe(window.location.href);
+    expect(signIn().hidden).toBe(false);
+    expect(signIn().target).toBe("_self");
+    expect(retry().hidden).toBe(true);
+    expect(statusText()).toBe("Sign in to open this app.");
     expect(Session.attemptRefreshingSession).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the auth portal when the workspace auth setting is an origin", async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ message: "Sign in" }), { status: 401, headers: { "Content-Type": "application/json" } }));
-    const frame = document.querySelector("iframe")!;
-    const reply = vi.spyOn(frame.contentWindow!, "postMessage");
-    cleanups.push(registerAppAccessFrame(frame, { ...options, authUrl: "https://workspace.example.test" }));
-    send(frame);
-    await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-    const destination = new URL(reply.mock.calls[0][0].signInUrl);
-    expect(destination.pathname).toBe("/auth");
-    expect(destination.searchParams.get("redirect_uri")).toBe(window.location.href);
+  it("asks again after a successful refresh", async () => {
+    vi.mocked(Session.attemptRefreshingSession).mockResolvedValue(true);
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(refused(401))
+      .mockResolvedValueOnce(issued())
+      .mockResolvedValueOnce(json({ expires_in_seconds: 43200 }))
+      .mockResolvedValueOnce(new Response("ok"));
+    await startAppAccess(options);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("offers the auth portal from a signed-out direct app navigation", async () => {
-    document.body.innerHTML = '<p id="app-access-status"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button>';
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(new Response(JSON.stringify({ request_id: requestId })))
-      .mockResolvedValue(new Response(JSON.stringify({ message: "Sign in" }), { status: 401, headers: { "Content-Type": "application/json" } }));
-    await startAppAccess({ ...options, authUrl: "https://workspace.example.test", parentOrigin: "https://workspace.example.test" });
-    const destination = new URL((document.getElementById("app-access-sign-in") as HTMLAnchorElement).href);
-    expect(destination.pathname).toBe("/auth");
-    expect(destination.searchParams.get("redirect_uri")).toBe(window.location.href);
-    expect(document.getElementById("app-access-sign-in")?.hidden).toBe(false);
+  it("signs in at the top when shown in a workspace tab", async () => {
+    vi.spyOn(window, "parent", "get").mockReturnValue({} as Window);
+    vi.mocked(fetch).mockResolvedValue(refused(401));
+    await startAppAccess(options);
+    expect(signIn().target).toBe("_top");
+  });
+
+  it("says the app is unavailable to this account without offering sign-in", async () => {
+    vi.mocked(fetch).mockResolvedValue(refused(404));
+    await startAppAccess(options);
+    expect(statusText()).toBe("This app isn’t available to your account.");
+    expect(signIn().hidden).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("treats a refused redemption as something to retry, not a sign-out", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(issued()).mockResolvedValueOnce(refused(401));
+    await startAppAccess(options);
+    expect(statusText()).toBe("We couldn’t check your access. Try again.");
+    expect(retry().hidden).toBe(false);
+    expect(signIn().hidden).toBe(true);
   });
 
   it("shows an actionable error when session refresh stops answering", async () => {
     vi.useFakeTimers();
     vi.mocked(Session.attemptRefreshingSession).mockImplementation(() => new Promise(() => {}));
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ message: "Sign in" }), { status: 401, headers: { "Content-Type": "application/json" } }));
-    const frame = document.querySelector("iframe")!;
-    const reply = vi.spyOn(frame.contentWindow!, "postMessage");
-    cleanups.push(registerAppAccessFrame(frame, options));
-    send(frame);
+    vi.mocked(fetch).mockResolvedValue(refused(401));
+    const started = startAppAccess(options);
     await vi.advanceTimersByTimeAsync(10_001);
-    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ error: "unavailable" }), options.appOrigin);
+    await started;
+    expect(statusText()).toBe("We couldn’t check your access. Try again.");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["http://[", "https://other.example.test/auth"])("uses the local sign-in link when a parent supplies %s", async signInUrl => {
-    document.body.innerHTML = '<iframe></iframe><p id="app-access-status"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button>';
-    const parent = document.querySelector("iframe")!.contentWindow!;
-    vi.spyOn(window, "parent", "get").mockReturnValue(parent);
-    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ request_id: requestId })));
-    vi.spyOn(parent, "postMessage").mockImplementation(() => {
-      window.dispatchEvent(new MessageEvent("message", {
-        source: parent, origin: "https://workspace.example.test",
-        data: { type: "lemma:app-access:result", requestId, error: "signed-out", signInUrl },
-      }));
-    });
-    await startAppAccess({ ...options, parentOrigin: "https://workspace.example.test" });
-    const signIn = document.getElementById("app-access-sign-in") as HTMLAnchorElement;
-    const destination = new URL(signIn.href);
-    expect(signIn.hidden).toBe(false);
-    expect(document.getElementById("app-access-status")?.textContent).toBe("Sign in to open this app.");
-    expect(destination.origin).toBe("https://workspace.example.test");
-    expect(destination.pathname).toBe("/auth");
-    expect(destination.searchParams.get("redirect_uri")).toBe(window.location.href);
-  });
-
   it("does not reload when the browser rejects the app cookie", async () => {
-    document.body.innerHTML = '<p id="app-access-status"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button>';
     vi.mocked(fetch)
-      .mockResolvedValueOnce(new Response(JSON.stringify({ request_id: requestId })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code, expires_in_seconds: 60 }), { headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ expires_at: Date.now() })))
+      .mockResolvedValueOnce(issued())
+      .mockResolvedValueOnce(json({ expires_in_seconds: 43200 }))
       .mockResolvedValueOnce(new Response("", { status: 401 }));
-    await startAppAccess({ ...options, parentOrigin: "https://workspace.example.test" });
-    expect(document.getElementById("app-access-status")?.textContent).toContain("blocked app access");
-    expect(fetch).toHaveBeenCalledTimes(4);
+    await startAppAccess(options);
+    expect(statusText()).toContain("blocked app access");
+    expect(retry().hidden).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 });

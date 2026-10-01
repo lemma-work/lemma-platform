@@ -7,6 +7,8 @@ from app.modules.apps.config import AppsSettings
 def test_apps_settings_own_archive_limits(monkeypatch):
     expected = {
         "app_source_archive_max_bytes": 100 * 1024 * 1024,
+        # Revocation reaches private app files within this many seconds.
+        "app_access_cache_ttl_seconds": 60,
         "app_dist_archive_max_bytes": 100 * 1024 * 1024,
         "app_bundle_upload_max_bytes": 200 * 1024 * 1024,
         "app_archive_max_entries": 10_000,
@@ -24,7 +26,6 @@ def test_apps_settings_own_archive_limits(monkeypatch):
         "app_release_retention_budget_seconds": 60.0,
         # Moved from `app/core/config.py`: only this module reads it.
         "app_branding_enabled": True,
-        "app_access_create_limit_per_minute": 30,
     }
     assert set(AppsSettings.model_fields) == set(expected)
     for field, default in expected.items():

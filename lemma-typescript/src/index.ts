@@ -1,6 +1,4 @@
 export { LemmaClient } from "./client.js";
-export { registerAppAccessFrame, startAppAccess } from "./app-access.js";
-export type { AppAccessOptions, AppAccessFrameOptions, AppAccessBootstrapOptions } from "./app-access.js";
 export type { LemmaAppConfig, LemmaConfig } from "./client.js";
 export {
   AuthManager,

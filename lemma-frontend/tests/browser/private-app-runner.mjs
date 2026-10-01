@@ -14,14 +14,15 @@ const browser = await chromium.launch({
 try {
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
     if (!config.mode?.endsWith("signed-out") && !loginReturn) await context.addCookies([{ name: "sAccessToken", value: config.token, domain: "api.example.test", path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
-    const offers = [];
+    const isTicket = url => url.pathname === "/apps/access/tickets";
+    const tickets = [];
     const redemptions = [];
     if (config.mode === "concurrent") {
-        await context.route("**/_lemma/app-access/requests", async route => {
-            const headers = await route.request().allHeaders();
-            assert.ok(!headers.cookie?.includes("__Host-lemmaAppAccessBinding"));
-            offers.push(route);
-            if (offers.length === 2) await Promise.all(offers.map(offer => offer.continue()));
+        // Hold both first visits' tickets until both are asked for, so the two
+        // redemptions really do race on one cookie jar.
+        await context.route(isTicket, async route => {
+            tickets.push(route);
+            if (tickets.length === 2) await Promise.all(tickets.map(ticket => ticket.continue()));
         });
         context.on("response", response => {
             if (new URL(response.url()).pathname === "/_lemma/app-access/redeem") redemptions.push(response.status());
@@ -38,7 +39,7 @@ try {
             await route.fulfill({ response, headers });
         });
     }
-    if (config.mode === "service-down") await context.route("**/_lemma/app-access/requests", route => route.fulfill({ status: 503, contentType: "application/json", body: '{}' }));
+    if (config.mode === "service-down") await context.route(isTicket, route => route.fulfill({ status: 503, contentType: "application/json", body: '{}' }));
     const page = await context.newPage();
     const secondPage = config.mode === "concurrent" ? await context.newPage() : null;
     page.on("pageerror", error => console.error(error.message));
@@ -75,7 +76,9 @@ try {
         const link = new URL(await signIn.getAttribute("href"));
         assert.equal(link.origin, config.workspaceOrigin);
         assert.equal(link.pathname, "/auth");
-        assert.equal(link.searchParams.get("redirect_uri"), config.workspace || destination);
+        // A framed sign-in page cannot read the workspace's address, so it
+        // returns to the app's own -- signed in, the app opens there directly.
+        assert.equal(link.searchParams.get("redirect_uri"), config.workspace ? config.origin + "/" : destination);
         assert.equal((await view.locator("body").innerText()).includes("PRIVATE_APP_CONTENT"), false);
     } else if (["blocked-cookies", "service-down"].includes(config.mode)) {
         await view.getByText(config.mode === "blocked-cookies" ? "Your browser blocked app access. Allow cookies for this site, then try again." : "We couldn’t check your access. Try again.").waitFor({ timeout: 15_000 });
@@ -91,7 +94,7 @@ try {
         await view.getByText("PRIVATE_APP_CONTENT", { exact: true }).waitFor({ timeout: 15_000 });
     } catch (error) {
         console.error(await view.locator("body").innerText());
-        console.error(await page.evaluate(() => ({ sdk: typeof window.LemmaClient?.startAppAccess, crypto: typeof crypto.subtle, parent: window.parent === window })));
+        console.error(await page.evaluate(() => ({ sdk: typeof window.LemmaClient?.startAppAccess, parent: window.parent === window })));
         throw error;
     }
     if (!config.workspace) assert.equal(page.url(), destination);
@@ -99,7 +102,6 @@ try {
         await secondPage.getByText("PRIVATE_APP_CONTENT", { exact: true }).waitFor({ timeout: 15_000 });
         assert.equal(secondPage.url(), destination);
         assert.deepEqual(redemptions, [200, 200]);
-        assert.ok(!(await context.cookies()).some(cookie => cookie.name.startsWith("__Host-lemmaAppAccessBinding-")));
     }
     const cookies = await context.cookies();
     assert.equal(cookies.find(cookie => cookie.name === "sAccessToken").domain, "api.example.test");

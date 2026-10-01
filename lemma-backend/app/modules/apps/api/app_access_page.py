@@ -2,20 +2,14 @@
 
 import json
 from html import escape
-from urllib.parse import urlsplit
 
 from app.core.config import settings
 from app.modules.identity.contracts.app_sessions import app_sign_in_url
 
 
 def render_app_access_page() -> str:
-    frontend = urlsplit(settings.frontend_url)
     config = json.dumps(
-        {
-            "apiUrl": settings.api_url,
-            "authUrl": app_sign_in_url(),
-            "parentOrigin": f"{frontend.scheme}://{frontend.netloc}",
-        }
+        {"apiUrl": settings.api_url, "authUrl": app_sign_in_url()}
     ).replace("<", "\\u003c")
     sdk_url = escape(
         settings.api_url.rstrip("/") + "/public/sdk/lemma-client.js", quote=True

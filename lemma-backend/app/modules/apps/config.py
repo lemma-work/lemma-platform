@@ -17,10 +17,15 @@ class AppsSettings(BaseSettings):
     )
 
     app_source_archive_max_bytes: int = Field(default=100 * 1024 * 1024)
-    app_access_create_limit_per_minute: int = Field(
-        default=30,
-        ge=1,
-        description="Browser app-access handoffs permitted per client IP per minute.",
+    app_access_cache_ttl_seconds: int = Field(
+        default=60,
+        ge=0,
+        description=(
+            "How long a private app host trusts its last check that a viewer may "
+            "still read the app. Bounds how late sign-out, account deactivation "
+            "or permission removal takes effect on app files. 0 checks every "
+            "request against the session service and the database."
+        ),
     )
     app_dist_archive_max_bytes: int = Field(default=100 * 1024 * 1024)
     app_bundle_upload_max_bytes: int = Field(default=200 * 1024 * 1024)

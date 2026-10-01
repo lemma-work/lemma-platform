@@ -16,4 +16,5 @@ def app_asset_response(asset: AppAssetDocument) -> Response:
         is_entrypoint=asset.is_entrypoint,
         not_modified=asset.not_modified,
         extra_headers=asset.headers,
+        private=asset.private,
     )

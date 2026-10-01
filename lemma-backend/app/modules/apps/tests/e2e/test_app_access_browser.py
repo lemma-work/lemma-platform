@@ -1,3 +1,5 @@
+"""Private apps in a real browser: direct visits, workspace tabs, sign-in and failures."""
+
 from __future__ import annotations
 
 import asyncio
@@ -116,18 +118,9 @@ async def test_private_app_browser_direct_and_workspace(
     assert uploaded.status_code == 200, uploaded.text
 
     async def workspace_page():
-        options = json.dumps(
-            {
-                "apiUrl": api_origin,
-                "authUrl": settings.auth_frontend_url,
-                "appOrigin": origin,
-            }
-        )
-        return HTMLResponse(
-            f'<iframe src="{origin}"></iframe><script src="/public/sdk/lemma-client.js"></script>'
-            f'<script>window.LemmaClient.registerAppAccessFrame(document.querySelector("iframe"),'
-            f"{options});</script>"
-        )
+        # The workspace frames the app's address and does nothing else: the
+        # framed sign-in page asks the API for its own ticket.
+        return HTMLResponse(f'<iframe src="{origin}"></iframe>')
 
     route_count = len(test_app.router.routes)
     test_app.add_api_route("/public/sdk/private-app-test-workspace", workspace_page)

@@ -14,8 +14,6 @@ from app.core.authorization.context import (
     Context,
     ResourceRef,
     ResourceType,
-    ResourceVisibility,
-    normalize_resource_visibility,
 )
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
@@ -26,7 +24,6 @@ from app.modules.apps.services.app_visibility import (
     app_visibility_value,
     normalize_app_visibility,
 )
-from app.modules.apps.domain.access import AppAccessRequiredError, AppAccessSession
 from app.modules.apps.domain.events import AppPublishedEvent
 from app.modules.apps.domain.entities import (
     AppAssetDocument,
@@ -513,20 +510,17 @@ class AppService:
         asset_path: str | None,
         request_etag: str | None = None,
         ctx: Context | None = None,
-        access: AppAccessSession | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
-        """Authorize and resolve inputs inside the short UoW; read storage afterward."""
+        """DB+authz phase for serving an authed app asset. Call inside a short UoW;
+        then call read_app_asset (storage) outside it. Returns a not-modified
+        document directly on a 304."""
         app = await self.get_app_by_name(
             pod_id, name, user_id, raise_not_found=True, ctx=ctx
         )
         assert app is not None
-        if access is not None:
-            assert ctx is not None
-            return await self._asset_resolver.resolve_private_host(
-                app, access, asset_path=asset_path, ctx=ctx
-            )
-        return await self._asset_resolver.resolve_authenticated(
+        return await self._asset_resolver.resolve(
             app,
+            raise_not_found_name=name,
             asset_path=asset_path,
             request_etag=request_etag,
         )
@@ -538,38 +532,15 @@ class AppService:
         asset_path: str | None,
         request_etag: str | None = None,
         release_ref: str | None = None,
-    ) -> _AssetReadInputs | AppAssetDocument:
-        """DB phase for serving a public (unauthenticated) app asset by slug.
-
-        ``release_ref`` serves a specific release instead of the live one, for
-        the preview host ``<slug>--r7.<app_base_domain>``. See
-        ``AppAssetResolver.preview_url`` for why it is a host and not a prefix.
-        """
-        app = await self.repository.get_by_public_slug(public_slug)
-        if not app:
-            raise AppAccessRequiredError()
-        # Anonymous reads reveal only PUBLIC builds. The host controller gates
-        # private and missing slugs identically until an identity is authorized.
-        if (
-            normalize_resource_visibility(app.visibility)
-            is not ResourceVisibility.PUBLIC
-        ):
-            raise AppAccessRequiredError()
-        release = None
-        public_url = self._asset_resolver.public_url(app)
-        if release_ref is not None:
-            from app.modules.apps.services.app_release_service import resolve_preview
-
-            release, public_url = await resolve_preview(
-                self.repository, self._asset_resolver, app, release_ref
-            )
-        return await self._asset_resolver.resolve(
-            app,
-            raise_not_found_name=public_slug,
+        viewer_app_id: UUID | None = None,
+    ) -> _AssetReadInputs | AppAssetDocument | None:
+        """DB phase for an app host's asset; None when the caller may not see it."""
+        return await self._asset_resolver.resolve_by_public_slug(
+            public_slug,
             asset_path=asset_path,
             request_etag=request_etag,
-            public_url=public_url,
-            release=release,
+            release_ref=release_ref,
+            viewer_app_id=viewer_app_id,
         )
 
     async def resolve_source_archive(

@@ -474,45 +474,26 @@ SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_SAME_SITE=lax
 ```
 
-Private apps on hosted HTTPS domains use a browser-bound Redis handoff. The
-trusted app bootstrap calls the API with the existing main-session transport;
-workspace frames ask their registered parent to make that call. The API checks
-`app.read` (and `app.update` for private release previews), then returns a code
-that the initiating browser redeems on the exact app origin. The host-only
-`__Host-lemmaAppAccess` cookie authorizes HTML and assets only. Every private
-request rechecks the parent SuperTokens session, account eligibility and app
-permissions. No database migration or additional signing secret is needed.
+Apps that are not public open at their hosted HTTPS address only for people
+allowed to read them. The address shows a sign-in page that asks the API for a
+one-minute ticket (with the API session cookie, which every app origin may
+already send), then trades it on the app's own origin for a host-only
+`__Host-lemmaAppAccess` cookie. Both are signed with `SECRET_ENCRYPTION_KEY`;
+neither is stored. The cookie opens that app's pages and files and nothing else,
+and lasts 12 hours before the page quietly fetches a new one.
 
-Serve `/_lemma/app-access/requests` and `/_lemma/app-access/redeem` through the
-existing wildcard app-host routing, including ingress rewrites to
-`/public/apps`. These two reserved routes work independently of
-`APP_API_VIA_APP_ORIGIN`; enabling the general app-origin API alias is not
-required. Keep `API_URL`, `FRONTEND_URL`, `AUTH_FRONTEND_URL` and `APP_BASE_DOMAIN`
-consistent with the public HTTPS origins. Credentialed CORS must permit the
-workspace and app origins, and the login return allowlist must permit those
-app origins. The bootstrap combines the auth origin with
-`AUTH_WEBSITE_BASE_PATH`; an explicit path in `AUTH_FRONTEND_URL` is treated as
-the complete portal URL. Verify the configured login page accepts the `redirect_uri` query
-parameter and returns to the original app path, query and fragment.
+Each private read rechecks that the session behind the cookie is still live,
+the account in good standing and the app permission unchanged, at most every
+`APP_ACCESS_CACHE_TTL_SECONDS` (default 60; `0` checks every request). That is
+how late a sign-out, a deactivation or a removed share reaches an app's files.
+Private files are `Cache-Control: private, no-cache` with an ETag, so browsers
+revalidate every use and shared caches keep nothing.
 
-Requests expire after five minutes and redemption codes after 60 seconds.
-Each request sets its own `__Host-lemmaAppAccessBinding-<request_id>` cookie,
-which is cleared on successful redemption or expires after five minutes.
-This keeps concurrent first visits from replacing one another's browser proof.
-`APP_ACCESS_CREATE_LIMIT_PER_MINUTE` defaults to 30 per client address; forwarded
-addresses are trusted only from `AUTH_TRUSTED_PROXY_IPS`. Redis holds token
-hashes and opaque access records whose lifetime cannot exceed the parent
-session. Redis or identity-service failures refuse private content with an
-actionable error; blocked app cookies are detected before the bootstrap reloads.
-Private responses use `Cache-Control: private, no-store`, with no private 304s.
-Public app caching and desktop HTTP framing retain their existing behavior.
-
-Deploy compatible backend, browser SDK and workspace frontend images together.
-Check a private direct link (including an HTML page or nested `index.html`),
-simultaneous first visits in two tabs, a workspace tab, an unauthorized account, logout
-and a public app before promotion. Rolling back those images restores the
-previous private-host 404 behavior; access records expire automatically in
-Redis. No Terraform change is required by this protocol.
+This needs only what serving apps already needs: the wildcard app host routed to
+the API, credentialed CORS for the app origins, and a sign-in page that honours
+`redirect_uri`. `AUTH_WEBSITE_BASE_PATH` is appended to an `AUTH_FRONTEND_URL`
+with no path of its own. Private apps are not served this way on plain HTTP
+(the desktop), where only public apps open at the app address.
 
 ## Outside MCP clients
 

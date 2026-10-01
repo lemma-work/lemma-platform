@@ -38,8 +38,8 @@ during pod-bundle import use the sandbox runtime from the bundle module.
 | `/.../assets...` | Serve an authenticated pod app asset |
 | `/.../source/archive`, `/.../dist/archive` | Download stored release archives |
 | `/public/apps...` | Host-based public app entrypoint/assets |
-| `/_lemma/app-access/requests`, `/_lemma/app-access/redeem` | Browser-bound asset access on the app origin |
-| `/apps/access/requests/{id}/authorize` | Authorize a handoff using the main session and current app permissions |
+| `/apps/access/tickets` | One-minute ticket for the app host named by `Origin` (not in OpenAPI) |
+| `/_lemma/app-access/redeem` | Trade a ticket for the app host's access cookie (not in OpenAPI) |
 | `/.lemma/...` | Manifest, icons, service worker and offline page (on the app host) |
 | `/public/sdk/*` | Browser SDK and web-component bundles |
 
@@ -62,23 +62,16 @@ Storage uses a stage/commit/promote pattern with cleanup compensation. HTML
 lint is advisory and reports obsolete SDK usage; it does not reject app code.
 Entrypoints are no-cache and receive pod/API/auth context at serve time, while
 hashed static assets use immutable caching and ETags.
-Hosted private builds use a trusted bootstrap before any app bytes are served.
-Redis carries single-use handoffs and app-origin access records; the identity
-module publishes parent-session and account eligibility checks. Private reads
-recheck authorization in a short unit of work, read storage afterward, and
-return `private, no-store` without ETags or 304 responses. App API credentials
-and desktop HTTP serving remain governed by their existing contracts.
-Request-specific browser binding cookies allow simultaneous first visits.
-Private HTML deep links use the same sign-in bootstrap as the app root, and
-authorized missing-document navigations retain the workspace recovery page.
-Handoff identifiers use the same 43-character base64url constraint in the
-authorization path and redemption body. The generated OpenAPI schema publishes
-both constraints. Hosted reads require `app.read`; private release previews
-also require `app.update`. The app asset cookie grants access only to its own
-origin's assets, and never authenticates general API operations. Parent-session
-expiry or revocation, account ineligibility and permission removal take effect
-on the next asset request. Private responses omit ETags and cannot return 304,
-so browser caches cannot extend access after authorization ends.
+An app that is not public is served on its hosted HTTPS address only to a
+holder of that host's `__Host-lemmaAppAccess` cookie; anyone else, and any
+absent slug, gets the same sign-in page. The page trades the API session for a
+signed one-minute ticket bound to the requesting origin, then redeems it on the
+app host for a signed 12-hour cookie (`services/app_access.py`; no server-side
+records). Each read rechecks the session, the account and `app.read` --
+`app.update` too on a release preview -- at most every
+`app_access_cache_ttl_seconds`, through Redis. Private responses, here and on the
+authenticated asset route, are `private, no-cache` with ETags, so a 304 follows
+only an allowed check. The cookie never authenticates an API operation.
 `AppsSettings` owns source/dist/combined upload ceilings and archive-entry,
 expanded-size, and compression-ratio protections.
 

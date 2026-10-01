@@ -32,7 +32,6 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "workspace.",  # workspace runtime is driven by the backend
     "channel.",
     "app.public",
-    "app.access.",  # browser-bound host handoffs use the TypeScript helper
     "health_check",  # liveness probe
     # OAuth/consent browser callbacks — never called by a client
     "connector.oauth.callback",

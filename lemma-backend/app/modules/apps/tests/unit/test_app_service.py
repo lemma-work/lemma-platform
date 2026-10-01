@@ -43,12 +43,15 @@ async def _get_app_asset(
     return await service.read_app_asset(resolved)
 
 
-async def _get_public_app_asset(service, public_slug, *, asset_path=None):
+async def _get_public_app_asset(
+    service, public_slug, *, asset_path=None, viewer_app_id=None
+):
     resolved = await service.resolve_app_asset_by_public_slug(
         public_slug,
         asset_path=asset_path,
+        viewer_app_id=viewer_app_id,
     )
-    if isinstance(resolved, AppAssetDocument):
+    if resolved is None or isinstance(resolved, AppAssetDocument):
         return resolved
     return await service.read_app_asset(resolved)
 
@@ -78,11 +81,43 @@ async def test_public_slug_route_serves_only_apps_published_to_everyone(visibili
         visibility=visibility,
     )
 
-    with pytest.raises(AppNotFoundError):
-        await _get_public_app_asset(service, "private-desk")
+    assert await _get_public_app_asset(service, "private-desk") is None
+    # Nor for an access cookie checked against some other app.
+    assert (
+        await _get_public_app_asset(service, "private-desk", viewer_app_id=uuid4())
+        is None
+    )
 
     # Nothing was read from storage before the refusal.
     storage.read_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_public_slug_route_serves_a_private_app_to_its_checked_viewer():
+    """A viewer checked against this app gets it, marked private for caches."""
+    repo = AsyncMock()
+    storage = AsyncMock()
+    storage.read_file.return_value = b"console.log(1)"
+    service = AppService(repo, Mock(return_value=storage), AsyncMock())
+    app = AppEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="Private Desk",
+        public_slug="private-desk",
+        current_release_id=uuid4(),
+        visibility="POD",
+    )
+    repo.get_by_public_slug.return_value = app
+    repo.get_release.return_value = Mock(version="v1", dist_root_path="dist/")
+
+    asset = await _get_public_app_asset(
+        service, "private-desk", asset_path="app.js", viewer_app_id=app.id
+    )
+
+    assert asset is not None
+    assert asset.private is True
+    assert asset.content == b"console.log(1)"
 
 
 @pytest.mark.asyncio

@@ -2,9 +2,6 @@
 
 import { AppWindowPanel } from "./app-window";
 import { useAppFrame } from "./pod-apps";
-import { useEffect, useRef } from "react";
-import { registerAppAccessFrame } from "lemma-sdk";
-import { apiUrl, authUrl } from "@/session/client";
 
 /** What to call an app in a sentence, from its address: a published app lives
  *  at `<slug>.apps.<host>`, and the slug is the name its builder gave it. */
@@ -31,11 +28,6 @@ export function AppFrameView({
     onFrameLoad: (view: Window | null) => void;
 }) {
     const frame = useAppFrame(url);
-    const element = useRef<HTMLIFrameElement | null>(null);
-    useEffect(() => {
-        if (frame.kind !== "frame" || !element.current || !frame.src.startsWith("https://")) return;
-        return registerAppAccessFrame(element.current, { apiUrl: apiUrl(), authUrl: authUrl(), appOrigin: new URL(frame.src).origin });
-    }, [frame]);
     if (frame.kind === "window") return <AppWindowPanel url={url} hidden={hidden} reason={frame.reason} />;
     /* No frame yet: the shell answers in milliseconds, and a frame on the
        app's own address first would load it signed out and then swap. Said,
@@ -50,7 +42,7 @@ export function AppFrameView({
     }
     return (
         <iframe
-            ref={view => { element.current = view; frameRef(view); }}
+            ref={frameRef}
             className="frame"
             title="App"
             src={frame.src}

@@ -184,23 +184,24 @@ their credentials do not travel with it.
 - While a person is signed out, the system shall reveal no more about an absent
   app than about a private app.
 - When a person's sign-in expires, the system shall refuse further access to
-  private apps until they sign in again.
+  private apps within a minute, until they sign in again.
 - When a person's sign-in is revoked, the system shall refuse further access
-  to private apps until they sign in again.
+  to private apps within a minute, until they sign in again.
 - When an account becomes ineligible, the system shall refuse that person's
-  further access to private apps.
-- When a person's app permission is removed, the system shall end their app
-  access to that private app.
+  further access to private apps within a minute.
+- When a person's app permission is removed, the system shall end their access
+  to that private app within a minute.
 - When a person opens a private release preview, the system shall additionally
   require permission to edit that app.
 - When a person loses access to a private app, the system shall refuse to load
-  its pages and files even if they opened them before.
+  its pages and files even if they opened them before, and no shared cache shall
+  keep them.
 - When a person opens a private app, the system shall grant no access to other
   apps merely because they opened it.
 - When an app acts on a person's behalf, the system shall allow only actions
   that person is permitted to perform.
 
-**Contracts:** `app.get`, `app.asset.get`, `app.access.request.create`, `app.access.request.authorize`, `app.access.redeem`, `app.published`, `app.session_started`
+**Contracts:** `app.get`, `app.asset.get`, `app.published`, `app.session_started`
 
 ### PS-PACK-032 — A person can retrieve what an app was built from
 **Status:** covered

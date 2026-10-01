@@ -92,9 +92,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/apps/{app_name}/releases` | `app.release.list` | List App Releases |
 | GET | `/pods/{pod_id}/apps/{app_name}/source/archive` | `app.source.archive.get` | Download App Source Archive |
 | PATCH | `/pods/{pod_id}/apps/{app_name}` | `app.update` | Update App |
-| POST | `/_lemma/app-access/redeem` | `app.access.redeem` | Redeem App Access |
-| POST | `/_lemma/app-access/requests` | `app.access.request.create` | Create App Access Request |
-| POST | `/apps/access/requests/{request_id}/authorize` | `app.access.request.authorize` | Authorize App Access Request |
 | POST | `/pods/{pod_id}/apps` | `app.create` | Create App |
 | POST | `/pods/{pod_id}/apps/from-widget` | `app.create_from_widget` | Save Widget As App |
 | POST | `/pods/{pod_id}/apps/{app_name}/bundle` | `app.bundle.upload` | Upload App Bundle |
