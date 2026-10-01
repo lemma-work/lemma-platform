@@ -81,7 +81,7 @@ try {
         assert.equal(link.searchParams.get("redirect_uri"), config.workspace ? config.origin + "/" : destination);
         assert.equal((await view.locator("body").innerText()).includes("PRIVATE_APP_CONTENT"), false);
     } else if (["blocked-cookies", "service-down"].includes(config.mode)) {
-        await view.getByText(config.mode === "blocked-cookies" ? "Your browser blocked app access. Allow cookies for this site, then try again." : "We couldn’t check your access. Try again.").waitFor({ timeout: 15_000 });
+        await view.getByText(config.mode === "blocked-cookies" ? "Your browser blocked app access" : "We couldn’t check your access").waitFor({ timeout: 15_000 });
         await view.getByRole("button", { name: "Try again" }).waitFor();
         const settled = navigations;
         await page.waitForTimeout(300);

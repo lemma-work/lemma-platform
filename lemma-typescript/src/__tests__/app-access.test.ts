@@ -19,13 +19,15 @@ const refused = (status: number) => json({ message: "No" }, status);
 const reload = vi.fn();
 
 const statusText = () => document.getElementById("app-access-status")?.textContent;
+const titleText = () => document.getElementById("app-access-title")?.textContent;
+const home = () => document.getElementById("app-access-home") as HTMLAnchorElement;
 const signIn = () => document.getElementById("app-access-sign-in") as HTMLAnchorElement;
 const retry = () => document.getElementById("app-access-retry") as HTMLButtonElement;
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(Session.attemptRefreshingSession).mockResolvedValue(false);
-  document.body.innerHTML = '<p id="app-access-status"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button>';
+  document.body.innerHTML = '<h1 id="app-access-title"></h1><p id="app-access-status"></p><p id="app-access-host"></p><a id="app-access-sign-in"></a><button id="app-access-retry"></button><a id="app-access-home"></a>';
   vi.stubGlobal("fetch", vi.fn());
   vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, href: window.location.href, reload } as Location);
 });
@@ -59,7 +61,9 @@ describe("app access sign-in page", () => {
     expect(signIn().hidden).toBe(false);
     expect(signIn().target).toBe("_self");
     expect(retry().hidden).toBe(true);
-    expect(statusText()).toBe("Sign in to open this app.");
+    expect(titleText()).toBe("Sign in to open this app");
+    expect(document.body.dataset.state).toBe("signed-out");
+    expect(document.getElementById("app-access-host")?.textContent).toBe(window.location.host);
     expect(Session.attemptRefreshingSession).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -82,18 +86,20 @@ describe("app access sign-in page", () => {
     expect(signIn().target).toBe("_top");
   });
 
-  it("says the app is unavailable to this account without offering sign-in", async () => {
+  it("says the app is not shared with this account, and offers the way home", async () => {
     vi.mocked(fetch).mockResolvedValue(refused(404));
-    await startAppAccess(options);
-    expect(statusText()).toBe("This app isn’t available to your account.");
+    await startAppAccess({ ...options, homeUrl: "https://workspace.example.test/" });
+    expect(titleText()).toBe("This app isn’t shared with you");
     expect(signIn().hidden).toBe(true);
+    expect(home().hidden).toBe(false);
+    expect(home().href).toBe("https://workspace.example.test/");
     expect(reload).not.toHaveBeenCalled();
   });
 
   it("treats a refused redemption as something to retry, not a sign-out", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(issued()).mockResolvedValueOnce(refused(401));
     await startAppAccess(options);
-    expect(statusText()).toBe("We couldn’t check your access. Try again.");
+    expect(titleText()).toBe("We couldn’t check your access");
     expect(retry().hidden).toBe(false);
     expect(signIn().hidden).toBe(true);
   });
@@ -105,7 +111,7 @@ describe("app access sign-in page", () => {
     const started = startAppAccess(options);
     await vi.advanceTimersByTimeAsync(10_001);
     await started;
-    expect(statusText()).toBe("We couldn’t check your access. Try again.");
+    expect(titleText()).toBe("We couldn’t check your access");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -115,7 +121,8 @@ describe("app access sign-in page", () => {
       .mockResolvedValueOnce(json({ expires_in_seconds: 43200 }))
       .mockResolvedValueOnce(new Response("", { status: 401 }));
     await startAppAccess(options);
-    expect(statusText()).toContain("blocked app access");
+    expect(titleText()).toBe("Your browser blocked app access");
+    expect(statusText()).toBe("Allow cookies for this site, then try again.");
     expect(retry().hidden).toBe(false);
     expect(reload).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(3);

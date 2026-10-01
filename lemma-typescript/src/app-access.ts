@@ -6,6 +6,8 @@ import Session from "supertokens-web-js/recipe/session/index.js";
 export interface AppAccessOptions {
   apiUrl: string;
   authUrl: string;
+  /** Where "Go to Lemma" leads when this account may not open the app. */
+  homeUrl?: string;
 }
 
 interface AppAccessTicket {
@@ -14,6 +16,16 @@ interface AppAccessTicket {
 }
 
 type AccessFailure = "signed-out" | "denied" | "unavailable";
+type PageState = "checking" | AccessFailure | "blocked";
+
+/** One heading and one sentence per state, and the action that state offers. */
+const COPY: Record<PageState, { title: string; message: string }> = {
+  checking: { title: "Opening this app", message: "Checking that it’s shared with you." },
+  "signed-out": { title: "Sign in to open this app", message: "This app is private. Sign in with the Lemma account it’s shared with, and you’ll come straight back here." },
+  denied: { title: "This app isn’t shared with you", message: "You’re signed in, but this account can’t open it. Ask the person who shared the link to give you access." },
+  unavailable: { title: "We couldn’t check your access", message: "Something went wrong on our side. Try again in a moment." },
+  blocked: { title: "Your browser blocked app access", message: "Allow cookies for this site, then try again." },
+};
 
 function failureKind(error: unknown): AccessFailure {
   if (error instanceof ApiError && error.statusCode === 401) return "signed-out";
@@ -67,40 +79,46 @@ async function redeem(ticket: string): Promise<void> {
 
 /** Runs only in the server-owned sign-in page, before any private app code loads. */
 export async function startAppAccess(options: AppAccessOptions): Promise<void> {
+  const title = document.getElementById("app-access-title");
   const status = document.getElementById("app-access-status");
   const signIn = document.getElementById("app-access-sign-in") as HTMLAnchorElement | null;
   const retry = document.getElementById("app-access-retry") as HTMLButtonElement | null;
+  const home = document.getElementById("app-access-home") as HTMLAnchorElement | null;
+  const host = document.getElementById("app-access-host");
   if (!status || !signIn || !retry) return;
-  retry.onclick = () => { void startAppAccess(options); };
-  retry.hidden = true;
-  signIn.hidden = true;
-  status.textContent = "Checking your access…";
-  const showFailure = (kind: AccessFailure) => {
-    status.textContent = kind === "signed-out" ? "Sign in to open this app." : kind === "denied" ? "This app isn’t available to your account." : "We couldn’t check your access. Try again.";
-    retry.hidden = kind === "signed-out";
-    if (kind === "signed-out") {
+  // The browser knows the address it asked for; the server's page names none.
+  if (host) host.textContent = window.location.host;
+  const show = (state: PageState) => {
+    document.body.dataset.state = state;
+    if (title) title.textContent = COPY[state].title;
+    status.textContent = COPY[state].message;
+    retry.hidden = state !== "unavailable" && state !== "blocked";
+    signIn.hidden = state !== "signed-out";
+    if (home) {
+      home.hidden = state !== "denied";
+      if (options.homeUrl) home.href = options.homeUrl;
+    }
+    if (state === "signed-out") {
       signIn.href = signInUrlForApp(options.authUrl, window.location.href);
       // In a workspace tab, sign in at the top: the portal is not framed.
       signIn.target = window.parent === window ? "_self" : "_top";
-      signIn.hidden = false;
+      signIn.focus();
     }
   };
+  retry.onclick = () => { void startAppAccess(options); };
+  show("checking");
   try {
     const { ticket } = await requestTicket(options);
     await redeem(ticket);
     // HttpOnly cookies cannot be read by JavaScript. Ask the server before
     // reloading, so a browser that refuses the cookie cannot enter a loop.
     const verified = await fetch("/", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/octet-stream" }, signal: AbortSignal.timeout(10_000) });
-    if (verified.status === 401) {
-      status.textContent = "Your browser blocked app access. Allow cookies for this site, then try again.";
-      retry.hidden = false;
-      return;
-    }
-    if (!verified.ok) { showFailure("unavailable"); return; }
+    if (verified.status === 401) { show("blocked"); return; }
+    if (!verified.ok) { show("unavailable"); return; }
     // Replacing the same URL with a fragment can be a same-document navigation.
     // Reload only after the server has confirmed the cookie was accepted.
     window.location.reload();
   } catch (error) {
-    showFailure(failureKind(error));
+    show(failureKind(error));
   }
 }

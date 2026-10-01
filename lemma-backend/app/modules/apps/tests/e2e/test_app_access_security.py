@@ -156,7 +156,7 @@ async def test_visibility_requires_the_real_app_permission(
         app.origin + "/deep/path?mode=study", headers={"Accept": "text/html"}
     )
     assert_gate(page)
-    assert "Open this app" in page.text and app.name not in page.text
+    assert "Opening this app" in page.text and app.name not in page.text
     for path in ["/assets/app.js", "/styles.css"]:
         denied = await browser.get(app.origin + path, headers={"Accept": "text/html"})
         assert_gate(denied)
@@ -225,7 +225,7 @@ async def test_private_html_navigation_can_sign_in_at_its_original_path(
     url = hosted_app.origin + "/" + asset_path + "?period=current"
     gate = await browser.get(url, headers={"Accept": "text/html"})
     assert_gate(gate)
-    assert "Open this app" in gate.text and "PRIVATE_REPORT" not in gate.text
+    assert "Opening this app" in gate.text and "PRIVATE_REPORT" not in gate.text
     script = await browser.get(
         url, headers={"Accept": "text/html", "Sec-Fetch-Dest": "script"}
     )

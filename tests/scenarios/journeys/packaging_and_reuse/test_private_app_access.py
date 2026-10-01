@@ -56,7 +56,7 @@ async def test_private_app_address_requires_app_access(
     headers = {"Host": host, "Origin": origin}
     async with httpx.AsyncClient(base_url=world.base_url, timeout=15) as browser:
         gate = await browser.get(asset_path, headers={**headers, "Accept": "text/html"})
-        assert gate.status_code == 401 and "Open this app" in gate.text
+        assert gate.status_code == 401 and "Opening this app" in gate.text
         assert "<body>scenario</body>" not in gate.text
 
         denied = await outsider.api.call(
