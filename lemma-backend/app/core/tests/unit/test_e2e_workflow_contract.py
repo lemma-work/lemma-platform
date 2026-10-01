@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from fnmatch import fnmatchcase
 import importlib.util
 import json
 import pathlib
@@ -10,6 +11,22 @@ import yaml
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
+
+
+def test_app_browser_runner_and_dependencies_trigger_backend_validation() -> None:
+    workflow = yaml.safe_load((_REPO_ROOT / ".github/workflows/e2e.yml").read_text())
+    filters = next(
+        step["with"]["filters"]
+        for step in workflow["jobs"]["changes"]["steps"]
+        if step.get("id") == "filter"
+    )
+    backend = yaml.safe_load(filters)["backend"]
+    for path in (
+        "lemma-frontend/tests/browser/private-app-runner.mjs",
+        "lemma-frontend/package.json",
+        "lemma-frontend/package-lock.json",
+    ):
+        assert any(fnmatchcase(path, pattern) for pattern in backend), path
 
 
 def _load_planner():

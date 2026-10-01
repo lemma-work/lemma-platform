@@ -4,6 +4,9 @@ from app.core.registry import LemmaModule
 
 
 def _routers():
+    from app.modules.apps.api.controllers.app_access_controller import (
+        router as app_access,
+    )
     from app.modules.apps.api.controllers.app_controller import router as app_router
     from app.modules.apps.api.controllers.public_app_controller import (
         router as public_app,
@@ -12,7 +15,7 @@ def _routers():
         router as public_sdk,
     )
 
-    return [app_router, public_app, public_sdk]
+    return [app_router, app_access, public_app, public_sdk]
 
 
 def _register_streaq() -> None:

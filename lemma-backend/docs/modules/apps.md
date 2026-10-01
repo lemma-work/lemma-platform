@@ -38,6 +38,8 @@ during pod-bundle import use the sandbox runtime from the bundle module.
 | `/.../assets...` | Serve an authenticated pod app asset |
 | `/.../source/archive`, `/.../dist/archive` | Download stored release archives |
 | `/public/apps...` | Host-based public app entrypoint/assets |
+| `/apps/access/tickets` | One-minute ticket for the app host named by `Origin` (not in OpenAPI) |
+| `/_lemma/app-access/redeem` | Trade a ticket for the app host's access cookie (not in OpenAPI) |
 | `/.lemma/...` | Manifest, icons, service worker and offline page (on the app host) |
 | `/public/sdk/*` | Browser SDK and web-component bundles |
 
@@ -60,6 +62,16 @@ Storage uses a stage/commit/promote pattern with cleanup compensation. HTML
 lint is advisory and reports obsolete SDK usage; it does not reject app code.
 Entrypoints are no-cache and receive pod/API/auth context at serve time, while
 hashed static assets use immutable caching and ETags.
+An app that is not public is served on its hosted HTTPS address only to a
+holder of that host's `__Host-lemmaAppAccess` cookie; anyone else, and any
+absent slug, gets the same sign-in page. The page trades the API session for a
+signed one-minute ticket bound to the requesting origin, then redeems it on the
+app host for a signed 12-hour cookie (`services/app_access.py`; no server-side
+records). Each read rechecks the session, the account and `app.read` --
+`app.update` too on a release preview -- at most every
+`app_access_cache_ttl_seconds`, through Redis. Private responses, here and on the
+authenticated asset route, are `private, no-cache` with ETags, so a 304 follows
+only an allowed check. The cookie never authenticates an API operation.
 `AppsSettings` owns source/dist/combined upload ceilings and archive-entry,
 expanded-size, and compression-ratio protections.
 

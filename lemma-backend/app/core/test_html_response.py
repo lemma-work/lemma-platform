@@ -61,3 +61,18 @@ def test_asset_response_not_modified_returns_304():
     )
     assert resp.status_code == 304
     assert resp.headers["etag"] == '"v1"'
+
+
+def test_private_asset_revalidates_and_keeps_its_etag():
+    for not_modified in (False, True):
+        resp = build_asset_response(
+            content=None if not_modified else b"console.log(1)",
+            media_type="application/javascript",
+            etag='"v1"',
+            is_entrypoint=False,
+            not_modified=not_modified,
+            private=True,
+        )
+        assert resp.headers["cache-control"] == "private, no-cache"
+        assert resp.headers["x-robots-tag"] == "noindex"
+        assert resp.headers["etag"] == '"v1"'

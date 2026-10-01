@@ -21,9 +21,20 @@ from uuid import UUID
 
 from fastapi import Request
 
+from app.core.authorization.context import ResourceRef
+from app.core.authorization.permissions import Permissions
 from app.core.authorization.scope import pod_context_scope, uow_scope
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.security import account_may_sign_in
 from app.modules.apps.domain.entities import AppAssetDocument, AppEntity
+from app.modules.apps.domain.errors import AppNotFoundError
+from app.modules.apps.services.app_access import (
+    AppAccessClaims,
+    host_access_is_cached,
+    remember_host_access,
+)
+from app.modules.identity.contracts.app_sessions import session_is_live_for
 from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.archive_validation import inspect_app_archive
 from app.core.concurrency.offload import run_blocking
@@ -203,14 +214,18 @@ class AppUseCases:
         asset_path: str | None,
         request_etag: str | None,
         release_ref: str | None = None,
-    ) -> AppAssetDocument:
+        viewer_app_id: UUID | None = None,
+    ) -> AppAssetDocument | None:
         """Resolve by public slug (short UoW, unauthenticated), release the
         connection, then read the asset bytes from storage. Highest-traffic path
         (every app page load + static asset).
 
+        None when this caller may not see the app: it is missing, or it is not
+        published to everyone and ``viewer_app_id`` -- the app an access cookie
+        has been checked against -- is not this one.
+
         ``release_ref`` serves a preview host's specific release instead of the
-        live one; it inherits the same PUBLIC-only rule, since a preview is the
-        same shell with the same separately-authorized data calls.
+        live one, under the same rule.
         """
         async with uow_scope(self._uow_factory) as uow:
             service = self._build(uow)
@@ -219,10 +234,79 @@ class AppUseCases:
                 asset_path=asset_path,
                 request_etag=request_etag,
                 release_ref=release_ref,
+                viewer_app_id=viewer_app_id,
             )
-        if isinstance(resolved, AppAssetDocument):
+        if resolved is None or isinstance(resolved, AppAssetDocument):
             return resolved
         return await service.read_app_asset(resolved)
+
+    async def authorize_host_access(
+        self, *, slug: str, release_ref: str | None, request: Request, user_id: UUID
+    ) -> UUID:
+        """The id of the app at ``slug`` if ``user_id`` may open its host.
+
+        Reading the live host takes read permission; a preview host takes edit
+        permission too, since it shows a build nobody has published.
+        """
+        async with uow_scope(self._uow_factory) as uow:
+            app = await self._build(uow).repository.get_by_public_slug(slug)
+        if app is None or app.id is None:
+            raise AppNotFoundError()
+        async with pod_context_scope(
+            self._uow_factory, request=request, user_id=user_id, pod_id=app.pod_id
+        ) as scope:
+            service = self._build(scope.uow)
+            authorized = await service.get_app_by_name(
+                app.pod_id, app.name, user_id, raise_not_found=True, ctx=scope.ctx
+            )
+            if authorized is None or authorized.id != app.id:
+                raise AppNotFoundError()
+            if release_ref is not None:
+                await scope.ctx.require(
+                    Permissions.APP_UPDATE, ResourceRef.app(app.pod_id, app.id)
+                )
+                await self._build_releases(scope.uow).resolve_release(
+                    authorized, release_ref
+                )
+        return app.id
+
+    async def authorize_host_viewer(
+        self,
+        claims: AppAccessClaims,
+        *,
+        slug: str,
+        release_ref: str | None,
+        request: Request,
+    ) -> bool:
+        """Whether the person behind an app access cookie may still read the app.
+
+        Answered from cache when it was asked recently; otherwise the session,
+        the account and the permission are checked live and a yes is cached.
+        A no is never cached, so access returns as soon as it is restored. When
+        the session service cannot answer, that error propagates: unknown is
+        not a refusal, and must not clear a valid cookie.
+        """
+        if await host_access_is_cached(claims):
+            return True
+        if not await session_is_live_for(
+            claims.session_handle, claims.user_id
+        ) or not await account_may_sign_in(claims.user_id):
+            return False
+        try:
+            app_id = await self.authorize_host_access(
+                slug=slug,
+                release_ref=release_ref,
+                request=request,
+                user_id=claims.user_id,
+            )
+        except DomainError as error:
+            if error.status_code in {401, 403, 404, 410}:
+                return False
+            raise
+        if app_id != claims.app_id:
+            return False
+        await remember_host_access(claims)
+        return True
 
     async def list_releases(
         self,
