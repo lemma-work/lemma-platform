@@ -14,8 +14,9 @@ holds only a `*_secret_id`, and reads and writes it through
 | `vault_secrets` | One row per secret: owner scope (`organization_id`, `pod_id`, `user_id`), `purpose`, `kind` (text or JSON), the data key wrapped by a KEK, the AES-256-GCM ciphertext, `version`, non-secret `metadata`, `expires_at`, and a refresh lease (`lease_holder`, `lease_until`). The current version only: a new value replaces the old in place under a new data key. |
 | `vault_secret_events` | The audit trail: created, replaced, revealed (when a person or workload asked), deleted (including by an owner row going away), rewrapped and imported, with actor and request id. |
 
-No table stores its secrets here yet. The connector, agent and surface tables
-still encrypt their own columns; moving them in is the next change.
+Owners: `accounts.credentials_secret_id`, `auth_configs.config_secret_id`,
+`agent_runtime_profiles.secrets_secret_id`, `agent_surfaces.webhook_secret_id`,
+`surface_whatsapp_numbers.credentials_secret_id`.
 
 ## How a secret is protected
 
@@ -56,6 +57,6 @@ routes, events or tasks.
 
 `tests/unit` covers binding, the sealer, signing keys and the migration's
 legacy decoders; `tests/e2e` covers the store, the owner trigger, leases,
-audit and rewrap.
+audit, rewrap, and migration `0044_vault_cutover` moving every legacy format.
 Operators use `scripts/vault_admin.py` (status, probe, rotate-kek, rewrap,
 retire-kek, rotate-sign-key); see `docs/operators/secrets-vault.md`.

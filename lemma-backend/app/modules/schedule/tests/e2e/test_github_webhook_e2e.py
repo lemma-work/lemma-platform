@@ -17,6 +17,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.test_support.e2e.vault_helpers import seed_account_credentials
 from app.modules.connectors.infrastructure.webhook_sources.github import source_event_id
 from app.modules.connectors.config import connector_settings
 from app.modules.schedule.domain.schedule import ScheduleType
@@ -505,8 +506,8 @@ async def test_picking_a_trigger_and_an_account_binds_the_routing_key(
         # What the App install redirect recorded. A string column; the payload's
         # `installation.id` is a JSON number.
         external_ref=INSTALLATION_ID,
-        credentials={"access_token": "gho_x"},
     )
+    await seed_account_credentials(db_session, account, {"access_token": "gho_x"})
     db_session.add(account)
     await db_session.commit()
 

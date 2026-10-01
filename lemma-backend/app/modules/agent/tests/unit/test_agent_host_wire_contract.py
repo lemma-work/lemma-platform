@@ -206,7 +206,7 @@ def test_the_protocol_version_is_the_one_the_host_sends() -> None:
 def test_the_run_spec_declares_the_fields_the_contract_names() -> None:
     """The run spec is one payload in two languages, and this side omits a field.
 
-    ``mcp`` is on the wire -- ``_wire_command`` decrypts ``encrypted_mcp`` into
+    ``mcp`` is on the wire -- ``_wire_command`` opens the sealed ``encrypted_mcp`` into
     it as the command is handed to the host -- but it is deliberately not a
     field of this model. A model field is a place the plaintext could be
     persisted back into the command row, which is the one thing encrypting it

@@ -375,7 +375,16 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
     account_id = uuid4()
     config = SurfaceConfig()
     repo.get_by_platform_and_account_id.return_value = None
-    repo.create.side_effect = lambda entity: entity
+    stored: list[AgentSurfaceEntity] = []
+
+    def create(entity: AgentSurfaceEntity) -> AgentSurfaceEntity:
+        stored.append(entity)
+        # What the real repository hands back: the vault id, never the value.
+        return entity.model_copy(
+            update={"webhook_secret": None, "webhook_secret_id": uuid4()}
+        )
+
+    repo.create.side_effect = create
     enricher.resolve_binding.return_value = (None, None, None)
     account_port.get_account.return_value = SurfaceAccountInfo(
         id=account_id,
@@ -398,12 +407,16 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
         account_id=account_id,
     )
 
-    assert result.webhook_secret
+    # The secret handed to the repository to store is the one Telegram is
+    # told to send -- read off the entity that minted it, since the one the
+    # repository returns carries no plaintext.
+    minted = stored[0].webhook_secret
+    assert minted and result.webhook_secret is None
     webhook_url = f"https://api.example.test/surfaces/{result.id}/webhook"
     register.assert_awaited_once_with(
         credentials={"bot_token": "telegram-token"},
         webhook_url=webhook_url,
-        webhook_secret=result.webhook_secret,
+        webhook_secret=minted,
     )
 
 
@@ -639,7 +652,7 @@ async def test_toggle_telegram_webhook_surface_deletes_provider_webhook(monkeypa
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
         account_id=account_id,
-        webhook_secret="surface-secret",
+        webhook_secret_id=uuid4(),
         is_active=True,
     )
     repo.get.return_value = entity
@@ -667,7 +680,7 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
         account_id=account_id,
-        webhook_secret="old-secret",
+        webhook_secret_id=uuid4(),
         is_active=False,
     )
     repo.get.return_value = entity
@@ -689,12 +702,48 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
     result = await service.update_surface(surface_id=entity.id, is_active=True)
 
     assert result.is_active is True
-    assert result.webhook_secret and result.webhook_secret != "old-secret"
+    # A fresh secret is minted on resume, for the repository to replace the
+    # stored one with.
+    assert result.webhook_secret
     register.assert_awaited_once_with(
         credentials={"bot_token": "telegram-token"},
         webhook_url=f"https://api.example.test/surfaces/{entity.id}/webhook",
         webhook_secret=result.webhook_secret,
     )
+
+
+async def test_an_unrelated_edit_to_a_registered_telegram_surface_does_not_re_register():
+    """A stored secret counts as a secret, though the entity holds no value.
+
+    Surfaces come back from the repository with the vault id only. Deciding
+    "needs registering" from the plaintext would read every stored surface as
+    secretless and re-register the bot -- dropping its pending updates -- on
+    every edit.
+    """
+    repo = _repo()
+    account_port = AsyncMock()
+    service = AgentSurfaceService(
+        surface_repository=repo,
+        account_binding_resolver=AsyncMock(),
+        account_port=account_port,
+    )
+    entity = _surface_entity(
+        surface_type=SurfacePlatform.TELEGRAM,
+        config=SurfaceConfig(),
+        account_id=uuid4(),
+        webhook_secret_id=uuid4(),
+        is_active=True,
+    )
+    repo.get.return_value = entity
+    repo.update.side_effect = lambda updated: updated
+
+    result = await service.update_surface(surface_id=entity.id, is_active=True)
+
+    # Registering starts by reading the bot's account and minting a secret;
+    # neither happened.
+    account_port.get_account.assert_not_awaited()
+    assert result.webhook_secret is None
+    assert result.webhook_secret_id == entity.webhook_secret_id
 
 
 async def test_delete_telegram_webhook_surface_deletes_provider_webhook(monkeypatch):
@@ -707,7 +756,7 @@ async def test_delete_telegram_webhook_surface_deletes_provider_webhook(monkeypa
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
         account_id=uuid4(),
-        webhook_secret="surface-secret",
+        webhook_secret_id=uuid4(),
         is_active=False,
     )
     repo.get.return_value = entity

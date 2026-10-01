@@ -31,10 +31,10 @@ import httpx
 import jwt
 
 from app.core.config import settings
-from app.core.crypto.factory import get_secret_cipher
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.modules.connectors.config import connector_settings
+from app.modules.vault.contracts import SealedValueInvalid, open_text, seal_value
 
 logger = get_logger(__name__)
 
@@ -46,6 +46,8 @@ _JWT_TTL_SECONDS = 9 * 60
 # never starts with a token that expires mid-flight.
 _TOKEN_EXPIRY_SKEW_SECONDS = 5 * 60
 _MINT_TIMEOUT_SECONDS = 15.0
+#: What the sealed cache entry is for, bound into it with the key it sits under.
+_TOKEN_PURPOSE = "connectors.github_app.installation_token"
 
 
 class GitHubAppUnavailable(Exception):
@@ -132,26 +134,34 @@ async def installation_token(
 ) -> str:
     """A token that acts as the App on one installation.
 
-    Cached in Redis, encrypted, keyed by installation -- every member of an
+    Cached in Redis, sealed, keyed by installation -- every member of an
     organization shares one installation, so a per-account cache would mint the
     same token repeatedly and burn the App's rate budget to do it.
+
+    The seal binds the value to its own cache key, so a token copied under
+    another installation's key does not open there. An entry that does not open
+    -- that, or one written in the format before the vault -- is a miss: it is
+    dropped and a fresh token minted, which costs one call to GitHub.
     """
     cache = _token_cache()
+    bindings = [cache.build_key(installation_id)]
     cached = await cache.get_raw(installation_id)
     if cached:
-        plaintext = get_secret_cipher().decrypt_str(cached)
-        if plaintext:
-            return plaintext
+        try:
+            return await open_text(cached, purpose=_TOKEN_PURPOSE, bindings=bindings)
+        except SealedValueInvalid:
+            await cache.delete(installation_id)
 
     minted = await _mint(installation_id, client=client)
-    encrypted = get_secret_cipher().encrypt_str(minted.token)
-    if encrypted:
-        remaining = int(
-            (minted.expires_at - datetime.now(timezone.utc)).total_seconds()
-            - _TOKEN_EXPIRY_SKEW_SECONDS
+    remaining = int(
+        (minted.expires_at - datetime.now(timezone.utc)).total_seconds()
+        - _TOKEN_EXPIRY_SKEW_SECONDS
+    )
+    if remaining > 0:
+        sealed = await seal_value(
+            minted.token, purpose=_TOKEN_PURPOSE, bindings=bindings
         )
-        if remaining > 0:
-            await cache.set_raw(installation_id, encrypted, ttl_seconds=remaining)
+        await cache.set_raw(installation_id, sealed, ttl_seconds=remaining)
     return minted.token
 
 

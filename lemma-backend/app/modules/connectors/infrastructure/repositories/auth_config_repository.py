@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import select
@@ -15,43 +15,99 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigStatus,
 )
-from app.modules.connectors.domain.ports import SecretEncryptionPort
 from app.modules.connectors.infrastructure.models import AuthConfig
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    AUTH_CONFIG_PURPOSE,
+    AUTH_CONFIGS_TABLE,
+    auth_config_scope,
+)
+from app.modules.vault.contracts import JsonObject, Revealed, Vault, vault_for
 
 
 class AuthConfigRepository(
     SqlAlchemyRepository[AuthConfig, AuthConfigEntity],
 ):
+    """Repository for installs.
+
+    The install's config -- client secrets and signing secrets beside public
+    endpoints -- is one vault secret, revealed on every read that returns an
+    entity. Deleting the row deletes the secret (a trigger does it).
+    """
+
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        encryption: SecretEncryptionPort,
         message_bus: MessageBus | None = None,
+        vault: Vault | None = None,
     ):
         super().__init__(uow, AuthConfig, AuthConfigEntity)
-        self.encryption = encryption
+        self._vault = vault or vault_for(uow)
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
 
-    async def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
+    def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
         data = entity.model_dump(exclude_unset=True)
         # `provider`/`provider_config` are read-only compatibility views on the
-        # entity; the columns are `kind` and `config`. Dropped rather than
-        # renamed, because the entity has already resolved them.
+        # entity; the column is `kind`. Dropped rather than renamed, because the
+        # entity has already resolved them. The config goes to the vault.
         data.pop("provider", None)
         data.pop("provider_config", None)
+        data.pop("config", None)
         data["kind"] = entity.kind.value
-        data["config"] = await self.encryption.encrypt_json_async(entity.config)
         data["metadata_"] = data.pop("metadata", None)
         return self.model_cls(**data)
 
     async def _to_entity(self, instance: AuthConfig) -> AuthConfigEntity:
+        secret = None
+        if instance.config_secret_id is not None:
+            secret = await self._vault.reveal(
+                instance.config_secret_id,
+                expect=auth_config_scope(instance.organization_id),
+                purpose=AUTH_CONFIG_PURPOSE,
+            )
+        return self._entity_from(instance, secret)
+
+    @staticmethod
+    def _entity_from(instance: AuthConfig, secret: Revealed | None) -> AuthConfigEntity:
         entity = instance.to_entity()
-        entity.config = await self.encryption.decrypt_json_async(entity.config)
+        entity.config = secret.json() if secret is not None else None
         return entity
 
+    async def _write_config(
+        self, instance: AuthConfig, config: JsonObject | None
+    ) -> None:
+        """Point ``instance`` at a secret holding ``config``, or at none.
+
+        An empty config is no secret -- there is nothing in it to protect -- so
+        it is stored as no pointer and reads back as ``None``. An unchanged
+        config writes nothing, so saving an install's name does not mint a new
+        version of its secrets.
+        """
+        scope = auth_config_scope(instance.organization_id)
+        if not config:
+            # The trigger deletes the orphaned vault row with the column.
+            instance.config_secret_id = None
+            return
+        if instance.config_secret_id is not None:
+            await self._vault.replace(
+                instance.config_secret_id,
+                expect=scope,
+                purpose=AUTH_CONFIG_PURPOSE,
+                value=config,
+                skip_if_equal=True,
+            )
+            return
+        ref = await self._vault.put(
+            scope=scope,
+            purpose=AUTH_CONFIG_PURPOSE,
+            value=config,
+            owner_table=AUTH_CONFIGS_TABLE,
+        )
+        instance.config_secret_id = ref.id
+
     async def create(self, entity: AuthConfigEntity) -> AuthConfigEntity:
-        instance = await self._to_model(entity)
+        instance = self._to_model(entity)
+        await self._write_config(instance, entity.config)
         self.session.add(instance)
         await self.session.flush()
         return await self._to_entity(instance)
@@ -75,7 +131,7 @@ class AuthConfigRepository(
             if hasattr(entity.status, "value")
             else str(entity.status)
         )
-        instance.config = await self.encryption.encrypt_json_async(entity.config)
+        await self._write_config(instance, entity.config)
         instance.is_default = entity.is_default
         instance.metadata_ = entity.metadata
         instance.updated_by_user_id = entity.updated_by_user_id
@@ -154,7 +210,23 @@ class AuthConfigRepository(
         if len(instances) > limit:
             next_cursor = instances[limit - 1].id
             instances = instances[:limit]
-        return await aconvert_valid_rows(instances, self._to_entity), next_cursor
+        # One vault read for the page, not one per install.
+        revealed = await self._vault.reveal_many(
+            {
+                instance.config_secret_id: auth_config_scope(instance.organization_id)
+                for instance in instances
+                if instance.config_secret_id is not None
+            },
+            purpose=AUTH_CONFIG_PURPOSE,
+        )
+
+        async def to_entity(instance: AuthConfig) -> AuthConfigEntity:
+            secret_id = instance.config_secret_id
+            return self._entity_from(
+                instance, revealed.get(secret_id) if secret_id is not None else None
+            )
+
+        return await aconvert_valid_rows(instances, to_entity), next_cursor
 
     async def delete(self, id: UUID) -> bool:
         stmt = select(AuthConfig).where(AuthConfig.id == id)

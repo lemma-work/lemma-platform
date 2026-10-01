@@ -18,6 +18,7 @@ from app.modules.connectors.infrastructure.models.auth_config_operation import (
 from app.modules.connectors.infrastructure.repositories.auth_config_operation_repository import (
     AuthConfigOperationRepository,
 )
+from app.modules.connectors.tests.support.stored_secrets import auth_config_secret
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -48,7 +49,11 @@ async def install(db_session, connector_test_connector, fixed_test_org):
         config_source="SYSTEM_DEFAULT",
         status="ACTIVE",
         is_default=True,
-        config={"server_url": "https://mcp.example.test"},
+        config_secret_id=await auth_config_secret(
+            db_session,
+            organization_id=fixed_test_org["id"],
+            config={"server_url": "https://mcp.example.test"},
+        ),
     )
     db_session.add(auth_config)
     await db_session.commit()
@@ -160,7 +165,11 @@ class TestTenantIsolation:
             kind="mcp",
             config_source="SYSTEM_DEFAULT",
             status="ACTIVE",
-            config={"server_url": "https://other.example.test"},
+            config_secret_id=await auth_config_secret(
+                db_session,
+                organization_id=fixed_test_org["id"],
+                config={"server_url": "https://other.example.test"},
+            ),
         )
         db_session.add(other)
         await db_session.commit()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
@@ -10,9 +10,11 @@ from app.core.authorization.context import Context
 
 from app.modules.connectors.domain.account import (
     AccountEntity,
+    AccountStatus,
     CredentialTypes,
     OAuthCredentials,
 )
+from app.modules.vault.contracts import LeaseToken, SecretMeta, SecretRef
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 from app.modules.connectors.domain.connector import (
@@ -106,6 +108,30 @@ class AccountRepositoryPort(Protocol):
         auth_config_id: UUID,
         exclude_account_id: UUID,
     ) -> Optional[AccountEntity]: ...
+
+    # Credentials are written only through these, never through `update`: a
+    # caller that merely read an account must not be able to write back the
+    # credentials it read. See `AccountRepository.update`.
+    async def replace_credentials(
+        self,
+        account_id: UUID,
+        credentials: object | None,
+        *,
+        expected_version: int | None = None,
+        lease: LeaseToken | None = None,
+    ) -> SecretRef | None: ...
+
+    async def set_status(self, account_id: UUID, status: AccountStatus) -> bool: ...
+
+    async def set_external_ref(self, account_id: UUID, external_ref: str) -> bool: ...
+
+    async def try_lease_credentials(
+        self, account_id: UUID, *, if_version: int, holder: str, ttl: timedelta
+    ) -> LeaseToken | None: ...
+
+    async def release_credentials_lease(self, lease: LeaseToken) -> None: ...
+
+    async def credentials_meta(self, account_id: UUID) -> SecretMeta | None: ...
 
 
 class ConnectRequestRepositoryPort(Protocol):
@@ -271,22 +297,6 @@ class AuthProviderRegistryPort(Protocol):
 
 class OAuthRedirectUriBuilderPort(Protocol):
     def build(self) -> str: ...
-
-
-class SecretEncryptionPort(Protocol):
-    def encrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None: ...
-
-    def decrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None: ...
-
-    # Async variants offload the (possibly blocking, KMS-backed) crypto off the
-    # event loop. Callers on the worker loop must use these, not the sync ones.
-    async def encrypt_json_async(
-        self, value: dict[str, Any] | None
-    ) -> dict[str, Any] | None: ...
-
-    async def decrypt_json_async(
-        self, value: dict[str, Any] | None
-    ) -> dict[str, Any] | None: ...
 
 
 class SystemOAuthConfigPort(Protocol):

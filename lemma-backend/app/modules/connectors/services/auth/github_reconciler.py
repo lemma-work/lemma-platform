@@ -148,7 +148,9 @@ class GithubInstallationReconciler:
         if str(account.external_ref or "") == outcome.installation_id:
             return
         account.external_ref = outcome.installation_id
-        await self._service.account_repository.update(account)
+        await self._service.account_repository.set_external_ref(
+            account.id, outcome.installation_id
+        )
         await self._service.uow.commit()
         logger.info(
             "connectors.github_reconciler.installation_bound.diagnostic",

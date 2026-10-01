@@ -2,8 +2,8 @@
 
 The tenant each account speaks for -- a Slack ``team.id``, an Atlassian
 ``cloud_id``, a Teams ``tid``, a Composio ``connection_id`` -- has always been
-in the credentials. Those are encrypted at rest, so this cannot be a SQL
-migration: reading them needs the application's cipher.
+in the credentials. Those are a vault secret per account, so this cannot be a
+SQL migration: reading them needs the application's vault keys.
 
 Dry-run is the default and prints a per-connector summary:
 
@@ -29,16 +29,19 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.connectors.domain.install_binding import resolve_external_ref
 from app.modules.connectors.infrastructure.models.account import Account
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    ACCOUNT_CREDENTIALS_PURPOSE,
+    account_scope,
+)
+from app.modules.vault.contracts import Revealed, VaultError, vault_for
 
 _BATCH = 500
 
 
 async def _run(apply_changes: bool) -> dict[str, object]:
-    cipher = get_secret_cipher()
     filled: Counter[str] = Counter()
     corrected: Counter[str] = Counter()
     absent: Counter[str] = Counter()
@@ -60,18 +63,22 @@ async def _run(apply_changes: bool) -> dict[str, object]:
             if not rows:
                 break
             after = rows[-1].id
+            secrets = await _reveal_page(session, rows)
 
             for account in rows:
                 scanned += 1
                 connector_id = account.connector_id
-                try:
-                    credentials = await cipher.decrypt_json_async(account.credentials)
-                except Exception:
+                secret = secrets.get(account.id)
+                if secret is None:
                     # A credential we cannot read is a key-rotation or corruption
                     # problem of its own. Counting it and moving on beats aborting
                     # a backfill over one row.
-                    unreadable[connector_id] += 1
+                    if account.credentials_secret_id is not None:
+                        unreadable[connector_id] += 1
+                    else:
+                        absent[connector_id] += 1
                     continue
+                credentials = secret.json()
 
                 resolved = resolve_external_ref(connector_id, credentials)
                 if resolved is None:
@@ -97,6 +104,38 @@ async def _run(apply_changes: bool) -> dict[str, object]:
         "no_tenant": dict(absent),
         "unreadable_credentials": dict(unreadable),
     }
+
+
+async def _reveal_page(session, rows) -> dict[UUID, Revealed]:
+    """The page's credentials by account id, in one vault read where possible.
+
+    Falls back to one read per row when the batch refuses, so a single
+    unreadable secret is counted as that and does not sink the page.
+    """
+    vault = vault_for(session)
+    owned = {
+        account.credentials_secret_id: account
+        for account in rows
+        if account.credentials_secret_id is not None
+    }
+    expected = {
+        secret_id: account_scope(account.organization_id, account.user_id)
+        for secret_id, account in owned.items()
+    }
+    try:
+        revealed = await vault.reveal_many(
+            expected, purpose=ACCOUNT_CREDENTIALS_PURPOSE
+        )
+    except VaultError:
+        revealed = {}
+        for secret_id, scope in expected.items():
+            try:
+                revealed[secret_id] = await vault.reveal(
+                    secret_id, expect=scope, purpose=ACCOUNT_CREDENTIALS_PURPOSE
+                )
+            except VaultError:
+                continue
+    return {owned[secret_id].id: secret for secret_id, secret in revealed.items()}
 
 
 def main() -> None:

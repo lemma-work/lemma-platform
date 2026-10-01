@@ -375,7 +375,10 @@ async def _record_installation(
         # `_persist_account` exists to make.
         raise ConnectRequestNotFoundError()
 
-    account.credentials = identity.credentials
+    # No version check: a fresh authorization supersedes whatever is stored.
+    await service.account_repository.replace_credentials(
+        account.id, identity.credentials
+    )
     if identity.external_ref:
         account.external_ref = identity.external_ref
     account.status = AccountStatus.CONNECTED
@@ -427,7 +430,11 @@ async def _persist_account(
         )
 
     if account:
-        account.credentials = identity.credentials
+        # A reconnect is a new grant, so it replaces the stored credentials
+        # outright rather than comparing versions with them.
+        await service.account_repository.replace_credentials(
+            account.id, identity.credentials
+        )
         account.external_ref = identity.external_ref
         if provider_account_id:
             account.provider_account_id = provider_account_id

@@ -348,13 +348,16 @@ async def handle_surface_webhook(
 
     # get_surface raises AgentSurfaceNotFoundError (404) and verify_surface_request
     # raises SurfaceWebhookAuthenticationError — both DomainErrors, translated by
-    # the global handler.
+    # the global handler. The secret is revealed in the scope, beside the read.
     async with uow_scope(uow_factory) as uow:
-        surface = await get_surface_service(uow).get_surface(surface_id)
+        surfaces = get_surface_service(uow)
+        surface = await surfaces.get_surface(surface_id)
+        webhook_secret = await surfaces.reveal_webhook_secret(surface)
     await security_service.verify_surface_request(
         surface=surface,
         headers=headers,
         raw_body=raw_body,
+        webhook_secret=webhook_secret,
     )
 
     source = surface.surface_type.value.lower()

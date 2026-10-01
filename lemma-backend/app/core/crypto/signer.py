@@ -15,11 +15,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from collections.abc import Callable
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from app.core.crypto.ports import KeyProvider
+from app.core.crypto.ports import Keyring
 
 
 def _b64e(raw: bytes) -> str:
@@ -33,8 +34,8 @@ def _b64d(value: str) -> bytes:
 class HkdfSecretSigner:
     """Implements :class:`app.core.crypto.ports.SecretSigner`."""
 
-    def __init__(self, provider: KeyProvider) -> None:
-        self._provider = provider
+    def __init__(self, keyring: Callable[[], Keyring]) -> None:
+        self._keyring = keyring
         self._subkey_cache: dict[tuple[str, str], bytes] = {}
 
     def _subkey(self, purpose: str, kid: str) -> bytes | None:
@@ -42,7 +43,7 @@ class HkdfSecretSigner:
         cached = self._subkey_cache.get(cache_key)
         if cached is not None:
             return cached
-        material = self._provider.signing_keyring().get(kid)
+        material = self._keyring().get(kid)
         if material is None:
             return None
         derived = HKDF(
@@ -55,7 +56,7 @@ class HkdfSecretSigner:
         return derived
 
     def sign(self, purpose: str, payload: bytes) -> str:
-        kid = self._provider.signing_keyring().primary_kid
+        kid = self._keyring().primary_kid
         subkey = self._subkey(purpose, kid)
         if subkey is None:  # pragma: no cover - primary is always present
             raise RuntimeError(f"Primary signing key {kid!r} is unavailable")

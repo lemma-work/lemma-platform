@@ -645,23 +645,29 @@ LOCAL_FILE_STORAGE_ROOT=/var/lib/lemma/files
 
 ## Secret encryption
 
-Connector credentials and other stored secrets are encrypted at rest. The
-provider decides where the key comes from. `auto` resolves by what you have
-configured, in this order: `gcp_kms` when `GCP_KMS_KEY_NAME` is set, else
-`gcp_secret_manager` when `GCP_SECRET_MANAGER_SECRET_NAME` is set, else
-`static`.
+Stored secrets (connector credentials, install configs, model-provider keys,
+surface webhook secrets) live in the vault, sealed under keys that are
+themselves wrapped by a **root key** outside the database. The provider decides
+where the root lives. `auto` resolves by what you have configured: `gcp_kms`
+when `GCP_KMS_KEY_NAME` is set, else `gcp_secret_manager` when
+`GCP_SECRET_MANAGER_SECRET_NAME` is set, else `static`.
 
 ```dotenv
 SECRET_KEY_PROVIDER=auto      # auto | static | gcp_kms | gcp_secret_manager | keychain
-SECRET_ENCRYPTION_KEY=
-GCP_KMS_KEY_NAME=
+SECRET_ENCRYPTION_KEY=        # static root (or SECRET_ENCRYPTION_KEYSET for rotation)
+GCP_KMS_KEY_NAME=             # projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>
+GCP_KMS_KEY_VERSION=          # optional: pin one version
+GCP_KMS_TIMEOUT_SECONDS=10
+VAULT_KEK_REFRESH_SECONDS=300
 ```
 
-The local-key provider is named `static`. This said `env`, which the setting
-does not accept and which aborts `Settings()` at import.
+With `gcp_kms` there is no key in the environment: grant the service account
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key. Outside local mode a
+process whose root cannot work refuses to start.
 
-Rotating or losing this key makes every encrypted row unreadable. Treat it as
-durable state, not configuration.
+Losing the root makes every stored secret unreadable. Treat it as durable
+state, not configuration, and back it up with the database. Rotation and
+recovery: [operating the secrets vault](../lemma-backend/docs/operators/secrets-vault.md).
 
 ## Models
 

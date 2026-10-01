@@ -54,6 +54,9 @@ from app.modules.connectors.infrastructure.repositories.connector_trigger_reposi
     ConnectorTriggerRepository,
 )
 from app.modules.connectors.services.connector_service import ConnectorService
+from app.modules.connectors.tests.support.stored_secrets import (
+    account_credentials_secret,
+)
 
 
 class FakeProviderOperationError(Exception):
@@ -287,7 +290,12 @@ async def test_connector_operations_use_connected_user_account(
         user_id=fixed_test_user["id"],
         organization_id=fixed_test_org["id"],
         auth_config_id=auth_config.id,
-        credentials={"api_key": "secret"},
+        credentials_secret_id=await account_credentials_secret(
+            db_session,
+            organization_id=fixed_test_org["id"],
+            user_id=fixed_test_user["id"],
+            credentials={"api_key": "secret"},
+        ),
     )
     db_session.add(account)
     db_session.add(
@@ -622,7 +630,12 @@ async def test_connector_operation_returns_upstream_execution_error_details(
             user_id=fixed_test_user["id"],
             organization_id=fixed_test_org["id"],
             auth_config_id=auth_config.id,
-            credentials={"api_key": "secret"},
+            credentials_secret_id=await account_credentials_secret(
+                db_session,
+                organization_id=fixed_test_org["id"],
+                user_id=fixed_test_user["id"],
+                credentials={"api_key": "secret"},
+            ),
         )
     )
     db_session.add(
@@ -726,12 +739,17 @@ async def test_google_calendar_operation_uses_composio_account(
             user_id=fixed_test_user["id"],
             organization_id=fixed_test_org["id"],
             auth_config_id=auth_config.id,
-            credentials={
-                "expires_at": None,
-                "token_type": "Bearer",
-                "access_token": "ya29...",
-                "connection_id": "ca_nsKQ2C1X4Q4A",
-            },
+            credentials_secret_id=await account_credentials_secret(
+                db_session,
+                organization_id=fixed_test_org["id"],
+                user_id=fixed_test_user["id"],
+                credentials={
+                    "expires_at": None,
+                    "token_type": "Bearer",
+                    "access_token": "ya29...",
+                    "connection_id": "ca_nsKQ2C1X4Q4A",
+                },
+            ),
         )
     )
     await db_session.commit()

@@ -204,7 +204,9 @@ class AgentSurfaceService(
             await self._register_telegram_webhook(
                 credentials=telegram_credentials,
                 webhook_url=self._build_public_surface_webhook_url(created.id),
-                webhook_secret=created.webhook_secret or "",
+                # The entity this call minted it on: the one the repository
+                # returns carries only the vault id.
+                webhook_secret=entity.webhook_secret or "",
             )
         await self._notify_receivers_after_commit(created.id)
         return created
@@ -249,6 +251,14 @@ class AgentSurfaceService(
         if surface is None:
             raise AgentSurfaceNotFoundError(str(surface_id))
         return surface
+
+    async def reveal_webhook_secret(self, surface: AgentSurfaceEntity) -> str | None:
+        """This surface's stored webhook secret, or None when it has none.
+
+        On this service's own session, so call it inside the scope the surface
+        was read in -- never across the network call that uses the value.
+        """
+        return await self.surface_repository.reveal_webhook_secret(surface)
 
     async def get_surface_by_name_in_pod(
         self,
@@ -356,7 +366,7 @@ class AgentSurfaceService(
             await self._register_telegram_webhook(
                 credentials=telegram_credentials,
                 webhook_url=self._build_public_surface_webhook_url(updated.id),
-                webhook_secret=updated.webhook_secret or "",
+                webhook_secret=surface.webhook_secret or "",
             )
         await self._notify_receivers_after_commit(updated.id)
         return updated

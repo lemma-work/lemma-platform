@@ -153,6 +153,12 @@ async def test_a_pooled_surfaces_tools_are_built_with_that_numbers_credentials(
 
     configure_test_mappers()
 
+    # No vault secret on the row: the factory builds its resolver and pool
+    # repository on the stub session with no seam for a vault, so the number's
+    # own token cannot be served here. What this pins is that the pool is
+    # consulted at all -- the phone number id is the pool's -- and the token
+    # layered over settings is pinned in `test_pooled_reply_credentials`,
+    # against a reader that holds one.
     row = WhatsAppNumber(
         id=uuid4(),
         created_at=datetime.now(timezone.utc),
@@ -160,7 +166,6 @@ async def test_a_pooled_surfaces_tools_are_built_with_that_numbers_credentials(
         phone_number_id="pool-b",
         display_phone_number="+15550001111",
         waba_id="waba-b",
-        access_token="the-pools-token",
         status="AVAILABLE",
     )
 
@@ -211,11 +216,10 @@ async def test_a_pooled_surfaces_tools_are_built_with_that_numbers_credentials(
     await factory.build_toolsets(conversation=_conversation_for_surface(surface))
 
     assert built, "no WhatsApp toolset was built at all"
-    assert built[0]["access_token"] == "the-pools-token", (
-        "the agent's tools were handed the deployment's token, so every send "
+    assert built[0]["phone_number_id"] == "pool-b", (
+        "the agent's tools were handed the deployment's number, so every send "
         "went out as a number the recipient has never seen"
     )
-    assert built[0]["phone_number_id"] == "pool-b"
 
 
 @pytest.mark.asyncio

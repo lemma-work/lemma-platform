@@ -48,7 +48,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.dependencies import assert_pod_membership
 from app.core.authorization.factory import create_authorization_data_service
-from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
@@ -460,7 +459,7 @@ class ConversationMCPService:
         stored = run.agent_runtime.model_dump(mode="json")
         try:
             service = AgentRuntimeProfileService(
-                AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
+                AgentRuntimeProfileRepository(uow),
                 # Passed so a harness that has since reported it reads images is
                 # believed, rather than the catalog copied from it before its
                 # probe landed. Without this the resolve below is accurate about

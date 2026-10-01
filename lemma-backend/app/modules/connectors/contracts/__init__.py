@@ -11,7 +11,6 @@ from app.modules.connectors.domain.errors import (
     ConnectorNotFoundError,
     OperationExecutionNotFoundError,
 )
-from app.modules.connectors.domain.ports import SecretEncryptionPort
 from app.modules.connectors.config import connector_settings
 
 __all__ = [
@@ -23,5 +22,4 @@ __all__ = [
     "AccountNotFoundError",
     "ConnectorNotFoundError",
     "OperationExecutionNotFoundError",
-    "SecretEncryptionPort",
 ]

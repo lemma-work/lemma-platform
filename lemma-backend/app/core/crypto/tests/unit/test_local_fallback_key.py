@@ -23,14 +23,11 @@ import pytest
 from cryptography.fernet import Fernet
 
 from app.core.crypto import keys as crypto_keys
-from app.core.crypto.cipher import EnvelopeSecretCipher
 from app.core.crypto.keys import (
     derive_kid,
-    legacy_candidate_secrets,
     load_static_keyring,
     local_fallback_secret,
 )
-from app.core.crypto.providers.static import StaticKeyProvider
 
 pytestmark = pytest.mark.unit
 
@@ -48,37 +45,6 @@ class _Settings:
 @pytest.fixture
 def _no_legacy_env(monkeypatch):
     monkeypatch.delenv(crypto_keys.LEGACY_ENV_VAR, raising=False)
-
-
-def _cipher(settings) -> EnvelopeSecretCipher:
-    return EnvelopeSecretCipher(
-        StaticKeyProvider(load_static_keyring()),
-        legacy_secrets=legacy_candidate_secrets(),
-    )
-
-
-def test_rows_written_under_the_fallback_still_read_after_a_key_is_configured(
-    monkeypatch, _no_legacy_env
-):
-    """The lemma-stack upgrade path: new key for new writes, old rows unharmed."""
-    before = _Settings("local", None)
-    monkeypatch.setattr(crypto_keys, "settings", before)
-    old = _cipher(before)
-    stored = old.encrypt_json({"api_key": "ROW-WRITTEN-BEFORE-THE-UPGRADE"})
-    assert stored is not None
-    assert stored["kid"] == derive_kid(local_fallback_secret())
-
-    after = _Settings("local", Fernet.generate_key().decode("ascii"))
-    monkeypatch.setattr(crypto_keys, "settings", after)
-    upgraded = _cipher(after)
-
-    assert upgraded.decrypt_json(stored) == {
-        "api_key": "ROW-WRITTEN-BEFORE-THE-UPGRADE"
-    }
-    # And a new write is under the new key, not the published one.
-    fresh = upgraded.encrypt_json({"api_key": "NEW"})
-    assert fresh is not None
-    assert fresh["kid"] != stored["kid"]
 
 
 def test_the_published_key_never_signs_once_an_installation_has_its_own(

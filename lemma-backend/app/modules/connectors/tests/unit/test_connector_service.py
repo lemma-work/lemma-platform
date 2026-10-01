@@ -645,6 +645,7 @@ async def test_get_account_credentials_marks_reauth_required_on_refresh_failure(
         auth_config_id=uuid4(),
         connector_id="slack",
         credentials=expired,
+        credentials_version=1,
     )
     account_repo = AsyncMock()
     account_repo.get.return_value = account
@@ -675,8 +676,14 @@ async def test_get_account_credentials_marks_reauth_required_on_refresh_failure(
     with pytest.raises(OAuthWorkflowError):
         await service.get_account_credentials(account.id, user_id)
 
-    assert account.status == AccountStatus.REAUTH_REQUIRED
-    account_repo.update.assert_awaited()
+    # A targeted status write: nothing about the failure is a credential write.
+    account_repo.set_status.assert_awaited_once_with(
+        account.id, AccountStatus.REAUTH_REQUIRED
+    )
+    account_repo.update.assert_not_awaited()
+    account_repo.replace_credentials.assert_not_awaited()
+    # The refresh lease is given back, so a waiter need not sit out its TTL.
+    account_repo.release_credentials_lease.assert_awaited_once()
 
 
 def _refreshing_service(
@@ -745,7 +752,9 @@ async def test_a_withdrawn_grant_is_a_409_that_asks_for_a_reconnect(expired):
         "account_id": str(account.id),
         "connector_id": "slack",
     }
-    assert account.status == AccountStatus.REAUTH_REQUIRED
+    service.account_repository.set_status.assert_awaited_once_with(
+        account.id, AccountStatus.REAUTH_REQUIRED
+    )
 
 
 async def test_an_expired_token_with_nothing_to_refresh_with_asks_for_a_reconnect():
@@ -905,17 +914,10 @@ async def test_get_account_credentials_refreshes_expired_token():
         auth_config_id=uuid4(),
         connector_id="slack",
         credentials=expired_credentials,
+        credentials_version=3,
     )
     account_repo = AsyncMock()
     account_repo.get.return_value = account
-    account_repo.update.return_value = AccountEntity(
-        id=account.id,
-        user_id=user_id,
-        organization_id=ORG_ID,
-        auth_config_id=account.auth_config_id,
-        connector_id="slack",
-        credentials=refreshed_credentials,
-    )
     auth_provider = _auth_provider()
     auth_provider.refresh_credentials.return_value = refreshed_credentials
     registry = Mock()
@@ -942,8 +944,17 @@ async def test_get_account_credentials_refreshes_expired_token():
     credentials = await service.get_account_credentials(account.id, user_id)
 
     assert credentials.access_token == "new"
-    account_repo.update.assert_awaited_once()
-    uow.commit.assert_awaited_once()
+    # Written as a compare-and-set on the version read, under the lease taken
+    # at that version -- never through `update`.
+    lease = account_repo.try_lease_credentials.return_value
+    account_repo.try_lease_credentials.assert_awaited_once()
+    assert account_repo.try_lease_credentials.await_args.kwargs["if_version"] == 3
+    account_repo.replace_credentials.assert_awaited_once_with(
+        account.id, refreshed_credentials, expected_version=3, lease=lease
+    )
+    account_repo.update.assert_not_awaited()
+    # Once to publish the lease before the provider call, once for the write.
+    assert uow.commit.await_count == 2
 
 
 async def test_get_account_credentials_force_refreshes_valid_token():
@@ -965,17 +976,10 @@ async def test_get_account_credentials_force_refreshes_valid_token():
         auth_config_id=uuid4(),
         connector_id="slack",
         credentials=valid_credentials,
+        credentials_version=1,
     )
     account_repo = AsyncMock()
     account_repo.get.return_value = account
-    account_repo.update.return_value = AccountEntity(
-        id=account.id,
-        user_id=user_id,
-        organization_id=ORG_ID,
-        auth_config_id=account.auth_config_id,
-        connector_id="slack",
-        credentials=refreshed_credentials,
-    )
     auth_provider = _auth_provider()
     auth_provider.refresh_credentials.return_value = refreshed_credentials
     registry = Mock()
@@ -1006,8 +1010,8 @@ async def test_get_account_credentials_force_refreshes_valid_token():
     )
 
     assert credentials.access_token == "new"
-    account_repo.update.assert_awaited_once()
-    uow.commit.assert_awaited_once()
+    account_repo.replace_credentials.assert_awaited_once()
+    account_repo.update.assert_not_awaited()
 
 
 async def test_handle_oauth_callback_sets_provider_account_id_on_create():

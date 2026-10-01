@@ -38,7 +38,6 @@ from uuid import UUID
 
 from sqlalchemy import case, select
 
-from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
@@ -66,13 +65,14 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
     DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
     DEFAULT_RUN_LEASE_SECONDS,
-    AgentHostProtocolViolation,
     utcnow,
 )
+from app.modules.agent.infrastructure.agent_host.mcp_frame import open_mcp_frame
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostRunLeaseModel,
 )
+from app.modules.vault.contracts import SealingKeys
 
 
 logger = get_logger(__name__)
@@ -112,10 +112,13 @@ class AgentHostDispatchRepository:
         uow: SqlAlchemyUnitOfWork,
         *,
         event_stream: AgentHostEventStream | None = None,
+        keyring: SealingKeys | None = None,
     ):
         self.uow = uow
         self.session = uow.session
         self._events = event_stream or agent_host_event_stream()
+        # Opens the sealed MCP frame on delivery; the process keyring if None.
+        self._keyring = keyring
 
     # ---------------------------------------------------------------- dispatch
 
@@ -126,7 +129,7 @@ class AgentHostDispatchRepository:
         harness_id: UUID,
         runtime_profile_id: UUID,
         run_spec: AgentHostRunSpec,
-        encrypted_mcp_payload: dict,
+        encrypted_mcp_payload: str,
         now: datetime | None = None,
         command_ttl_seconds: int = DEFAULT_COMMAND_TTL_SECONDS,
     ) -> AgentHostCommandModel:
@@ -398,7 +401,7 @@ class AgentHostDispatchRepository:
         self,
         *,
         run_id: UUID,
-        encrypted_mcp_payload: dict,
+        encrypted_mcp_payload: str,
         now: datetime | None = None,
     ) -> AgentHostCommandModel | None:
         """Hand a run still in flight a replacement Lemma MCP credential.
@@ -473,15 +476,13 @@ class AgentHostDispatchRepository:
     async def cleanup_retained_state(self, *, now: datetime | None = None) -> None:
         return await recovery.cleanup_retained_state(self.session, now=now)
 
-    @staticmethod
-    async def _wire_command(command: AgentHostCommandModel) -> AgentHostCommand:
+    async def _wire_command(self, command: AgentHostCommandModel) -> AgentHostCommand:
         payload = dict(command.payload or {})
-        encrypted_mcp = payload.pop("encrypted_mcp", None)
-        if encrypted_mcp is not None:
-            mcp = await get_secret_cipher().decrypt_json_async(encrypted_mcp)
-            if mcp is None:
-                raise AgentHostProtocolViolation("MCP payload is unavailable")
-            payload["mcp"] = mcp
+        sealed_mcp = payload.pop("encrypted_mcp", None)
+        if sealed_mcp is not None:
+            payload["mcp"] = await open_mcp_frame(
+                sealed_mcp, run_id=command.run_id, keyring=self._keyring
+            )
         return AgentHostCommand(
             command_id=command.id,
             kind=AgentHostCommandKind(command.kind),

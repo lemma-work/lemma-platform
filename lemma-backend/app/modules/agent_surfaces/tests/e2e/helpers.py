@@ -27,6 +27,9 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
+from app.modules.agent.infrastructure.repositories.runtime_profile_repository import (
+    put_profile_secrets,
+)
 from app.modules.agent.infrastructure.runtime_models import (
     AgentRuntimeProfileModel,
 )
@@ -35,6 +38,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceReplyContext,
 )
 from app.modules.agent_surfaces.infrastructure.models import (
+    AgentSurface,
     AgentSurfaceExternalUser,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
@@ -56,7 +60,12 @@ from app.modules.connectors.infrastructure.models.connector_trigger import (
     ConnectorTrigger,
 )
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    ACCOUNT_CREDENTIALS_PURPOSE,
+)
+from app.modules.test_support.e2e.vault_helpers import seed_account_credentials
 from app.modules.test_support.e2e.waiters import eventually
+from app.modules.vault.contracts import JsonObject, SecretScope, vault_for
 
 pytestmark = pytest.mark.e2e
 
@@ -222,6 +231,68 @@ async def _create_agent(
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+_AUTH_CONFIG_PURPOSE = "connectors.auth_config.config"
+
+
+async def stored_account_credentials(
+    session: AsyncSession, account: Account
+) -> JsonObject:
+    """An account's credentials, revealed under the connectors module's binding."""
+    assert account.credentials_secret_id is not None
+    revealed = await vault_for(session).reveal(
+        account.credentials_secret_id,
+        expect=SecretScope(account.organization_id, user_id=account.user_id),
+        purpose=ACCOUNT_CREDENTIALS_PURPOSE,
+    )
+    return revealed.json()
+
+
+async def merge_auth_config_values(
+    session: AsyncSession, auth_config: AuthConfig, updates: JsonObject
+) -> None:
+    """Merge ``updates`` into an install's config, which lives in the vault.
+
+    Stored as a fresh secret and repointed -- the owner trigger removes the one
+    it replaces -- under the connectors module's purpose and org scope.
+    """
+    vault = vault_for(session)
+    scope = SecretScope(auth_config.organization_id)
+    current: JsonObject = {}
+    if auth_config.config_secret_id is not None:
+        current = (
+            await vault.reveal(
+                auth_config.config_secret_id,
+                expect=scope,
+                purpose=_AUTH_CONFIG_PURPOSE,
+            )
+        ).json()
+    ref = await vault.put(
+        scope=scope,
+        purpose=_AUTH_CONFIG_PURPOSE,
+        value={**current, **updates},
+        owner_table="auth_configs",
+    )
+    auth_config.config_secret_id = ref.id
+
+
+async def stored_webhook_secret(session: AsyncSession, surface_id: str | UUID) -> str:
+    """The webhook secret a surface stored, read the way a verifier must.
+
+    Spelled out against the vault's contract -- the row's org and pod as the
+    scope, the column's purpose -- rather than through the repository, so a
+    repository that stored it under the wrong scope fails here instead of
+    agreeing with itself.
+    """
+    row = await session.get(AgentSurface, UUID(str(surface_id)))
+    assert row is not None and row.webhook_secret_id is not None
+    revealed = await vault_for(session).reveal(
+        row.webhook_secret_id,
+        expect=SecretScope(row.organization_id, pod_id=row.pod_id),
+        purpose="agent_surfaces.surface.webhook_secret",
+    )
+    return revealed.text()
 
 
 async def _create_surface(
@@ -409,13 +480,14 @@ async def _ensure_connector_account(
             connector_id=connector_id,
             provider_account_id=f"e2e-{connector_id}",
             email=email,
-            credentials=credentials,
         )
         db_session.add(account)
     else:
         account.email = email
         account.auth_config_id = auth_config.id
-        account.credentials = credentials
+    # Credentials live in the vault. A fresh secret each time, repointed: the
+    # owner trigger deletes the one it replaces.
+    await seed_account_credentials(db_session, account, credentials)
     await db_session.commit()
     await db_session.refresh(account)
     return account
@@ -603,7 +675,11 @@ async def _ensure_e2e_runtime_profile(
                 "headers": {},
                 "model_settings": {},
             },
-            credentials={"api_key": "surface-e2e-key"},
+            secrets_secret_id=await put_profile_secrets(
+                vault_for(db_session),
+                organization_id=organization_id,
+                credentials={"api_key": "surface-e2e-key"},
+            ),
             status=RuntimeProfileStatus.ACTIVE.value,
             profile_metadata={"surface_e2e": True},
         )

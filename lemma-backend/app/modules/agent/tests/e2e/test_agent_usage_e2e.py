@@ -10,7 +10,11 @@ import pytest
 from sqlalchemy import select
 
 from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.infrastructure.repositories.runtime_profile_repository import (
+    SECRETS_PURPOSE as RUNTIME_PROFILE_SECRETS_PURPOSE,
+)
 from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
+from app.modules.vault.contracts import SecretScope, vault_for
 from app.modules.agent.services.runtime_system_profiles import _load_runtime_env
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     SYSTEM_LEMMA_SKIP_REASON,
@@ -590,8 +594,15 @@ async def test_agent_run_uses_user_added_openai_compatible_profile(
         )
     )
     assert stored_profile is not None
-    assert stored_profile.credentials["_encrypted"] == "lemma-secret-v2"
-    assert api_key not in str(stored_profile.credentials)
+    # The key lives in the vault, not in any column of the row.
+    assert stored_profile.secrets_secret_id is not None
+    assert api_key not in str(stored_profile.config)
+    revealed = await vault_for(db_session).reveal(
+        stored_profile.secrets_secret_id,
+        expect=SecretScope(organization_id=stored_profile.organization_id),
+        purpose=RUNTIME_PROFILE_SECRETS_PURPOSE,
+    )
+    assert revealed.json() == {"credentials": {"api_key": api_key}, "headers": {}}
 
     create_agent = await authenticated_client.post(
         f"/pods/{pod_id}/agents",

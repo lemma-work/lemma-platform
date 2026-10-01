@@ -15,6 +15,12 @@ from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connect_request import ConnectRequest
 from app.modules.connectors.infrastructure.models.connector import Connector
+from app.modules.connectors.infrastructure.repositories.connector_secrets import (
+    ACCOUNT_CREDENTIALS_PURPOSE,
+    AUTH_CONFIG_PURPOSE,
+    account_scope,
+    auth_config_scope,
+)
 from app.modules.connectors.services.auth.lemma_auth_provider import LemmaAuthProvider
 from app.modules.connectors.tests.support.fake_auth_provider import (
     FakeAuthProvider,
@@ -22,6 +28,10 @@ from app.modules.connectors.tests.support.fake_auth_provider import (
 from app.modules.identity.infrastructure.supertokens_auth.helpers import get_user_token
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
     build_delegation_claims,
+)
+from app.modules.vault.contracts import vault_for
+from app.modules.connectors.tests.support.stored_secrets import (
+    account_credentials_secret,
 )
 
 # A native Gmail row as seeded by the catalog importer: a LEMMA OAuth2 capability
@@ -263,15 +273,33 @@ async def test_connect_request_and_accounts_lifecycle(
         Account.__table__.select().where(Account.id == UUID(account_id))
     )
     stored_account = result.mappings().one()
-    assert stored_account["credentials"]["_encrypted"] == "lemma-secret-v2"
-    assert "access-token" not in str(stored_account["credentials"])
+    # The row holds a pointer, not the token; the token is in the vault, and
+    # opens only under the owner's scope and the credentials purpose.
+    assert "access-token" not in str(dict(stored_account))
+    account_secret_id = stored_account["credentials_secret_id"]
+    assert account_secret_id is not None
+    stored_credentials = await _revealed(
+        db_session,
+        account_secret_id,
+        account_scope(stored_account["organization_id"], stored_account["user_id"]),
+        ACCOUNT_CREDENTIALS_PURPOSE,
+    )
+    assert stored_credentials["access_token"] == "access-token"
 
     result = await db_session.execute(
         AuthConfig.__table__.select().where(AuthConfig.id == UUID(auth_config["id"]))
     )
     stored_auth_config = result.mappings().one()
-    assert stored_auth_config["config"]["_encrypted"] == "lemma-secret-v2"
-    assert "client-secret" not in str(stored_auth_config["config"])
+    assert "client-secret" not in str(dict(stored_auth_config))
+    config_secret_id = stored_auth_config["config_secret_id"]
+    assert config_secret_id is not None
+    stored_config = await _revealed(
+        db_session,
+        config_secret_id,
+        auth_config_scope(stored_auth_config["organization_id"]),
+        AUTH_CONFIG_PURPOSE,
+    )
+    assert stored_config["oauth2_credentials"]["client_secret"] == "client-secret"
 
     response = await authenticated_client.delete(
         f"/organizations/{org_id}/connectors/auth-configs/{connector_id}"
@@ -286,6 +314,34 @@ async def test_connect_request_and_accounts_lifecycle(
         AuthConfig.__table__.select().where(AuthConfig.id == UUID(auth_config["id"]))
     )
     assert result.mappings().first() is None
+    # Their secrets went with them: nothing is left in the vault to leak.
+    vault = vault_for(db_session)
+    assert (
+        await vault.meta(
+            account_secret_id,
+            expect=account_scope(
+                stored_account["organization_id"], stored_account["user_id"]
+            ),
+            purpose=ACCOUNT_CREDENTIALS_PURPOSE,
+        )
+        is None
+    )
+    assert (
+        await vault.meta(
+            config_secret_id,
+            expect=auth_config_scope(stored_auth_config["organization_id"]),
+            purpose=AUTH_CONFIG_PURPOSE,
+        )
+        is None
+    )
+
+
+async def _revealed(db_session, secret_id, scope, purpose) -> dict[str, object]:
+    """What the vault holds for ``secret_id``, decrypted as its owner would."""
+    revealed = await vault_for(db_session).reveal(
+        secret_id, expect=scope, purpose=purpose
+    )
+    return revealed.json()
 
 
 @pytest.mark.asyncio
@@ -472,8 +528,14 @@ async def test_direct_credential_managed_account_create_encrypts_credentials(
         Account.__table__.select().where(Account.id == UUID(account_id))
     )
     stored_account = result.mappings().one()
-    assert stored_account["credentials"]["_encrypted"] == "lemma-secret-v2"
-    assert "telegram-secret-token" not in str(stored_account["credentials"])
+    assert "telegram-secret-token" not in str(dict(stored_account))
+    stored_credentials = await _revealed(
+        db_session,
+        stored_account["credentials_secret_id"],
+        account_scope(stored_account["organization_id"], stored_account["user_id"]),
+        ACCOUNT_CREDENTIALS_PURPOSE,
+    )
+    assert stored_credentials["bot_token"] == "telegram-secret-token"
     # The first account connected for an auth config is the default.
     assert account["is_default"] is True
 
@@ -589,7 +651,12 @@ async def test_list_accounts_uses_id_cursor_pagination(
                 organization_id=org_id,
                 auth_config_id=auth_config.id,
                 connector_id=connector_id,
-                credentials={"access_token": connector_id},
+                credentials_secret_id=await account_credentials_secret(
+                    db_session,
+                    organization_id=org_id,
+                    user_id=fixed_test_user["id"],
+                    credentials={"access_token": connector_id},
+                ),
             )
         )
 

@@ -9,14 +9,13 @@ and lets the caller's own write be the thing that takes it. See
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import get_secret_cipher
 from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
@@ -26,6 +25,13 @@ from app.modules.agent_surfaces.domain.whatsapp_numbers import (
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (
     WhatsAppNumber,
+    WhatsAppNumberSecrets,
+)
+from app.modules.vault.contracts import (
+    JsonObject,
+    SecretScope,
+    Vault,
+    vault_for,
 )
 
 #: What the caller does with a number to take it: whatever write makes this
@@ -51,6 +57,42 @@ _MAX_POOL_PAGE = 500
 #: Named here because the claim is a whole surface write, and a surface write can
 #: violate several other things.
 _NUMBER_TAKEN_CONSTRAINT = "uq_agent_org_whatsapp_number"
+
+#: A number's three secrets live in the vault as one JSON object, holding only
+#: the keys that are set. Deployment-scoped: the pool belongs to no
+#: organisation, and a number is handed to several over its life.
+CREDENTIALS_PURPOSE = "agent_surfaces.whatsapp_number.credentials"
+_OWNER_TABLE = "surface_whatsapp_numbers"
+_SECRET_KEYS = ("access_token", "app_secret", "verify_token")
+
+
+def _credentials_value(entity: WhatsAppNumberEntity) -> JsonObject | None:
+    """What to store for a new number, or None when it declares nothing.
+
+    A missing key is not an empty value: it is "fall back to settings", the
+    same answer a number with no secret at all gets. So an unset secret is left
+    out rather than stored as an empty string that would shadow the setting.
+    """
+    value: JsonObject = {
+        key: secret for key in _SECRET_KEYS if (secret := getattr(entity, key))
+    }
+    return value or None
+
+
+def _secrets_from(stored: JsonObject | None) -> WhatsAppNumberSecrets:
+    """The stored object as the three optional secrets; absent keys stay None."""
+    if not stored:
+        return WhatsAppNumberSecrets()
+
+    def text(key: str) -> str | None:
+        value = stored.get(key)
+        return value if isinstance(value, str) else None
+
+    return WhatsAppNumberSecrets(
+        access_token=text("access_token"),
+        app_secret=text("app_secret"),
+        verify_token=text("verify_token"),
+    )
 
 
 def _violated_constraint(error: IntegrityError) -> str | None:
@@ -83,12 +125,42 @@ def _violated_constraint(error: IntegrityError) -> str | None:
 class WhatsAppNumberRepository:
     """The `surface_whatsapp_numbers` table, as entities."""
 
-    def __init__(self, uow: IUnitOfWork):
+    def __init__(self, uow: IUnitOfWork, *, vault: Vault | None = None):
         self.uow = uow
         # Annotated as the async session it actually is. The repositories beside
         # this one write `Session`, which type-checks every `await` on it as an
         # error -- harmless only because nothing checks those files.
         self.session: AsyncSession = uow.session
+        self._vault = vault or vault_for(self.session)
+
+    async def _entities(
+        self, models: Sequence[WhatsAppNumber]
+    ) -> list[WhatsAppNumberEntity]:
+        """Rows as entities, their secrets revealed in one vault read.
+
+        Every read path comes through here, so an entity in hand always holds
+        usable values -- the callers compare, sign and send with them and have
+        no vault of their own. One `reveal_many` however many rows: a list of
+        the pool is one query for the secrets, not one per number.
+        """
+        scopes = {
+            model.credentials_secret_id: SecretScope.system()
+            for model in models
+            if model.credentials_secret_id is not None
+        }
+        revealed = await self._vault.reveal_many(scopes, purpose=CREDENTIALS_PURPOSE)
+
+        def secrets_for(model: WhatsAppNumber) -> WhatsAppNumberSecrets:
+            secret_id = model.credentials_secret_id
+            found = revealed.get(secret_id) if secret_id is not None else None
+            return _secrets_from(found.json() if found is not None else None)
+
+        return [model.to_entity(secrets_for(model)) for model in models]
+
+    async def _entity(
+        self, model: WhatsAppNumber | None
+    ) -> WhatsAppNumberEntity | None:
+        return (await self._entities([model]))[0] if model is not None else None
 
     async def get_by_phone_number_id(
         self, phone_number_id: str
@@ -98,8 +170,7 @@ class WhatsAppNumberRepository:
             WhatsAppNumber.phone_number_id == phone_number_id
         )
         result = await self.session.execute(stmt)
-        model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
+        return await self._entity(result.scalar_one_or_none())
 
     async def oldest_available_number(self) -> WhatsAppNumberEntity | None:
         """The pool's answer for the cold-open line, or None when it has none.
@@ -131,8 +202,7 @@ class WhatsAppNumberRepository:
             .limit(1)
         )
         result = await self.session.execute(stmt)
-        model = result.scalars().first()
-        return model.to_entity() if model else None
+        return await self._entity(result.scalars().first())
 
     async def list_all(
         self, *, limit: int = _MAX_POOL_PAGE
@@ -148,7 +218,7 @@ class WhatsAppNumberRepository:
             .limit(limit)
         )
         result = await self.session.execute(stmt)
-        return [model.to_entity() for model in result.scalars().all()]
+        return await self._entities(result.scalars().all())
 
     async def any_allocatable(self) -> bool:
         """Does this deployment have a pool at all?
@@ -280,12 +350,26 @@ class WhatsAppNumberRepository:
         result = await self.session.execute(stmt)
         # Mapped to entities before any claim runs: a failed attempt rolls a
         # savepoint back, and reading an ORM instance loaded inside it afterwards
-        # would re-fetch it in the middle of the retry loop.
-        return [model.to_entity() for model in result.scalars().all()]
+        # would re-fetch it in the middle of the retry loop. Revealed here for
+        # the same reason: the vault read happens once, outside every savepoint.
+        return await self._entities(result.scalars().all())
 
     async def create(self, entity: WhatsAppNumberEntity) -> WhatsAppNumberEntity:
-        """Add a number to the pool, secrets encrypted at rest."""
-        cipher = get_secret_cipher()
+        """Add a number to the pool, its secrets (if any) as one vault secret.
+
+        On this repository's transaction, so the secret and the row that owns it
+        land together or not at all.
+        """
+        credentials = _credentials_value(entity)
+        secret_id = None
+        if credentials is not None:
+            ref = await self._vault.put(
+                scope=SecretScope.system(),
+                purpose=CREDENTIALS_PURPOSE,
+                value=credentials,
+                owner_table=_OWNER_TABLE,
+            )
+            secret_id = ref.id
         model = WhatsAppNumber(
             id=entity.id,
             created_at=entity.created_at,
@@ -293,9 +377,7 @@ class WhatsAppNumberRepository:
             phone_number_id=entity.phone_number_id,
             display_phone_number=entity.display_phone_number,
             waba_id=entity.waba_id,
-            access_token=cipher.encrypt_str(entity.access_token),
-            app_secret=cipher.encrypt_str(entity.app_secret),
-            verify_token=cipher.encrypt_str(entity.verify_token),
+            credentials_secret_id=secret_id,
             onboarding_email_flow_id=entity.onboarding_email_flow_id,
             onboarding_code_flow_id=entity.onboarding_code_flow_id,
             status=entity.status.value,
@@ -303,7 +385,7 @@ class WhatsAppNumberRepository:
         )
         self.session.add(model)
         await self.session.flush()
-        return model.to_entity()
+        return model.to_entity(_secrets_from(credentials))
 
     async def retire(self, phone_number_id: str) -> WhatsAppNumberEntity | None:
         """Stop handing this number out, without disturbing whoever holds it.
@@ -317,7 +399,7 @@ class WhatsAppNumberRepository:
             return None
         model.status = WhatsAppNumberStatus.RETIRED.value
         await self.session.flush()
-        return model.to_entity()
+        return await self._entity(model)
 
     async def remove(self, phone_number_id: str) -> bool:
         """Drop a number the deployment no longer owns. False when it was gone.
@@ -327,6 +409,10 @@ class WhatsAppNumberRepository:
         keeps naming it. That is the honest outcome -- the number is gone from
         Meta's side too -- and it is the caller's job to deal with the surfaces,
         which is why this is `remove` and `retire` exists beside it.
+
+        The number's secret goes with the row: `vault_owned` on
+        `credentials_secret_id` deletes it by trigger, whatever path the row
+        takes out.
         """
         model = await self._model_for(phone_number_id)
         if model is None:

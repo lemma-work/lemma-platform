@@ -6,7 +6,6 @@ import pytest
 from cryptography.fernet import Fernet
 
 from app.core.crypto.ports import KeyMaterial, Keyring
-from app.core.crypto.providers.static import StaticKeyProvider
 from app.core.crypto.signer import HkdfSecretSigner
 
 pytestmark = pytest.mark.unit
@@ -17,7 +16,7 @@ def _signer(*entries: tuple[str, bytes], primary: str) -> HkdfSecretSigner:
         primary_kid=primary,
         keys={kid: KeyMaterial(kid, key) for kid, key in entries},
     )
-    return HkdfSecretSigner(StaticKeyProvider(keyring))
+    return HkdfSecretSigner(lambda: keyring)
 
 
 def test_sign_verify_round_trip_carries_kid():

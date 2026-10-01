@@ -31,6 +31,9 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
 )
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.execution_plan import ResolvedConnectorExecution
+from app.modules.connectors.infrastructure.repositories.account_repository import (
+    AccountRepository,
+)
 
 
 async def get_account(uow, account_id: UUID) -> AccountEntity | None:
@@ -54,15 +57,11 @@ async def resolve_account_connector(uow, account_id: UUID) -> tuple[str, str] | 
     Resolved from the account and its auth config rather than guessed from the
     name of whatever holds it -- a surface's platform, a schedule's directory --
     since that guess is wrong for any resource with no platform of its own.
+
+    Two plaintext columns, one join: loading the entities for them decrypted
+    the account's credentials and the install's config to read neither.
     """
-    service = get_connector_service(uow)
-    account = await service.account_repository.get(account_id)
-    if account is None:
-        return None
-    auth_config = await service.auth_config_repository.get(account.auth_config_id)
-    if auth_config is None:
-        return None
-    return account.connector_id, auth_config.kind.value
+    return await AccountRepository(uow).connector_and_kind(account_id)
 
 
 async def resolve_operation(

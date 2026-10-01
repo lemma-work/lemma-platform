@@ -57,7 +57,7 @@ def _row(**overrides) -> AgentSurface:
     row.surface_identity_username = None
     row.status = "ACTIVE"
     row.surface_identity_email = None
-    row.webhook_secret = None
+    row.webhook_secret_id = None
     for key, value in overrides.items():
         setattr(row, key, value)
     return row
@@ -74,6 +74,28 @@ def test_a_live_row_still_maps_with_every_field_intact() -> None:
     assert entity.surface_type is SurfacePlatform.RESEND
     assert entity.surface_identity_email == "agent@ops.example"
     assert entity.id == row.id
+
+
+def test_a_webhook_secret_maps_as_its_vault_id_and_never_a_value() -> None:
+    """Surfaces are mapped on every routing read, and none of those decrypt.
+
+    The entity carries the id; the plaintext field is write-only, for a secret
+    just minted, and stays out of every dump so it cannot ride along into a
+    response, a cache entry or an event.
+    """
+    secret_id = uuid4()
+    entity = _row(
+        surface_type="TELEGRAM", name="telegram", webhook_secret_id=secret_id
+    ).to_entity()
+    assert entity.webhook_secret_id == secret_id
+    assert entity.webhook_secret is None
+    assert entity.has_webhook_secret
+
+    entity.configure_webhook_secret(secret="freshly-minted")
+    dumped = entity.model_dump()
+    assert "webhook_secret" not in dumped
+    assert dumped["webhook_secret_id"] == secret_id
+    assert "freshly-minted" not in repr(entity)
 
 
 @pytest.mark.parametrize("retired", ["GMAIL", "OUTLOOK"])

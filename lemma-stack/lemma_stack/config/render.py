@@ -88,11 +88,11 @@ def _secret_encryption_key(doc: TOMLDocument) -> str:
     and neither is written down a second time. Stable for the life of the
     installation, and gone when the data directory is.
 
-    Rows written *before* this key existed stay readable: they are tagged with
-    the fallback's key id, and the backend keeps that key as a decrypt-only
-    candidate while ``ENVIRONMENT`` is local (``crypto/keys.py::
-    legacy_candidate_secrets``). New writes take this key; to move the old rows
-    forward, run ``scripts/reencrypt_secrets.py`` in the backend.
+    It is the root key of the backend's secrets vault. Secrets written *before*
+    this key existed, under the published fallback, are still read: the vault
+    migration (``0044_vault_cutover``) tries every legacy candidate, the fallback
+    included while ``ENVIRONMENT`` is local (``crypto/keys.py::
+    legacy_candidate_secrets``), and re-seals them under this root.
     """
 
     digest = hmac.digest(

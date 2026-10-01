@@ -220,13 +220,20 @@ class SurfaceWebhookSecurityService:
         surface: AgentSurfaceEntity,
         headers: dict[str, str],
         raw_body: bytes,
+        webhook_secret: str | None = None,
     ) -> None:
+        """Check a delivery addressed to one surface.
+
+        ``webhook_secret`` is the surface's stored secret, revealed by the
+        caller in the scope it read the surface in: the entity carries only the
+        vault id, and a scope of our own would be a second connection per request.
+        """
         if not self.verification_enabled():
             return
         if surface.surface_type is SurfacePlatform.TELEGRAM:
             self._verify_telegram_secret(
                 headers=headers,
-                webhook_secret=surface.webhook_secret,
+                webhook_secret=webhook_secret,
             )
             return
         if surface.surface_type is SurfacePlatform.WHATSAPP:
@@ -238,7 +245,7 @@ class SurfaceWebhookSecurityService:
             )
             return
         if surface.surface_type is SurfacePlatform.SLACK:
-            signing_secret = surface.webhook_secret or reveal_secret(
+            signing_secret = webhook_secret or reveal_secret(
                 surface_settings.slack_signing_secret
             )
             async with self._resolver() as resolver:

@@ -31,9 +31,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.crypto import get_secret_cipher
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.vault.contracts import vault_owned
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -229,9 +229,13 @@ class AgentSurface(UUIDAuditBase):
     surface_identity_email: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )
-    # Encrypted at rest via app.core.crypto (compact ``lsenc1:`` envelope). Text
-    # (not String(255)) because the envelope is longer than the raw secret.
-    webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Telegram's per-surface webhook secret, as a vault secret (purpose
+    # `agent_surfaces.surface.webhook_secret`, scoped to the org and pod). The
+    # entity carries only the id; the few paths that verify or register a
+    # webhook reveal it.
+    webhook_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
 
     def to_entity_or_none(self) -> "AgentSurfaceEntity | None":
         """This row as an entity, or ``None`` when it names something retired.
@@ -297,8 +301,7 @@ class AgentSurface(UUIDAuditBase):
             surface_identity_username=self.surface_identity_username,
             status=self.status or AgentSurfaceStatus.ACTIVE.value,
             surface_identity_email=self.surface_identity_email,
-            # Decrypt at rest; legacy plaintext rows pass through unchanged.
-            webhook_secret=get_secret_cipher().decrypt_str(self.webhook_secret),
+            webhook_secret_id=self.webhook_secret_id,
         )
 
 
@@ -585,3 +588,6 @@ class NotificationModel(UUIDAuditBase):
             read_at=self.read_at,
             responded_at=self.responded_at,
         )
+
+
+vault_owned(AgentSurface.__table__, "webhook_secret_id")

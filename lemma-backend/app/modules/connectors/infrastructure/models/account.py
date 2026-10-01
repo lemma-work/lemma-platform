@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import UUIDAuditBase
+from app.modules.vault.contracts import vault_owned
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.infrastructure.models.connector import Connector
 
@@ -38,8 +39,8 @@ class Account(UUIDAuditBase):
     # The opaque upstream id this account's events arrive under: a Composio
     # `connection_id`, a Slack `authed_user.id`. Distinct from
     # `provider_account_id`, which is the human's handle on the provider and is
-    # what the uniqueness index is about. Plaintext and indexed because
-    # `credentials` is encrypted JSONB and inbound routing has to query this.
+    # what the uniqueness index is about. Plaintext and indexed because the
+    # credentials are in the vault and inbound routing has to query this.
     external_ref: Mapped[str | None] = mapped_column(
         String(255), default=None, nullable=True, index=True
     )
@@ -58,8 +59,12 @@ class Account(UUIDAuditBase):
         String(255), default=None, nullable=True
     )
 
-    # JSON configuration fields
-    credentials: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
+    # The whole credentials blob (tokens, keys, the provider's token response)
+    # is one vault secret, purpose `connectors.account.credentials`, scoped to
+    # this row's organization and user. Deleting the account deletes it.
+    credentials_secret_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("vault_secrets.id"), unique=True, nullable=True
+    )
     preferences: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
     # Scopes
     allowed_scopes: Mapped[list[str] | None] = mapped_column(
@@ -98,3 +103,6 @@ class Account(UUIDAuditBase):
 
     def __repr__(self) -> str:
         return f"<Account(id={self.id}, user_id={self.user_id}, connector_id={self.connector_id})>"
+
+
+vault_owned(Account.__table__, "credentials_secret_id")
