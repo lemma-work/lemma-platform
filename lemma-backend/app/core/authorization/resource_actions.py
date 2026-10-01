@@ -25,6 +25,12 @@ RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
         Permissions.WORKFLOW_UPDATE,
         Permissions.WORKFLOW_DELETE,
     ),
+    ResourceType.DECIDER: (
+        Permissions.DECIDER_READ,
+        Permissions.DECIDER_EXECUTE,
+        Permissions.DECIDER_UPDATE,
+        Permissions.DECIDER_DELETE,
+    ),
     ResourceType.SCHEDULE: (
         Permissions.SCHEDULE_READ,
         Permissions.SCHEDULE_UPDATE,

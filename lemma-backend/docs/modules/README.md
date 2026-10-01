@@ -48,6 +48,7 @@ depending on import order.
 | [usage](usage.md) | Model-usage metering, reservations, limits, and reporting | `usage_records`, `usage_limit_counters` |
 | [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |
 | [mcp_access](mcp_access.md) | Outside MCP clients: the OAuth authorization server, consent, and connected clients | `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens`; pending authorizations and codes are short-lived Redis keys |
+| [decisions](decisions.md) | Closed-set judgements: deciders, the rules → System One → model ladder, recorded decisions and the examples people teach | `deciders`, `decider_versions`, `decisions`, `decision_examples` |
 
 ## Tables owned by core
 

@@ -6,6 +6,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.modules.workflow.domain.decision_step import DecisionAsk, DecisionOutcome
 from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.domain.wait import (
@@ -272,3 +273,28 @@ class SchedulePort(ABC):
         pod_id: UUID,
         user_id: UUID,
     ) -> UUID: ...
+
+
+class DecisionPort(Protocol):
+    """How a DECISION node's question gets asked.
+
+    Two halves, because the engine advances a run inside one transaction with
+    the run row locked, and asking can climb to System One or a model.
+    `request` only arranges for the question to be asked once the wait row it
+    belongs to has committed; the job that follows calls `decide` with no
+    session open, then resumes the run with the answer.
+    """
+
+    async def request(self, wait_ref: str) -> None:
+        """Arrange for the active DECISION wait `wait_ref` to be asked."""
+        ...
+
+    async def decide(
+        self, ask: DecisionAsk, *, user_id: UUID, pod_id: UUID
+    ) -> DecisionOutcome:
+        """Ask now, as the run's person.
+
+        Raises `DecisionStepError` for a refusal the run should fail on: no
+        such decider, no permission to ask it, or no question to branch on.
+        """
+        ...

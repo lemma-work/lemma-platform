@@ -8,10 +8,43 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 from app.modules.schedule.config import schedule_settings
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.modules.schedule.domain.schedule import (
+    TIME_SCHEDULE_FILTER_REFUSED,
     ScheduleRunStatus,
     ScheduleFireStatus,
     ScheduleType,
     normalize_datastore_schedule_config,
+    refuses_filter,
+)
+from app.modules.schedule.domain.triage import (
+    TIME_SCHEDULE_TRIAGE_REFUSED,
+    TRIAGE_REPLACES_FILTER,
+    TriageConfig,
+    TriageRoute,
+)
+
+#: As long as `instruction` may be. The filter is asked as a decision, and a
+#: decision's question holds 2,000 characters and its guidance 8,000, so an
+#: instruction past the first is asked as guidance and none is ever cut.
+FILTER_INSTRUCTION_MAX_CHARS = 8000
+FILTER_INSTRUCTION_DESCRIPTION = (
+    "WEBHOOK and DATASTORE schedules only: a yes/no condition, in your own "
+    "words, that each event must meet to fire the schedule. It is asked as a "
+    "decision (System One when configured, the system model otherwise), and "
+    "every event it turns down is recorded as a FILTERED run carrying the "
+    "decision's id. Refused on TIME schedules, which have no event to judge."
+)
+FILTER_OUTPUT_SCHEMA_DESCRIPTION = (
+    "Optional JSON schema of fields to extract from an event the filter let "
+    "through; the target reads them, with `should_proceed` and `decision_id`, "
+    "as `llm_output`. Refused on TIME schedules."
+)
+TRIAGE_DESCRIPTION = (
+    "WEBHOOK and DATASTORE schedules only, instead of a filter: a pod decider "
+    "asked about each event, and what each option of its choice question does "
+    "with it -- act (wake the target now), digest (hold it for the next digest, "
+    "one run for many events), ask (hold it and ask the event's owner, whose "
+    "answer routes it and teaches the decider) or ignore (record it as "
+    "skipped). Every declared option must be routed."
 )
 
 
@@ -63,19 +96,25 @@ class CreateScheduleRequest(BaseModel):
     )
     filter_instruction: str | None = Field(
         default=None,
-        description=(
-            "Optional schedule-level LLM filter instruction. Filters belong to the "
-            "schedule, not the workflow start."
-        ),
+        max_length=FILTER_INSTRUCTION_MAX_CHARS,
+        description=FILTER_INSTRUCTION_DESCRIPTION,
     )
     filter_output_schema: dict | None = Field(
         default=None,
-        description=(
-            "Optional schema for the schedule-level filter output. Filters belong to "
-            "the schedule, not the workflow start."
-        ),
+        description=FILTER_OUTPUT_SCHEMA_DESCRIPTION,
     )
+    triage: TriageConfig | None = Field(default=None, description=TRIAGE_DESCRIPTION)
     visibility: str | None = None
+
+    @model_validator(mode="after")
+    def triage_replaces_the_filter(self) -> "CreateScheduleRequest":
+        if self.triage is None:
+            return self
+        if self.schedule_type == ScheduleType.TIME:
+            raise ValueError(TIME_SCHEDULE_TRIAGE_REFUSED)
+        if self.filter_instruction or self.filter_output_schema:
+            raise ValueError(TRIAGE_REPLACES_FILTER)
+        return self
 
     @model_validator(mode="after")
     def require_one_target_name(self) -> "CreateScheduleRequest":
@@ -83,6 +122,12 @@ class CreateScheduleRequest(BaseModel):
             raise ValueError("Exactly one of agent_name or workflow_name is required")
         if self.connector_trigger_id and self.schedule_type != ScheduleType.WEBHOOK:
             raise ValueError("connector_trigger_id is only valid for WEBHOOK schedules")
+        if refuses_filter(
+            self.schedule_type,
+            filter_instruction=self.filter_instruction,
+            filter_output_schema=self.filter_output_schema,
+        ):
+            raise ValueError(TIME_SCHEDULE_FILTER_REFUSED)
         if (
             self.agent_name
             and self.schedule_type == ScheduleType.WEBHOOK
@@ -111,10 +156,29 @@ class UpdateScheduleRequest(BaseModel):
     agent_name: str | None = None
     workflow_name: str | None = None
     instruction: str | None = Field(default=None, max_length=8000)
-    filter_instruction: str | None = None
-    filter_output_schema: dict | None = None
+    # Refused on a TIME schedule by the service, which knows the type this
+    # request does not carry.
+    filter_instruction: str | None = Field(
+        default=None,
+        max_length=FILTER_INSTRUCTION_MAX_CHARS,
+        description=FILTER_INSTRUCTION_DESCRIPTION,
+    )
+    filter_output_schema: dict | None = Field(
+        default=None, description=FILTER_OUTPUT_SCHEMA_DESCRIPTION
+    )
+    # Refused on a TIME schedule, and beside a filter, by the service, which
+    # knows the type and the filter this request does not carry.
+    triage: TriageConfig | None = Field(
+        default=None,
+        description=f"{TRIAGE_DESCRIPTION} Send null to remove it.",
+    )
     is_active: bool | None = None
     visibility: str | None = None
+
+    @property
+    def clears_triage(self) -> bool:
+        """`"triage": null` was sent, as distinct from leaving triage out."""
+        return "triage" in self.model_fields_set and self.triage is None
 
     @model_validator(mode="after")
     def allow_at_most_one_target_name(self) -> "UpdateScheduleRequest":
@@ -149,6 +213,9 @@ class ScheduleResponse(BaseModel):
     connector_trigger_id: str | None
     filter_instruction: str | None
     filter_output_schema: dict | None
+    triage: TriageConfig | None = None
+    #: When the triage's held events next go out together, if it has a digest.
+    next_digest_at: datetime | None = None
     visibility: str
     is_active: bool
     is_internal: bool
@@ -219,6 +286,10 @@ class ScheduleRunResponse(BaseModel):
     source_occurred_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    #: While `HELD`: what the event waits for -- its digest, or its person's answer.
+    held_for: TriageRoute | None = None
+    #: The one run a digest sent this event in, once it has.
+    digest_run_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 

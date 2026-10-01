@@ -43,7 +43,10 @@ from app.modules.schedule.infrastructure.models.run import ScheduleRun
 
 # States a run can rest in forever. RECEIVED, PROCESSING and DISPATCHED are
 # absent on purpose: a DISPATCHED run whose target has not finished is the
-# ledger's normal in-flight state, not an old row.
+# ledger's normal in-flight state, not an old row. So is HELD: a triaged event
+# waiting for its digest or a person has no `completed_at` and is never pruned
+# while it waits. An event a digest sent ends DISPATCHED with its
+# `target_outcome` set too, which is what makes it prunable.
 _TERMINAL_STATUSES = (
     ScheduleRunStatus.COMPLETED.value,
     ScheduleRunStatus.TARGET_FAILED.value,

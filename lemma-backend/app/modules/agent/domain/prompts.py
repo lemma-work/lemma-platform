@@ -41,6 +41,7 @@ _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _MEMORY_PROMPT_PATH = _PROMPT_DIR / "memory.md"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 _MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
+_DECISIONS_PROMPT_PATH = _PROMPT_DIR / "decisions.md"
 _USER_INTERACTION_PROMPT_PATH = _PROMPT_DIR / "user_interaction.md"
 _AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 _AGENT_HOST_HOST_EXECUTION_PROMPT_PATH = _PROMPT_DIR / "agent_host_host_execution.md"
@@ -82,6 +83,11 @@ FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     # describe → run loop, or about the fact that a connector operation is the
     # one call in the pod that acts on the world outside it.
     AgentToolset.CONNECTORS: _CONNECTORS_PROMPT_PATH,
+    # Deferred, and its fragment is what decides whether it is ever searched
+    # for: an agent reading two hundred rows and judging each in its own
+    # context has no reason to suspect a tool does that, recorded and
+    # correctable, unless the prefix says so.
+    AgentToolset.DECISIONS: _DECISIONS_PROMPT_PATH,
 }
 
 
@@ -174,6 +180,10 @@ def load_todo_prompt() -> str:
 
 def load_messaging_prompt() -> str:
     return _read_required_prompt(_MESSAGING_PROMPT_PATH)
+
+
+def load_decisions_prompt() -> str:
+    return _read_required_prompt(_DECISIONS_PROMPT_PATH)
 
 
 def load_speech_prompt() -> str:

@@ -40,6 +40,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Database connection scope](design/db-connection-scope.md) | How long a pooled connection is held, the gates that keep it short, and what authorization costs |
 | [App and function versions](design/app-function-versioning.md) | Revision identity, previews, rollback, bounded retention, and concurrent cleanup |
 | [Product analytics](design/product-analytics.md) | The product-analytics plane, its event contract, origins, and the privacy boundary |
+| [Decisions](design/decisions.md) | Proposal: closed-set judgements as one primitive (questions, deciders, a rules → System One → model ladder, records, examples) that backfills of a person's connected history, triage, agents over MCP, workflows and apps all ask through |
 
 The sandbox set breaks down further:
 [protocol](architecture/sandbox/sandbox-protocol.md) ·

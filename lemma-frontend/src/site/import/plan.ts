@@ -15,12 +15,15 @@ const KINDS: Record<string, { one: string; many: string; order: number }> = {
     AGENT: { one: "Agent", many: "Agents", order: 0 },
     APP: { one: "App", many: "Apps", order: 1 },
     WORKFLOW: { one: "Workflow", many: "Workflows", order: 2 },
-    SCHEDULE: { one: "Automation", many: "Automations", order: 3 },
-    TABLE: { one: "Table", many: "Tables", order: 4 },
-    TABLE_DATA: { one: "Sample rows", many: "Sample rows", order: 5 },
-    FUNCTION: { one: "Function", many: "Functions", order: 6 },
-    SURFACE: { one: "Channel", many: "Channels", order: 7 },
-    FILE: { one: "File", many: "Files", order: 8 },
+    // How the teammate sorts things: a judgement with its rules, never the
+    // examples it learned, which stay in the pod they came from.
+    DECIDER: { one: "Decider", many: "Deciders", order: 3 },
+    SCHEDULE: { one: "Automation", many: "Automations", order: 4 },
+    TABLE: { one: "Table", many: "Tables", order: 5 },
+    TABLE_DATA: { one: "Sample rows", many: "Sample rows", order: 6 },
+    FUNCTION: { one: "Function", many: "Functions", order: 7 },
+    SURFACE: { one: "Channel", many: "Channels", order: 8 },
+    FILE: { one: "File", many: "Files", order: 9 },
 };
 const HIDDEN = new Set(["AGENT_GRANTS", "FUNCTION_GRANTS"]);
 

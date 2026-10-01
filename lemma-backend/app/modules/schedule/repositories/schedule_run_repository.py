@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -85,6 +86,10 @@ class ScheduleRunRepository:
         await self.session.flush()
         if model.target_outcome is not None:
             return None
+        # HELD carries a `target_outcome` and is already refused above; it is
+        # named here as well because a held event is released by its triage
+        # (`HeldRunRepository.settle_ask`), never by a fire that happens to
+        # share its source event.
         if model.status in {
             ScheduleRunStatus.DISPATCHED.value,
             ScheduleRunStatus.COMPLETED.value,
@@ -92,6 +97,7 @@ class ScheduleRunRepository:
             ScheduleRunStatus.CANCELLED.value,
             ScheduleRunStatus.FILTERED.value,
             ScheduleRunStatus.DEAD_LETTERED.value,
+            ScheduleRunStatus.HELD.value,
         }:
             return None
         if (
@@ -114,6 +120,51 @@ class ScheduleRunRepository:
         model.error_code = None
         await self.session.flush()
         return model.to_entity()
+
+    async def record_filtered(
+        self,
+        *,
+        schedule_id: UUID,
+        user_id: UUID,
+        source_event_id: str,
+        target_kind: str,
+        metadata: Mapping[str, object] | None,
+        llm_output: Mapping[str, object],
+    ) -> bool:
+        """Record a fire the schedule's filter turned down, once per source event.
+
+        Returns whether a row was written. An event that already has one --
+        redelivered, or recorded some other way first -- keeps the row it has:
+        the first outcome for an event is the one that stands.
+
+        No target was woken, so there is no target run id and no payload; the
+        decision named in ``llm_output`` keeps what the event said. The row is
+        terminal the moment it is written, and ``target_outcome`` is set as
+        well as ``status`` so it never enters the recovery sweep's index, which
+        is partial on ``target_outcome IS NULL``. A filter that skips most of
+        what it sees would otherwise put every skip at the head of that index.
+        """
+        now = datetime.now(timezone.utc)
+        created_id = await self.session.scalar(
+            insert(ScheduleRun)
+            .values(
+                schedule_id=schedule_id,
+                user_id=user_id,
+                source_event_id=source_event_id,
+                status=ScheduleRunStatus.FILTERED.value,
+                target_outcome=ScheduleRunStatus.FILTERED.value,
+                attempts=0,
+                target_kind=target_kind,
+                payload={},
+                fire_metadata=dict(metadata or {}),
+                llm_output=dict(llm_output),
+                started_at=now,
+                completed_at=now,
+            )
+            .on_conflict_do_nothing(constraint="uq_schedule_run_source_event")
+            .returning(ScheduleRun.id)
+        )
+        return created_id is not None
 
     async def mark_dispatched(self, run_id: UUID) -> None:
         """Mark launch complete unless a synchronous target outcome won the race.
@@ -262,6 +313,15 @@ class ScheduleRunRepository:
         is the one that is actually true of the schedule. The cost is that a
         rarely-firing schedule takes a long wall-clock time to trip -- which is
         the correct amount of patience for something that rarely fires.
+
+        **Skips are left out in the query, not the loop.** A ``FILTERED`` run
+        neither breaks a streak nor extends one -- nothing ran -- but it does
+        complete, so counting it against the scan would let a filter that skips
+        most events push a real streak out of the window: five failures spread
+        across two hundred skips would never trip the breaker. Left out here,
+        the window holds runs that reached, or failed to reach, a target.
+        An event a digest sent is left out for the same reason: its outcome is
+        the digest run's, which is in the window on its own.
         """
         rows = (
             await self.session.execute(
@@ -269,6 +329,8 @@ class ScheduleRunRepository:
                 .where(
                     ScheduleRun.schedule_id == schedule_id,
                     ScheduleRun.completed_at.is_not(None),
+                    ScheduleRun.status != ScheduleRunStatus.FILTERED.value,
+                    ScheduleRun.digest_run_id.is_(None),
                 )
                 .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())
                 .limit(_BREAKER_SCAN_LIMIT)
@@ -347,10 +409,19 @@ class ScheduleRunRepository:
         *,
         limit: int = 100,
         user_id: UUID | None = None,
+        statuses: Sequence[ScheduleRunStatus] = (),
     ) -> list[ScheduleRunEntity]:
         stmt = select(ScheduleRun).where(ScheduleRun.schedule_id == schedule_id)
         if user_id is not None:
             stmt = stmt.where(ScheduleRun.user_id == user_id)
+        if statuses:
+            # The status a run is listed with: its target's outcome once there
+            # is one, as `to_entity` reports it.
+            stmt = stmt.where(
+                func.coalesce(ScheduleRun.target_outcome, ScheduleRun.status).in_(
+                    [status.value for status in statuses]
+                )
+            )
         rows = await self.session.scalars(
             stmt.order_by(ScheduleRun.created_at.desc(), ScheduleRun.id.desc()).limit(
                 limit

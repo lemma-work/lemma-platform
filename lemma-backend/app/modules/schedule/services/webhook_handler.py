@@ -132,8 +132,12 @@ class WebhookHandler:
         metadata: Dict[str, Any],
         source_event_id: str,
     ) -> None:
-        """Publish schedule or defer through LLM filter queue when needed."""
-        if schedule.filter_instruction:
+        """Publish schedule or defer through LLM filter queue when needed.
+
+        A triage is deferred the same way: its decision may climb to a model,
+        which a webhook request must not wait on.
+        """
+        if schedule.filter_instruction or schedule.triage is not None:
             logger.debug(
                 "schedule.webhook_handler.s_has_filter_instruction_offloading.observed"
             )

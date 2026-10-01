@@ -23,6 +23,7 @@ from app.modules.workflow.domain.nodes.function import (
 from app.modules.workflow.domain.nodes.decision import (
     DecisionNode,
     DecisionNodeConfig,
+    DecisionNodeQuestion,
     DecisionRule,
 )
 from app.modules.workflow.domain.nodes.loop import LoopNode, LoopNodeConfig
@@ -53,6 +54,7 @@ __all__ = [
     "BaseNode",
     "DecisionNode",
     "DecisionNodeConfig",
+    "DecisionNodeQuestion",
     "DecisionRule",
     "EndNode",
     "EndNodeConfig",

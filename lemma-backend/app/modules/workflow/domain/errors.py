@@ -92,3 +92,19 @@ class WorkflowAccessDeniedError(WorkflowDomainError):
             code="WORKFLOW_ACCESS_DENIED",
             status_code=403,
         )
+
+
+class DecisionStepError(WorkflowDomainError):
+    """A DECISION node's question was refused, so the run cannot go on.
+
+    The decider does not exist, the run's person may not ask it, or the answer
+    has no question to branch on. Each is fixed in the workflow or the pod, not
+    by asking again, so the run fails with the reason instead of retrying.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            code="WORKFLOW_DECISION_FAILED",
+            status_code=422,
+        )

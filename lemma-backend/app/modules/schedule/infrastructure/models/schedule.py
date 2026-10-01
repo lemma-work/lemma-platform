@@ -88,6 +88,11 @@ class Schedule(UUIDAuditBase):
     instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     filter_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     filter_output_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # A decider and its routes, instead of a filter -- see `domain/triage.py`.
+    # `none_as_null`: clearing it stores SQL NULL, not the JSON value null.
+    triage: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
     # Active status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -99,6 +104,11 @@ class Schedule(UUIDAuditBase):
     # FOR UPDATE SKIP LOCKED and advanced in the same transaction, so exactly
     # one replica fires a given occurrence no matter how many are running.
     next_fire_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # The digest sweep's cursor, claimed the same way: when this schedule's
+    # triage next sends what it has held. Null when it has no digest.
+    next_digest_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -138,6 +148,12 @@ class Schedule(UUIDAuditBase):
         Index("ix_schedules_workflow", "workflow_id"),
         Index("ix_schedules_agent", "agent_id"),
         Index("ix_schedules_config_gin", "config", postgresql_using="gin"),
+        # The digest sweep's claim: only schedules with a digest are in it.
+        Index(
+            "ix_schedules_digest_due",
+            "next_digest_at",
+            postgresql_where=text("next_digest_at IS NOT NULL"),
+        ),
         Index(
             "uq_schedules_pod_name",
             "pod_id",

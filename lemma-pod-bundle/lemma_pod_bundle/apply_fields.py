@@ -1,4 +1,4 @@
-"""Field allow-lists for applying a bundled surface/schedule resource.
+"""Field allow-lists for applying a bundled surface/schedule/decider resource.
 
 Single source of truth for "which exported fields actually reach the
 create/update call": the backend's apply job (``pod_bundle/infrastructure/
@@ -19,6 +19,11 @@ SURFACE_APPLY_FIELDS = frozenset(
         "is_enabled",
     }
 )
+
+# The whole of a bundled decider, and the whole of the body that creates one. It
+# is also everything the exporter writes: a decider's examples and decisions are
+# people's data, so the normalizer keeps these keys rather than stripping others.
+DECIDER_APPLY_FIELDS = frozenset({"name", "definition"})
 
 SCHEDULE_APPLY_FIELDS = frozenset(
     {

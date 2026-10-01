@@ -25,7 +25,10 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     NotificationNotFoundError,
 )
-from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
+from app.modules.agent_surfaces.domain.events import (
+    NotificationClosedEvent,
+    NotificationSettledEvent,
+)
 from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
     NotificationOriginKind,
@@ -173,7 +176,9 @@ class NotificationService:
                 "The recipient is not a member of this pod."
             )
 
-        if self.rate_limiter is not None:
+        # Only what is pushed to a channel counts: the limit bounds messages on
+        # a person's phone, and a row that only lands in their inbox sends none.
+        if self.rate_limiter is not None and deliver:
             await self.rate_limiter.check(
                 pod_id=pod_id, recipient_user_id=recipient_user_id
             )
@@ -413,7 +418,37 @@ class NotificationService:
         notification.respond(summary=summary, data=data)
         updated = await self.notifications.update(notification)
         await self._announce_if_settled(updated)
+        self._announce_closed(notification)
         return updated
+
+    def _announce_closed(self, notification: NotificationEntity) -> None:
+        """Raise ``NotificationClosedEvent`` for an asker holding something on it.
+
+        Every way out announces -- an answer, an expiry, a cancellation -- since
+        each settles the held thing differently, and a held thing nobody is
+        told about stays held.
+        """
+        if not notification.announces_close:
+            return
+        answer = (notification.response_data or {}).get("answer")
+        self.uow.collect_events(
+            [
+                NotificationClosedEvent(
+                    pod_id=notification.pod_id,
+                    notification_id=notification.id,
+                    origin_kind=notification.origin_kind,
+                    origin_id=notification.origin_id,
+                    status=notification.status,
+                    responder_user_id=(
+                        notification.recipient_user_id
+                        if notification.status is NotificationStatus.RESPONDED
+                        else None
+                    ),
+                    answer=answer if isinstance(answer, str) else None,
+                    action=notification.action,
+                )
+            ]
+        )
 
     async def _announce_if_settled(self, notification: NotificationEntity) -> None:
         """Raise ``NotificationSettledEvent`` once this conversation is owed nothing.
@@ -491,6 +526,7 @@ class NotificationService:
         for notification in notifications:
             notification.cancel()
             await self.notifications.update(notification)
+            self._announce_closed(notification)
         return len(notifications)
 
     async def expire_past_due(self, *, limit: int = 100) -> int:
@@ -514,6 +550,7 @@ class NotificationService:
             await self._announce_if_settled(
                 await self.notifications.update(notification)
             )
+            self._announce_closed(notification)
             expired += 1
         return expired
 

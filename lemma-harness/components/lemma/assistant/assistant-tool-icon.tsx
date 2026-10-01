@@ -16,6 +16,7 @@ import {
   MessageSquare,
   Mic,
   PanelsTopLeft,
+  Scale,
   Settings2,
   ShieldCheck,
   SquareTerminal,
@@ -36,6 +37,7 @@ export type ToolIconKind =
   | "code"
   | "complete"
   | "data"
+  | "decision"
   | "display"
   | "file-edit"
   | "file-read"
@@ -55,10 +57,13 @@ export type ToolIconKind =
   | "tool";
 
 const TOOL_ICON_KINDS: Record<string, ToolIconKind> = {
+  answer_decision: "decision",
   apply_patch: "file-edit",
   ask_user: "question",
   command_execution: "terminal",
   create_file: "file-edit",
+  decide: "decision",
+  define_decider: "decision",
   display_resource: "display",
   edit_file: "file-edit",
   exec_command: "terminal",
@@ -94,6 +99,7 @@ const TOOL_ICON_KINDS: Record<string, ToolIconKind> = {
   search_tools: "tool",
   spawn_subagent: "agent",
   terminate_process: "process",
+  test_decider: "decision",
   tool_search: "tool",
   update_plan: "plan",
   view_image: "image",
@@ -110,6 +116,7 @@ const ICONS: Record<ToolIconKind, LemmaIcon> = {
   code: Code2,
   complete: CheckCircle2,
   data: Table,
+  decision: Scale,
   display: PanelsTopLeft,
   "file-edit": FilePenLine,
   "file-read": FileText,

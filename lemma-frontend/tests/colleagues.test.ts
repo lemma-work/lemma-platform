@@ -81,7 +81,7 @@ test("the pod's own responder reports no toolsets, and is not believed", () => {
     // people their teammate could "talk, and that is all" about an agent with
     // a computer, a browser, the pod's files and tables and web search.
     assert.deepEqual(grantedToolsets([], true), [...POD_DEFAULT_TOOLSETS]);
-    assert.equal(grantedToolsets([], true).length, 12);
+    assert.equal(grantedToolsets([], true).length, 13);
 });
 
 test("an agent somebody made with no toolsets genuinely has none", () => {

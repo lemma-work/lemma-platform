@@ -9,6 +9,7 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
 from ...models.schedule_run_list_response import ScheduleRunListResponse
+from ...models.schedule_run_status import ScheduleRunStatus
 from ...types import UNSET, Response, Unset
 
 
@@ -17,11 +18,25 @@ def _get_kwargs(
     schedule_id: UUID,
     *,
     limit: int | Unset = 100,
+    status: list[ScheduleRunStatus] | None | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
     params["limit"] = limit
+
+    json_status: list[str] | None | Unset
+    if isinstance(status, Unset):
+        json_status = UNSET
+    elif isinstance(status, list):
+        json_status = []
+        for status_type_0_item_data in status:
+            status_type_0_item = status_type_0_item_data.value
+            json_status.append(status_type_0_item)
+
+    else:
+        json_status = status
+    params["status"] = json_status
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -73,6 +88,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    status: list[ScheduleRunStatus] | None | Unset = UNSET,
 ) -> Response[ErrorResponse | ScheduleRunListResponse]:
     """List Schedule Runs
 
@@ -80,6 +96,8 @@ def sync_detailed(
         pod_id (UUID):
         schedule_id (UUID):
         limit (int | Unset):  Default: 100.
+        status (list[ScheduleRunStatus] | None | Unset): Only runs in these statuses (repeatable),
+            e.g. `status=HELD` for the events a triage is holding for its digest or for a person.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -93,6 +111,7 @@ def sync_detailed(
         pod_id=pod_id,
         schedule_id=schedule_id,
         limit=limit,
+        status=status,
     )
 
     response = client.get_httpx_client().request(
@@ -108,6 +127,7 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    status: list[ScheduleRunStatus] | None | Unset = UNSET,
 ) -> ErrorResponse | ScheduleRunListResponse | None:
     """List Schedule Runs
 
@@ -115,6 +135,8 @@ def sync(
         pod_id (UUID):
         schedule_id (UUID):
         limit (int | Unset):  Default: 100.
+        status (list[ScheduleRunStatus] | None | Unset): Only runs in these statuses (repeatable),
+            e.g. `status=HELD` for the events a triage is holding for its digest or for a person.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -129,6 +151,7 @@ def sync(
         schedule_id=schedule_id,
         client=client,
         limit=limit,
+        status=status,
     ).parsed
 
 
@@ -138,6 +161,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    status: list[ScheduleRunStatus] | None | Unset = UNSET,
 ) -> Response[ErrorResponse | ScheduleRunListResponse]:
     """List Schedule Runs
 
@@ -145,6 +169,8 @@ async def asyncio_detailed(
         pod_id (UUID):
         schedule_id (UUID):
         limit (int | Unset):  Default: 100.
+        status (list[ScheduleRunStatus] | None | Unset): Only runs in these statuses (repeatable),
+            e.g. `status=HELD` for the events a triage is holding for its digest or for a person.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -158,6 +184,7 @@ async def asyncio_detailed(
         pod_id=pod_id,
         schedule_id=schedule_id,
         limit=limit,
+        status=status,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -171,6 +198,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    status: list[ScheduleRunStatus] | None | Unset = UNSET,
 ) -> ErrorResponse | ScheduleRunListResponse | None:
     """List Schedule Runs
 
@@ -178,6 +206,8 @@ async def asyncio(
         pod_id (UUID):
         schedule_id (UUID):
         limit (int | Unset):  Default: 100.
+        status (list[ScheduleRunStatus] | None | Unset): Only runs in these statuses (repeatable),
+            e.g. `status=HELD` for the events a triage is holding for its digest or for a person.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -193,5 +223,6 @@ async def asyncio(
             schedule_id=schedule_id,
             client=client,
             limit=limit,
+            status=status,
         )
     ).parsed

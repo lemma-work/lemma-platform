@@ -1,4 +1,4 @@
-"""The ceiling the schedule filter asks for, and the bound that backs it up.
+"""The ceiling the schedule filter's extraction asks for, and the bound behind it.
 
 ``UsageLimits.count_tokens_before_request`` makes pydantic-ai call
 ``Model.count_tokens`` before the request. The base method raises
@@ -22,7 +22,7 @@ import pytest
 from app.modules.schedule.infrastructure.adapters.system_model_filter import (
     _MAX_EVENT_CHARS,
     FILTER_USAGE_LIMITS,
-    SystemModelScheduleFilter,
+    SystemModelFieldExtractor,
 )
 
 pytestmark = pytest.mark.unit
@@ -34,8 +34,9 @@ _CHARS_PER_TOKEN = 3
 
 
 def test_the_filter_declares_its_own_ceiling() -> None:
-    """One request, and caps that add up. The filter runs a single turn, so a
-    `request_limit` above one would only mean retries nobody asked for."""
+    """One request, and caps that add up. Extraction runs a single turn, so a
+    `request_limit` above one would only mean retries nobody asked for. (The
+    decision before it is charged under the decisions module's own ceiling.)"""
     assert FILTER_USAGE_LIMITS.request_limit == 1
     assert FILTER_USAGE_LIMITS.count_tokens_before_request is True
     assert FILTER_USAGE_LIMITS.total_tokens_limit == (
@@ -64,7 +65,7 @@ def test_a_bounded_event_stays_inside_the_bound() -> None:
         "rows": [{"i": index, "blob": "x" * 200} for index in range(2_000)]
     }
 
-    message = SystemModelScheduleFilter._user_message(payload)
+    message = SystemModelFieldExtractor._user_message(payload)
 
     assert len(message) / _CHARS_PER_TOKEN < (
         FILTER_USAGE_LIMITS.input_tokens_limit or 0
@@ -73,7 +74,7 @@ def test_a_bounded_event_stays_inside_the_bound() -> None:
 
 def test_the_filter_never_asks_for_limits_it_did_not_declare() -> None:
     """The ceiling is passed to `agent`, not restated there. If this module
-    stops handing `FILTER_USAGE_LIMITS` to `resolve_system_runtime`, the filter
+    stops handing `FILTER_USAGE_LIMITS` to `resolve_system_runtime`, extraction
     silently runs on whatever that call's default happens to be."""
     import inspect
 

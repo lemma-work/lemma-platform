@@ -1,13 +1,21 @@
 """Interfaces for schedule module."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import List, Optional, Any, Dict, Protocol
 from uuid import UUID
 
+from pydantic import JsonValue
+
 from app.core.authorization.context import Context
 from app.modules.schedule.contracts.targets import ScheduleTarget
-from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    ScheduleEntity,
+    ScheduleRunEntity,
+    ScheduleType,
+)
+from app.modules.schedule.domain.triage import TriageVerdict
 from app.modules.schedule.domain.value_objects import DatastoreOperation
 
 # `ScheduleTarget` is declared in `contracts/targets.py` rather than here,
@@ -52,17 +60,81 @@ class DatastoreSchedulePolicy(Protocol):
     ) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ScheduleFilterVerdict:
+    """What a schedule's filter decided about one event.
+
+    `output` is the event's `llm_output`: `should_proceed`, the id of the
+    decision that said so, and -- on a pass whose `filter_output_schema` asks
+    for more -- the fields extracted from the event. A target reads it as
+    `start.llm_output.*`; a skipped event keeps it on its `FILTERED` run.
+    """
+
+    proceed: bool
+    decision_id: UUID
+    output: dict[str, JsonValue]
+
+
 class ScheduleEventFilter(Protocol):
-    """Evaluate an optional schedule filter without exposing model infrastructure."""
+    """Decide whether one event fires a schedule, without exposing how.
+
+    `source_event_id` makes the judgement once per event: a retry or a
+    redelivery reads the recorded answer instead of asking again. `owner_id` is
+    whose event it is -- the row's owner on an RLS table, otherwise the
+    schedule's -- and `personal` says the event is theirs alone, so the record
+    of judging it has to be as well.
+
+    Raises `ScheduleFilterUndecidedError` when nothing could decide.
+    """
 
     async def filter_event(
         self,
         *,
-        instruction: str,
-        output_schema: dict[str, Any] | None,
-        event_payload: dict[str, Any],
         schedule: ScheduleEntity,
-    ) -> tuple[bool, dict[str, Any] | None]: ...
+        instruction: str,
+        output_schema: Mapping[str, object] | None,
+        event_payload: Mapping[str, object],
+        source_event_id: str,
+        owner_id: UUID,
+        personal: bool = False,
+    ) -> ScheduleFilterVerdict: ...
+
+
+class ScheduleFilterOutcomeRecorder(Protocol):
+    """Where a filter's or a triage's skip, its hold, or its failure to decide,
+    goes on the run ledger."""
+
+    async def record_filtered(
+        self,
+        schedule: ScheduleEntity,
+        *,
+        source_event_id: str,
+        user_id: UUID,
+        metadata: Mapping[str, object] | None,
+        llm_output: Mapping[str, object],
+    ) -> bool: ...
+
+    async def record_filter_undecided(
+        self,
+        schedule: ScheduleEntity,
+        *,
+        source_event_id: str,
+        decision_id: UUID | None,
+        user_id: UUID | None = None,
+        metadata: Mapping[str, object] | None = None,
+        error_type: str = ...,
+    ) -> bool: ...
+
+    async def record_held(
+        self,
+        schedule: ScheduleEntity,
+        verdict: TriageVerdict,
+        *,
+        source_event_id: str,
+        user_id: UUID,
+        payload: Mapping[str, object],
+        metadata: Mapping[str, object] | None,
+    ) -> ScheduleRunEntity | None: ...
 
 
 class ScheduleRepository(ABC):

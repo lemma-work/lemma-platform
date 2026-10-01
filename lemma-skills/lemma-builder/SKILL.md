@@ -144,7 +144,7 @@ Read what the task needs:
 - `references/agents.md` — agent JSON, toolsets, instructions, agents/functions as tools (sub-agents), runtime profiles, testing.
 - `references/workflows.md` — every node type, expressions, human-in-the-loop patterns, run debugging.
 - `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; connector kinds (`composio`/`http`/`sql`/`mcp`); custom connectors from an OpenAPI spec, MCP server or database; delegated execution.
-- `references/schedules-and-triggers.md` — TIME/DATASTORE/WEBHOOK triggers, event payloads, LLM event filtering.
+- `references/schedules-and-triggers.md` — TIME/DATASTORE/WEBHOOK triggers, event payloads, event filters and how every skip is recorded.
 - `references/surfaces.md` — exposing one pod agent on Slack/Teams/Telegram/WhatsApp/email (Gmail/Outlook are connectors, not surfaces).
 - `references/apps.md` — app architecture, SDK/auth/data wiring, scaffold/dev/deploy, and components. Pair it with `lemma-app-design` for UX/visual direction and `lemma-app-qa` for systematic release testing.
 - `references/app-recipes/*.md` — copy-paste app patterns: agent chat, RLS tables, workflow forms, file viewer, connector actions (load the one you need).

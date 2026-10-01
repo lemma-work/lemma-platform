@@ -135,11 +135,13 @@ account or deleting a pod stops its connected clients at once; deletion is
 soft and memberships survive it, so the pod needs its own check. A `pod.deleted`
 subscriber then ends the pod's grants.
 
-**The toolset is the pod toolset, annotated.** Every tool carries a title and
-`readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`
-(`app/modules/agent/services/pod_mcp_tool_policy.py`). A test fails if a pod
-tool has no row there, because a missing row would default a new tool to the
-cautious "write" policy silently. For outside clients the `needs_approval`
+**The toolsets are the pod's and its decisions', annotated.** Every tool carries
+a title and `readOnlyHint`, `destructiveHint`, `idempotentHint` and
+`openWorldHint` (`app/modules/agent/services/pod_mcp_tool_policy.py`). A test
+fails if a served tool has no row there, because a missing row would default a
+new tool to the cautious "write" policy silently. Asking a decision (`decide`)
+and trying a decider (`test_decider`) are reads, since a decision is a log entry
+rather than pod data; saving a decider and answering a decision are writes. For outside clients the `needs_approval`
 hand-off is removed from denied results: it points a Lemma agent at
 `request_approval`, a tool outside clients do not have, and for someone acting
 as themselves a denial is the answer. One call needs more than its tool's

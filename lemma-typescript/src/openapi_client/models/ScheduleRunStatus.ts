@@ -12,4 +12,5 @@ export enum ScheduleRunStatus {
     FILTERED = 'FILTERED',
     FAILED = 'FAILED',
     DEAD_LETTERED = 'DEAD_LETTERED',
+    HELD = 'HELD',
 }

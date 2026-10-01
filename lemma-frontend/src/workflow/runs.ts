@@ -18,8 +18,9 @@ export const RUN_STATUSES = [
 ] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
-/** `domain/wait.py:12`. */
-export const WAIT_TYPES = ["HUMAN", "AGENT", "FUNCTION", "TIME"] as const;
+/** `domain/wait.py:12`. DECISION is a DECISION node's question, asked by a
+ *  job once the run's transaction has committed. */
+export const WAIT_TYPES = ["HUMAN", "AGENT", "FUNCTION", "TIME", "DECISION"] as const;
 export type WaitType = (typeof WAIT_TYPES)[number];
 
 /** What a row is for, at a glance. Four tones rather than six statuses,
@@ -66,6 +67,7 @@ export function sayWaitingOn(type: WaitType): string {
         case "AGENT": return "Waiting on an agent";
         case "FUNCTION": return "Waiting on a function";
         case "TIME": return "Waiting on a timer";
+        case "DECISION": return "Deciding";
     }
 }
 

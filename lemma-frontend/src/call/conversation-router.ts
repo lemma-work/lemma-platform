@@ -2,7 +2,7 @@ import { readSSE, parseSSEJson, parseAssistantStreamEvent, upsertConversationMes
 import { buildTurns } from "@/thread/turns";
 import { resourceLabel } from "@/thread/display-resource";
 import { NEW_CONVERSATION } from "@/data/types";
-import { classifyCall, type ConversationSnapshot, type RouterState, type VoiceEvent } from "./routing";
+import { classifyCall, type ConversationSnapshot, type RouteAsk, type RouterState, type VoiceEvent } from "./routing";
 import { newId } from "./ids";
 
 export const running = (status: string) => ["RUNNING", "IN_PROGRESS", "PROCESSING", "STOP_REQUESTED"].includes(status.toUpperCase());
@@ -71,6 +71,11 @@ export class ConversationRouter {
     };
     observeTranscript = (text: string) => { this.transcript = text; };
     setContext = (text: string) => { this.podContext = text; };
+    /** Routing is asked as the person on the call, in the call's pod, about
+     *  one utterance or event. */
+    private ask(): RouteAsk {
+        return { client: this.client, podId: this.podId };
+    }
     private emit(event: VoiceEvent) {
         if (!this.active) return;
         this.recentEvents = [...this.recentEvents, { ...event, text: event.text.slice(0, 2000) }].slice(-12);
@@ -142,7 +147,7 @@ export class ConversationRouter {
         const task = this.serial.catch(() => {}).then(async () => {
             if (epoch !== this.epoch || !this.active) return;
             this.transcript = transcript;
-            const decision = await this.classify(this.state(text), this.controller.signal);
+            const decision = await this.classify(this.state(text), this.ask(), this.controller.signal);
             if (epoch !== this.epoch || !this.active) return;
             if (decision.action === "voice") return;
             if (decision.action === "clarify") {
@@ -297,7 +302,7 @@ export class ConversationRouter {
         if (!snapshot) return;
         const event: VoiceEvent = { id: newId(), conversationId: id, kind, responseTo: this.responseRequests.get(id), speak: false, text: snapshotText(snapshot) };
         let delivery: "speak" | "context" | "ignore" = kind === "progress" ? "context" : "speak";
-        try { delivery = (await this.classify(this.state("", event), this.controller.signal)).delivery; } catch { /* Deliver verified terminal state even if selection fails. */ }
+        try { delivery = (await this.classify(this.state("", event), this.ask(), this.controller.signal)).delivery; } catch { /* Deliver verified terminal state even if selection fails. */ }
         if (epoch === this.epoch && delivery !== "ignore") this.emit({ ...event, speak: delivery === "speak" && !!event.responseTo });
     }
     close = () => {

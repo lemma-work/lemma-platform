@@ -46,7 +46,7 @@ export function firstSentence(text: string, limit = 120): string {
 export type ToolsetIcon =
     | "shell" | "browser" | "web" | "pod" | "connectors" | "delegate"
     | "message" | "speech" | "skills" | "memory" | "plan" | "ask"
-    | "wait" | "image" | "other";
+    | "wait" | "image" | "decide" | "other";
 
 /** A toolset, as a person would say it.
  *
@@ -114,6 +114,7 @@ const TOOLSETS: Record<string, Omit<Capability, "code">> = {
     USER_INTERACTION: { word: "Asks first", says: "Stops to ask a person mid-task", icon: "ask", plain: true, tools: true },
     WAIT: { word: "Waits", says: "Puts work down and picks it up when the answer lands", icon: "wait", plain: true, tools: true },
     VIEW_IMAGE: { word: "Images", says: "Looks at a screenshot the way it reads a file", icon: "image", plain: false, tools: true },
+    DECISIONS: { word: "Decisions", says: "Sorts many things the same way, and keeps a record you can correct", icon: "decide", plain: false, tools: true },
 };
 
 /** What the pod's default agent runs with, which is not on its row.
@@ -138,7 +139,7 @@ const TOOLSETS: Record<string, Omit<Capability, "code">> = {
  */
 export const POD_DEFAULT_TOOLSETS: readonly string[] = [
     "WORKSPACE_CLI", "BROWSER", "POD", "USER_INTERACTION", "SKILLS", "WEB_SEARCH",
-    "SUBAGENTS", "SPEECH", "TODO", "MESSAGING", "WAIT", "MEMORY",
+    "SUBAGENTS", "SPEECH", "TODO", "MESSAGING", "WAIT", "MEMORY", "DECISIONS",
 ];
 
 export function toolsetWord(code: string): string {
@@ -182,7 +183,7 @@ export function grantedToolsets(raw: unknown, isDefault: boolean): string[] {
  */
 const TELLING_FIRST = [
     "WORKSPACE_CLI", "BROWSER", "WEB_SEARCH", "POD", "CONNECTORS",
-    "SUBAGENTS", "MESSAGING", "SPEECH", "SKILLS",
+    "SUBAGENTS", "MESSAGING", "SPEECH", "DECISIONS", "SKILLS",
 ];
 
 export function capabilityList(raw: unknown): Capability[] {

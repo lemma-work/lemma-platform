@@ -40,9 +40,11 @@ from app.modules.function.domain.events import (
 from app.modules.schedule.domain.events.schedule import ScheduleFired
 from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
+from app.modules.workflow.infrastructure.decisions_adapter import ASK_DECISION_JOB
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRunWaitRepository,
 )
+from app.modules.workflow.services.decision_step_service import DecisionStepService
 from app.modules.workflow.services.run_resume_service import RunResumeService
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 from app.core.log.log import get_logger
@@ -186,6 +188,22 @@ async def resume_workflow_run_for_agent(
         await service.resume_for_agent_conversation(
             conversation_id=agent_conversation_id,
         )
+
+
+@streaq_task(name=ASK_DECISION_JOB)
+async def ask_workflow_decision(wait_ref: str) -> None:
+    """Ask the question a DECISION wait carries, then move its run on.
+
+    Queued once the wait row has committed, and again by the reconcile sweep
+    for a job that was lost. Never run inside the engine's transaction: asking
+    can climb to System One or a model.
+    """
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    service = DecisionStepService(
+        uow_factory=worker_ctx.uow_factory,
+        resumer_for=lambda uow: RunResumeService(build_workflow_engine(uow)),
+    )
+    await service.answer(wait_ref)
 
 
 @streaq_cron("1-59/5 * * * *", name="reconcile_workflow_waits")

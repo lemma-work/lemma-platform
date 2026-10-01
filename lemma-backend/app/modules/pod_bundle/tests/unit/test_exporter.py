@@ -114,6 +114,21 @@ _AGENTS = "app.modules.agent.contracts.provisioning"
 _WORKFLOWS = "app.modules.workflow.contracts.provisioning"
 _SCHEDULES = "app.modules.schedule.contracts.provisioning"
 _APPS = "app.modules.apps.contracts.provisioning"
+_DECIDERS = "app.modules.decisions.contracts.deciders"
+
+
+class _MayReadAll:
+    """A reader the exporter's own permission checks always allow."""
+
+    async def can(self, permission_id, resource=None):
+        return True
+
+
+def _listed_deciders(items):
+    async def _list(*, pod_id, limit=100):
+        return list(items)
+
+    return _list
 
 
 class _FakeNamedResource:
@@ -230,6 +245,7 @@ def patched_exporter(monkeypatch):
 
     monkeypatch.setattr(f"{_WORKFLOWS}.list_workflow_names", _no_names)
     monkeypatch.setattr(f"{_SCHEDULES}.list_schedules", _no_schedules)
+    monkeypatch.setattr(f"{_DECIDERS}.list_deciders", _listed_deciders([]))
     _FakeAppOperations([]).patch(monkeypatch)
 
     # Pod fetch: PodRepository(uow).get(pod_id) -> object with name.
@@ -305,7 +321,7 @@ async def _run_export(
         data_tables=data_tables,
         file_folders=file_folders,
         include=include,
-        ctx=object(),
+        ctx=_MayReadAll(),
         uow=object(),
         on_progress=on_progress,
     )
@@ -588,6 +604,39 @@ async def test_include_filters_resource_types(patched_exporter, tmp_path):
     # agents/functions excluded when include=['tables'].
     assert not (root / "functions" / "enrich").exists()
     assert not (root / "agents" / "assistant").exists()
+
+
+async def test_a_decider_exports_as_its_definition_unless_left_out(
+    patched_exporter, tmp_path, monkeypatch
+):
+    from app.modules.decisions.contracts.deciders import DeciderEntity
+    from app.modules.decisions.contracts.shapes import DeciderDefinition
+
+    definition = DeciderDefinition.model_validate(
+        {
+            "description": "Is this about money?",
+            "questions": {"money": {"type": "yes_no", "prompt": "About money?"}},
+        }
+    )
+    decider = DeciderEntity(
+        pod_id=uuid4(), name="money", version=3, definition=definition
+    )
+    monkeypatch.setattr(f"{_DECIDERS}.list_deciders", _listed_deciders([decider]))
+
+    _filename, zip_bytes, progress = await _run_export(patched_exporter)
+    root = extract_bundle(zip_bytes, tmp_path / "all")
+    manifest = json.loads((root / "deciders" / "money" / "money.json").read_text())
+    assert manifest == {
+        "name": "money",
+        "definition": definition.model_dump(mode="json", exclude_none=True),
+    }
+    assert progress[-1] == (progress[-1][1], progress[-1][1])
+
+    _filename, zip_bytes, _progress = await _run_export(
+        patched_exporter, include=["tables"]
+    )
+    tables_only = extract_bundle(zip_bytes, tmp_path / "tables")
+    assert not (tables_only / "deciders" / "money").exists()
 
 
 async def test_app_source_exported_and_slug_tokenized(

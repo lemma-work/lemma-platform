@@ -93,6 +93,7 @@ SETTINGS_SOURCES = {
     "app.modules.schedule.config": ("schedule_settings",),
     "app.modules.usage.config": ("usage_settings",),
     "app.modules.mcp_access.config": ("mcp_access_settings",),
+    "app.modules.decisions.config": ("decisions_settings",),
     "app.modules.workflow.config": ("workflow_settings",),
     "app.modules.workspace.config": ("workspace_settings",),
 }

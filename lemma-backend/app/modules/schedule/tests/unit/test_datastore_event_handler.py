@@ -9,12 +9,18 @@ from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
 )
+from app.modules.schedule.domain.errors import ScheduleFilterUndecidedError
+from app.modules.schedule.domain.interfaces import ScheduleFilterVerdict
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleFireStatus,
     ScheduleType,
 )
 from app.modules.schedule.services.datastore_event_handler import DatastoreEventHandler
+from app.modules.schedule.services.schedule_processor import ScheduleEventOutcome
+from app.modules.schedule.tests.fakes import FakeFilterOutcomes
+
+FIRED = ScheduleEventOutcome(fired=True)
 
 
 @pytest.mark.asyncio
@@ -30,7 +36,7 @@ async def test_datastore_event_handler_processes_matching_triggers():
         config={"table_name": "users", "operations": ["INSERT"]},
     )
     repo.find_by_pod_table_event.return_value = [schedule]
-    processor.process_event.return_value = True
+    processor.process_event.return_value = FIRED
 
     handler = DatastoreEventHandler(
         schedule_repository=repo,
@@ -67,7 +73,7 @@ async def test_datastore_event_handler_uses_schedule_owner_for_shared_rows():
         config={"table_name": "shared", "operations": ["INSERT"]},
     )
     repo.find_by_pod_table_event.return_value = [schedule]
-    processor.process_event.return_value = True
+    processor.process_event.return_value = FIRED
     handler = DatastoreEventHandler(repo, processor)
     event = DatastoreRecordEvent.create(
         pod_id=schedule.pod_id,
@@ -138,7 +144,7 @@ async def test_unmatched_condition_never_reaches_the_processor():
 async def test_matched_condition_fires_the_schedule():
     repo = AsyncMock()
     processor = AsyncMock()
-    processor.process_event.return_value = True
+    processor.process_event.return_value = FIRED
     schedule = _conditional_schedule({"status": {"to": "approved"}})
     repo.find_by_pod_table_event.return_value = [schedule]
 
@@ -160,7 +166,7 @@ async def test_matched_condition_fires_the_schedule():
 async def test_one_filtered_schedule_does_not_hold_back_another():
     repo = AsyncMock()
     processor = AsyncMock()
-    processor.process_event.return_value = True
+    processor.process_event.return_value = FIRED
     filtered = _conditional_schedule({"status": {"to": "rejected"}})
     firing = _conditional_schedule({"status": {"to": "approved"}})
     firing.pod_id = filtered.pod_id
@@ -184,7 +190,7 @@ async def test_what_the_write_did_reaches_the_run_metadata():
     """A workflow should be able to read the change, not just the row."""
     repo = AsyncMock()
     processor = AsyncMock()
-    processor.process_event.return_value = True
+    processor.process_event.return_value = FIRED
     schedule = _conditional_schedule({}, operations=["UPDATE"])
     schedule.config = {"table_name": "tickets", "operations": ["UPDATE"]}
     repo.find_by_pod_table_event.return_value = [schedule]
@@ -236,9 +242,10 @@ class _Journal:
     def __init__(self) -> None:
         self.entries: list[str] = []
 
-    def note(self, name: str):
+    def note(self, name: str, returns: object = None):
         async def _record(*_args, **_kwargs):
             self.entries.append(name)
+            return returns
 
         return _record
 
@@ -286,7 +293,7 @@ async def test_the_connection_is_handed_back_before_each_schedule_is_processed()
     journal = _Journal()
     repo = _repository_on(journal)
     processor = AsyncMock()
-    processor.process_event.side_effect = journal.note("process_event")
+    processor.process_event.side_effect = journal.note("process_event", FIRED)
 
     pod_id = uuid4()
     schedules = [
@@ -323,3 +330,106 @@ async def test_the_connection_is_handed_back_before_each_schedule_is_processed()
         "process_event",
         "record_fire",
     ]
+
+
+def _filtered_schedule(pod_id=None) -> ScheduleEntity:
+    return ScheduleEntity(
+        id=uuid4(),
+        user_id=uuid4(),
+        pod_id=pod_id or uuid4(),
+        schedule_type=ScheduleType.DATASTORE,
+        config={"table_name": "tickets", "operations": ["INSERT"]},
+        filter_instruction="Only tickets a customer marked urgent.",
+    )
+
+
+def _insert_event(schedule: ScheduleEntity, *, owner_user_id=None):
+    return DatastoreRecordEvent.create(
+        pod_id=schedule.pod_id,
+        table_name="tickets",
+        record_id="rec_1",
+        operation=DatastoreRecordOperation.INSERT,
+        payload={"id": "rec_1", "priority": "low"},
+        actor_id=schedule.user_id,
+        owner_user_id=owner_user_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_filter_skip_is_recorded_as_a_filtered_run_with_its_decision():
+    """PS-SCHED-012: skipped is recorded as skipped, and says which decision."""
+    repo = AsyncMock()
+    processor = AsyncMock()
+    outcomes = FakeFilterOutcomes()
+    schedule = _filtered_schedule()
+    repo.find_by_pod_table_event.return_value = [schedule]
+    decision_id = uuid4()
+    verdict = ScheduleFilterVerdict(
+        proceed=False,
+        decision_id=decision_id,
+        output={"should_proceed": False, "decision_id": str(decision_id)},
+    )
+    processor.process_event.return_value = ScheduleEventOutcome(
+        fired=False, verdict=verdict
+    )
+    row_owner = uuid4()
+    event = _insert_event(schedule, owner_user_id=row_owner)
+
+    handler = DatastoreEventHandler(repo, processor, run_outcomes=outcomes)
+    result = await handler.handle_datastore_event(event)
+
+    assert result == []
+    [skip] = outcomes.recorded
+    assert skip.kind == "filtered"
+    assert skip.schedule_id == schedule.id
+    assert skip.source_event_id == str(event.event_id)
+    # The row owner's, like every other run this row would have produced.
+    assert skip.user_id == row_owner
+    assert skip.llm_output == verdict.output
+    assert skip.metadata is not None
+    assert skip.metadata["record_id"] == "rec_1"
+
+
+@pytest.mark.asyncio
+async def test_an_undecided_filter_fails_its_fire_without_holding_back_the_rest():
+    """Not raised: the decision is recorded under the event, so a redelivery
+    would read back the same open question and drop the other schedules again."""
+    repo = AsyncMock()
+    processor = AsyncMock()
+    outcomes = FakeFilterOutcomes()
+    undecided = _filtered_schedule()
+    firing = _filtered_schedule(pod_id=undecided.pod_id)
+    repo.find_by_pod_table_event.return_value = [undecided, firing]
+    decision_id = uuid4()
+    processor.process_event.side_effect = [
+        ScheduleFilterUndecidedError(decision_id),
+        FIRED,
+    ]
+
+    handler = DatastoreEventHandler(repo, processor, run_outcomes=outcomes)
+    result = await handler.handle_datastore_event(_insert_event(undecided))
+
+    assert result == [firing.id]
+    [failure] = outcomes.recorded
+    assert failure.kind == "undecided"
+    assert failure.schedule_id == undecided.id
+    assert failure.decision_id == decision_id
+    assert failure.user_id == undecided.user_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_owner", [True, False])
+async def test_only_a_row_with_an_owner_is_judged_as_personal(has_owner: bool):
+    """A row carries an owner only on an RLS table, where it is theirs alone."""
+    repo = AsyncMock()
+    processor = AsyncMock()
+    processor.process_event.return_value = FIRED
+    schedule = _filtered_schedule()
+    repo.find_by_pod_table_event.return_value = [schedule]
+
+    handler = DatastoreEventHandler(repo, processor, run_outcomes=FakeFilterOutcomes())
+    await handler.handle_datastore_event(
+        _insert_event(schedule, owner_user_id=uuid4() if has_owner else None)
+    )
+
+    assert processor.process_event.await_args.kwargs["personal"] is has_owner

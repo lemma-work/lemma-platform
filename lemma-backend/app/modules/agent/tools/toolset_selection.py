@@ -56,6 +56,10 @@ DECLARABLE_TOOLSETS: tuple[AgentToolset, ...] = (
     AgentToolset.SUBAGENTS,
     AgentToolset.SPEECH,
     AgentToolset.MEMORY,
+    # Every decision costs a model or classifier call and is recorded in the
+    # pod, and no grant implies wanting that: an agent triaging an inbox does,
+    # one answering questions does not.
+    AgentToolset.DECISIONS,
 )
 
 # What a new agent starts with when its creator did not say. Both are cheap and

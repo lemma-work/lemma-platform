@@ -87,6 +87,7 @@ class StepKind(str, Enum):
 
     TABLE = "TABLE"
     TABLE_DATA = "TABLE_DATA"
+    DECIDER = "DECIDER"
     FUNCTION = "FUNCTION"
     FUNCTION_GRANTS = "FUNCTION_GRANTS"
     AGENT = "AGENT"

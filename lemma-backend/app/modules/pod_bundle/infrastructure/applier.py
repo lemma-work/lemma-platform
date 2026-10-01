@@ -27,6 +27,8 @@ from app.modules.pod_bundle.domain.errors import PodBundleDomainError
 from app.modules.pod_bundle.infrastructure.account_binding import (
     validate_account_binding,
 )
+from app.modules.pod_bundle.infrastructure.decider_apply import apply_decider
+from app.modules.pod_bundle.infrastructure.schedule_apply import drop_time_filter
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
 from app.modules.pod_bundle.infrastructure.grants import (
@@ -40,8 +42,7 @@ logger = get_logger(__name__)
 
 
 class StepNotApplicableError(PodBundleDomainError):
-    """A step kind this slice does not yet apply (app/surface/grants). Marked
-    SKIPPED with a reason rather than failing the whole import."""
+    """A step kind the applier does not run; the apply loop marks it SKIPPED."""
 
     def __init__(self, message: str):
         super().__init__(message, code="POD_BUNDLE_STEP_UNSUPPORTED", status_code=422)
@@ -74,6 +75,7 @@ class BundleApplier:
         handler = {
             StepKind.TABLE: self._apply_table,
             StepKind.TABLE_DATA: self._apply_table_data,
+            StepKind.DECIDER: self._decider_step,
             StepKind.AGENT: self._apply_agent,
             StepKind.AGENT_GRANTS: self._apply_agent_grants,
             StepKind.FUNCTION_GRANTS: self._apply_function_grants,
@@ -295,12 +297,11 @@ class BundleApplier:
     async def _surface_step(self, step: PlanStep) -> None:
         """The dispatch table's uniform shape over `surface_apply.apply_surface`."""
         await apply_surface(
-            step,
-            uow=self._uow,
-            ctx=self._ctx,
-            pod_id=self._pod_id,
-            load=self._load,
+            step, uow=self._uow, ctx=self._ctx, pod_id=self._pod_id, load=self._load
         )
+
+    async def _decider_step(self, step: PlanStep) -> None:
+        await apply_decider(step, self._load, self._ctx, self._pod_id, self._user_id)
 
     async def _apply_function_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace a function's resource permission grants
@@ -427,6 +428,7 @@ class BundleApplier:
         fields["name"] = step.name
         fields["schedule_type"] = ScheduleType(str(payload.get("schedule_type")))
         fields["config"] = payload.get("config") or {}
+        drop_time_filter(fields, warnings=self._warnings)
         await validate_account_binding(
             self._uow,
             account_id=fields.get("account_id"),
@@ -435,9 +437,7 @@ class BundleApplier:
             resource_label=f"Schedule '{step.name}'",
         )
         entity = ScheduleCreateEntity(
-            user_id=self._user_id,
-            pod_id=self._pod_id,
-            **fields,
+            user_id=self._user_id, pod_id=self._pod_id, **fields
         )
         await create_schedule(self._uow, entity, ctx=self._ctx)
 

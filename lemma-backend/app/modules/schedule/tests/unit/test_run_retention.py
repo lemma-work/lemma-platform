@@ -116,11 +116,20 @@ def test_every_run_status_is_classified_one_way_or_the_other() -> None:
         ScheduleRunStatus.DISPATCHED.value,
         ScheduleRunStatus.FAILED.value,
     }
-    classified = set(run_retention._TERMINAL_STATUSES) | retryable_or_in_flight
+    # A triaged event waiting for its digest or for a person. It has no
+    # `completed_at` while it waits, and every way out of it -- a digest, an
+    # answer, an unanswered question -- ends it in a terminal state first.
+    waiting = {ScheduleRunStatus.HELD.value}
+    classified = (
+        set(run_retention._TERMINAL_STATUSES) | retryable_or_in_flight | waiting
+    )
 
     assert classified == {status.value for status in ScheduleRunStatus}
     assert ScheduleRunStatus.FAILED.value not in run_retention._TERMINAL_STATUSES, (
         "FAILED is retryable; recovery must dead-letter it before retention sees it"
+    )
+    assert ScheduleRunStatus.HELD.value not in run_retention._TERMINAL_STATUSES, (
+        "a held event is waiting to be sent or answered, not finished"
     )
 
 

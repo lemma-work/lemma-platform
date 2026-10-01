@@ -62,6 +62,7 @@ def _event_routers():
         schedule_lifecycle_consumer,
         schedule_notification_consumer,
         target_outcome_consumer,
+        triage_answer_consumer,
     )
 
     return [
@@ -71,6 +72,7 @@ def _event_routers():
         pod_lifecycle_consumer.router,
         schedule_notification_consumer.router,
         target_outcome_consumer.router,
+        triage_answer_consumer.router,
     ]
 
 
@@ -160,5 +162,7 @@ module = LemmaModule(
         ("pod_events", "schedule-pod-events"),
         ("workflow_run_events", "schedule-workflow-outcomes"),
         ("agent_events", "schedule-agent-outcomes"),
+        # How a held event's question closed, so its event can be routed.
+        ("surface_events", "schedule-triage-answers"),
     ),
 )

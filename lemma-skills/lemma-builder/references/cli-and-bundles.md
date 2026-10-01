@@ -47,6 +47,7 @@ Scripting conventions:
 my-pod/
   pod.json
   tables/<TableName>/<TableName>.json
+  deciders/<name>/<name>.json     # name + definition only; what it learned never travels
   functions/<name>/<name>.json    # includes permissions.grants (exported automatically)
   functions/<name>/code.py
   agents/<name>/<name>.json       # includes permissions.grants (exported automatically)
@@ -99,6 +100,19 @@ Rules:
   "instruction": {"$file": "instruction.md"},
   "toolsets": ["WEB_SEARCH"],   // POD is DERIVED from the grants below — don't list it
   "permissions": { "grants": [ /* exported + upserted like functions */ ] } }
+
+// deciders/email-triage/email-triage.json — the decider's name and current
+// definition, and nothing else: no version, and none of its examples (people's
+// answers about real data stay in the pod they were given in). `examples` inside
+// an option are part of the definition and do travel.
+{ "name": "email-triage",
+  "definition": {
+    "description": "What Kit does with each new email.",
+    "input": { "fields": ["from", "subject", "labels"], "max_chars": 4000 },
+    "questions": { "action": { "type": "choice", "prompt": "What should Kit do?",
+      "options": { "act": "A customer is waiting.", "ignore": "Newsletters." },
+      "fallback": "ignore" } },
+    "rules": [ { "when": "contains(labels, 'PROMOTIONS')", "answer": { "action": "ignore" } } ] } }
 
 // workflows/intake/intake.json
 { "name": "intake", "description": "...", "start": {"type": "MANUAL"},
@@ -186,10 +200,10 @@ lemma pods export ./bundles --exclude apps
 ```
 
 - **Matching is by `name`** (schedules also match by id; surfaces by their own pod-unique name, which defaults to the lowercased platform — and the CLI importer keys them on the *platform*; files by path). Renaming a resource in the bundle creates a new one — it does not rename.
-- **Upsert behavior per resource:** tables → add/remove columns + update config; functions → update description/type/code **+ permissions replaced**; agents → full update except name **+ permissions replaced**; workflows → graph fully replaced; schedules → config/target update; surfaces → upserted by platform (one per platform); apps → metadata update + rebuild/redeploy if `source/` present; files → folders, then file bytes when `--with-files` was passed to *import*; table rows last, when `--with-data` was (and only into new tables).
+- **Upsert behavior per resource:** deciders → a changed definition is saved as the decider's next version (old versions stay), an identical one is left alone — so re-importing an exported bundle saves no new version (a hand-written definition that relies on server defaults may save one each time through the CLI); tables → add/remove columns + update config; functions → update description/type/code **+ permissions replaced**; agents → full update except name **+ permissions replaced**; workflows → graph fully replaced; schedules → config/target update; surfaces → upserted by platform (one per platform); apps → metadata update + rebuild/redeploy if `source/` present; files → folders, then file bytes when `--with-files` was passed to *import*; table rows last, when `--with-data` was (and only into new tables).
 - **Permissions travel with the bundle.** Export always embeds each function's and agent's `permissions.grants`; import applies them with replace semantics on every upsert — the bundle is the source of truth for what a workload may access. **Present vs absent matters:** a `permissions` block (even `{"grants": []}`) replaces the grants with exactly that list, while omitting the key leaves the workload's existing grants alone. Grants apply in a deferred pass after every resource exists, so cross-references resolve.
-- **Import order is dependency order:** tables → functions → agents → workflows → schedules → surfaces → apps → file folders → file bytes → agent grants → table rows. Agent AND function grants are deliberately deferred to the end, after every resource a grant could name exists.
-- **Validation on import:** folder/JSON name match; Python syntax parse; required function headers (`#input_type_name`, `#output_type_name`, `#function_name`, plus `#config_type_name` when a config schema exists); surface `platform` must be present and one of SLACK/TEAMS/TELEGRAM/WHATSAPP/RESEND (Gmail and Outlook are connectors, not surfaces); a Vite app `source/` must build (`npm install && npm run build` → `dist/index.html`), while an HTML app (`source/index.html` with no `package.json`, or a single `html.html`) is uploaded as-is with no build. A grant that references a **table/function/agent/workflow/schedule/app/folder** the bundle neither creates nor finds in the pod is a **hard failure** (the import aborts before any writes), as is a `connector_account` grant naming an account this org can't reach.
+- **Import order is dependency order:** tables → deciders → functions → agents → workflows → schedules → surfaces → apps → file folders → file bytes → agent grants → table rows. Deciders come before anything that can name one (a workflow's DECISION step, a schedule, a `decider:<name>:execute` grant). Agent AND function grants are deliberately deferred to the end, after every resource a grant could name exists.
+- **Validation on import:** folder/JSON name match; Python syntax parse; required function headers (`#input_type_name`, `#output_type_name`, `#function_name`, plus `#config_type_name` when a config schema exists); surface `platform` must be present and one of SLACK/TEAMS/TELEGRAM/WHATSAPP/RESEND (Gmail and Outlook are connectors, not surfaces); a Vite app `source/` must build (`npm install && npm run build` → `dist/index.html`), while an HTML app (`source/index.html` with no `package.json`, or a single `html.html`) is uploaded as-is with no build. A decider's file is checked against the shape the server accepts (name, question keys and types, a choice's `fallback` among its options, each rule's `when` *or* `phrases` and the questions it answers), and a decider file left loose at `deciders/<name>.json` instead of in its own folder fails the plan. A grant that references a **table/function/agent/workflow/schedule/app/decider/folder** the bundle neither creates nor finds in the pod is a **hard failure** (the import aborts before any writes), as is a `connector_account` grant naming an account this org can't reach.
 - **Advisories (`[yellow]advisory[/yellow]`, non-fatal):** import and `--dry-run` warn — without blocking — about grants that commonly bite: an agent/function **created with NO grants** (it has zero access and will 403 at runtime — the most common way a fresh pod arrives broken), **connector grants** being environment-specific (verify a connected account exists in the target pod), **destructive grants** (e.g. `datastore.table.delete`) giving standing authority with no runtime approval prompt, and a `SUBAGENTS` agent with no `agent` grants being able to spawn only copies of itself. `lemma pods doctor` re-checks all of these against the live pod.
 - After import, verify grants landed with `lemma functions permissions get <name>` / `lemma agents permissions get <name>`, or `lemma pods doctor` for the whole pod at once.
 - **Unrecognized fields fail the import.** A key the API has no slot for (a typo, or a field that resource type doesn't accept) aborts with the offending name instead of being dropped silently. Outside a bundle the same check warns — `lemma <resource> schema` prints the accepted shape.

@@ -205,15 +205,19 @@ no `start`). JMESPath expressions in workflow nodes reference it:
 
   Bulk writes are no exception: a row inserted by `bulk_create` carries the same
   whole-row payload as one created on its own.
-- `start.llm_output.*` — the structured output of the LLM filter, if you set one
-  (below).
+- `start.llm_output.*` — what the schedule's filter decided, if it has one (below):
+  `should_proceed` (always `true` here), `decision_id`, and the fields your
+  `filter_output_schema` asked for.
 
 For an **agent** target, the event is delivered as the message that wakes the agent
 — write the instruction to read that message.
 
 Debugging "it didn't fire": read telemetry before logs. `lemma schedules get <id>`
 shows `last_fired_at`, `last_run_id`, `last_fire_status` (`TRIGGERED` / `FILTERED` /
-`ERROR`), and `last_error`.
+`ERROR`), and `last_error`. An event the filter turned down is also in the
+schedule's run history (`GET /pods/{pod_id}/schedules/{id}/runs`) as a `FILTERED`
+run whose `llm_output.decision_id` names the decision — read it with
+`GET /pods/{pod_id}/decisions/{decision_id}` to see what was judged and who answered.
 
 ## Match conditions — the deterministic filter (DATASTORE only)
 
@@ -238,8 +242,8 @@ alone**: no database read, no model call, no cost. Reach for it first, and keep
 Keys are column names. A bare value is shorthand for `equals`, so
 `{"priority": "high"}` and `{"priority": {"equals": "high"}}` are the same.
 **Every condition must hold** — conditions AND together, and so do operators
-within one column. There is no OR and no nesting; that is what the LLM filter is
-for.
+within one column. There is no OR and no nesting; that is what `filter_instruction`
+is for.
 
 | Operator | Holds when | Needs |
 | --- | --- | --- |
@@ -266,7 +270,9 @@ A condition no declared operation could satisfy is **rejected at save time**
 rather than leaving you with a trigger that silently never fires — so
 `operations: ["INSERT"]` with `{"status": {"changed": true}}` is an error.
 
-Filtered events record `last_fire_status: FILTERED`, same as the LLM filter.
+An event a `when` block rules out records `last_fire_status: FILTERED` and nothing
+else — no run, since nothing was judged. (A `filter_instruction` skip also records a
+run; see below.)
 
 On the CLI there is no dedicated flag — pass the block through `--data`, which
 merges into the config built from `--datastore` / `--on`:
@@ -276,17 +282,42 @@ lemma schedules create --workflow fulfil-ticket --datastore tickets --on update 
   --data '{"config": {"when": {"status": {"to": "approved"}}}}'
 ```
 
-## LLM event filtering — drop the noise
+## Event filters — drop the noise
 
 Chatty webhook/datastore sources fire constantly. A `filter_instruction` is a
-**natural-language predicate evaluated per event before the target fires**; events
-that fail it are dropped (status `FILTERED`, not `TRIGGERED`). Add an optional
-`filter_output_schema` to capture structured output the run can read at
-`start.llm_output.*`.
+**yes/no condition, in plain words, that each event must meet before the target
+fires**. It is asked as a **decision**: System One (Typesafe) answers when the
+deployment has it configured, and the system model answers otherwise or when System
+One is unsure. Each event is decided **once** — a redelivered event reads the
+recorded decision instead of asking again.
+
+Every outcome is recorded:
+
+- **Passed** — the target fires; `start.llm_output` carries `should_proceed: true`
+  and the `decision_id`.
+- **Turned down** — no target runs. The schedule's run history gets a `FILTERED` run
+  whose `llm_output` holds `should_proceed: false` and the `decision_id`, and
+  `last_fire_status` becomes `FILTERED`.
+- **Undecided** — nothing could answer (the model failed, or said the event does not
+  let it tell). That is a **failed** run (`DEAD_LETTERED`, error
+  `ScheduleFilterUndecided`, `last_fire_status: ERROR`), and like any failure it
+  counts toward the five-in-a-row auto-pause. Write the condition so the event
+  itself can answer it.
+
+Add an optional `filter_output_schema` to have fields extracted from an event that
+**passed** — the model fills them after the decision, so a turned-down event never
+pays for extraction — and read them at `start.llm_output.*`. A schema that asks only
+for `should_proceed`/`reason` extracts nothing: the decision already answered.
+
+**Only `WEBHOOK` and `DATASTORE` schedules take a filter.** A `TIME` schedule fires
+on the clock with no event to judge, so create and update refuse
+`filter_instruction` on one; put what to check in its `instruction` instead. (A
+bundle carrying one on a `TIME` schedule imports with a warning and without it.)
 
 > On a `DATASTORE` trigger, prefer a `when` block for anything a comparison can
-> decide. The filter costs a model call **per event**; a `when` block costs
-> nothing and runs first, so events it rules out never reach the model.
+> decide. A filter is a decision **per event** — a model call when System One is
+> not there to answer — while a `when` block costs nothing and runs first, so
+> events it rules out never reach the filter.
 
 ```json
 {
@@ -307,7 +338,44 @@ makes this a Gmail schedule. `source` is the inbound endpoint (`composio` here,
 `github` for a GitHub App trigger), not the app; on a bound schedule like this one it
 is overwritten or ignored by provisioning either way.
 
-On the CLI: `--filter "<predicate>"`.
+On the CLI: `--filter "<condition>"`.
+
+## Triage — act now, batch, ask, or ignore
+
+When "fire or skip" is too coarse, give a `WEBHOOK` or `DATASTORE` schedule a
+`triage` **instead of** a filter (not beside one; `TIME` refuses it). It names a pod
+**decider** (define it first, with `define_decider` or `POST
+/pods/{pod_id}/deciders`) and maps every option of one of its `choice` questions to
+an outcome:
+
+```json
+"triage": {
+  "decider": "inbox-triage",
+  "routes": {"urgent": "act", "fyi": "digest", "unsure": "ask", "promo": "ignore"},
+  "digest": {"cron": "0 9 * * 1-5", "timezone": "Europe/Berlin"},
+  "act_per_hour": 20
+}
+```
+
+- **act** — the target fires now, as usual; `start.llm_output` has the
+  `decision_id`, `answer` and `route`.
+- **digest** — the event is held (`HELD` run) and sent with the others on the
+  digest's cron: **one** run whose `start.payload.events` lists them, oldest first,
+  with `start.payload.held` their count. Bounded per digest; the rest wait for the
+  next one (`start.metadata.more_waiting`). `digest` is required when any option
+  routes there, and it is no more frequent than a `TIME` schedule may be.
+- **ask** — the event is held and its owner gets a notification with the options.
+  Their choice (in the app, or by telling their agent, which records it with
+  `respond_to_notification` and `data.answer`) routes it -- act, digest or ignore --
+  and teaches the decider. Unanswered when it expires, it is skipped.
+- **ignore** — a `FILTERED` run carrying the decision.
+
+`act_per_hour` caps act runs: past it, act becomes digest (or ask, with no digest).
+Every declared option must be routed, and `question` is needed only when the decider
+asks more than one. An open question uses its `fallback` option's route; with no
+routed fallback it fails like an undecided filter. See what is waiting with `GET
+/pods/{pod_id}/schedules/{id}/runs?status=HELD`; remove a triage with
+`"triage": null` -- whatever its digest held goes out once more.
 
 ## Patterns
 

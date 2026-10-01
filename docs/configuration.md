@@ -691,6 +691,31 @@ BRAVE_SEARCH_API_KEY=
 SEARXNG_URL=
 ```
 
+### Decisions
+
+A decision is a closed-set judgement -- which of these, yes or no, how much --
+answered by rules, then by Typesafe's System One when a key is set, then by the
+system model. Nothing here is required: with no key, decisions go from rules
+straight to the model. See [Decisions](design/decisions.md).
+
+```dotenv
+# System One. Sending a decision's input view to it makes Typesafe a
+# subprocessor for that content; see the design doc before enabling it.
+TYPESAFE_API_KEY=
+# A version id, never jev-latest: the alias moves with each release, and every
+# recorded decision names the version that answered it.
+TYPESAFE_MODEL=jev-1.13.0
+TYPESAFE_BASE_URL=https://api.typesafe.ai/v1
+# One key serves every pod, so the budget is shared across processes and
+# split by lane: interactive, then ambient, then bulk.
+TYPESAFE_REQUESTS_PER_SECOND=40
+DECISIONS_SYSTEM_ONE_ENABLED=true
+# The model rung's model on the system profile; unset uses its default.
+DECISION_MODEL=
+# How long a decision keeps what it was asked about, for review and correction.
+DECISION_EVIDENCE_TTL_DAYS=30
+```
+
 ## Spend limits
 
 Nothing is limited by default: usage is metered but never refused. Set any of

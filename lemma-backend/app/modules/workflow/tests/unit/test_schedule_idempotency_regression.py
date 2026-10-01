@@ -64,6 +64,7 @@ def _engine_with_mocks() -> WorkflowEngine:
         function_adapter=Mock(),
         schedule_adapter=Mock(),
         notification_adapter=AsyncMock(),
+        decision_adapter=Mock(),
     )
 
 

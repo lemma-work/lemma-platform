@@ -1,9 +1,9 @@
-/** Whether this server can carry a live call: the router's key, and the key
- *  of whichever voice model holds the microphone (`NEXT_PUBLIC_VOICE_PROVIDER`,
- *  Gemini unless it says gpt-live). Answering only for the router offered a
- *  call button that failed at the first word. */
+/** Whether this server can carry a live call: the key of whichever voice model
+ *  holds the microphone (`NEXT_PUBLIC_VOICE_PROVIDER`, Gemini unless it says
+ *  gpt-live). A call button offered without it fails at the first word.
+ *  Routing needs nothing here: the browser asks the backend's decisions API,
+ *  which routes with or without a System One key. */
 export async function GET() {
     const voice = process.env.NEXT_PUBLIC_VOICE_PROVIDER === "gpt-live" ? process.env.OPENAI_API_KEY : process.env.GEMINI_API_KEY;
-    const configured = Boolean(process.env.TYPESAFE_API_KEY) && Boolean(voice);
-    return Response.json({ configured }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ configured: Boolean(voice) }, { headers: { "Cache-Control": "no-store" } });
 }

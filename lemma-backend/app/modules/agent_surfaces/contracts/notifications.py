@@ -21,13 +21,18 @@ pay for it.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 from uuid import UUID
 
+from pydantic import JsonValue
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.domain.notification import NotificationEntity
 
 logger = get_logger(__name__)
 
@@ -105,6 +110,84 @@ async def send_notification(
             "delivered_via": notification.delivery_platform,
             "undeliverable_reason": notification.delivery_error,
         }
+
+
+async def ask_about_schedule_event(
+    *,
+    pod_id: UUID,
+    recipient_user_id: UUID,
+    schedule_id: UUID,
+    title: str,
+    body: str,
+    action: dict[str, JsonValue],
+    background_instruction: str,
+    idempotency_key: str,
+) -> UUID | None:
+    """Put an event a schedule holds in front of its person, with the choices.
+
+    ``action`` is a ``CHOICE``: answering it means picking one of its options,
+    on any channel or in the app, and how it closes is announced as
+    ``NotificationClosedEvent`` for the schedule to act on. Idempotent on
+    ``idempotency_key``, so a redelivered event asks once.
+
+    A held event must always be answerable. Over the per-recipient hourly
+    limit, the question still lands in the person's Lemma inbox -- it is only
+    not pushed to a channel. Returns None when the person is no longer a member
+    of the pod, so there is nobody to ask.
+    """
+    from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+    from app.modules.agent_surfaces.domain.notification import (
+        NotificationOriginKind,
+    )
+    from app.modules.agent_surfaces.services.notification_rate_limiter import (
+        NotificationRateLimitExceeded,
+    )
+
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        service = _service(uow)
+
+        async def notify(*, deliver: bool) -> NotificationEntity:
+            return await service.notify(
+                pod_id=pod_id,
+                recipient_user_id=recipient_user_id,
+                title=title,
+                body=body,
+                origin_kind=NotificationOriginKind.SCHEDULE,
+                origin_id=schedule_id,
+                background_instruction=background_instruction,
+                expects_response=True,
+                action=dict(action),
+                idempotency_key=idempotency_key,
+                deliver=deliver,
+            )
+
+        try:
+            notification = await notify(deliver=True)
+        except NotificationRateLimitExceeded:
+            logger.warning(
+                "agent_surfaces.notifications.schedule_question_inbox_only.degraded",
+                pod_id=str(pod_id),
+                schedule_id=str(schedule_id),
+                exc_info=True,
+            )
+            notification = await notify(deliver=False)
+            if notification.delivered_at is None:
+                notification.mark_undeliverable(
+                    "Not pushed to a channel: this person had already been sent "
+                    "the most notifications an hour allows. It is in their "
+                    "Lemma inbox."
+                )
+                notification = await service.notifications.update(notification)
+        except AgentSurfaceValidationError:
+            logger.warning(
+                "agent_surfaces.notifications.schedule_question_unaddressable.degraded",
+                pod_id=str(pod_id),
+                schedule_id=str(schedule_id),
+                exc_info=True,
+            )
+            return None
+        await uow.commit()
+        return notification.id
 
 
 async def reachable_channels(
@@ -234,6 +317,7 @@ async def record_notification_response(
 
 
 __all__ = [
+    "ask_about_schedule_event",
     "check_notifications",
     "notification_form_action",
     "open_notifications_for_conversation",

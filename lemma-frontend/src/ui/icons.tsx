@@ -25,6 +25,8 @@ export {
     // capability rather than a tool; `Toolbox` is the neutral mark for a
     // toolset this build has not been taught a name for yet.
     Brain as MemoryIcon, Toolbox as ToolIcon,
+    // Weighing many things the same way: a decision, and a teammate that makes them.
+    Scales as DecideIcon,
     // A file removed, and a file moved, on the cards for a local agent's edits.
     Trash as DeleteIcon, ArrowsLeftRight as MoveIcon,
     // A password field's reveal toggle: the open eye shows it, the struck one hides it.

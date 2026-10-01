@@ -8,6 +8,7 @@ import {
     AgentIcon,
     CodeIcon,
     ConnectorIcon,
+    DecideIcon,
     DeleteIcon,
     EditIcon,
     FileIcon,
@@ -35,6 +36,7 @@ import {
     waitEnding,
     type BrowserStep,
     type ConnectorRun,
+    type DecisionRun,
     type FileChange,
     type FileRead,
     type FileSearch,
@@ -824,6 +826,57 @@ function ConnectorCard({ run }: { run: ConnectorRun }) {
     );
 }
 
+/* ── a closed-set question, put to one thing or to many ──────────────── */
+
+function decisionStatus(run: DecisionRun): string {
+    if (run.pending) return run.trial ? "trying" : "deciding";
+    if (run.failed) return "failed";
+    if (run.open) return run.open + " open";
+    return run.trial ? "tried" : "decided";
+}
+
+function DecisionCard({ run }: { run: DecisionRun }) {
+    const [open, setOpen] = useState(false);
+    const rows = run.rows === undefined ? "" : run.rows + (run.rows === 1 ? " row" : " rows");
+    const answered = [...run.answers.map((answer) => ({
+        key: answer.question,
+        said: answer.value + (answer.by ? " · by " + answer.by.replace("_", " ") : ""),
+    })), ...run.counts.map((count) => ({
+        key: count.question,
+        said: count.tallies.map((tally) => tally.answer + " " + tally.count).join(" · "),
+    }))];
+
+    return (
+        <section className="toolcard">
+            <Head
+                icon={<DecideIcon size={14} />}
+                what={run.decider}
+                meta={[rows, run.trial ? "nothing recorded" : ""].filter(Boolean).join(", ") || undefined}
+                status={decisionStatus(run)}
+                tone={run.failed ? "bad" : run.pending || run.open ? "wait" : undefined}
+                open={open}
+                onToggle={() => setOpen((was) => !was)}
+            />
+            {open && (
+                <div className="toolcard__body">
+                    {run.error && <p className="toolcard__note" data-tone="bad">{run.error}</p>}
+                    {answered.length > 0 && (
+                        <dl className="toolcard__args">
+                            {answered.map((item) => (
+                                <div key={item.key}>
+                                    <dt>{item.key}</dt>
+                                    <dd>{item.said}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                    )}
+                    {run.savedTo && <p className="toolcard__where">saved to {run.savedTo}</p>}
+                </div>
+            )}
+        </section>
+    );
+}
+
 /* ── a run that is deliberately waiting ──────────────────────────────── */
 
 /** While waiting: when it is due back, or what it is waiting on. */
@@ -969,6 +1022,8 @@ export function ToolCardView({
             return <SourcesCard list={card} />;
         case "connector":
             return <ConnectorCard run={card} />;
+        case "decision":
+            return <DecisionCard run={card} />;
         case "wait":
             return <WaitCard wait={card} />;
         case "image":

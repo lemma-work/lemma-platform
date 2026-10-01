@@ -24,8 +24,9 @@ T = TypeVar("T", bound="DecisionNode")
 
 @_attrs_define
 class DecisionNode:
-    """Decision node. Routes to the first rule whose condition is truthy;
-    falls through to the default outgoing edge when no rule matches.
+    """Decision node. Routes to the first rule whose condition is truthy,
+    then asks its question when it has one; falls through to the default
+    outgoing edge when neither picks a node.
 
         Attributes:
             config (DecisionNodeConfig): Configuration for Decision node.

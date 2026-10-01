@@ -91,6 +91,7 @@
     "core->apps": 1,
     "core->connectors": 4,
     "core->datastore": 2,
+    "core->decisions": 1,
     "core->function": 1,
     "core->identity": 2,
     "core->pod": 1,

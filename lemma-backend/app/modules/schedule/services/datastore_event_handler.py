@@ -2,19 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import List
 from uuid import UUID
 
 from app.modules.datastore.domain.events import DatastoreRecordEvent
+from app.modules.schedule.domain.errors import ScheduleFilterUndecidedError
+from app.modules.schedule.domain.interfaces import ScheduleFilterOutcomeRecorder
 from app.modules.schedule.domain.match_conditions import evaluate_match_conditions
-from app.modules.schedule.domain.schedule import ScheduleFireStatus, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    ScheduleEntity,
+    ScheduleFireStatus,
+    ScheduleType,
+)
 from app.modules.schedule.domain.value_objects import (
     DatastoreOperation,
     parse_datastore_operation,
 )
+from app.modules.schedule.domain.ports import TriageQuestions
+from app.modules.schedule.infrastructure.adapters.triage_questions import (
+    NotificationTriageQuestions,
+)
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
-from app.modules.schedule.services.schedule_processor import ScheduleProcessor
+from app.modules.schedule.services.run_outcome_service import ScheduleRunOutcomeService
+from app.modules.schedule.services.schedule_processor import (
+    ScheduleEventOutcome,
+    ScheduleProcessor,
+)
+from app.modules.schedule.services.triage_holds import ask_if_waiting
 from app.core.infrastructure.db.session_uow import commit_now
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind, origin_scope
@@ -29,9 +45,17 @@ class DatastoreEventHandler:
         self,
         schedule_repository: ScheduleRepository,
         schedule_processor: ScheduleProcessor,
+        run_outcomes: ScheduleFilterOutcomeRecorder | None = None,
+        questions: TriageQuestions | None = None,
     ):
         self.schedule_repository = schedule_repository
         self.schedule_processor = schedule_processor
+        # On the repository's own unit of work, so a skip's run and the fire
+        # status beside it commit together.
+        self.run_outcomes = run_outcomes or ScheduleRunOutcomeService(
+            schedule_repository.uow
+        )
+        self.questions: TriageQuestions = questions or NotificationTriageQuestions()
 
     async def handle_datastore_event(
         self,
@@ -78,11 +102,12 @@ class DatastoreEventHandler:
                 continue
 
             # Let the connection go before processing. A schedule carrying a
-            # filter_instruction runs an LLM inference inline here, once per
-            # matching schedule, and holding the transaction across that keeps
-            # a pooled connection idle for the length of every call in the
-            # loop. The webhook sibling (schedule_consumer) already does this
-            # and says why in its docstring.
+            # filter_instruction asks its decision inline here -- System One,
+            # the model, or both -- once per matching schedule, and holding the
+            # transaction across that keeps a pooled connection idle for the
+            # length of every call in the loop. The webhook sibling
+            # (schedule_consumer) already does this and says why in its
+            # docstring.
             #
             # A commit rather than `connection_released`: a previous iteration
             # may have written a FILTERED fire row, and `safe_to_release`
@@ -90,52 +115,136 @@ class DatastoreEventHandler:
             # silent no-op exactly when the loop is longest.
             await commit_now(self.schedule_repository)
 
-            # One bad schedule must not drop the event for the rest.
-            try:
-                # Deliberately *overrides* the inbound event's origin. The row
-                # may well have been written from the web, but that is how the
-                # write arrived -- this schedule's work arrived because a table
-                # changed, and DATA_TRIGGER is the honest answer for everything
-                # raised from here down.
-                with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
-                    fired = await self.schedule_processor.process_event(
-                        schedule=schedule,
-                        payload=event.payload or {},
-                        user_id=event.owner_user_id or schedule.user_id,
-                        metadata=metadata,
-                        source_event_id=str(event.event_id),
-                    )
-            except Exception as exc:
-                logger.debug(
-                    "schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated",
-                    record_id=event.record_id,
-                    exc_info=True,
-                )
-                await self._record_fire(
-                    schedule.id, status=ScheduleFireStatus.ERROR, error=str(exc)
-                )
-                raise
+            if await self._fire(schedule, event, metadata):
+                fired_schedule_ids.append(schedule.id)
 
-            latency_ms = int(
-                (datetime.now(timezone.utc) - event.occurred_at).total_seconds() * 1000
+        return fired_schedule_ids
+
+    async def _fire(
+        self,
+        schedule: ScheduleEntity,
+        event: DatastoreRecordEvent,
+        metadata: Mapping[str, object],
+    ) -> bool:
+        """Process one matching schedule and record what came of it.
+
+        Returns whether it fired. A filter's skip is recorded as a `FILTERED`
+        run with its decision, and a filter that could not decide as a failed
+        one; neither is raised, since the decision is recorded under this event
+        and a redelivery would only read it back. A filter a provider failure
+        interrupted is raised, because the redelivery asks it again.
+        """
+        owner_id = event.owner_user_id or schedule.user_id
+        source_event_id = str(event.event_id)
+        # One bad schedule must not drop the event for the rest.
+        try:
+            # Deliberately *overrides* the inbound event's origin. The row
+            # may well have been written from the web, but that is how the
+            # write arrived -- this schedule's work arrived because a table
+            # changed, and DATA_TRIGGER is the honest answer for everything
+            # raised from here down.
+            with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
+                outcome = await self.schedule_processor.process_event(
+                    schedule=schedule,
+                    payload=event.payload or {},
+                    user_id=owner_id,
+                    metadata=dict(metadata),
+                    source_event_id=source_event_id,
+                    # A row with an owner is on an RLS table: its owner's alone.
+                    personal=event.owner_user_id is not None,
+                )
+        except ScheduleFilterUndecidedError as exc:
+            await self.run_outcomes.record_filter_undecided(
+                schedule,
+                source_event_id=source_event_id,
+                decision_id=exc.decision_id,
+                user_id=owner_id,
+                metadata=metadata,
+                error_type=exc.error_type,
             )
-            logger.debug(
-                "schedule.fire.latency_ms",
+            logger.warning(
+                "schedule.datastore_event_handler.filter_undecided.degraded",
                 schedule_id=str(schedule.id),
-                latency_ms=latency_ms,
+                decision_id=str(exc.decision_id) if exc.decision_id else None,
+                error_type=exc.error_type,
             )
+            return False
+        except Exception as exc:
+            logger.debug(
+                "schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated",
+                record_id=event.record_id,
+                exc_info=True,
+            )
+            await self._record_fire(
+                schedule.id, status=ScheduleFireStatus.ERROR, error=str(exc)
+            )
+            raise
+
+        latency_ms = int(
+            (datetime.now(timezone.utc) - event.occurred_at).total_seconds() * 1000
+        )
+        logger.debug(
+            "schedule.fire.latency_ms",
+            schedule_id=str(schedule.id),
+            latency_ms=latency_ms,
+        )
+        await self._record_outcome(
+            schedule,
+            outcome,
+            source_event_id=source_event_id,
+            owner_id=owner_id,
+            payload=event.payload or {},
+            metadata=metadata,
+        )
+        return outcome.fired
+
+    async def _record_outcome(
+        self,
+        schedule: ScheduleEntity,
+        outcome: ScheduleEventOutcome,
+        *,
+        source_event_id: str,
+        owner_id: UUID,
+        payload: Mapping[str, object],
+        metadata: Mapping[str, object],
+    ) -> None:
+        """A skip's or a hold's run, which stamps the fire status itself; else the stamp.
+
+        A held event's question goes out only once its hold has committed --
+        and never with this transaction open across the send. See
+        `triage_holds`.
+        """
+        skipped = outcome.filtered
+        if skipped is not None:
+            await self.run_outcomes.record_filtered(
+                schedule,
+                source_event_id=source_event_id,
+                user_id=owner_id,
+                metadata=metadata,
+                llm_output=skipped.output,
+            )
+            return
+        held = outcome.held
+        if held is None:
             await self._record_fire(
                 schedule.id,
                 status=(
                     ScheduleFireStatus.TRIGGERED
-                    if fired
+                    if outcome.fired
                     else ScheduleFireStatus.FILTERED
                 ),
             )
-            if fired:
-                fired_schedule_ids.append(schedule.id)
-
-        return fired_schedule_ids
+            return
+        run = await self.run_outcomes.record_held(
+            schedule,
+            held,
+            source_event_id=source_event_id,
+            user_id=owner_id,
+            payload=payload,
+            metadata=metadata,
+        )
+        await commit_now(self.schedule_repository)
+        await ask_if_waiting(self.questions, schedule, run, held)
 
     def _matches_conditions(
         self,

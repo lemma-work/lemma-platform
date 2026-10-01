@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar
@@ -10,6 +11,7 @@ from app.modules.schedule.domain.match_conditions import (
     ColumnCondition,
     parse_match_conditions,
 )
+from app.modules.schedule.domain.triage import TriageConfig, TriageRoute
 from app.modules.schedule.domain.value_objects import (
     DatastoreOperation,
     normalize_datastore_operations,
@@ -34,6 +36,33 @@ INSTRUCTION_REQUIRED = (
     "`instruction` field (CLI: --instruction). No other field carries it: a "
     "payload under a different key is dropped, not used."
 )
+
+
+#: Said to a person who puts a filter on a TIME schedule, by the create schema
+#: and by the update policy alike.
+TIME_SCHEDULE_FILTER_REFUSED = (
+    "filter_instruction and filter_output_schema act on the event that fired a "
+    "WEBHOOK or DATASTORE schedule. A TIME schedule fires on the clock, with no "
+    "event to judge, so it cannot carry a filter. To have the target check "
+    "something before it acts, say so in the schedule's `instruction`."
+)
+
+
+def refuses_filter(
+    schedule_type: ScheduleType,
+    *,
+    filter_instruction: str | None,
+    filter_output_schema: Mapping[str, object] | None,
+) -> bool:
+    """Whether this schedule would carry a filter it can never apply.
+
+    A TIME schedule accepted one and ignored it, so a person who wrote "only on
+    weekdays" believed it was being checked. Empty values are not refused:
+    they are how a filter is cleared.
+    """
+    return schedule_type == ScheduleType.TIME and bool(
+        filter_instruction or filter_output_schema
+    )
 
 
 class TimeScheduleConfig(BaseModel):
@@ -184,6 +213,8 @@ class ScheduleFireStatus(str, Enum):
     TRIGGERED = "TRIGGERED"
     FILTERED = "FILTERED"
     ERROR = "ERROR"
+    #: The schedule's triage held the event for its digest or for a person.
+    HELD = "HELD"
 
 
 class ScheduleRunStatus(str, Enum):
@@ -196,6 +227,9 @@ class ScheduleRunStatus(str, Enum):
     FILTERED = "FILTERED"
     FAILED = "FAILED"
     DEAD_LETTERED = "DEAD_LETTERED"
+    #: A triaged event waiting for its digest or for a person's answer. Which
+    #: of the two is the run's `held_for`; leaving it is the triage's job.
+    HELD = "HELD"
 
 
 class ScheduleRunEntity(Entity):
@@ -216,6 +250,16 @@ class ScheduleRunEntity(Entity):
     source_occurred_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    #: While HELD: what the event waits for, its digest or a person's answer.
+    held_for: TriageRoute | None = None
+    #: The one run a digest dispatched this event in, once it has.
+    digest_run_id: UUID | None = None
+
+    @property
+    def awaiting_answer(self) -> bool:
+        return (
+            self.status is ScheduleRunStatus.HELD and self.held_for is TriageRoute.ASK
+        )
 
 
 class ScheduleEntity(Entity):
@@ -243,6 +287,11 @@ class ScheduleEntity(Entity):
     # LLM-based event filtering
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
+
+    # Routes each event by a decider's answer, instead of a filter. See
+    # `domain/triage.py`; `next_digest_at` is when its held events next go out.
+    triage: TriageConfig | None = None
+    next_digest_at: datetime | None = None
 
     # For WEBHOOK schedules backed by connector provider triggers.
     account_id: UUID | None = None
@@ -286,6 +335,11 @@ class ScheduleEntity(Entity):
         """Whether anything is wired to this schedule's firing."""
         return self.agent_id is not None or self.workflow_id is not None
 
+    @property
+    def target_kind(self) -> str:
+        """What a run of this schedule is dispatched at, as the ledger names it."""
+        return "WORKFLOW" if self.workflow_id is not None else "AGENT"
+
 
 class ScheduleCreateEntity(BaseModel):
     """Entity for creating a schedule."""
@@ -302,6 +356,7 @@ class ScheduleCreateEntity(BaseModel):
     instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
+    triage: TriageConfig | None = None
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
     # None means "caller did not specify": DATASTORE and GLOBAL-workflow
@@ -328,5 +383,9 @@ class ScheduleUpdateEntity(BaseModel):
     instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
+    triage: TriageConfig | None = None
+    #: `triage: null` on the wire. None above means "not given", so clearing it
+    #: needs its own flag.
+    clear_triage: bool = False
     is_active: bool | None = None
     visibility: str | None = None

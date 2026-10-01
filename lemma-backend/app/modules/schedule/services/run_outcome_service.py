@@ -2,19 +2,32 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import JsonValue
+
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.schedule.config import schedule_settings
+from app.modules.schedule.domain.errors import (
+    ScheduleFilterUndecidedError,
+    ScheduleTriageDeciderMissingError,
+    ScheduleTriageUndecidedError,
+)
 from app.modules.schedule.domain.events.schedule import (
     ScheduleDeactivated,
     ScheduleRunCompleted,
 )
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
+    ScheduleFireStatus,
+    ScheduleRunEntity,
     ScheduleRunStatus,
 )
+from app.modules.schedule.domain.triage import TriageVerdict
+from app.modules.schedule.repositories.held_runs import HeldRunRepository
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
@@ -22,6 +35,34 @@ from app.modules.schedule.repositories.schedule_run_repository import (
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+#: The `error_type` of a fire whose filter could not decide. Distinct from the
+#: two quota failures, because the fix is different again: read the decision,
+#: and make the instruction one the event can answer. A triage's own failures
+#: are its subclasses' `error_type`s.
+FILTER_UNDECIDED = ScheduleFilterUndecidedError.error_type
+_EXPLANATIONS = {
+    error.error_type: error.explanation
+    for error in (
+        ScheduleFilterUndecidedError,
+        ScheduleTriageUndecidedError,
+        ScheduleTriageDeciderMissingError,
+    )
+}
+
+
+def _target_kind(schedule: ScheduleEntity) -> str:
+    return "WORKFLOW" if schedule.workflow_id is not None else "AGENT"
+
+
+def _json(value: Mapping[str, object]) -> dict[str, JsonValue]:
+    """`value` as plain JSON, which is all a held event's columns may hold.
+
+    A datastore row can carry a timestamp or a decimal; `default=str` renders
+    those as the event's filter and its target always read them.
+    """
+    decoded = json.loads(json.dumps(dict(value), default=str))
+    return decoded if isinstance(decoded, dict) else {}
 
 
 class ScheduleRunOutcomeService:
@@ -79,12 +120,127 @@ class ScheduleRunOutcomeService:
         await self._apply_breaker(schedule)
         return True
 
+    async def record_filtered(
+        self,
+        schedule: ScheduleEntity,
+        *,
+        source_event_id: str,
+        user_id: UUID,
+        metadata: Mapping[str, object] | None,
+        llm_output: Mapping[str, object],
+    ) -> bool:
+        """Record an event the schedule's filter turned down (PS-SCHED-012).
+
+        A skip is recorded as a run of its own, ``FILTERED``, carrying the
+        decision in its ``llm_output``, so a person can tell it apart from an
+        event that never arrived and from one that failed. It is not counted on
+        the breaker either way: nothing ran, so nothing succeeded or failed.
+
+        ``last_fire_status`` moves only with a new row. A redelivered event
+        already has its row, and stamping it again would report an old skip as
+        the latest thing the schedule did.
+        """
+        recorded = await self.run_repository.record_filtered(
+            schedule_id=schedule.id,
+            user_id=user_id,
+            source_event_id=source_event_id,
+            target_kind=_target_kind(schedule),
+            metadata=metadata,
+            llm_output=llm_output,
+        )
+        if recorded:
+            await self.schedule_repository.record_fire(
+                schedule.id, status=ScheduleFireStatus.FILTERED
+            )
+        return recorded
+
+    async def record_filter_undecided(
+        self,
+        schedule: ScheduleEntity,
+        *,
+        source_event_id: str,
+        decision_id: UUID | None,
+        user_id: UUID | None = None,
+        metadata: Mapping[str, object] | None = None,
+        error_type: str = FILTER_UNDECIDED,
+    ) -> bool:
+        """Record an event the filter or triage could not decide about, as a failed fire.
+
+        PS-SCHED-012: a filter that fails to evaluate fails the trigger rather
+        than skipping it, and a triage is held to the same. Dead-lettered like
+        any failure that never reached a target, and for the same reason: the
+        decision is recorded under the event, so a retry would read back the
+        same open question. `decision_id` is None only when there was nothing
+        to ask -- a triage whose decider is gone.
+        """
+        recorded = await self.record_pre_dispatch_failure(
+            schedule,
+            source_event_id=source_event_id,
+            error_type=error_type,
+            user_id=user_id,
+            metadata=metadata,
+            llm_output=(
+                {"decision_id": str(decision_id)} if decision_id is not None else {}
+            ),
+        )
+        if recorded:
+            explanation = _EXPLANATIONS.get(error_type, _EXPLANATIONS[FILTER_UNDECIDED])
+            await self.schedule_repository.record_fire(
+                schedule.id,
+                status=ScheduleFireStatus.ERROR,
+                error=(
+                    f"{explanation} (decision {decision_id})."
+                    if decision_id is not None
+                    else f"{explanation}."
+                ),
+            )
+        return recorded
+
+    async def record_held(
+        self,
+        schedule: ScheduleEntity,
+        verdict: TriageVerdict,
+        *,
+        source_event_id: str,
+        user_id: UUID,
+        payload: Mapping[str, object],
+        metadata: Mapping[str, object] | None,
+    ) -> ScheduleRunEntity | None:
+        """Hold an event the triage routed to its digest or to a person.
+
+        Written once per source event, as a skip is: a redelivered event finds
+        the row it has and changes nothing. Returned as it stands, which is
+        what tells the caller whether a question is still owed on it. Not
+        counted on the breaker -- nothing has run yet.
+        """
+        held = await HeldRunRepository(self.uow).hold(
+            schedule_id=schedule.id,
+            user_id=user_id,
+            source_event_id=source_event_id,
+            target_kind=_target_kind(schedule),
+            held_for=verdict.route,
+            payload=_json(payload),
+            metadata=_json(metadata or {}),
+            llm_output=verdict.output,
+        )
+        if held is None:
+            return None
+        run, created = held
+        if created:
+            await self.schedule_repository.record_fire(
+                schedule.id, status=ScheduleFireStatus.HELD
+            )
+        return run
+
     async def record_pre_dispatch_failure(
         self,
         schedule: ScheduleEntity,
         *,
         source_event_id: str,
         error_type: str,
+        user_id: UUID | None = None,
+        metadata: Mapping[str, object] | None = None,
+        llm_output: Mapping[str, object] | None = None,
     ) -> bool:
         """Record a fire that never reached a target, and count it on the breaker.
 
@@ -103,15 +259,19 @@ class ScheduleRunOutcomeService:
 
         Returns whether a new failure was recorded; a repeat of the same
         ``source_event_id`` is a no-op, so a redelivery cannot inflate the streak.
+
+        ``user_id`` is the run's owner when it is not the schedule's -- the row
+        owner of an RLS datastore event -- so the failure is listed to the same
+        people a run of that fire would have been.
         """
         run = await self.run_repository.claim(
             schedule_id=schedule.id,
-            user_id=schedule.user_id,
+            user_id=user_id or schedule.user_id,
             source_event_id=source_event_id,
-            target_kind="WORKFLOW" if schedule.workflow_id is not None else "AGENT",
+            target_kind=_target_kind(schedule),
             payload={},
-            metadata=None,
-            llm_output=None,
+            metadata=dict(metadata) if metadata is not None else None,
+            llm_output=dict(llm_output) if llm_output is not None else None,
         )
         if run is None:
             return False

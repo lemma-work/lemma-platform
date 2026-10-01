@@ -9,4 +9,5 @@ export enum ScheduleFireStatus {
     TRIGGERED = 'TRIGGERED',
     FILTERED = 'FILTERED',
     ERROR = 'ERROR',
+    HELD = 'HELD',
 }

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from app.core.authorization.context import Context
 from app.modules.workflow.domain.context import LoopScope, RunContextReader
+from app.modules.workflow.domain.decision_step import DecisionOutcome
 from app.modules.workflow.domain.errors import WorkflowDomainError
 from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.domain.ports import AgentPort, FunctionPort, SchedulePort
@@ -27,7 +28,7 @@ from app.modules.workflow.execution.outcome import (
     Suspend,
 )
 from app.modules.workflow.execution.step_context import StepContext
-from app.modules.workflow.domain.nodes import NodeType
+from app.modules.workflow.domain.nodes import DecisionNode, NodeType
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind, origin_scope
 
@@ -175,7 +176,7 @@ class RunStepper:
         self, run: WorkflowRunEntity, flow: WorkflowEntity, node_id: str
     ) -> StepResult:
         """Continue execution after node_id completed externally (resume)."""
-        self.move_past(run, flow, node_id)
+        self.move_past(run, flow, node_id, forced=_answered_branch(run, flow, node_id))
         if run.status != WorkflowRunStatus.RUNNING:
             self._log_outcome(run)
             return StepResult()
@@ -257,6 +258,12 @@ class RunStepper:
             function=self._function,
             schedule=self._schedule,
             authz_ctx=self._authz_ctx,
+            loop_path=tuple(frame.index for frame in run.execution_stack),
+            earlier_refs=frozenset(
+                step.external_ref
+                for step in run.step_history
+                if step.node_id == run.current_node_id and step.external_ref
+            ),
         )
 
     def _log_outcome(self, run: WorkflowRunEntity) -> None:
@@ -268,3 +275,20 @@ class RunStepper:
                 run_id=str(run.id),
                 failed_node_id=run.failed_node_id,
             )
+
+
+def _answered_branch(
+    run: WorkflowRunEntity, flow: WorkflowEntity, node_id: str
+) -> str | None:
+    """Where a DECISION node that waited on its question goes with the answer.
+
+    Every other node resumes onto its outgoing edge; a decision's branches are
+    not edges. None falls through to the edge, as an unmatched rule does.
+    """
+    node = next((node for node in flow.nodes if node.id == node_id), None)
+    if not isinstance(node, DecisionNode) or node.config.question is None:
+        return None
+    outcome = DecisionOutcome.model_validate(
+        run.execution_context.node_output(node_id) or {}
+    )
+    return node.config.question.route(outcome.choice, outcome.open)

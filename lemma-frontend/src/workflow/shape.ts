@@ -17,8 +17,9 @@
  *  the validator uses.
  *
  *  And the graph is not all in `edges`. A decision's branches are
- *  `config.rules[].next_node_id` and a loop's body is `config.child_node_id`
- *  (`domain/graph.py:106`); neither is an edge. A walk that follows only
+ *  `config.rules[].next_node_id` and its question's `branches` and `on_open`,
+ *  and a loop's body is `config.child_node_id` (`domain/graph.py:106`); none
+ *  of them is an edge. A walk that follows only
  *  `edges` silently loses every branch arm and every loop body and then
  *  reports them as unreachable, which is the most confident kind of wrong.
  *
@@ -28,6 +29,7 @@
  */
 
 import { isRecord, sayFor, str } from "./runs";
+import { questionTargets, readQuestion, sayQuestion } from "./question";
 
 /* ── the kinds, as the backend spells them ─────────────────────────── */
 
@@ -267,13 +269,14 @@ function sayInputs(config: Record<string, unknown> | null): { detail: string[]; 
     };
 }
 
-/** The branches, with their conditions.
+/** The branches, with their conditions, then the question and its answers.
  *
  *  This is the one node type where the detail *is* the shape: a decision with
  *  its rules hidden is a step that says "branches" and leaves the reader to
- *  guess where. The first truthy rule wins and the outgoing edge is the
- *  fall-through (`domain/nodes/decision.py:26`), so the order is meaningful
- *  and the last line says what happens when none of them match.
+ *  guess where. The first truthy rule wins; when none does, a node with a
+ *  question asks it and follows the answer's branch; the outgoing edge is the
+ *  fall-through (`domain/nodes/decision.py`). So the order is meaningful, and
+ *  the lines keep it.
  */
 function sayDecision(config: Record<string, unknown> | null): { detail: string[]; branches: string[] } {
     const rules = Array.isArray(config?.rules) ? config.rules : [];
@@ -288,6 +291,13 @@ function sayDecision(config: Record<string, unknown> | null): { detail: string[]
         const condition = str(rule.condition);
         if (target) branches.push(target);
         detail.push((condition ?? "on some condition the payload did not carry") + " → " + (target ?? "nowhere named"));
+    }
+    const question = readQuestion(config);
+    if (question) {
+        detail.push(sayQuestion(question));
+        for (const { answer, target } of question.branches) detail.push(answer + " → " + target);
+        if (question.onOpen) detail.push("Left open → " + question.onOpen);
+        branches.push(...questionTargets(question));
     }
     if (detail.length === 0) detail.push("No branches — it falls straight through.");
     return { detail, branches };

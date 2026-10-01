@@ -25,6 +25,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleFireStatus,
     ScheduleType,
 )
+from app.modules.schedule.domain.triage import next_digest_at, triage_json
 from app.modules.schedule.domain.value_objects import (
     DatastoreOperation,
     parse_datastore_operation,
@@ -95,6 +96,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             instruction=entity.instruction,
             filter_instruction=entity.filter_instruction,
             filter_output_schema=entity.filter_output_schema,
+            triage=triage_json(entity.triage),
             account_id=entity.account_id,
             connector_trigger_id=entity.connector_trigger_id,
             visibility=entity.visibility,
@@ -104,6 +106,9 @@ class ScheduleRepository(ScheduleRepositoryInterface):
                 entity.config,
                 is_active=entity.is_active,
                 schedule_type=entity.schedule_type,
+            ),
+            next_digest_at=next_digest_at(
+                entity.triage, after=datetime.now(timezone.utc)
             ),
         )
         self.session.add(schedule)

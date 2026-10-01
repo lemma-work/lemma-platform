@@ -156,6 +156,7 @@ friendly verbs, or raw permission ids when you need one the presets don't cover.
 | `function:score_ticket:execute` | `function` → `function.execute` | expose a function as a tool (§6) |
 | `agent:researcher:execute` | `agent` → `agent.execute` | dispatch another agent (§7) |
 | `workflow:intake:execute` | `workflow` → `workflow.execute` | start a workflow |
+| `decider:email-triage:execute` | `decider` → `decider.execute` | ask a decider and answer its decisions |
 | `schedule:nightly:read` / `:write` | `schedule` → `schedule.read` / `.update` | inspect or retarget a schedule |
 | `app:dashboard:read` / `:write` / `:publish` | `app` → `app.*` | a Lemma **app** in this pod |
 

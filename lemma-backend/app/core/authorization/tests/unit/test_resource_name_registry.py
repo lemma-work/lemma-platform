@@ -40,6 +40,9 @@ EXPECTED_TYPES = {
     ResourceType.SCHEDULE,
     ResourceType.FOLDER,
     ResourceType.DOCUMENT,
+    # Added with the type itself, not transcribed: deciders are granted by name
+    # from bundles and the CLI (`decider:<name>:execute`) like functions.
+    ResourceType.DECIDER,
 }
 
 
@@ -113,6 +116,7 @@ def test_a_module_may_declare_nothing(assembled: dict) -> None:
         "agent",
         "apps",
         "datastore",
+        "decisions",
         "function",
         "schedule",
         "workflow",

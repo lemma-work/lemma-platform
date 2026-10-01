@@ -100,6 +100,62 @@ function createBranch(decisionId: string, index: number, overrides: Partial<Step
     };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+type QuestionArm = { target: string; answers: string[]; onOpen: boolean; label: string };
+
+/** A DECISION's question arms, one per target: `config.question.branches`
+ *  (option -> node) in the order written, then `on_open`. Null without a
+ *  question. None of these is an edge, so the edge walk never finds them. */
+function questionArmsOf(config: unknown): QuestionArm[] | null {
+    const question = isRecord(config) && isRecord(config.question) ? config.question : null;
+    if (!question) return null;
+    const arms = new Map<string, QuestionArm>();
+    const armFor = (target: string) => {
+        const arm = arms.get(target) ?? { target, answers: [], onOpen: false, label: '' };
+        arms.set(target, arm);
+        return arm;
+    };
+    if (isRecord(question.branches)) {
+        Object.entries(question.branches).forEach(([answer, target]) => {
+            if (typeof target === 'string' && target) armFor(target).answers.push(answer);
+        });
+    }
+    if (typeof question.on_open === 'string' && question.on_open) {
+        armFor(question.on_open).onOpen = true;
+    }
+    return [...arms.values()].map((arm) => ({
+        ...arm,
+        label: [...arm.answers, ...(arm.onOpen ? ['Left open'] : [])].join(' / '),
+    }));
+}
+
+/** The question with each arm's target read back off the arm's first step. */
+function withQuestionTargets(
+    question: Record<string, unknown>,
+    branches: StepBranch[],
+    nextId: string | null,
+): Record<string, unknown> {
+    const next: Record<string, unknown> = { ...question };
+    const targets: Record<string, unknown> = isRecord(question.branches) ? { ...question.branches } : {};
+    branches.forEach((branch) => {
+        if (!branch.question) return;
+        const target = branch.steps[0]?.id || nextId;
+        branch.question.answers.forEach((answer) => {
+            if (target) targets[answer] = target;
+            else delete targets[answer];
+        });
+        if (branch.question.onOpen) {
+            if (target) next.on_open = target;
+            else delete next.on_open;
+        }
+    });
+    next.branches = targets;
+    return next;
+}
+
 export function createDefaultDecisionBranches(decisionId: string): StepBranch[] {
     return [
         createBranch(decisionId, 0, { label: 'Yes' }),
@@ -176,6 +232,7 @@ function parseChain(startId: string, options: ParseOptions): { steps: StepNode[]
                 && Array.isArray((node.config as { paths?: unknown[] }).paths)
                     ? (node.config as { paths: unknown[] }).paths
                     : [];
+            const asked = questionArmsOf(node.config);
             const mergeCandidates: string[] = [];
 
             step.branches = outgoing.map((target, index) => {
@@ -188,6 +245,18 @@ function parseChain(startId: string, options: ParseOptions): { steps: StepNode[]
 
                 const rule = rawRules[index] as { condition?: string } | undefined;
                 const path = rawPaths[index] as { label?: string; condition?: string } | undefined;
+                // An edge no rule claims on a step that asks a question is where
+                // unmapped answers fall through. Read as a `1 == 1` rule it would
+                // answer first, and the question would never be asked.
+                if (asked && !rule?.condition && !path?.condition) {
+                    return {
+                        id: `${step.id}_branch_${index + 1}`,
+                        label: 'Otherwise',
+                        condition: '',
+                        steps: parsed.steps,
+                        fallThrough: true,
+                    };
+                }
                 const condition = rule?.condition || path?.condition || '1 == 1';
                 const label = typeof path?.label === 'string' && path.label.trim() ? path.label.trim() : `Branch ${index + 1}`;
                 return {
@@ -197,6 +266,25 @@ function parseChain(startId: string, options: ParseOptions): { steps: StepNode[]
                     conditionBuilder: parseConditionBuilder(condition) || undefined,
                     steps: parsed.steps,
                 };
+            });
+
+            // The question's arms. A target an edge already leads to keeps its
+            // arm there, and its mapping is saved back untouched.
+            (asked || []).forEach((arm, index) => {
+                if (outgoing.includes(arm.target) || !options.nodeMap.has(arm.target)) return;
+                const parsed = parseChain(arm.target, {
+                    ...options,
+                    markIncluded: false,
+                    stopAtMerge: true,
+                });
+                if (parsed.nextId) mergeCandidates.push(parsed.nextId);
+                step.branches?.push({
+                    id: `${step.id}_answer_${index + 1}`,
+                    label: arm.label,
+                    condition: '',
+                    steps: parsed.steps,
+                    question: { answers: arm.answers, onOpen: arm.onOpen },
+                });
             });
 
             steps.push(step);
@@ -421,11 +509,16 @@ export function serializeDefinition(steps: StepNode[]): FlowDefinition {
             }
 
             if (step.type === NodeType.DECISION) {
-                const rules = (step.branches || [])
+                const question = isRecord(config.question) ? config.question : null;
+                const ruleArms = (step.branches || []).filter((branch) => !branch.question && !branch.fallThrough);
+                const rules = ruleArms
                     .map((branch, index) => {
                         const targetId = branch.steps[0]?.id || nextId;
                         if (!targetId) return null;
-                        const fallback = index === (step.branches?.length || 1) - 1 ? '1 == 1' : '';
+                        // A blank condition becomes a catch-all, which on a step
+                        // that asks a question would answer before it is asked.
+                        if (question && !branch.conditionBuilder && !branch.condition.trim()) return null;
+                        const fallback = index === ruleArms.length - 1 ? '1 == 1' : '';
                         return {
                             condition: getBranchCondition(branch) || fallback || '1 == 1',
                             next_node_id: targetId,
@@ -433,6 +526,9 @@ export function serializeDefinition(steps: StepNode[]): FlowDefinition {
                     })
                     .filter(Boolean);
                 config.rules = rules;
+                if (question) {
+                    config.question = withQuestionTargets(question, step.branches || [], nextId);
+                }
             }
 
             if (step.type === NodeType.LOOP) {
@@ -455,6 +551,13 @@ export function serializeDefinition(steps: StepNode[]): FlowDefinition {
 
         if (step.type === NodeType.DECISION) {
             (step.branches || []).forEach((branch) => {
+                if (branch.question) {
+                    // Reached through the question, never an edge: the first
+                    // edge is the fall-through, and would send every unmapped
+                    // answer down this arm.
+                    visitList(branch.steps, nextId);
+                    return;
+                }
                 if (branch.steps.length > 0) {
                     addEdge(step.id, branch.steps[0].id, branch.label);
                     visitList(branch.steps, nextId);

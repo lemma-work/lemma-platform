@@ -8,7 +8,7 @@ picks up from reality.
 
 :class:`PlanBuilder` is pure: it reads the staged bundle from disk and asks an
 :class:`ExistingResources` port for the pod's current resource names (and, for a
-table being updated, its columns). Production wires
+table being updated, its columns; for a decider, its definition). Production wires
 :class:`ServiceExistingResources` (module services over a short UoW); unit tests
 inject a fake, so the diff logic is tested without a database.
 """
@@ -38,6 +38,7 @@ from lemma_pod_bundle.limits import (
 from app.modules.pod_bundle.domain.exportable import is_exportable_agent
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
+from app.modules.pod_bundle.infrastructure import decider_apply
 from app.modules.pod_bundle.infrastructure.grants import has_grants
 from app.modules.pod_bundle.domain.state import (
     ImportPlan,
@@ -56,6 +57,7 @@ class ExistingResources(Protocol):
 
     async def table_names(self) -> set[str]: ...
     async def table_manifest(self, name: str) -> dict[str, Any] | None: ...
+    async def deciders(self) -> Mapping[str, decider_apply.DeciderSnapshot]: ...
     async def function_names(self) -> set[str]: ...
     async def agent_names(self) -> set[str]: ...
     async def workflow_names(self) -> set[str]: ...
@@ -262,6 +264,9 @@ class PlanBuilder:
             if data_path.is_file():
                 seeded_rows += _check_seed_rows(data_path, name, seeded_rows)
                 data_steps.append((name, {}))
+
+        # --- deciders (before anything that can name one) --------------------
+        steps.extend(await decider_apply.plan_deciders(bundle_root, self._existing))
 
         # --- functions (+ deferred grants) -----------------------------------
         existing_functions = await self._existing.function_names()
@@ -471,6 +476,9 @@ class ServiceExistingResources:
         if table is None:
             return None
         return TableResponse.model_validate(table).model_dump(mode="json")
+
+    async def deciders(self) -> dict[str, decider_apply.DeciderSnapshot]:
+        return await decider_apply.pod_deciders(self._pod_id)
 
     async def function_names(self) -> set[str]:
         from app.modules.function.contracts.provisioning import list_function_names

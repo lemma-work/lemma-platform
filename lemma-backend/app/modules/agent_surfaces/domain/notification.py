@@ -24,6 +24,7 @@ to list it" — not a wait mechanism. The waits themselves stay where they are.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
@@ -79,6 +80,55 @@ class NotificationDeliveryStatus(StrEnum):
     UNDELIVERABLE = "UNDELIVERABLE"
     # A channel was chosen and the send raised.
     FAILED = "FAILED"
+
+
+#: An `action` answered by picking one of its `options`, each `{key, label}`.
+#: The reply names the key in `data.answer`, or a person types the key or the
+#: label as their answer.
+CHOICE_ACTION = "CHOICE"
+
+
+def choice_options(action: Mapping[str, object] | None) -> dict[str, str]:
+    """``{key: label}`` when ``action`` is a choice, and empty when it is not.
+
+    Read off a JSON column, so every level is checked rather than trusted.
+    """
+    if not action or action.get("type") != CHOICE_ACTION:
+        return {}
+    options = action.get("options")
+    if not isinstance(options, list):
+        return {}
+    found: dict[str, str] = {}
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        key, label = option.get("key"), option.get("label")
+        if isinstance(key, str) and key:
+            found[key] = label if isinstance(label, str) and label else key
+    return found
+
+
+def chosen_option(
+    options: Mapping[str, str], *, summary: str, data: Mapping[str, object] | None
+) -> str | None:
+    """The option a reply picks, or None when it names none of them.
+
+    ``data.answer`` decides when it is given, so an agent recording a reply
+    cannot be overruled by the wording of its summary. Without it, the summary
+    must be an option's key or label, give or take case and a full stop.
+    """
+    answer = (data or {}).get("answer")
+    if answer is not None:
+        return answer if isinstance(answer, str) and answer in options else None
+    said = _fold(summary)
+    for key, label in options.items():
+        if said in (_fold(key), _fold(label)):
+            return key
+    return None
+
+
+def _fold(text: str) -> str:
+    return " ".join(text.strip().lower().split()).strip(".!?")
 
 
 class NotificationEntity(AggregateRoot):
@@ -140,6 +190,16 @@ class NotificationEntity(AggregateRoot):
             raise AgentSurfaceValidationError(
                 "A WORKFLOW_FORM notification must carry its action."
             )
+        # A schedule's question holds an event until it is answered, so one it
+        # could not be answered with would hold that event for good.
+        if (
+            self.origin_kind is NotificationOriginKind.SCHEDULE
+            and self.expects_response
+            and not self.offers_choice
+        ):
+            raise AgentSurfaceValidationError(
+                "A SCHEDULE notification that asks must offer its choices."
+            )
         return self
 
     def mark_delivered(
@@ -191,6 +251,21 @@ class NotificationEntity(AggregateRoot):
         """What the UI renders a Respond button for."""
         return self.expects_response and self.status is NotificationStatus.OPEN
 
+    @property
+    def offers_choice(self) -> bool:
+        """True when a reply must pick one of ``action``'s options."""
+        return bool(choice_options(self.action))
+
+    @property
+    def announces_close(self) -> bool:
+        """Whether its asker must hear how it closed: answered, expired or cancelled.
+
+        A schedule holds an event until its person answers, and each way this
+        closes settles that event differently -- which the schedule module
+        decides, not this one.
+        """
+        return self.origin_kind is NotificationOriginKind.SCHEDULE
+
     def _require_open(self, verb: str) -> None:
         """The single gate every resolving transition passes through.
 
@@ -224,6 +299,16 @@ class NotificationEntity(AggregateRoot):
                 notification_id=self.id,
                 status=self.status.value,
             )
+        options = choice_options(self.action)
+        if options:
+            # Checked before anything changes: a reply that picks nothing must
+            # leave the question open for one that does.
+            choice = chosen_option(options, summary=summary, data=data)
+            if choice is None:
+                raise AgentSurfaceValidationError(
+                    f"Answer with one of: {', '.join(options)}."
+                )
+            data = {**(data or {}), "answer": choice}
         self.status = NotificationStatus.RESPONDED
         self.response_summary = summary
         self.response_data = data

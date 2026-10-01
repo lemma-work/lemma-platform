@@ -10,6 +10,7 @@ class ResourceType(str, Enum):
     CONVERSATION = "conversation"
     DATASTORE_RECORD = "datastore_record"
     DATASTORE_TABLE = "datastore_table"
+    DECIDER = "decider"
     DOCUMENT = "document"
     FOLDER = "folder"
     FUNCTION = "function"

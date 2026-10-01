@@ -71,6 +71,12 @@ class Permissions:
     WORKFLOW_DELETE: ClassVar[str] = "workflow.delete"
     WORKFLOW_EXECUTE: ClassVar[str] = "workflow.execute"
 
+    DECIDER_READ: ClassVar[str] = "decider.read"
+    DECIDER_CREATE: ClassVar[str] = "decider.create"
+    DECIDER_UPDATE: ClassVar[str] = "decider.update"
+    DECIDER_DELETE: ClassVar[str] = "decider.delete"
+    DECIDER_EXECUTE: ClassVar[str] = "decider.execute"
+
     SCHEDULE_READ: ClassVar[str] = "schedule.read"
     SCHEDULE_CREATE: ClassVar[str] = "schedule.create"
     SCHEDULE_UPDATE: ClassVar[str] = "schedule.update"
@@ -240,6 +246,24 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Execute functions",
     ),
     PermissionDefinition(
+        Permissions.DECIDER_READ, PermissionScope.POD, "decider", "Read deciders"
+    ),
+    PermissionDefinition(
+        Permissions.DECIDER_CREATE, PermissionScope.POD, "decider", "Create deciders"
+    ),
+    PermissionDefinition(
+        Permissions.DECIDER_UPDATE, PermissionScope.POD, "decider", "Update deciders"
+    ),
+    PermissionDefinition(
+        Permissions.DECIDER_DELETE, PermissionScope.POD, "decider", "Delete deciders"
+    ),
+    PermissionDefinition(
+        Permissions.DECIDER_EXECUTE,
+        PermissionScope.POD,
+        "decider",
+        "Ask deciders and answer their decisions",
+    ),
+    PermissionDefinition(
         Permissions.WORKFLOW_READ, PermissionScope.POD, "workflow", "Read workflows"
     ),
     PermissionDefinition(
@@ -333,6 +357,7 @@ POD_VIEWER_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.AGENT_READ,
         Permissions.FUNCTION_READ,
         Permissions.WORKFLOW_READ,
+        Permissions.DECIDER_READ,
         Permissions.SCHEDULE_READ,
         Permissions.CONVERSATION_READ,
     }
@@ -344,6 +369,7 @@ POD_USER_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.AGENT_EXECUTE,
         Permissions.FUNCTION_EXECUTE,
         Permissions.WORKFLOW_EXECUTE,
+        Permissions.DECIDER_EXECUTE,
         # Pod users can create their own schedules. The schedule is owned by its
         # creator and defaults to PERSONAL visibility, and the owner-action set
         # lets the creator manage (read/update/delete) it without needing the
@@ -371,6 +397,8 @@ POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.FUNCTION_UPDATE,
         Permissions.WORKFLOW_CREATE,
         Permissions.WORKFLOW_UPDATE,
+        Permissions.DECIDER_CREATE,
+        Permissions.DECIDER_UPDATE,
         Permissions.SCHEDULE_CREATE,
         Permissions.SCHEDULE_UPDATE,
     }
@@ -388,6 +416,7 @@ POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.AGENT_DELETE,
         Permissions.FUNCTION_DELETE,
         Permissions.WORKFLOW_DELETE,
+        Permissions.DECIDER_DELETE,
         Permissions.SCHEDULE_DELETE,
         Permissions.CONNECTOR_ACCOUNT_MANAGE,
     }
@@ -449,6 +478,10 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
     Permissions.AGENT_DELETE: frozenset({Permissions.AGENT_READ}),
     Permissions.FUNCTION_DELETE: frozenset({Permissions.FUNCTION_READ}),
     Permissions.WORKFLOW_DELETE: frozenset({Permissions.WORKFLOW_READ}),
+    # Asking a decider reads its definition; changing or deleting one loads it.
+    Permissions.DECIDER_EXECUTE: frozenset({Permissions.DECIDER_READ}),
+    Permissions.DECIDER_UPDATE: frozenset({Permissions.DECIDER_READ}),
+    Permissions.DECIDER_DELETE: frozenset({Permissions.DECIDER_READ}),
 }
 
 

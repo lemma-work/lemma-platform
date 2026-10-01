@@ -615,6 +615,93 @@ def test_validate_workflow_flags_decision_with_no_rules():
     assert "no rules" in joined
 
 
+_EXPORTED_DECIDER = {
+    "name": "email-triage",
+    "definition": {
+        "description": "What Kit does with each new email.",
+        "input": {"fields": ["from", "subject", "labels"], "max_chars": 8000},
+        "questions": {
+            "action": {
+                "type": "choice",
+                "prompt": "What should Kit do with this email?",
+                "options": {
+                    "act": {"description": "A customer is waiting.", "examples": []},
+                    # The shorthand a person writes by hand.
+                    "ignore": "Newsletters.",
+                },
+                "fallback": "ignore",
+            },
+            "urgency": {
+                "type": "scale",
+                "prompt": "How soon?",
+                "levels": ["later", "today", "now"],
+            },
+            "money": {"type": "yes_no", "prompt": "About money?", "yes": "It is."},
+        },
+        "rules": [
+            {
+                "when": "contains(labels, 'PROMOTIONS')",
+                "field": "text",
+                "answer": {"action": "ignore"},
+            },
+            {"phrases": ["invoice"], "field": "subject", "answer": {"money": True}},
+        ],
+        "policy": {"lane": "ambient", "rules_only": {"action": ["ignore"]}},
+    },
+}
+
+
+def test_validate_decider_accepts_what_an_export_writes():
+    from lemma_cli.cli_app.scaffold import validate_decider
+
+    assert validate_decider(_EXPORTED_DECIDER) == []
+
+
+def test_validate_decider_flags_what_the_server_would_refuse():
+    from lemma_cli.cli_app.scaffold import validate_decider
+
+    issues = validate_decider(
+        {
+            "name": "Email Triage",
+            "examples": [{"action": "act"}],
+            "definition": {
+                "summary": "A field definitions do not have.",
+                "questions": {
+                    "Action": {"type": "choice", "prompt": "?"},
+                    "pick": {
+                        "type": "choice",
+                        "prompt": "Which?",
+                        "options": {"a": "A"},
+                        "fallback": "b",
+                    },
+                    "tone": {"type": "scale", "prompt": "How warm?", "levels": ["x"]},
+                    "flag": {"type": "maybe", "prompt": "?"},
+                    "ok": {"type": "yes_no", "prompt": "?", "fallback": "no"},
+                },
+                "rules": [{"when": "x", "phrases": ["y"], "answer": {"ghost": True}}],
+                "policy": {"require_confidence": {"phantom": {"a": 0.9}}},
+            },
+        }
+    )
+
+    joined = "\n".join(issues)
+    for expected in (
+        "unrecognized field(s) examples",
+        "decider name 'Email Triage'",
+        "unrecognized definition field(s): summary",
+        "`definition.description` is required",
+        "question 'Action': a question key",
+        "question 'pick': fallback 'b' is not one of its options",
+        "question 'tone': a scale needs 2 to 10 `levels`",
+        "question 'flag': `type` must be one of",
+        "question 'ok': unrecognized field(s) fallback on a yes_no question",
+        "rule 0 needs exactly one of `when` or `phrases`",
+        "rule 0 answers unknown question 'ghost'",
+        "policy.require_confidence names unknown question 'phantom'",
+    ):
+        assert expected in joined, expected
+
+
 def test_extract_portable_variables_tokenizes_assignee_member_id(tmp_path: Path):
     import json
 

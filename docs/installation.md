@@ -135,8 +135,8 @@ models**. Pick the model teammates use and, optionally:
 
 - **a model that reads images**, used when a teammate's own model cannot see
   an attachment (Anthropic's models read images themselves);
-- **a fast model** for conversation titles and summaries, which keeps those
-  cheap.
+- **a fast model** for conversation titles, summaries and decisions, which
+  keeps those cheap.
 
 **Test** lists the provider's models and asks the chosen one for a one-word
 answer. **Save** validates the provider again, stores the key in macOS

@@ -62,6 +62,11 @@ _FIRING_FACTS = frozenset(
         "fired_at",
         "scheduled_for",
         "timezone",
+        # A triage's digest says it is one, how many events it carries, and
+        # whether more are still held -- all said as a sentence instead.
+        "digest",
+        "held",
+        "more_waiting",
     }
 )
 
@@ -366,6 +371,25 @@ class AgentControlAdapter(AgentPort):
         return lines
 
     @staticmethod
+    def _digest_sentence(metadata: dict[str, object]) -> str | None:
+        """What a triage digest is, said once, so its events read as a batch.
+
+        A digest is one run for many held events, and nothing else in the
+        message says the payload is a list of them rather than one event.
+        """
+        if metadata.get("digest") is not True:
+            return None
+        held = metadata.get("held")
+        count = f"{held} events" if isinstance(held, int) and held != 1 else "1 event"
+        sentence = (
+            f"This run is a digest: {count} the schedule held since its last "
+            "digest, oldest first, under `payload.events`."
+        )
+        if metadata.get("more_waiting") is True:
+            sentence += " More are still held for the next digest."
+        return sentence
+
+    @staticmethod
     def _firing_event_body(
         input_data: dict[str, object], metadata: dict[str, object]
     ) -> dict[str, object]:
@@ -415,6 +439,9 @@ class AgentControlAdapter(AgentPort):
         raw = input_data.get("metadata")
         metadata = raw if isinstance(raw, dict) else {}
         lines = cls._firing_sentences(metadata)
+        digest = cls._digest_sentence(metadata)
+        if digest:
+            lines.append(digest)
 
         if instructions and instructions.strip():
             lines.append(f"What to do:\n{instructions.strip()}")

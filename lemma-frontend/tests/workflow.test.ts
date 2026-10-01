@@ -85,6 +85,8 @@ test("RUNNING says what it is actually stuck on", () => {
     assert.equal(sayStatus("RUNNING", "AGENT"), "Waiting on an agent");
     assert.equal(sayStatus("RUNNING", "FUNCTION"), "Waiting on a function");
     assert.equal(sayStatus("RUNNING", "TIME"), "Waiting on a timer");
+    // A DECISION node's question, asked by a job once the step has suspended.
+    assert.equal(sayStatus("RUNNING", "DECISION"), "Deciding");
     // A HUMAN wait on a RUNNING run is not a thing the engine produces, and
     // the status is the one to trust if it ever is.
     assert.equal(sayStatus("RUNNING", "HUMAN"), "Running");
@@ -119,6 +121,7 @@ test("a wait with no node id cannot be answered, so it is not a wait", () => {
     assert.equal(readWait({ ...wait, wait_type: "SOMETHING" }), null);
     assert.equal(readWait({ ...wait, id: null }), null);
     assert.equal(waitTypeOf({ wait_type: "TIME" }), "TIME");
+    assert.equal(waitTypeOf({ wait_type: "DECISION" }), "DECISION");
     assert.equal(waitTypeOf(null), null);
 });
 
@@ -571,3 +574,64 @@ test("every node kind says what it does, and none of them throws on an empty con
     assert.match(bare[4].detail[1], /points at nothing/);
     assert.match(bare[5].detail[0], /did not carry/);
 });
+
+test("a decision that asks a question says what it asks and where each answer goes", () => {
+    // A question's branches are `config.question.branches` and `on_open`, not
+    // edges (domain/nodes/decision.py) — so, like a rule's target, a walk that
+    // only followed edges would print every arm as unreachable.
+    const shape = readShape({
+        name: "support-triage",
+        nodes: [
+            node("triage", "DECISION", {
+                rules: [{ condition: "contains(start.payload.labels, 'SPAM')", next_node_id: "archive" }],
+                question: {
+                    input: { type: "expression", value: "start.payload" },
+                    definition: {
+                        description: "What to do with a support email.",
+                        questions: {
+                            action: {
+                                type: "choice",
+                                prompt: "What should Kit do with this email?",
+                                options: { act: "Reply.", ignore: "Leave it." },
+                            },
+                        },
+                    },
+                    branches: { act: "reply", ignore: "archive" },
+                    on_open: "review",
+                },
+            }),
+            node("reply", "AGENT", { agent_name: "support" }),
+            node("archive", "FUNCTION", { function_name: "archive-email" }),
+            node("review", "FORM", { input_schema: {} }),
+        ],
+        edges: [],
+        start: { type: "EVENT", config: { connector_id: "gmail", connector_trigger_id: "new_email" } },
+    });
+
+    assert.ok(shape);
+    assert.deepEqual(shape.orphans, []);
+    assert.equal(shape.trouble, null);
+    const triage = shape.ordered[0];
+    assert.equal(triage.id, "triage");
+    assert.deepEqual(triage.detail, [
+        "contains(start.payload.labels, 'SPAM') → archive",
+        "Asks: What should Kit do with this email? → act / ignore",
+        "act → reply",
+        "ignore → archive",
+        "Left open → review",
+    ]);
+    assert.deepEqual(triage.branches, ["archive", "reply", "archive", "review"]);
+    assert.deepEqual(ids(shape.ordered).sort(), ["archive", "reply", "review", "triage"]);
+});
+
+test("a question asked of a named decider says its name", () => {
+    const step = readFlowStep(
+        node("triage", "DECISION", {
+            question: { input: { type: "literal", value: 1 }, decider: "email-triage", branches: {} },
+        }),
+        0,
+    );
+    assert.deepEqual(step.detail, ["Asks email-triage"]);
+    assert.deepEqual(step.branches, []);
+});
+

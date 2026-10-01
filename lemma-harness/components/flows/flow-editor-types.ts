@@ -8,6 +8,13 @@ export type StepBranch = {
     condition: string;
     conditionBuilder?: ConditionBuilder;
     steps: StepNode[];
+    /** An arm of the step's question rather than of a rule: the options that
+     *  take it, and whether a question left open does. Saved into
+     *  `config.question`, never as a rule or an edge. */
+    question?: { answers: string[]; onOpen: boolean };
+    /** The fall-through edge of a step that asks a question. Saved as an edge
+     *  alone: a catch-all rule would answer before the question is asked. */
+    fallThrough?: boolean;
 };
 
 export type StepNode = {

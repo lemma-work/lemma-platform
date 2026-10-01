@@ -1909,11 +1909,105 @@
           "CONNECTORS",
           "WAIT",
           "MESSAGING",
+          "DECISIONS",
           "MEMORY",
           "VIEW_IMAGE"
         ],
         "title": "AgentToolset",
         "type": "string"
+      },
+      "Agreement": {
+        "properties": {
+          "agreed": {
+            "title": "Agreed",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agreed",
+          "total"
+        ],
+        "title": "Agreement",
+        "type": "object"
+      },
+      "Answer": {
+        "description": "One question's answer and where it came from.\n\n`distribution` and `confidence` are System One's and exist only when it\nanswered. A model's answer carries neither, and nothing here invents one.\n`abstained` marks a fallback taken because no rung committed.",
+        "properties": {
+          "abstained": {
+            "default": false,
+            "title": "Abstained",
+            "type": "boolean"
+          },
+          "by": {
+            "$ref": "#/components/schemas/Rung"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "distribution": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distribution"
+          },
+          "value": {
+            "$ref": "#/components/schemas/AnswerValue"
+          }
+        },
+        "required": [
+          "value",
+          "by"
+        ],
+        "title": "Answer",
+        "type": "object"
+      },
+      "AnswerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "answers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AnswerValue"
+            },
+            "minProperties": 1,
+            "title": "Answers",
+            "type": "object"
+          },
+          "by": {
+            "default": "person",
+            "description": "Who answered. A person's answer teaches the decider; an agent's is recorded and never becomes an example.",
+            "enum": [
+              "person",
+              "agent"
+            ],
+            "title": "By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answers"
+        ],
+        "title": "AnswerBody",
+        "type": "object"
       },
       "AnswerSignInRequest": {
         "properties": {
@@ -1928,6 +2022,25 @@
         ],
         "title": "AnswerSignInRequest",
         "type": "object"
+      },
+      "AnswerValue": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer"
+          }
+        ]
       },
       "AppBundleUploadRequest": {
         "properties": {
@@ -3102,6 +3215,55 @@
         ],
         "title": "BundleSourceKind",
         "type": "string"
+      },
+      "ChoiceQuestion": {
+        "additionalProperties": false,
+        "description": "Exactly one of the options.\n\nDeclared options are the fixed ones; a caller adds its own with each call.\nThat is how one definition answers \"which of these?\" over the person's\npods, the open conversations or the options of a question already put to\nthem, while its `none` or `not_an_answer` is always there to fall back on.",
+        "properties": {
+          "fallback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The option to answer when nothing clearly applies.",
+            "title": "Fallback"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/Option"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "prompt": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "type": {
+            "const": "choice",
+            "default": "choice",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "ChoiceQuestion",
+        "type": "object"
       },
       "ColumnSchema": {
         "description": "Schema for a datastore table column.",
@@ -4592,6 +4754,24 @@
         "title": "CreateConversationRequest",
         "type": "object"
       },
+      "CreateDeciderBody": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/DeciderDefinition"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "CreateDeciderBody",
+        "type": "object"
+      },
       "CreateFolderRequest": {
         "properties": {
           "description": {
@@ -4890,13 +5070,14 @@
           "filter_instruction": {
             "anyOf": [
               {
+                "maxLength": 8000,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Optional schedule-level LLM filter instruction. Filters belong to the schedule, not the workflow start.",
+            "description": "WEBHOOK and DATASTORE schedules only: a yes/no condition, in your own words, that each event must meet to fire the schedule. It is asked as a decision (System One when configured, the system model otherwise), and every event it turns down is recorded as a FILTERED run carrying the decision's id. Refused on TIME schedules, which have no event to judge.",
             "title": "Filter Instruction"
           },
           "filter_output_schema": {
@@ -4909,7 +5090,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional schema for the schedule-level filter output. Filters belong to the schedule, not the workflow start.",
+            "description": "Optional JSON schema of fields to extract from an event the filter let through; the target reads them, with `should_proceed` and `decision_id`, as `llm_output`. Refused on TIME schedules.",
             "title": "Filter Output Schema"
           },
           "instruction": {
@@ -4941,6 +5122,17 @@
           },
           "schedule_type": {
             "$ref": "#/components/schemas/ScheduleType"
+          },
+          "triage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "WEBHOOK and DATASTORE schedules only, instead of a filter: a pod decider asked about each event, and what each option of its choice question does with it -- act (wake the target now), digest (hold it for the next digest, one run for many events), ask (hold it and ask the event's owner, whose answer routes it and teaches the decider) or ignore (record it as skipped). Every declared option must be routed."
           },
           "visibility": {
             "anyOf": [
@@ -5277,8 +5469,532 @@
         "title": "DatastoreQueryResponse",
         "type": "object"
       },
+      "DecideBody": {
+        "additionalProperties": false,
+        "properties": {
+          "decider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A pod decider's name, or `system:<name>` for one that ships with Lemma. Leave out to ask the `definition` inline.",
+            "title": "Decider"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeciderDefinition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Questions to ask without a named decider. Nothing is learned for them."
+          },
+          "options": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Option"
+              },
+              "type": "object"
+            },
+            "description": "Per question, options to add to the declared ones for this call: the person's pods, the open conversations, a list built just now.",
+            "title": "Options",
+            "type": "object"
+          },
+          "record": {
+            "default": true,
+            "description": "Keep the decision. Off answers without keeping anything.",
+            "title": "Record",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "The evidence: an event, a row, a message. Only the decider's input view of it reaches an engine."
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the decision is about, stable across retries. A decider is asked about a subject once; asking again returns the recorded decision.",
+            "title": "Subject"
+          },
+          "visibility": {
+            "default": "PERSONAL",
+            "description": "Who may read the recorded decision, evidence included: only you, or everyone in the pod who can read deciders. Personal unless the state is the pod's to share, because evidence is whatever was decided about -- an inbox, a call, a conversation.",
+            "enum": [
+              "PERSONAL",
+              "POD"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "DecideBody",
+        "type": "object"
+      },
+      "DecideRowsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "decider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A pod decider's name, or `system:<name>` for one that ships with Lemma. Leave out to ask the `definition` inline.",
+            "title": "Decider"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeciderDefinition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Questions to ask without a named decider. Nothing is learned for them."
+          },
+          "id_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The field that identifies a row. Row numbers are used when absent.",
+            "title": "Id Field"
+          },
+          "options": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Option"
+              },
+              "type": "object"
+            },
+            "description": "Per question, options to add to the declared ones for this call: the person's pods, the open conversations, a list built just now.",
+            "title": "Options",
+            "type": "object"
+          },
+          "record": {
+            "default": true,
+            "description": "Keep the decision. Off answers without keeping anything.",
+            "title": "Record",
+            "type": "boolean"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Rows",
+            "type": "array"
+          },
+          "subject_prefix": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Prefix for each row's subject (`<prefix>:<row id>`), so deciding the same rows again returns the recorded decisions.",
+            "title": "Subject Prefix"
+          },
+          "visibility": {
+            "default": "PERSONAL",
+            "description": "Who may read the recorded decision, evidence included: only you, or everyone in the pod who can read deciders. Personal unless the state is the pod's to share, because evidence is whatever was decided about -- an inbox, a call, a conversation.",
+            "enum": [
+              "PERSONAL",
+              "POD"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "DecideRowsBody",
+        "type": "object"
+      },
+      "DeciderDefinition": {
+        "additionalProperties": false,
+        "description": "What a decider version is: every field an engine or a rule reads.",
+        "properties": {
+          "description": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "guidance": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guidance"
+          },
+          "input": {
+            "$ref": "#/components/schemas/InputView"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/Policy"
+          },
+          "questions": {
+            "additionalProperties": {
+              "discriminator": {
+                "mapping": {
+                  "choice": "#/components/schemas/ChoiceQuestion",
+                  "multi_choice": "#/components/schemas/MultiChoiceQuestion",
+                  "scale": "#/components/schemas/ScaleQuestion",
+                  "yes_no": "#/components/schemas/YesNoQuestion"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ChoiceQuestion"
+                },
+                {
+                  "$ref": "#/components/schemas/MultiChoiceQuestion"
+                },
+                {
+                  "$ref": "#/components/schemas/YesNoQuestion"
+                },
+                {
+                  "$ref": "#/components/schemas/ScaleQuestion"
+                }
+              ]
+            },
+            "maxProperties": 16,
+            "minProperties": 1,
+            "title": "Questions",
+            "type": "object"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "maxItems": 100,
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "description",
+          "questions"
+        ],
+        "title": "DeciderDefinition",
+        "type": "object"
+      },
+      "DeciderListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeciderResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "DeciderListResponse",
+        "type": "object"
+      },
+      "DeciderResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/DeciderDefinition"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "visibility": {
+            "title": "Visibility",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "Things the definition allows but that are usually a mistake.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "visibility",
+          "definition",
+          "user_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DeciderResponse",
+        "type": "object"
+      },
+      "DeciderTestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "decider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A pod decider's name, or `system:<name>` for one that ships with Lemma. Leave out to ask the `definition` inline.",
+            "title": "Decider"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeciderDefinition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Questions to ask without a named decider. Nothing is learned for them."
+          },
+          "options": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Option"
+              },
+              "type": "object"
+            },
+            "description": "Per question, options to add to the declared ones for this call: the person's pods, the open conversations, a list built just now.",
+            "title": "Options",
+            "type": "object"
+          },
+          "record": {
+            "default": true,
+            "description": "Keep the decision. Off answers without keeping anything.",
+            "title": "Record",
+            "type": "boolean"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/SampleRowBody"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Rows",
+            "type": "array"
+          },
+          "visibility": {
+            "default": "PERSONAL",
+            "description": "Who may read the recorded decision, evidence included: only you, or everyone in the pod who can read deciders. Personal unless the state is the pod's to share, because evidence is whatever was decided about -- an inbox, a call, a conversation.",
+            "enum": [
+              "PERSONAL",
+              "POD"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "DeciderTestBody",
+        "type": "object"
+      },
+      "DeciderTestResponse": {
+        "properties": {
+          "agreement": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Agreement"
+            },
+            "title": "Agreement",
+            "type": "object"
+          },
+          "answers": {
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Answer"
+              },
+              "type": "object"
+            },
+            "title": "Answers",
+            "type": "array"
+          },
+          "disagreements": {
+            "items": {
+              "$ref": "#/components/schemas/DisagreementResponse"
+            },
+            "title": "Disagreements",
+            "type": "array"
+          },
+          "open": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Open",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answers",
+          "open",
+          "agreement",
+          "disagreements"
+        ],
+        "title": "DeciderTestResponse",
+        "type": "object"
+      },
+      "DeciderVersionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeciderVersionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "DeciderVersionListResponse",
+        "type": "object"
+      },
+      "DeciderVersionResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/DeciderDefinition"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "definition",
+          "created_by",
+          "created_at"
+        ],
+        "title": "DeciderVersionResponse",
+        "type": "object"
+      },
+      "DecisionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `before` for the next, older page.",
+            "title": "Next Before"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "DecisionListResponse",
+        "type": "object"
+      },
       "DecisionNode": {
-        "description": "Decision node. Routes to the first rule whose condition is truthy;\nfalls through to the default outgoing edge when no rule matches.",
+        "description": "Decision node. Routes to the first rule whose condition is truthy,\nthen asks its question when it has one; falls through to the default\noutgoing edge when neither picks a node.",
         "properties": {
           "config": {
             "$ref": "#/components/schemas/DecisionNodeConfig"
@@ -5329,6 +6045,17 @@
       "DecisionNodeConfig": {
         "description": "Configuration for Decision node.",
         "properties": {
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionNodeQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Asked only when no rule matched: a decider's closed question, with a branch per option. The node needs rules, a question, or both."
+          },
           "rules": {
             "items": {
               "$ref": "#/components/schemas/DecisionRule"
@@ -5338,6 +6065,138 @@
           }
         },
         "title": "DecisionNodeConfig",
+        "type": "object"
+      },
+      "DecisionNodeQuestion": {
+        "description": "A closed question the node asks when none of its rules matched.\n\nAnswered by the decisions module -- the decider's own rules, then System\nOne, then the system model -- and recorded once per step, so a resumed or\nretried step reads the answer it already has.",
+        "properties": {
+          "branches": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Option key to the id of the node that answer goes to. An answer with no branch falls through to the default outgoing edge.",
+            "examples": [
+              {
+                "act": "draft_reply",
+                "ignore": "archive"
+              }
+            ],
+            "title": "Branches",
+            "type": "object"
+          },
+          "decider": {
+            "anyOf": [
+              {
+                "pattern": "^(system:)?[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A pod decider's name, or `system:<name>` for one that ships with Lemma. Leave out to ask `definition` inline.",
+            "examples": [
+              "email-triage",
+              "system:reply_to_question"
+            ],
+            "title": "Decider"
+          },
+          "definition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeciderDefinition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A decider asked inline: exactly one `choice` question. Nothing is learned for it; name a pod decider for answers people can correct."
+          },
+          "input": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "expression": "#/components/schemas/ExpressionInputBinding",
+                    "literal": "#/components/schemas/LiteralInputBinding"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ExpressionInputBinding"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LiteralInputBinding"
+                  }
+                ]
+              },
+              {
+                "additionalProperties": {
+                  "discriminator": {
+                    "mapping": {
+                      "expression": "#/components/schemas/ExpressionInputBinding",
+                      "literal": "#/components/schemas/LiteralInputBinding"
+                    },
+                    "propertyName": "type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ExpressionInputBinding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LiteralInputBinding"
+                    }
+                  ]
+                },
+                "type": "object"
+              }
+            ],
+            "description": "What the decision is about: one binding, or named bindings that become an object. Only the decider's input view of it reaches an engine.",
+            "examples": [
+              {
+                "from": {
+                  "type": "expression",
+                  "value": "start.payload.from"
+                },
+                "subject": {
+                  "type": "expression",
+                  "value": "start.payload.subject"
+                }
+              }
+            ],
+            "title": "Input"
+          },
+          "on_open": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The node to go to when no rung could answer. Without it an open question takes its fallback option's branch, or falls through.",
+            "title": "On Open"
+          },
+          "question_key": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The question to branch on. Leave out when the decider asks one.",
+            "title": "Question Key"
+          }
+        },
+        "required": [
+          "input"
+        ],
+        "title": "DecisionNodeQuestion",
         "type": "object"
       },
       "DecisionNodeResponse": {
@@ -5386,6 +6245,139 @@
           "config"
         ],
         "title": "DecisionNodeResponse",
+        "type": "object"
+      },
+      "DecisionResponse": {
+        "properties": {
+          "answered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered At"
+          },
+          "answered_by_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered By User Id"
+          },
+          "answers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Answer"
+            },
+            "title": "Answers",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decider_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decider Name"
+          },
+          "decider_scope": {
+            "title": "Decider Scope",
+            "type": "string"
+          },
+          "decider_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decider Version"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "open": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Open",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "subject_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Key"
+          },
+          "trace": {
+            "items": {
+              "$ref": "#/components/schemas/RungTrace"
+            },
+            "title": "Trace",
+            "type": "array"
+          },
+          "visibility": {
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "decider_scope",
+          "decider_name",
+          "decider_version",
+          "subject_key",
+          "visibility",
+          "answers",
+          "open",
+          "status",
+          "trace",
+          "evidence",
+          "created_at",
+          "answered_at",
+          "answered_by_user_id"
+        ],
+        "title": "DecisionResponse",
         "type": "object"
       },
       "DecisionRule": {
@@ -5506,6 +6498,39 @@
           "tree"
         ],
         "title": "DirectoryTreeResponse",
+        "type": "object"
+      },
+      "DisagreementResponse": {
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Answer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected": {
+            "$ref": "#/components/schemas/AnswerValue"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "row": {
+            "title": "Row",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "row",
+          "question",
+          "expected",
+          "answer"
+        ],
+        "title": "DisagreementResponse",
         "type": "object"
       },
       "DisplaySizeRequest": {
@@ -8628,6 +9653,36 @@
         "title": "ImportStatusResponse",
         "type": "object"
       },
+      "InputView": {
+        "additionalProperties": false,
+        "description": "The only part of the state any engine sees.\n\n`fields` are top-level keys or dotted paths into an object state. Leaving\nthem out passes the whole state. Either way the rendered view is cut at\n`max_chars`, and the engines are told it was.",
+        "properties": {
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "max_chars": {
+            "default": 8000,
+            "maximum": 60000.0,
+            "minimum": 200.0,
+            "title": "Max Chars",
+            "type": "integer"
+          }
+        },
+        "title": "InputView",
+        "type": "object"
+      },
       "InstallRequestInitiateSchema": {
         "description": "Which account still needs its provider-side installation.",
         "properties": {
@@ -8786,6 +9841,16 @@
         "type": "object"
       },
       "JsonValue": {},
+      "Lane": {
+        "description": "Who is waiting, which decides how long a rung may take.\n\nInteractive: a person is waiting in a conversation. Ambient: an event is\nbeing sorted and nobody is watching. Bulk: many rows at once, which yields\nto the other two.",
+        "enum": [
+          "interactive",
+          "ambient",
+          "bulk"
+        ],
+        "title": "Lane",
+        "type": "string"
+      },
       "LiteralInputBinding": {
         "description": "Pass a literal JSON value into the target input without resolution.",
         "properties": {
@@ -9164,6 +10229,43 @@
           "message"
         ],
         "title": "MessageResponseSchema",
+        "type": "object"
+      },
+      "MultiChoiceQuestion": {
+        "additionalProperties": false,
+        "description": "Any number of the options, including none.",
+        "properties": {
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/Option"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "prompt": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "type": {
+            "const": "multi_choice",
+            "default": "multi_choice",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "MultiChoiceQuestion",
         "type": "object"
       },
       "MyUsageLimitsResponse": {
@@ -10115,6 +11217,43 @@
           "name"
         ],
         "title": "OperationSummary",
+        "type": "object"
+      },
+      "Option": {
+        "additionalProperties": false,
+        "description": "What one option means, and optionally what it must not be used for.",
+        "properties": {
+          "description": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "examples": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Examples",
+            "type": "array"
+          },
+          "not_for": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not For"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "Option",
         "type": "object"
       },
       "OrganizationCreateRequest": {
@@ -11908,6 +13047,73 @@
         "title": "PodUpdateRequest",
         "type": "object"
       },
+      "Policy": {
+        "additionalProperties": false,
+        "description": "What each rung may answer, and when a rung passes a question on.",
+        "properties": {
+          "abstain_below": {
+            "default": 0.6,
+            "description": "System One's confidence below which a choice or scale answer is passed on rather than taken.",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Abstain Below",
+            "type": "number"
+          },
+          "escalate_to_model": {
+            "default": true,
+            "description": "Ask the model when System One abstains. Off, a System One abstention leaves the question open.",
+            "title": "Escalate To Model",
+            "type": "boolean"
+          },
+          "lane": {
+            "$ref": "#/components/schemas/Lane",
+            "default": "ambient"
+          },
+          "require_confidence": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "description": "Per question and answer, the System One confidence an engine answer needs to stand. A rung that reports no confidence never meets it.",
+            "title": "Require Confidence",
+            "type": "object"
+          },
+          "rules_only": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "Per question, answers only the rules rung may give. An engine that gives one has not answered.",
+            "title": "Rules Only",
+            "type": "object"
+          },
+          "yes_no_band": {
+            "default": [
+              0.35,
+              0.65
+            ],
+            "description": "Probabilities of yes inside this band are passed on rather than taken, for yes/no and each option of a multi-choice.",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Yes No Band",
+            "type": "array"
+          }
+        },
+        "title": "Policy",
+        "type": "object"
+      },
       "PublishMode": {
         "enum": [
           "CREATE",
@@ -12485,7 +13691,8 @@
           "connector",
           "connector_account",
           "web_login",
-          "connector_auth_config"
+          "connector_auth_config",
+          "decider"
         ],
         "title": "ResourceType",
         "type": "string"
@@ -12499,6 +13706,231 @@
         ],
         "title": "ResourceVisibility",
         "type": "string"
+      },
+      "RowResultResponse": {
+        "properties": {
+          "answers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Answer"
+            },
+            "title": "Answers",
+            "type": "object"
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "boolean"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "open": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Open",
+            "type": "array"
+          },
+          "row_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Id"
+          }
+        },
+        "required": [
+          "index",
+          "row_id",
+          "answers",
+          "open",
+          "decision_id",
+          "failed"
+        ],
+        "title": "RowResultResponse",
+        "type": "object"
+      },
+      "RowsResponse": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "description": "Per question, how many rows got each answer.",
+            "title": "Counts",
+            "type": "object"
+          },
+          "decider_key": {
+            "title": "Decider Key",
+            "type": "string"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RowResultResponse"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "decider_key",
+          "rows",
+          "counts",
+          "failed"
+        ],
+        "title": "RowsResponse",
+        "type": "object"
+      },
+      "Rule": {
+        "additionalProperties": false,
+        "description": "A deterministic answer, tried before any engine.\n\nEither `when`, a JMESPath expression over the rendered state that answers\nwhen truthy, or `phrases`, exact matches against the text at `field` after\nlowercasing, collapsing whitespace and dropping trailing punctuation.",
+        "properties": {
+          "answer": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AnswerValue"
+            },
+            "minProperties": 1,
+            "title": "Answer",
+            "type": "object"
+          },
+          "field": {
+            "default": "text",
+            "maxLength": 200,
+            "title": "Field",
+            "type": "string"
+          },
+          "phrases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phrases"
+          },
+          "when": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "When"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "title": "Rule",
+        "type": "object"
+      },
+      "Rung": {
+        "description": "Who answered. The first three are the ladder; the last two resolve it.",
+        "enum": [
+          "rules",
+          "system_one",
+          "model",
+          "person",
+          "agent"
+        ],
+        "title": "Rung",
+        "type": "string"
+      },
+      "RungOutcome": {
+        "enum": [
+          "answered",
+          "abstained",
+          "unavailable",
+          "failed",
+          "skipped",
+          "not_configured"
+        ],
+        "title": "RungOutcome",
+        "type": "string"
+      },
+      "RungTrace": {
+        "description": "What one rung did for one decision, for the record and for debugging.",
+        "properties": {
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "latency_ms": {
+            "default": 0,
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/RungOutcome"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "rung": {
+            "$ref": "#/components/schemas/Rung"
+          }
+        },
+        "required": [
+          "rung",
+          "outcome",
+          "questions"
+        ],
+        "title": "RungTrace",
+        "type": "object"
       },
       "RuntimeModelCapability": {
         "enum": [
@@ -12597,6 +14029,66 @@
         ],
         "title": "RuntimeProfileStatus",
         "type": "string"
+      },
+      "SampleRowBody": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/AnswerValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "SampleRowBody",
+        "type": "object"
+      },
+      "ScaleQuestion": {
+        "additionalProperties": false,
+        "description": "One of 2 to 10 ordered levels, lowest first. Answers with the level's index.",
+        "properties": {
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 2,
+            "title": "Levels",
+            "type": "array"
+          },
+          "prompt": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "type": {
+            "const": "scale",
+            "default": "scale",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt",
+          "levels"
+        ],
+        "title": "ScaleQuestion",
+        "type": "object"
       },
       "ScheduleDetailResponse": {
         "description": "Schedule detail response.",
@@ -12771,6 +14263,18 @@
             ],
             "title": "Name"
           },
+          "next_digest_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Digest At"
+          },
           "paused_by_failures": {
             "description": "True when the failure breaker paused this schedule, as opposed to a person pausing it. Reactivating resets the failure count.",
             "readOnly": true,
@@ -12791,6 +14295,16 @@
           },
           "schedule_type": {
             "$ref": "#/components/schemas/ScheduleType"
+          },
+          "triage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "updated_at": {
             "format": "date-time",
@@ -12858,7 +14372,8 @@
         "enum": [
           "TRIGGERED",
           "FILTERED",
-          "ERROR"
+          "ERROR",
+          "HELD"
         ],
         "title": "ScheduleFireStatus",
         "type": "string"
@@ -12940,6 +14455,18 @@
             "title": "Created At",
             "type": "string"
           },
+          "digest_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Digest Run Id"
+          },
           "error_code": {
             "anyOf": [
               {
@@ -12961,6 +14488,16 @@
               }
             ],
             "title": "Error Type"
+          },
+          "held_for": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageRoute"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "format": "uuid",
@@ -13103,7 +14640,8 @@
           "CANCELLED",
           "FILTERED",
           "FAILED",
-          "DEAD_LETTERED"
+          "DEAD_LETTERED",
+          "HELD"
         ],
         "title": "ScheduleRunStatus",
         "type": "string"
@@ -14939,6 +16477,114 @@
         "title": "TelegramManagedBotSetupResponse",
         "type": "object"
       },
+      "TriageConfig": {
+        "additionalProperties": false,
+        "description": "A decider, and what each of its answers does with the event.",
+        "properties": {
+          "act_per_hour": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "At most this many act runs an hour. Past it, act becomes digest when the schedule has one, and ask when it does not.",
+            "title": "Act Per Hour"
+          },
+          "decider": {
+            "description": "The pod decider asked about each event.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Decider",
+            "type": "string"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageDigest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required when any option routes to digest."
+          },
+          "question": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The decider's choice question to route on. Omitted means its only question; saved as the one it resolved to.",
+            "title": "Question"
+          },
+          "routes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TriageRoute"
+            },
+            "description": "Every declared option of the question, mapped to act, digest, ask or ignore.",
+            "maxProperties": 255,
+            "minProperties": 1,
+            "title": "Routes",
+            "type": "object"
+          }
+        },
+        "required": [
+          "decider",
+          "routes"
+        ],
+        "title": "TriageConfig",
+        "type": "object"
+      },
+      "TriageDigest": {
+        "additionalProperties": false,
+        "description": "When held events go out together.",
+        "properties": {
+          "cron": {
+            "description": "Five-field cron for the digest, e.g. '0 9 * * 1-5'. No more often than a TIME schedule may fire.",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Cron",
+            "type": "string"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "IANA zone the cron is read in, e.g. 'Europe/Berlin'. Omitted means UTC.",
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "cron"
+        ],
+        "title": "TriageDigest",
+        "type": "object"
+      },
+      "TriageRoute": {
+        "enum": [
+          "act",
+          "digest",
+          "ask",
+          "ignore"
+        ],
+        "title": "TriageRoute",
+        "type": "string"
+      },
       "UpdateAgentHostRuntimeProfileRequest": {
         "properties": {
           "config_selections": {
@@ -15338,6 +16984,19 @@
         "title": "UpdateConversationRequest",
         "type": "object"
       },
+      "UpdateDeciderBody": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/DeciderDefinition"
+          }
+        },
+        "required": [
+          "definition"
+        ],
+        "title": "UpdateDeciderBody",
+        "type": "object"
+      },
       "UpdateFunctionRequest": {
         "additionalProperties": false,
         "description": "Request to update a function.",
@@ -15597,12 +17256,14 @@
           "filter_instruction": {
             "anyOf": [
               {
+                "maxLength": 8000,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
+            "description": "WEBHOOK and DATASTORE schedules only: a yes/no condition, in your own words, that each event must meet to fire the schedule. It is asked as a decision (System One when configured, the system model otherwise), and every event it turns down is recorded as a FILTERED run carrying the decision's id. Refused on TIME schedules, which have no event to judge.",
             "title": "Filter Instruction"
           },
           "filter_output_schema": {
@@ -15615,6 +17276,7 @@
                 "type": "null"
               }
             ],
+            "description": "Optional JSON schema of fields to extract from an event the filter let through; the target reads them, with `should_proceed` and `decision_id`, as `llm_output`. Refused on TIME schedules.",
             "title": "Filter Output Schema"
           },
           "instruction": {
@@ -15652,6 +17314,17 @@
               }
             ],
             "title": "Name"
+          },
+          "triage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "WEBHOOK and DATASTORE schedules only, instead of a filter: a pod decider asked about each event, and what each option of its choice question does with it -- act (wake the target now), digest (hold it for the next digest, one run for many events), ask (hold it and ask the event's owner, whose answer routes it and teaches the decider) or ignore (record it as skipped). Every declared option must be routed. Send null to remove it."
           },
           "visibility": {
             "anyOf": [
@@ -18225,7 +19898,8 @@
           "HUMAN",
           "AGENT",
           "FUNCTION",
-          "TIME"
+          "TIME",
+          "DECISION"
         ],
         "title": "WorkflowRunWaitType",
         "type": "string"
@@ -18650,6 +20324,53 @@
           "state"
         ],
         "title": "WorkspaceStatusResponse",
+        "type": "object"
+      },
+      "YesNoQuestion": {
+        "additionalProperties": false,
+        "description": "True or false. `yes` and `no` optionally say what each means.",
+        "properties": {
+          "no": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No"
+          },
+          "prompt": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "type": {
+            "const": "yes_no",
+            "default": "yes_no",
+            "title": "Type",
+            "type": "string"
+          },
+          "yes": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yes"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "YesNoQuestion",
         "type": "object"
       },
       "attach": {
@@ -28913,6 +30634,821 @@
         }
       }
     },
+    "/pods/{pod_id}/deciders": {
+      "get": {
+        "operationId": "decider.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeciderListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List deciders",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "decider",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "description": "Define a named decider: its questions, guidance, input view, rules and policy. The response lists anything the definition allows but that is usually a mistake.",
+        "operationId": "decider.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeciderBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeciderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a decider",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "decider"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "decider",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/deciders/test": {
+      "post": {
+        "description": "Decide sample rows with a saved decider or a draft definition, without recording anything. Rows that carry expected answers are compared with what the decider said.",
+        "operationId": "decider.test",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeciderTestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeciderTestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test a decider",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "decider"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "decider",
+          "result": "entity",
+          "verb": "test"
+        }
+      }
+    },
+    "/pods/{pod_id}/deciders/{decider_name}": {
+      "delete": {
+        "description": "Delete a decider, its versions and what it learned. Its decisions stay, naming the decider they were asked of.",
+        "operationId": "decider.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "decider_name",
+            "required": true,
+            "schema": {
+              "title": "Decider Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a decider",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "decider"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "decider",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "get": {
+        "operationId": "decider.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "decider_name",
+            "required": true,
+            "schema": {
+              "title": "Decider Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeciderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get a decider",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "decider",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "put": {
+        "description": "Replace a decider's definition. The old version is kept, and decisions made with it still name it.",
+        "operationId": "decider.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "decider_name",
+            "required": true,
+            "schema": {
+              "title": "Decider Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDeciderBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeciderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save a new version of a decider",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "decider"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "decider",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/deciders/{decider_name}/versions": {
+      "get": {
+        "operationId": "decider.version.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "decider_name",
+            "required": true,
+            "schema": {
+              "title": "Decider Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeciderVersionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List a decider's versions",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "decider.version",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/decisions": {
+      "get": {
+        "description": "Decisions in this pod, newest first: the ones shared with the pod and your own.",
+        "operationId": "decision.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this decider's decisions.",
+            "in": "query",
+            "name": "decider",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this decider's decisions.",
+              "title": "Decider"
+            }
+          },
+          {
+            "description": "Only decisions with a question left open.",
+            "in": "query",
+            "name": "open_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Only decisions with a question left open.",
+              "title": "Open Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Only decisions made before this time.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only decisions made before this time.",
+              "title": "Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List decisions",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "decision",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "description": "Ask a decider -- a pod decider by name, `system:<name>`, or questions passed inline -- about one state. With a `subject`, a decider is asked once: asking again returns the recorded decision.",
+        "operationId": "decision.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ask a decision",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "decision"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "decision",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/decisions/rows": {
+      "post": {
+        "description": "Ask one decider about many rows at once, for sorting a list rather than one event. Rows are decided in parallel within the bulk budget.",
+        "operationId": "decision.rows",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideRowsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide many rows",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "decision"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "decision",
+          "result": "entity",
+          "verb": "rows"
+        }
+      }
+    },
+    "/pods/{pod_id}/decisions/{decision_id}": {
+      "get": {
+        "operationId": "decision.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get a decision",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "decision",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/decisions/{decision_id}/answer": {
+      "post": {
+        "description": "Answer questions a decision left open, or correct a machine's answer. A person's answer becomes an example the decider learns from.",
+        "operationId": "decision.answer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "decision_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Decision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Answer a decision",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "decision"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "decision",
+          "result": "entity",
+          "verb": "answer"
+        }
+      }
+    },
     "/pods/{pod_id}/functions": {
       "get": {
         "description": "List all functions in a pod",
@@ -32352,6 +34888,27 @@
               "default": 100,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Only runs in these statuses (repeatable), e.g. `status=HELD` for the events a triage is holding for its digest or for a person.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleRunStatus"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only runs in these statuses (repeatable), e.g. `status=HELD` for the events a triage is holding for its digest or for a person.",
+              "title": "Status"
             }
           }
         ],

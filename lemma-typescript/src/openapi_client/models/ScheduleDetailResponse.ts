@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { ScheduleFireStatus } from './ScheduleFireStatus.js';
 import type { ScheduleType } from './ScheduleType.js';
+import type { TriageConfig } from './TriageConfig.js';
 /**
  * Schedule detail response.
  */
@@ -27,12 +28,14 @@ export type ScheduleDetailResponse = {
     last_fired_at?: (string | null);
     last_run_id?: (string | null);
     name: (string | null);
+    next_digest_at?: (string | null);
     /**
      * True when the failure breaker paused this schedule, as opposed to a person pausing it. Reactivating resets the failure count.
      */
     readonly paused_by_failures: boolean;
     pod_id: (string | null);
     schedule_type: ScheduleType;
+    triage?: (TriageConfig | null);
     updated_at: string;
     user_id: string;
     visibility: string;

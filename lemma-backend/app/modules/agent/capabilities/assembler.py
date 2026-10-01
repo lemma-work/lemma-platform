@@ -51,6 +51,7 @@ from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.prompts import (
     load_connectors_prompt,
+    load_decisions_prompt,
     load_messaging_prompt,
     load_pod_prompt,
     load_skills_prompt,
@@ -70,6 +71,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
+from app.modules.agent.tools.decisions.pydantic_adapter import decisions_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
@@ -115,6 +117,11 @@ _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
     # `pod_*` sits behind a search with a one-line hint. Runs that never thought
     # to search did every read through the CLI. The fragment names the default.
     (pod_toolset, "pod", load_pod_prompt),
+    # Deferred too, and its competition is the agent itself: without the
+    # fragment, sorting two hundred rows is something it does by reading them,
+    # unrecorded and uncorrectable, because nothing in the prefix says a tool
+    # does it better.
+    (decisions_toolset, "decisions", load_decisions_prompt),
 )
 
 

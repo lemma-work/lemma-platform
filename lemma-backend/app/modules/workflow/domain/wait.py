@@ -15,6 +15,8 @@ class WorkflowRunWaitType(str, Enum):
     AGENT = "AGENT"
     FUNCTION = "FUNCTION"
     TIME = "TIME"
+    #: A DECISION node's question, asked by a job outside the run transaction.
+    DECISION = "DECISION"
 
 
 class WorkflowRunWaitStatus(str, Enum):
@@ -53,6 +55,34 @@ class WorkflowRunWaitEntity(AggregateRoot):
     scheduled_at: datetime | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     completed_at: datetime | None = None
+
+    @classmethod
+    def for_request(
+        cls,
+        request: WaitRequest,
+        *,
+        run_id: UUID,
+        flow_id: UUID,
+        pod_id: UUID,
+        node_id: str,
+    ) -> "WorkflowRunWaitEntity":
+        """The row a step suspending with `request` waits on."""
+        payload = dict(request.payload)
+        if request.scheduled_at is not None:
+            payload.setdefault("scheduled_at", request.scheduled_at.isoformat())
+        return cls(
+            run_id=run_id,
+            flow_id=flow_id,
+            pod_id=pod_id,
+            node_id=node_id,
+            wait_type=request.wait_type,
+            assigned_pod_member_id=request.assigned_pod_member_id,
+            external_ref=request.external_ref,
+            # Kept in `payload` too: the reconcile sweep still reads it from
+            # there, and older rows have only that copy.
+            scheduled_at=request.scheduled_at,
+            payload=payload,
+        )
 
     def complete(self, payload: dict[str, Any] | None = None) -> None:
         self.status = WorkflowRunWaitStatus.COMPLETED

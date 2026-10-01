@@ -22,6 +22,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleRunEntity,
     ScheduleRunStatus,
 )
+from app.modules.schedule.domain.triage import TriageRoute
 
 
 class ScheduleRun(UUIDAuditBase):
@@ -75,6 +76,13 @@ class ScheduleRun(UUIDAuditBase):
     last_inspected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Set exactly while a triaged event is HELD: `digest` or `ask`, what it
+    # waits for. Cleared when it leaves, which is what keeps the index below
+    # to the events still waiting.
+    held_for: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # The one run a digest sent this event in. Not a foreign key: it is a
+    # pointer for a reader, and retention may prune either row first.
+    digest_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
     __table_args__ = (
         UniqueConstraint(
@@ -152,6 +160,18 @@ class ScheduleRun(UUIDAuditBase):
             "id",
             postgresql_where=text("target_outcome IS NULL"),
         ),
+        # A schedule's held events, oldest first: what its next digest takes.
+        # A HELD row also carries `target_outcome = 'HELD'`, which keeps it out
+        # of the recovery index above -- an event waiting for its digest or a
+        # person is not a dispatch the sweep could repair.
+        Index(
+            "ix_schedule_runs_held",
+            "schedule_id",
+            "held_for",
+            "created_at",
+            "id",
+            postgresql_where=text("held_for IS NOT NULL"),
+        ),
     )
 
     def to_entity(self) -> ScheduleRunEntity:
@@ -176,4 +196,6 @@ class ScheduleRun(UUIDAuditBase):
             source_occurred_at=self.source_occurred_at,
             started_at=self.started_at,
             completed_at=self.completed_at,
+            held_for=TriageRoute(self.held_for) if self.held_for else None,
+            digest_run_id=self.digest_run_id,
         )

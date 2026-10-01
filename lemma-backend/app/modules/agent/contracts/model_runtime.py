@@ -35,9 +35,13 @@ from uuid import UUID, uuid4
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
+from app.core.domain.errors import DomainError
 from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     usage_limits_for,
+)
+from app.modules.agent.services.runtime_system_profiles import (
+    is_model_not_configured,
 )
 from app.modules.agent.services.workspace_model_fallback import (
     resolve_system_or_workspace_runtime,
@@ -62,6 +66,7 @@ async def resolve_system_runtime(
     user_id: UUID | None = None,
     organization_id: UUID | None = None,
     pod_id: UUID | None = None,
+    model_name: str | None = None,
 ) -> SystemModelRuntime:
     """The system model, ready to run under `usage_limits`.
 
@@ -74,10 +79,14 @@ async def resolve_system_runtime(
     `workspace_model_fallback`), which needs the organization -- and the pod,
     when there is one, so its chosen default wins. Without an organization that
     case raises `model_not_configured`, as it always did.
+
+    `model_name` is a caller's configured choice for its own purpose, such as
+    `DECISION_MODEL`; unset, the profile's default model answers.
     """
     resolved = await resolve_system_or_workspace_runtime(
         organization_id=organization_id,
         user_id=user_id or uuid4(),
+        model_name=model_name,
         pod_id=pod_id,
     )
     runtime_profile = resolved.public_snapshot()
@@ -93,4 +102,13 @@ async def resolve_system_runtime(
     )
 
 
-__all__ = ["SystemModelRuntime", "resolve_system_runtime"]
+def is_no_model_error(error: DomainError) -> bool:
+    """Whether resolving failed because there is no model at all.
+
+    The one failure a caller with another way to answer should take as "not
+    available here" rather than as an error.
+    """
+    return is_model_not_configured(error)
+
+
+__all__ = ["SystemModelRuntime", "is_no_model_error", "resolve_system_runtime"]

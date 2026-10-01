@@ -236,6 +236,13 @@ SCHEDULE_JSON = """{
   // work afterwards. Optional; omit to fire every time.
   // "filter_instruction": "Only when the row's status is 'urgent'.",
   // "filter_output_schema": { "type": "object" },  // shape the filter must answer in
+  // ...or, in place of a filter, sort every event with a pod decider and route
+  // its answer: act now, hold for a digest, ask a person, or ignore.
+  // "triage": {
+  //   "decider": "email-triage",
+  //   "routes": { "act": "act", "later": "digest", "unsure": "ask", "noise": "ignore" },
+  //   "digest": { "cron": "0 8 * * *", "timezone": "UTC" }
+  // },
   // WEBHOOK only — the connector account and trigger this listens on.
   // "account_id": "TODO-connector-account-uuid",
   // "connector_trigger_id": "TODO-connector-trigger-uuid",
@@ -657,6 +664,14 @@ PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
         "write": ["schedule.update"],
         "delete": ["schedule.delete"],
     },
+    # A decider in this pod. Execute is self-sufficient, as for functions: it
+    # implies read, so an agent granted it can both load and ask the decider.
+    "decider": {
+        "execute": ["decider.execute"],
+        "read": ["decider.read"],
+        "write": ["decider.update"],
+        "delete": ["decider.delete"],
+    },
     # A Lemma app in this pod — NOT a connector. `app:` used to alias to
     # connector back when connectors were called apps; see parse_grant_spec.
     "app": {
@@ -681,6 +696,7 @@ _GRANT_TYPE_ALIASES = {
     "agent": "agent",
     "workflow": "workflow",
     "schedule": "schedule",
+    "decider": "decider",
 }
 GRANT_TYPE_TOKENS = tuple(sorted(_GRANT_TYPE_ALIASES))
 
@@ -1052,6 +1068,157 @@ def validate_workflow(payload: dict) -> list[str]:
     # DECISION nodes whose rule/edge shape risks routing an unmatched input
     # (e.g. a rejection) silently onto a 'positive' default branch.
     issues.extend(_decision_misroute_issues(nodes, edges))
+    return issues
+
+
+# A decider's shape, as the server validates it (lemma-backend
+# app/modules/decisions/domain/deciders.py and questions.py). Only what can be
+# read off the file is mirrored here; a rule's JMESPath, say, is the server's to
+# compile. The server refuses anything else with a 422, but by then an import
+# has already written the tables before it.
+_DECIDER_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_DECIDER_QUESTION_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_DECIDER_OPTION_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_DECIDER_DEFINITION_KEYS = frozenset(
+    {"description", "guidance", "input", "questions", "rules", "policy"}
+)
+_DECIDER_QUESTION_FIELDS: dict[str, frozenset[str]] = {
+    "choice": frozenset({"type", "prompt", "options", "fallback"}),
+    "multi_choice": frozenset({"type", "prompt", "options"}),
+    "yes_no": frozenset({"type", "prompt", "yes", "no"}),
+    "scale": frozenset({"type", "prompt", "levels"}),
+}
+_DECIDER_MAX_QUESTIONS = 16
+
+
+def validate_decider(payload: dict[str, object]) -> list[str]:
+    """Static checks on a bundled decider, ``{name, definition}``, before import."""
+    issues: list[str] = []
+    extra = sorted(set(payload) - {"name", "definition"})
+    if extra:
+        issues.append(
+            f"unrecognized field(s) {', '.join(extra)}: a decider file holds only "
+            "`name` and `definition`."
+        )
+    name = str(payload.get("name") or "")
+    if not _DECIDER_NAME.match(name):
+        issues.append(
+            f"decider name '{name}' must be lowercase letters, digits, '_' or '-', "
+            "starting with a letter or digit, at most 64 characters."
+        )
+    definition = payload.get("definition")
+    if not isinstance(definition, dict):
+        issues.append(
+            "`definition` must be an object with `description` and `questions`."
+        )
+        return issues
+    return issues + _decider_definition_issues(definition)
+
+
+def _decider_definition_issues(definition: dict[str, object]) -> list[str]:
+    issues: list[str] = []
+    extra = sorted(set(definition) - _DECIDER_DEFINITION_KEYS)
+    if extra:
+        issues.append(f"unrecognized definition field(s): {', '.join(extra)}.")
+    if not str(definition.get("description") or "").strip():
+        issues.append("`definition.description` is required.")
+    questions = definition.get("questions")
+    if not isinstance(questions, dict) or not questions:
+        issues.append("`definition.questions` must declare at least one question.")
+        questions = {}
+    elif len(questions) > _DECIDER_MAX_QUESTIONS:
+        issues.append(
+            f"a decider asks at most {_DECIDER_MAX_QUESTIONS} questions; this one "
+            f"declares {len(questions)}."
+        )
+    for key, question in questions.items():
+        issues.extend(_decider_question_issues(str(key), question))
+    for index, rule in enumerate(definition.get("rules") or []):
+        issues.extend(_decider_rule_issues(index, rule, questions))
+    return issues + _decider_policy_issues(definition.get("policy"), questions)
+
+
+def _decider_policy_issues(policy: object, questions: dict[str, object]) -> list[str]:
+    if not isinstance(policy, dict):
+        return []
+    return [
+        f"policy.{mapping} names unknown question '{key}'."
+        for mapping in ("rules_only", "require_confidence")
+        for key in policy.get(mapping) or {}
+        if key not in questions
+    ]
+
+
+def _decider_question_issues(key: str, question: object) -> list[str]:
+    where = f"question '{key}'"
+    if not _DECIDER_QUESTION_KEY.match(key):
+        return [
+            (
+                f"{where}: a question key is lowercase letters, digits or '_', "
+                "starting with a letter."
+            )
+        ]
+    if not isinstance(question, dict):
+        return [f"{where} must be an object with `type` and `prompt`."]
+    qtype = str(question.get("type"))
+    fields = _DECIDER_QUESTION_FIELDS.get(qtype)
+    if fields is None:
+        return [
+            f"{where}: `type` must be one of {', '.join(_DECIDER_QUESTION_FIELDS)}."
+        ]
+    issues: list[str] = []
+    extra = sorted(set(question) - fields)
+    if extra:
+        issues.append(
+            f"{where}: unrecognized field(s) {', '.join(extra)} on a {qtype} question."
+        )
+    if not str(question.get("prompt") or "").strip():
+        issues.append(f"{where}: `prompt` is required.")
+    if qtype in ("choice", "multi_choice"):
+        issues.extend(_decider_option_issues(where, question))
+    levels = question.get("levels")
+    if qtype == "scale" and not (isinstance(levels, list) and 2 <= len(levels) <= 10):
+        issues.append(f"{where}: a scale needs 2 to 10 `levels`, lowest first.")
+    return issues
+
+
+def _decider_option_issues(where: str, question: dict[str, object]) -> list[str]:
+    options = question.get("options")
+    if options is not None and (not isinstance(options, dict) or not options):
+        return [f"{where}: `options` must map at least one key to what it means."]
+    options = options or {}
+    issues: list[str] = []
+    for option, meaning in options.items():
+        if not _DECIDER_OPTION_KEY.match(str(option)):
+            issues.append(
+                f"{where}: option key '{option}' must be lowercase letters, digits, "
+                "'_' or '-'."
+            )
+        described = meaning.get("description") if isinstance(meaning, dict) else meaning
+        if not isinstance(described, str) or not described.strip():
+            issues.append(f"{where}: option '{option}' needs a description.")
+    fallback = question.get("fallback")
+    if fallback is not None and fallback not in options:
+        issues.append(f"{where}: fallback '{fallback}' is not one of its options.")
+    return issues
+
+
+def _decider_rule_issues(
+    index: int, rule: object, questions: dict[str, object]
+) -> list[str]:
+    where = f"rule {index}"
+    if not isinstance(rule, dict):
+        return [f"{where} must be an object."]
+    issues: list[str] = []
+    if (rule.get("when") is None) == (rule.get("phrases") is None):
+        issues.append(f"{where} needs exactly one of `when` or `phrases`.")
+    answer = rule.get("answer")
+    if not isinstance(answer, dict) or not answer:
+        issues.append(f"{where} needs an `answer` naming at least one question.")
+        return issues
+    for key in answer:
+        if key not in questions:
+            issues.append(f"{where} answers unknown question '{key}'.")
     return issues
 
 

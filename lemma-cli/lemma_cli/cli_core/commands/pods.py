@@ -1042,7 +1042,8 @@ def _normalize_resource_types(values: list[str], *, option: str) -> set[str]:
         if not resource_type:
             raise typer.BadParameter(
                 f"Unknown resource type for {option}: {value}. "
-                "Use tables, functions, agents, workflows, schedules, surfaces, apps, or files."
+                "Use tables, deciders, functions, agents, workflows, schedules, "
+                "surfaces, apps, or files."
             )
         normalized.add(resource_type)
     return normalized

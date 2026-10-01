@@ -18,9 +18,11 @@ Open http://localhost:3000. Set `NEXT_PUBLIC_API_URL` for live data, or
 `NEXT_PUBLIC_DATA=sample` for a local demo without a backend.
 The sibling `lemma-harness` provides operator tools and the desktop web runtime.
 
-See [.env.example](.env.example) for configuration. Voice calls require
-server-only `GEMINI_API_KEY` and `TYPESAFE_API_KEY`; never expose secrets through
-`NEXT_PUBLIC_*` variables. `/auth` provides sign-in; `/connect` supports manual token sign-in.
+See [.env.example](.env.example) for configuration. Voice calls require the
+server-only `GEMINI_API_KEY` (`OPENAI_API_KEY` for GPT-Live). The browser routes
+each call through the backend's decisions API, which uses System One when the
+backend has `TYPESAFE_API_KEY` and its system model when not; never expose secrets
+through `NEXT_PUBLIC_*` variables. `/auth` provides sign-in; `/connect` supports manual token sign-in.
 
 ## Checks
 

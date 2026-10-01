@@ -11,7 +11,7 @@ Two things an outside client needs that the Agent Host never did:
   writing tools, and is refused if it calls one anyway.
 
 The table is by name and total: `test_pod_mcp_tool_policy` fails when a tool is
-added to the pod toolset without a row here. A missing row falls back to the
+added to any toolset the server serves (`POD_MCP_TOOLSETS`) without a row here. A missing row falls back to the
 most cautious policy -- a destructive write -- which is safe but wrong for a
 tool that only reads: read-only connections would not be offered it, and every
 client would ask the person before each call.
@@ -75,6 +75,17 @@ POD_TOOL_POLICIES: dict[str, ToolPolicy] = {
     "pod_edit_file": ToolPolicy(
         "Edit a file", Scope.WRITE, destructive=True, idempotent=False
     ),
+    # A decision is a log entry, not a change to the pod's data, so asking is
+    # reading. Not idempotent: without a subject, each call is asked afresh and
+    # recorded again, and a model's answer may differ the second time.
+    "decide": ToolPolicy("Decide", Scope.READ, idempotent=False),
+    # Records nothing at all.
+    "test_decider": ToolPolicy("Try a decider", Scope.READ),
+    # Saving an existing name adds a version and keeps the old ones, so it is
+    # additive rather than destructive -- but every save is a new version.
+    "define_decider": ToolPolicy("Save a decider", Scope.WRITE, idempotent=False),
+    # Replaces a machine's answer when it corrects one.
+    "answer_decision": ToolPolicy("Answer a decision", Scope.WRITE, destructive=True),
 }
 
 _WRITE_UNLESS_KNOWN = ToolPolicy(
@@ -96,7 +107,22 @@ def scope_for_call(tool_name: str, arguments: Mapping[str, object] | None) -> Sc
     """
     if tool_name == "pod_get_file_url" and _url_type(arguments) == "public":
         return Scope.WRITE
+    if tool_name == "decide" and _decides_rows(arguments):
+        # Past a few rows the results land in a pod file, so a batch writes.
+        return Scope.WRITE
     return policy_for(tool_name).scope
+
+
+def _decides_rows(arguments: Mapping[str, object] | None) -> bool:
+    source = _call_arguments(arguments)
+    return any(source.get(key) is not None for key in ("items", "file", "table"))
+
+
+def _call_arguments(arguments: Mapping[str, object] | None) -> Mapping[str, object]:
+    if not arguments:
+        return {}
+    inner = arguments.get("request")
+    return inner if isinstance(inner, Mapping) else arguments
 
 
 def _url_type(arguments: Mapping[str, object] | None) -> object:

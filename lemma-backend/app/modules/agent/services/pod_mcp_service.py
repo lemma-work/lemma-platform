@@ -1,8 +1,8 @@
 """Request-scoped tool resolution for the ``pod/{id}`` MCP surface.
 
 Mirrors `ConversationMCPService` but is scoped to a pod instead of a
-conversation: the pod id is injected from the URL and the pod toolset is exposed
-with ``lemma_``-prefixed names. The caller's token determines the authorization
+conversation: the pod id is injected from the URL and the pod and decisions
+toolsets are exposed with ``lemma_``-prefixed names. The caller's token determines the authorization
 principal; the pod tools then enforce per-resource grants.
 
 Two kinds of token arrive here. A Lemma session -- the Agent Host's, optionally
@@ -19,6 +19,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
+from pydantic_ai.toolsets import FunctionToolset
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
@@ -49,6 +50,7 @@ from app.modules.agent.infrastructure.mcp import (
 )
 from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.decisions.pydantic_adapter import decisions_toolset
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.tool_errors import (
@@ -63,6 +65,14 @@ from app.modules.mcp_access.contracts import (
 logger = get_logger(__name__)
 
 _NIL_CONVERSATION_ID = UUID(int=0)
+
+#: What this server serves: the pod's tables and files, and its decisions --
+#: the tools an in-process agent reaches the same pod with, under the same
+#: grants. Every tool in them needs a row in `POD_TOOL_POLICIES`.
+POD_MCP_TOOLSETS: tuple[FunctionToolset[BaseAgentContext], ...] = (
+    pod_toolset,
+    decisions_toolset,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +108,9 @@ class PodMCPService:
         caller = await self._require_caller(
             pod_id=pod_id, token=token, principal=principal
         )
-        tools = await self.dispatcher.list_tools(ctx=caller.ctx, toolsets=[pod_toolset])
+        tools = await self.dispatcher.list_tools(
+            ctx=caller.ctx, toolsets=list(POD_MCP_TOOLSETS)
+        )
         return [
             Tool(
                 name=exported_tool_name(tool.name),
@@ -138,7 +150,7 @@ class PodMCPService:
         try:
             result = await self.dispatcher.call_tool(
                 ctx=caller.ctx,
-                toolsets=[pod_toolset],
+                toolsets=list(POD_MCP_TOOLSETS),
                 name=tool_name,
                 arguments=arguments,
             )

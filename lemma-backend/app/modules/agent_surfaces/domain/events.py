@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from pydantic import JsonValue
+
 from app.core.domain.events import DomainEvent
+from app.modules.agent_surfaces.domain.notification import (
+    NotificationOriginKind,
+    NotificationStatus,
+)
 
 
 class SurfaceEvents:
@@ -65,6 +71,37 @@ class NotificationSettledEvent(DomainEvent):
     pod_id: UUID
     conversation_id: UUID
     notification_id: UUID
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return SurfaceEvents.STREAM
+
+
+class NotificationClosedEvent(DomainEvent):
+    """A notification its asker holds something on has closed, however it closed.
+
+    Raised for an origin outside this module that keeps something waiting
+    until a person answers -- a schedule's held event, today -- when the
+    notification is answered, expires or is cancelled. Each settles the held
+    thing differently and only its owner knows how, so this says what happened
+    and carries the ``action`` the asker wrote, with the option the person
+    chose as ``answer``.
+
+    An event rather than a call, for the reason ``NotificationSettledEvent``
+    is one: this module may not reach into its asker, and an answer whose
+    handling failed is redelivered rather than lost.
+    """
+
+    event_type: str = "notification.closed"
+    pod_id: UUID
+    notification_id: UUID
+    origin_kind: NotificationOriginKind
+    origin_id: UUID | None = None
+    status: NotificationStatus
+    #: Who answered. None when it expired or was cancelled.
+    responder_user_id: UUID | None = None
+    answer: str | None = None
+    action: dict[str, JsonValue] | None = None
 
     @classmethod
     def stream_name(cls) -> str:

@@ -23,6 +23,7 @@ from app.modules.function.contracts.workflow_control import (
 )
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.execution.timers import WaitRowTimer
+from app.modules.workflow.infrastructure.decisions_adapter import DecisionsAdapter
 from app.modules.workflow.services.workflow_service import WorkflowService
 
 
@@ -32,7 +33,7 @@ def get_workflow_service(uow: UoWDep) -> WorkflowService:
 
 
 def build_workflow_engine(uow: SqlAlchemyUnitOfWork) -> WorkflowEngine:
-    """An engine with its four collaborators bound, for this transaction.
+    """An engine with its collaborators bound, for this transaction.
 
     The one place that chooses them. `WorkflowEngine.__init__` used to default
     each to `None` and resolve it, so twelve call sites wrote `WorkflowEngine(uow)`
@@ -46,6 +47,9 @@ def build_workflow_engine(uow: SqlAlchemyUnitOfWork) -> WorkflowEngine:
         function_adapter=build_function_control_adapter(uow),
         schedule_adapter=WaitRowTimer(),
         notification_adapter=build_workflow_notification_adapter(uow),
+        # Not bound to this transaction: it asks between units of work of its
+        # own, never inside the one that suspended the step.
+        decision_adapter=DecisionsAdapter(),
     )
 
 

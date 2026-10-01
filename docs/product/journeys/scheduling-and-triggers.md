@@ -199,6 +199,79 @@ about it when it eventually cannot.
 
 ---
 
+## Capability: Sort what arrives
+
+A busy source sends far more than anyone wants to be woken for. A person teaches
+the pod how to sort it -- what needs doing now, what can wait for a summary, what
+a person should look at, and what is noise -- and every event that arrives is
+sorted the same way, with nothing started for what can wait.
+
+### PS-SCHED-040 — A schedule sorts each event by what it deserves
+**Status:** planned
+
+- Where a schedule sorts its events, the system shall decide for each event
+  whether to act on it now, hold it for the next summary, ask a person about it,
+  or skip it, and shall do with the event what was decided.
+- When a person sets up sorting, the system shall require every answer the
+  sorting can give to lead somewhere, and shall refuse a setup that leaves one
+  unaccounted for.
+- The system shall decide about each event once, however many times the event
+  is delivered.
+- The system shall record each event it skipped or held, distinctly from one
+  that ran and one that failed.
+- If the sorting cannot decide about an event, then the system shall treat the
+  event as failed rather than silently skipping it.
+- If a person gives a schedule both a condition and a way of sorting, then the
+  system shall refuse it: the sorting replaces the condition.
+- If a person gives a schedule that fires on a timer a way of sorting, then the
+  system shall refuse it, because there is no event to sort.
+
+**Contracts:** `schedule.create`, `schedule.update`, `schedule.get`, `schedule.run.list`, `decider.create`
+
+### PS-SCHED-041 — Events that can wait arrive together
+**Status:** planned
+
+- When events have been held for a summary, the system shall hand them to the
+  schedule's target together, in one run, at the time the person chose.
+- The system shall hand them over in the order they arrived, and shall say when
+  more are still waiting for the next summary.
+- The system shall hand over each held event once, however many copies of the
+  system are running.
+- The system shall let a person see which events a schedule is holding.
+- If a person removes the summary, then the system shall hand over what it was
+  holding one last time rather than keeping it forever.
+
+**Contracts:** `schedule.run.list`, `schedule.get`, `schedule.update`
+
+### PS-SCHED-042 — A person decides the events the pod should not
+**Status:** planned
+
+- When the sorting says a person should look at an event, the system shall hold
+  the event and ask the person it belongs to, offering the choices that settle
+  it, without starting any work.
+- When the person chooses, the system shall do with the event what they chose,
+  and shall keep their choice so the sorting learns from it.
+- If a person answers with something that is not one of the choices, then the
+  system shall leave the question open rather than guess.
+- If the question is answered a second time, then the system shall refuse the
+  second answer and shall not act on the event twice.
+- If nobody answers before the question expires, then the system shall skip the
+  event and record that nobody answered, rather than act without a person.
+
+**Contracts:** `notification.list`, `notification.respond`, `schedule.run.list`, `decision.get`
+
+### PS-SCHED-043 — A flood of urgent events cannot run away
+**Status:** planned
+
+- Where a person limits how much work a schedule may start in an hour, the
+  system shall start no more than that, and shall hold the rest for the next
+  summary, or ask a person when there is no summary.
+- The system shall record why an event that would have run was held instead.
+
+**Contracts:** `schedule.create`, `schedule.run.list`
+
+---
+
 ## Not covered here
 
 | Concern | Where it lives |

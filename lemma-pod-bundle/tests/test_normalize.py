@@ -10,6 +10,7 @@ from lemma_pod_bundle.normalize import (
     _declared_reserved_columns,
     _normalize_agent_payload,
     _normalize_app_payload,
+    _normalize_decider_payload,
     _normalize_function_payload,
     _normalize_pod_payload,
     _normalize_schedule_payload,
@@ -345,3 +346,76 @@ def test_normalize_schedule_payload_leaves_a_clean_config_alone():
     }
 
     assert _normalize_schedule_payload(schedule)["config"] == {"cron": "0 9 * * *"}
+
+
+# What `GET /pods/{pod_id}/deciders` answers with, nulls and all: the shape the
+# CLI exporter reads. Anything beyond the name and definition is the pod's own.
+_DECIDER_RESPONSE = {
+    "id": "0b8c6a4e-0000-7000-8000-000000000001",
+    "name": "email-triage",
+    "version": 4,
+    "visibility": "POD",
+    "user_id": "0b8c6a4e-0000-7000-8000-000000000002",
+    "created_at": "2026-10-01T09:00:00Z",
+    "updated_at": "2026-10-01T10:00:00Z",
+    "warnings": ["Question 'action' has no fallback."],
+    "definition": {
+        "description": "What Kit does with each new email.",
+        "guidance": None,
+        "input": {"fields": ["from", "subject"], "max_chars": 4000},
+        "questions": {
+            "action": {
+                "type": "choice",
+                "prompt": "What should Kit do with this email?",
+                "options": {
+                    "act": {"description": "A customer is waiting.", "not_for": None},
+                    "ignore": {
+                        "description": "Newsletters.",
+                        "not_for": None,
+                        "examples": ["Your weekly digest"],
+                    },
+                },
+                "fallback": None,
+            }
+        },
+        "rules": [
+            {
+                "when": "contains(labels, 'PROMOTIONS')",
+                "phrases": None,
+                "field": "text",
+                "answer": {"action": "ignore"},
+            }
+        ],
+    },
+}
+
+
+def test_a_decider_exports_only_its_name_and_definition():
+    """Its version, id and author are the source pod's, and whatever it learned
+    is people's data: none of it may reach a bundle."""
+    payload = _normalize_decider_payload(
+        {**_DECIDER_RESPONSE, "examples": [{"value": "act"}], "decisions": [{}]}
+    )
+
+    assert set(payload) == {"name", "definition"}
+    assert payload["name"] == "email-triage"
+
+
+def test_a_decider_definition_exports_without_its_nulls():
+    """The API writes unset fields as null and the backend's store leaves them
+    out; both exporters have to write the same bytes."""
+    definition = _normalize_decider_payload(_DECIDER_RESPONSE)["definition"]
+
+    assert "guidance" not in definition
+    question = definition["questions"]["action"]
+    assert "fallback" not in question
+    assert question["options"]["act"] == {"description": "A customer is waiting."}
+    # An example written into the definition is part of it, and travels.
+    assert question["options"]["ignore"]["examples"] == ["Your weekly digest"]
+    assert definition["rules"] == [
+        {
+            "when": "contains(labels, 'PROMOTIONS')",
+            "field": "text",
+            "answer": {"action": "ignore"},
+        }
+    ]

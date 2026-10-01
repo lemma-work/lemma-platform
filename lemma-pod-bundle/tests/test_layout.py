@@ -24,6 +24,14 @@ def test_normalize_resource_dir_name_aliases():
     assert normalize_resource_dir_name("nonsense") == ""
 
 
+def test_deciders_are_a_resource_directory_imported_right_after_tables():
+    from lemma_pod_bundle.layout import EXPORTABLE_RESOURCE_DIRS, RESOURCE_DIRS
+
+    assert normalize_resource_dir_name("Decider") == "deciders"
+    assert "deciders" in EXPORTABLE_RESOURCE_DIRS
+    assert RESOURCE_DIRS.index("deciders") == RESOURCE_DIRS.index("tables") + 1
+
+
 def test_read_json_rejects_non_object(tmp_path: Path):
     path = tmp_path / "x.json"
     path.write_text("[1, 2]", encoding="utf-8")

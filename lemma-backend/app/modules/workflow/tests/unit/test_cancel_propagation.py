@@ -31,6 +31,7 @@ def _engine() -> WorkflowEngine:
         function_adapter=Mock(),
         schedule_adapter=Mock(),
         notification_adapter=AsyncMock(),
+        decision_adapter=Mock(),
     )
     engine.agent_adapter.stop_conversation = AsyncMock()
     engine.function_adapter.cancel_run = AsyncMock()

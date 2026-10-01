@@ -78,6 +78,7 @@ LEARNS_POD = {
     ResourceType.APP: "generic",
     ResourceType.WORKFLOW: "generic",
     ResourceType.SCHEDULE: "generic",
+    ResourceType.DECIDER: "generic",
     ResourceType.CONVERSATION: "no_visibility",
     ResourceType.FOLDER: "datastore_file",
     ResourceType.DOCUMENT: "datastore_file",
