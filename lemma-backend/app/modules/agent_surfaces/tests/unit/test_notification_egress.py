@@ -43,6 +43,12 @@ from app.modules.agent_surfaces.services.notification_delivery import (
 )
 from app.modules.agent_surfaces.services.notification_egress import NotificationEgress
 
+
+async def _no_outside_origin(_conversation_id):
+    """No conversation here answers people outside the pod."""
+    return
+
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -443,6 +449,7 @@ def _notification_service(
     )
 
     return NotificationService(
+        outside_origin_reader=_no_outside_origin,
         uow=AsyncMock(),
         notification_repository=AsyncMock(),
         surface_repository=surface_repo,

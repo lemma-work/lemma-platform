@@ -37,7 +37,20 @@ def _run(conversation_id, status=AgentRunStatus.RUNNING) -> AgentRun:
     )
 
 
-def _coordinator(*, queued: int, active_run: AgentRun | None = None):
+def _coordinator(
+    *,
+    queued: int,
+    active_run: AgentRun | None = None,
+    notes: int = 0,
+    finished_metadata: dict | None = None,
+    queues: dict | None = None,
+):
+    """A coordinator over a fake queue.
+
+    ``queued`` messages wait behind the finished run, ``notes`` of them private
+    notes, the oldest of them a note when there are any. ``queues`` adds other
+    runs' queues, by id, as ``(messages, notes)``.
+    """
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -46,9 +59,21 @@ def _coordinator(*, queued: int, active_run: AgentRun | None = None):
         agent_runtime=_runtime(),
     )
     finished = _run(conversation.id, AgentRunStatus.COMPLETED)
+    finished.metadata = finished_metadata or {}
     created = _run(conversation.id)
+    waiting = {finished.id: (queued, notes), **(queues or {})}
+
+    async def count(run_id, *, notes=None):
+        total, of_notes = waiting.get(run_id, (0, 0))
+        return total if notes is None else of_notes if notes else total - of_notes
+
+    async def earliest(run_id):
+        total, of_notes = waiting.get(run_id, (0, 0))
+        return None if not total else bool(of_notes)
+
     repository = SimpleNamespace(
-        count_queued_user_messages=AsyncMock(return_value=queued),
+        count_queued_user_messages=AsyncMock(side_effect=count),
+        earliest_queued_is_note=AsyncMock(side_effect=earliest),
         lock_conversation=AsyncMock(),
         get_active_agent_run_for_update=AsyncMock(return_value=active_run),
         get_agent_run=AsyncMock(return_value=finished),
@@ -120,7 +145,7 @@ async def test_the_followup_claims_the_queue_it_answers() -> None:
     assert frames == claimed
     call = repository.claim_queued_user_messages.await_args
     assert call.args == (finished.id,)
-    assert call.kwargs == {"into_run_id": created.id}
+    assert call.kwargs == {"into_run_id": created.id, "notes": False}
 
 
 @pytest.mark.asyncio
@@ -155,7 +180,10 @@ async def test_the_followup_run_cannot_itself_recur() -> None:
         conversation=conversation, completed_run_id=finished.id
     )
 
-    assert repository.count_queued_user_messages.await_args.args == (finished.id,)
+    asked = {
+        call.args[0] for call in repository.earliest_queued_is_note.await_args_list
+    }
+    assert asked == {finished.id}
     assert created.id != finished.id
 
 
@@ -213,3 +241,56 @@ async def test_a_stopped_run_does_not_start_the_next_one() -> None:
 
     assert result is None
     factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_note_queued_behind_a_run_is_answered_where_nobody_else_sees() -> None:
+    """Its follow-up is private, so the answer stays in Lemma."""
+    coordinator, conversation, repository, _uow, finished, created = _coordinator(
+        queued=1, notes=1
+    )
+
+    await coordinator.start_queued_followup(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    metadata = repository.create_agent_run.await_args.kwargs["metadata"]
+    assert metadata["private_note"] is True
+    assert repository.claim_queued_user_messages.await_args.kwargs["notes"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_kind_a_followup_did_not_answer_is_remembered_for_the_next() -> None:
+    """A note and a message for the platform never share a run."""
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=2, notes=1
+    )
+
+    await coordinator.start_queued_followup(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    metadata = repository.create_agent_run.await_args.kwargs["metadata"]
+    # The oldest was a note, so this one answers notes; the other message waits.
+    assert metadata["private_note"] is True
+    assert metadata["queued_leftovers_behind"] == [str(finished.id)]
+
+
+@pytest.mark.asyncio
+async def test_what_an_earlier_run_left_waiting_is_answered_next() -> None:
+    earlier = uuid4()
+    coordinator, conversation, repository, _uow, finished, _created = _coordinator(
+        queued=0,
+        finished_metadata={"queued_leftovers_behind": [str(earlier)]},
+        queues={earlier: (1, 0)},
+    )
+
+    started = await coordinator.start_queued_followup(
+        conversation=conversation, completed_run_id=finished.id
+    )
+
+    assert started is not None
+    metadata = repository.create_agent_run.await_args.kwargs["metadata"]
+    assert "private_note" not in metadata
+    assert metadata["queued_behind_agent_run_id"] == str(earlier)
+    assert repository.claim_queued_user_messages.await_args.args == (earlier,)

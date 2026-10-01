@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Protocol
 from uuid import UUID
 from pydantic_ai.output import OutputSpec
@@ -30,6 +31,9 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import ConversationNotFoundError
+from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.private_notes import run_is_private
+from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -51,6 +55,10 @@ from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
 )
+from app.modules.agent.services.outsider_runtime import (
+    default_runtimes,
+    in_process_runtime,
+)
 from app.modules.agent.services.run_limits import budget_for_run, make_stop_checker
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import (
@@ -62,6 +70,7 @@ from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
     select_runtime_history,
+    without_private_runs,
 )
 from app.modules.agent.services.run_context_builder import build_run_context
 from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
@@ -191,10 +200,8 @@ class AgentRunnerService:
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
         try:
-            resolved_runtime = await self._resolve_agent_runtime(
-                agent_run.agent_runtime,
-                user_id=user_id,
-                organization_id=conversation.organization_id,
+            resolved_runtime = await self._runtime_for(
+                conversation, agent_run, user_id=user_id
             )
             harness = self.harness_registry.get(resolved_runtime.harness_kind)
             outcome = RunOutcome()
@@ -430,6 +437,34 @@ class AgentRunnerService:
             if not isinstance(exc, Exception):
                 raise
 
+    async def _runtime_for(
+        self, conversation: Conversation, agent_run: AgentRun, *, user_id: UUID
+    ) -> ResolvedAgentRuntime:
+        """The run's runtime -- one that runs in this process, for a stranger's turn.
+
+        A stranger's turn never reaches a coding agent's shell, which would hold
+        a token minted for the member who answers for the group; see
+        ``outsider_runtime``.
+        """
+        resolved = await self._resolve_agent_runtime(
+            agent_run.agent_runtime,
+            user_id=user_id,
+            organization_id=conversation.organization_id,
+        )
+        if not answers_outsiders(conversation):
+            return resolved
+        return await in_process_runtime(
+            resolved,
+            fallbacks=await default_runtimes(
+                self.uow_factory, conversation.organization_id
+            ),
+            resolve=partial(
+                self._resolve_agent_runtime,
+                user_id=user_id,
+                organization_id=conversation.organization_id,
+            ),
+        )
+
     async def _resolve_agent_runtime(
         self,
         agent_runtime: AgentRuntimeConfig,
@@ -484,6 +519,8 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=pod_id,
                 )
+                # Before anything reads it: the runtime, the context, the tools.
+                conversation = await with_effective_audience(uow, conversation)
                 agent = await resolve_agent(
                     conversation,
                     user_id=user_id,
@@ -496,6 +533,12 @@ class AgentRunnerService:
                     conversation_id=agent_run.conversation_id,
                     run_id=agent_run.id,
                 )
+                if answers_outsiders(conversation) and not run_is_private(
+                    agent_run.metadata
+                ):
+                    messages = without_private_runs(
+                        messages, runs, current_run_id=agent_run.id
+                    )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
 

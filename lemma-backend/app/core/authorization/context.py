@@ -47,9 +47,11 @@ class ResourceVisibility(str, Enum):
     PERSONAL = "PERSONAL"
     POD = "POD"
     RESTRICTED = "RESTRICTED"
-    # Every Lemma account, pod membership or not. Never anonymous: authorization
-    # still runs against a signed-in principal, so this waives pod scope rather
-    # than opening the resource to the open internet.
+    # Every Lemma account, pod membership or not -- and the people outside the
+    # pod in its groups, where its bot answers them (``core/authorization/
+    # anonymous``): the one place an anonymous principal is authorized, pinned
+    # to one pod, read-only. It is still not the open internet: nothing serves a
+    # Public resource to a request nobody signed.
     PUBLIC = "PUBLIC"
 
 

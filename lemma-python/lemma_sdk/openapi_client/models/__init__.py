@@ -253,6 +253,18 @@ _NAME_TO_MODULE = {
     'FunctionStatus': 'function_status',
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
+    'GroupDetailResponse': 'group_detail_response',
+    'GroupLineResponse': 'group_line_response',
+    'GroupLinkRequest': 'group_link_request',
+    'GroupLinkResponse': 'group_link_response',
+    'GroupListResponse': 'group_list_response',
+    'GroupOwnerResponse': 'group_owner_response',
+    'GroupPersonResponse': 'group_person_response',
+    'GroupResponse': 'group_response',
+    'GroupStartRequest': 'group_start_request',
+    'GroupTimelineResponse': 'group_timeline_response',
+    'GroupUpdateRequest': 'group_update_request',
+    'GroupWaitingResponse': 'group_waiting_response',
     'HarnessKind': 'harness_kind',
     'HomeAgentResponse': 'home_agent_response',
     'HomeAppResponse': 'home_app_response',
@@ -433,6 +445,7 @@ _NAME_TO_MODULE = {
     'SurfaceConnectorSetupGuide': 'surface_connector_setup_guide',
     'SurfaceCreateRequest': 'surface_create_request',
     'SurfaceCredentialMode': 'surface_credential_mode',
+    'SurfaceGroupsConfig': 'surface_groups_config',
     'SurfaceIdentityConfigInput': 'surface_identity_config_input',
     'SurfaceIdentityConfigResponse': 'surface_identity_config_response',
     'SurfacePlatform': 'surface_platform',
@@ -793,6 +806,18 @@ if TYPE_CHECKING:
     from .function_status import FunctionStatus
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
+    from .group_detail_response import GroupDetailResponse
+    from .group_line_response import GroupLineResponse
+    from .group_link_request import GroupLinkRequest
+    from .group_link_response import GroupLinkResponse
+    from .group_list_response import GroupListResponse
+    from .group_owner_response import GroupOwnerResponse
+    from .group_person_response import GroupPersonResponse
+    from .group_response import GroupResponse
+    from .group_start_request import GroupStartRequest
+    from .group_timeline_response import GroupTimelineResponse
+    from .group_update_request import GroupUpdateRequest
+    from .group_waiting_response import GroupWaitingResponse
     from .harness_kind import HarnessKind
     from .home_agent_response import HomeAgentResponse
     from .home_app_response import HomeAppResponse
@@ -973,6 +998,7 @@ if TYPE_CHECKING:
     from .surface_connector_setup_guide import SurfaceConnectorSetupGuide
     from .surface_create_request import SurfaceCreateRequest
     from .surface_credential_mode import SurfaceCredentialMode
+    from .surface_groups_config import SurfaceGroupsConfig
     from .surface_identity_config_input import SurfaceIdentityConfigInput
     from .surface_identity_config_response import SurfaceIdentityConfigResponse
     from .surface_platform import SurfacePlatform
@@ -1346,6 +1372,18 @@ __all__ = [
     'FunctionStatus',
     'FunctionSummaryResponse',
     'FunctionType',
+    'GroupDetailResponse',
+    'GroupLineResponse',
+    'GroupLinkRequest',
+    'GroupLinkResponse',
+    'GroupListResponse',
+    'GroupOwnerResponse',
+    'GroupPersonResponse',
+    'GroupResponse',
+    'GroupStartRequest',
+    'GroupTimelineResponse',
+    'GroupUpdateRequest',
+    'GroupWaitingResponse',
     'HarnessKind',
     'HomeAgentResponse',
     'HomeAppResponse',
@@ -1526,6 +1564,7 @@ __all__ = [
     'SurfaceConnectorSetupGuide',
     'SurfaceCreateRequest',
     'SurfaceCredentialMode',
+    'SurfaceGroupsConfig',
     'SurfaceIdentityConfigInput',
     'SurfaceIdentityConfigResponse',
     'SurfacePlatform',

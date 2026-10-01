@@ -17,6 +17,7 @@ from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.agent_host import NEW_SESSION_ONLY, AgentHostRunSpec
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
@@ -169,6 +170,16 @@ async def enqueue_run[DepsT: AgentContext](
         # transaction that admits the run (`claim_exactly`), so neither a
         # failed dispatch nor a crash can leave them claimed by a run that
         # never went out.
+        # And only of this run's kind: a private note waits for a run that
+        # answers in Lemma, and a message for the platform for one that
+        # answers there (`domain/private_notes`).
+        private = run_is_private(run.metadata if run is not None else None)
+        messages = [
+            message
+            for message in messages
+            if not is_queued(message.metadata)
+            or is_private_note(message.metadata) == private
+        ]
         carried = frozenset(
             message.id
             for message in messages

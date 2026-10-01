@@ -35,8 +35,10 @@ function useKnownAccess(podId: string, subject: ShareSubject): { visibility?: st
 function whoCanOpen(space: string, known: { visibility?: string; rls?: boolean }): string {
     const said = (known.visibility ?? "").toUpperCase();
     /* PUBLIC waives the space, not sign-in: it is every Lemma account, never
-       the open internet. That is what a public link below is for. */
-    if (said === "PUBLIC") return "Anyone signed in to Lemma can open this, including people outside " + space + ".";
+       the open internet. That is what a public link below is for. It is
+       also what the space's bots answer people outside it from, in the
+       groups where they answer them — so it reaches them too. */
+    if (said === "PUBLIC") return "Anyone with a Lemma account can open this, and people outside " + space + " get answers from it in its groups.";
     if (said === "PERSONAL") return "Only you can open this. It is in your private files.";
     if (said === "RESTRICTED") return "Only the people it was shared with can open this.";
     if (known.rls) return "Everyone in " + space + " can open this, and each sees only their own rows.";
@@ -77,13 +79,15 @@ function LiveLink({ link, onRevoke, revoking }: { link: SharedLink; onRevoke: ()
  *  "who has access" is the space's people for every subject, and adding a
  *  person adds them to the space. A file can also go past the space, as a
  *  bounded public link, which is the one thing only a file can do. */
-export function ShareSheet({ pod, orgId, subject, onClose }: {
+export function ShareSheet({ pod, orgId, subject, adding: addingFirst = false, onClose }: {
     pod: Pod;
     orgId: string | null;
     subject: ShareSubject;
+    /** Open on adding people — asked for by an Invite button. */
+    adding?: boolean;
     onClose: () => void;
 }) {
-    const [adding, setAdding] = useState(false);
+    const [adding, setAdding] = useState(addingFirst);
     const [copied, setCopied] = useState(false);
     const [publicLink, setPublicLink] = useState(false);
     const path = subject.kind === "file" ? subject.path : "";

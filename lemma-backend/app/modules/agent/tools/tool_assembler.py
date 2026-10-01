@@ -14,6 +14,7 @@ from app.modules.agent.tools.context import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.outsiders import answers_outsiders
 from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
@@ -138,7 +139,13 @@ class RunToolAssembler:
                 toolsets = _for_host_execution(toolsets, host_execution)
             if harness_kind is not None and harness_kind != HarnessKind.LEMMA:
                 include_notification_tools = True
-            if include_notification_tools and conversation is not None:
+            # Answering somebody's notification is the owner's to do, in their
+            # own thread; a stranger's turn must not be able to do it for them.
+            if (
+                include_notification_tools
+                and conversation is not None
+                and not answers_outsiders(conversation)
+            ):
                 toolsets = [*toolsets, notification_toolset()]
             span.set_attribute("lemma.toolsets", len(toolsets))
             return toolsets
@@ -209,7 +216,12 @@ class RunToolAssembler:
                     conversation_id=conversation.id,
                 )
             )
-        if agent is not None and callable(self.uow_factory):
+        # A run answering somebody outside the pod gets neither the agent's
+        # functions and sub-agents nor its surface's platform tools: a function
+        # tool runs on behalf of the conversation's user, who on such a run is
+        # the member looking after it, not the stranger asking.
+        for_outsider = answers_outsiders(conversation)
+        if agent is not None and callable(self.uow_factory) and not for_outsider:
             toolsets.extend(
                 await AgentCallableToolFactory(self.uow_factory).build_toolsets(
                     agent=agent,
@@ -217,18 +229,8 @@ class RunToolAssembler:
                     grants=grants,
                 )
             )
-        if (
-            conversation is not None
-            and conversation.metadata
-            and conversation.metadata.get("surface_platform")
-        ):
-            from app.modules.agent_surfaces.contracts.egress import (
-                build_surface_toolsets,
-            )
-
-            toolsets.extend(
-                await build_surface_toolsets(self.uow_factory, conversation)
-            )
+        if not for_outsider:
+            toolsets.extend(await self._surface_toolsets(conversation))
         toolsets.extend(
             self._final_answer_toolsets(
                 agent=agent,
@@ -236,22 +238,49 @@ class RunToolAssembler:
                 include_final_answer=include_final_answer,
             )
         )
-        # Offered whenever the run can interpret an image at all -- directly, or
-        # by delegating to a configured vision model, which answers in text and
-        # so is safe on a text-only model.
-        #
-        # Here rather than in the runner, because the runner is not the only
-        # assembler. A remote harness reaches every tool through the MCP server,
-        # which re-assembles from scratch, so appending it in the runner left
-        # `view_image` unreachable on every Agent Host run whatever its vision
-        # mode -- while the run spec still advertised it, because that list is
-        # the runner's copy. Prompts and `web_fetch`'s own result message tell
-        # the model to use the tool unconditionally.
-        if vision_mode is not None and vision_mode.can_see:
-            from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
-                view_image_toolset,
-            )
-
-            if view_image_toolset not in toolsets:
-                toolsets.append(view_image_toolset)
+        # Not for an outsider's run: `view_image` opens files in the owner's
+        # sandbox.
+        if not for_outsider:
+            _add_view_image(toolsets, vision_mode)
         return toolsets
+
+    async def _surface_toolsets(
+        self, conversation: Conversation | None
+    ) -> list[AbstractToolset[ConversationContext]]:
+        """The tools the conversation's chat platform adds, if it lives on one."""
+        if conversation is None or not (conversation.metadata or {}).get(
+            "surface_platform"
+        ):
+            return []
+        from app.modules.agent_surfaces.contracts.egress import (
+            build_surface_toolsets,
+        )
+
+        return await build_surface_toolsets(self.uow_factory, conversation)
+
+
+def _add_view_image(
+    toolsets: list[AbstractToolset[ConversationContext]],
+    vision_mode: AgentVisionMode | None,
+) -> None:
+    """Offer `view_image` whenever the run can interpret an image at all.
+
+    Directly, or by delegating to a configured vision model, which answers in
+    text and so is safe on a text-only model.
+
+    Here rather than in the runner, because the runner is not the only
+    assembler. A remote harness reaches every tool through the MCP server, which
+    re-assembles from scratch, so appending it in the runner left `view_image`
+    unreachable on every Agent Host run whatever its vision mode -- while the
+    run spec still advertised it, because that list is the runner's copy.
+    Prompts and `web_fetch`'s own result message tell the model to use the tool
+    unconditionally.
+    """
+    if vision_mode is None or not vision_mode.can_see:
+        return
+    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+        view_image_toolset,
+    )
+
+    if view_image_toolset not in toolsets:
+        toolsets.append(view_image_toolset)

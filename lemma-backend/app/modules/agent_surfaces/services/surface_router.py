@@ -57,6 +57,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ResolvedSurfaceUser,
     SurfaceChannelRoute,
     SurfacePlatform,
+    is_slack_group_dm,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -118,6 +119,9 @@ def _channel_route_key(
     ):
         # Surface bound directly to one channel without explicit routes.
         route = SurfaceChannelRoute(channel_id=surface.external_channel_id)
+    if route is None and is_slack_group_dm(parsed) and parsed.external_channel_id:
+        # A group DM needs no route: being in it is the authorization.
+        route = SurfaceChannelRoute(channel_id=parsed.external_channel_id)
     if route is None or not _addressed(parsed):
         return None
     return (
@@ -469,10 +473,12 @@ class SurfaceRouter:
                 conversation_kind="EMAIL" if is_email else "DM",
                 route_key="email" if is_email else "dm",
             )
-        if surface.surface_type is SurfacePlatform.TELEGRAM:
+        if surface.surface_type in {SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP}:
             # Being added to the group by an admin is the authorization, so there
-            # is no per-group route config. The sender is still resolved and
-            # pod-membership checked upstream, so only pod members can invoke it.
+            # is no per-group route config -- and a WhatsApp group is one the bot
+            # created. The sender is still resolved and pod-membership checked
+            # upstream, so only pod members, or outsiders where the group
+            # welcomes them, can invoke it.
             if not _addressed(parsed):
                 return None
             return await self._route(

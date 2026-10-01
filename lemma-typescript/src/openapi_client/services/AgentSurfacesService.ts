@@ -6,6 +6,14 @@ import type { AgentSurfaceListResponse } from '../models/AgentSurfaceListRespons
 import type { AgentSurfaceResponse } from '../models/AgentSurfaceResponse.js';
 import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfaceChannelsResponse.js';
 import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
+import type { GroupDetailResponse } from '../models/GroupDetailResponse.js';
+import type { GroupLinkRequest } from '../models/GroupLinkRequest.js';
+import type { GroupLinkResponse } from '../models/GroupLinkResponse.js';
+import type { GroupListResponse } from '../models/GroupListResponse.js';
+import type { GroupResponse } from '../models/GroupResponse.js';
+import type { GroupStartRequest } from '../models/GroupStartRequest.js';
+import type { GroupTimelineResponse } from '../models/GroupTimelineResponse.js';
+import type { GroupUpdateRequest } from '../models/GroupUpdateRequest.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -36,6 +44,175 @@ export class AgentSurfacesService {
             url: '/pods/{pod_id}/available-surfaces',
             path: {
                 'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Groups
+     * Every group the pod's bots are in, most recently changed first.
+     * @param podId
+     * @returns GroupListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentGroupList(
+        podId: string,
+    ): CancelablePromise<GroupListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/groups',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Start Group
+     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
+     *
+     * WhatsApp confirms the group moments later: it comes back ``pending``, and
+     * its invite link appears once confirmed. Telegram and Slack cannot create
+     * groups for a bot; add the bot to one of theirs instead.
+     * @param podId
+     * @param requestBody
+     * @returns GroupResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentGroupStart(
+        podId: string,
+        requestBody: GroupStartRequest,
+    ): CancelablePromise<GroupResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/groups',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Group Link
+     * A one-use link that adds the pod's Telegram bot to a group the caller picks.
+     *
+     * The group is then the caller's to answer for. Which Telegram account is
+     * theirs is still their profile's to say: a link is easily passed on, so the
+     * one that used it is never taken for them. The link works for an hour.
+     * @param podId
+     * @param requestBody
+     * @returns GroupLinkResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentGroupLink(
+        podId: string,
+        requestBody: GroupLinkRequest,
+    ): CancelablePromise<GroupLinkResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/groups/links',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Group
+     * One group: who is in it, and what its outsiders are waiting on you for.
+     * @param podId
+     * @param groupId
+     * @returns GroupDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentGroupGet(
+        podId: string,
+        groupId: string,
+    ): CancelablePromise<GroupDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/groups/{group_id}',
+            path: {
+                'pod_id': podId,
+                'group_id': groupId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Group
+     * Switch outsiders on or off in one group, or take it over.
+     *
+     * The member who answers for the group may; so may anybody who configures the
+     * bot when nobody in the pod answers for it, and an admin of the pod, whose
+     * change the member is told about.
+     * @param podId
+     * @param groupId
+     * @param requestBody
+     * @returns GroupResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentGroupUpdate(
+        podId: string,
+        groupId: string,
+        requestBody: GroupUpdateRequest,
+    ): CancelablePromise<GroupResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/pods/{pod_id}/groups/{group_id}',
+            path: {
+                'pod_id': podId,
+                'group_id': groupId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Group Timeline
+     * What was said in the group, oldest first, as far as the pod kept it.
+     *
+     * Kept for WhatsApp and Telegram groups. A Slack channel's history is
+     * Slack's; it comes back empty here. An answer the bot made with one member's
+     * own access comes back withheld to everybody else: they may not be able to
+     * see what it was made from.
+     * @param podId
+     * @param groupId
+     * @param limit
+     * @returns GroupTimelineResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentGroupTimeline(
+        podId: string,
+        groupId: string,
+        limit: number = 60,
+    ): CancelablePromise<GroupTimelineResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/groups/{group_id}/timeline',
+            path: {
+                'pod_id': podId,
+                'group_id': groupId,
+            },
+            query: {
+                'limit': limit,
             },
             errors: {
                 422: `Validation Error`,

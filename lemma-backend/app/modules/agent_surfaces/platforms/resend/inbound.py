@@ -165,6 +165,12 @@ def normalize_resend_inbound(payload: dict) -> dict:
         "from_name": sender.display_name,
         "to": recipients[0] if recipients else None,
         "recipients": recipients,
+        # Who the sender wrote *to*, and who they copied. Routing only needs the
+        # pod's own address; these are for the thread's other people -- replying
+        # to all of them, and knowing whether the pod was addressed or only
+        # copied (see `email_recipients`).
+        "addressed_to": all_addresses(data.get("to")),
+        "cc": all_addresses(data.get("cc")),
         "subject": data.get("subject") or headers.get("subject"),
         "text": data.get("text"),
         "html": data.get("html"),

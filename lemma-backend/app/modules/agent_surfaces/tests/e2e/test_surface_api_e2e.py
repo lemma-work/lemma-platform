@@ -301,7 +301,10 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "groups",
     }
+    # A new bot answers people outside the pod in its groups until switched off.
+    assert config["groups"] == {"answers_outsiders": True}
     # Identity values are normalized on write.
     assert config["identity"]["allowed_domains"] == ["lemma.test"]
     route = config["channels"][0]
@@ -321,6 +324,18 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     assert config["send_policy"]["allow_send"] is True
     assert config["identity"]["allowed_domains"] == ["lemma.test"]
     assert config["channels"][0]["channel_id"] == "C-ROUTED"
+    assert config["groups"]["answers_outsiders"] is True
+
+    # Switching the bot off for outsiders leaves the rest as it was.
+    closed = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/slack",
+        json={"config": {"groups": {"answers_outsiders": False}}},
+    )
+    assert closed.status_code == 200, closed.text
+    config = closed.json()["config"]
+    assert config["groups"]["answers_outsiders"] is False
+    assert config["send_policy"]["allow_send"] is True
+    assert config["channels"][0]["channel_id"] == "C-ROUTED"
 
     openapi = await authenticated_client.get("/openapi.json")
     schemas = openapi.json()["components"]["schemas"]
@@ -330,6 +345,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "groups",
     }
     assert set(schemas["SurfaceBehaviorConfigInput"]["properties"]) == {
         "identity",
@@ -338,6 +354,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "send_policy",
         "slack",
         "telegram",
+        "groups",
     }
 
 

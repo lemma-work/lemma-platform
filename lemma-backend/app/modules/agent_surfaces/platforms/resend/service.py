@@ -120,6 +120,7 @@ class ResendPlatformService:
             content_type="markdown",
             attachments=list((metadata or {}).get("attachments") or []),
             from_name=self._sender_name(metadata),
+            cc=[str(a) for a in (event.reply_target.get("cc") or [])],
         )
 
     def _raise_unsendable(self, recipient_email: str) -> None:
@@ -296,6 +297,7 @@ class ResendPlatformService:
         attachments: list[tuple[str, bytes, str]],
         is_reply: bool = True,
         from_name: str | None = None,
+        cc: list[str] | None = None,
     ) -> dict[str, Any]:
         if not recipient_email or not self._api_key or not self._from_address:
             self._raise_unsendable(recipient_email)
@@ -322,6 +324,10 @@ class ResendPlatformService:
         }
         if html_body:
             payload["html"] = html_body
+        if cc:
+            # Reply to all: the thread's other people stay on it, as a person
+            # replying would keep them.
+            payload["cc"] = cc
         headers: dict[str, str] = {}
         if in_reply_to:
             headers["In-Reply-To"] = in_reply_to

@@ -15421,6 +15421,156 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Groups
+     * Every group the pod's bots are in, most recently changed first.
+     * @param podId
+     * @returns GroupListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/groups",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Group
+     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
+     *
+     * WhatsApp confirms the group moments later: it comes back ``pending``, and
+     * its invite link appears once confirmed. Telegram and Slack cannot create
+     * groups for a bot; add the bot to one of theirs instead.
+     * @param podId
+     * @param requestBody
+     * @returns GroupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/groups",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Group Link
+     * A one-use link that adds the pod's Telegram bot to a group the caller picks.
+     *
+     * The group is then the caller's to answer for. Which Telegram account is
+     * theirs is still their profile's to say: a link is easily passed on, so the
+     * one that used it is never taken for them. The link works for an hour.
+     * @param podId
+     * @param requestBody
+     * @returns GroupLinkResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupLink(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/groups/links",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Group
+     * One group: who is in it, and what its outsiders are waiting on you for.
+     * @param podId
+     * @param groupId
+     * @returns GroupDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupGet(podId, groupId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/groups/{group_id}",
+        path: {
+          "pod_id": podId,
+          "group_id": groupId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Group
+     * Switch outsiders on or off in one group, or take it over.
+     *
+     * The member who answers for the group may; so may anybody who configures the
+     * bot when nobody in the pod answers for it, and an admin of the pod, whose
+     * change the member is told about.
+     * @param podId
+     * @param groupId
+     * @param requestBody
+     * @returns GroupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupUpdate(podId, groupId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/groups/{group_id}",
+        path: {
+          "pod_id": podId,
+          "group_id": groupId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Group Timeline
+     * What was said in the group, oldest first, as far as the pod kept it.
+     *
+     * Kept for WhatsApp and Telegram groups. A Slack channel's history is
+     * Slack's; it comes back empty here. An answer the bot made with one member's
+     * own access comes back withheld to everybody else: they may not be able to
+     * see what it was made from.
+     * @param podId
+     * @param groupId
+     * @param limit
+     * @returns GroupTimelineResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupTimeline(podId, groupId, limit = 60) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/groups/{group_id}/timeline",
+        path: {
+          "pod_id": podId,
+          "group_id": groupId
+        },
+        query: {
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth
      * prerequisites) — works before any surface of this platform exists.
@@ -15812,6 +15962,50 @@ var LemmaClient = (() => {
     slackManifest(agentName) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackManifest(agentName)
+      );
+    }
+  };
+
+  // src/namespaces/pod-groups.ts
+  var PodGroupsNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    /** Every group the pod's bots are in, most recently changed first. */
+    list(podId) {
+      return this.client.request(() => AgentSurfacesService.agentGroupList(podId));
+    }
+    /** One group, with the people seen in it and what is waiting on the caller. */
+    get(podId, groupId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupGet(podId, groupId)
+      );
+    }
+    /** What was said in the group, oldest first (WhatsApp and Telegram groups). */
+    timeline(podId, groupId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return AgentSurfacesService.agentGroupTimeline(podId, groupId, (_a = options.limit) != null ? _a : 60);
+        }
+      );
+    }
+    /** Start a WhatsApp group with the pod's bot in it. */
+    start(podId, payload) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupStart(podId, payload)
+      );
+    }
+    /** A one-use, hour-long Telegram link that adds the bot to a group. */
+    link(podId, surfaceName) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupLink(podId, { surface_name: surfaceName })
+      );
+    }
+    /** Switch outsiders on or off in one group, or take it over. */
+    update(podId, groupId, payload) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupUpdate(podId, groupId, payload)
       );
     }
   };
@@ -18095,6 +18289,8 @@ var LemmaClient = (() => {
       __publicField(this, "podRoles");
       __publicField(this, "organizations");
       __publicField(this, "podSurfaces");
+      /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
+      __publicField(this, "podGroups");
       /** The caller's own surfaces across all pods (grouped by platform). */
       __publicField(this, "notifications");
       __publicField(this, "userSurfaces");
@@ -18155,6 +18351,7 @@ var LemmaClient = (() => {
       this.podRoles = new PodRolesNamespace(this._generated, podIdFn);
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
+      this.podGroups = new PodGroupsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }
     /** Change the active pod ID for subsequent calls. */

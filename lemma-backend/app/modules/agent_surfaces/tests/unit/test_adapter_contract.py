@@ -454,7 +454,13 @@ def test_the_registry_claims_only_what_the_adapter_implements(
 
     capabilities = get_platform_capabilities(platform)
     assert capabilities is not None
-    assert getattr(capabilities, claim) == _overrides(adapter, hook), (
+    implemented = _overrides(adapter, hook)
+    if claim == "is_channel_capable" and capabilities.bot_creates_groups:
+        # A bot that creates its groups has a second source of background: the
+        # pod's own log of every group it created (`services/group_log`), since
+        # WhatsApp hands back no history and no quoted message to fetch.
+        implemented = True
+    assert getattr(capabilities, claim) == implemented, (
         f"{platform}.{claim} says {getattr(capabilities, claim)} while "
         f"{hook} is {'overridden' if _overrides(adapter, hook) else 'the base stub'}."
     )

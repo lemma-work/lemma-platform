@@ -8163,6 +8163,614 @@
         "title": "FunctionType",
         "type": "string"
       },
+      "GroupDetailResponse": {
+        "properties": {
+          "answers_outsiders": {
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          },
+          "bot_answers_outsiders": {
+            "default": true,
+            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
+            "title": "Bot Answers Outsiders",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "description": "The reader may switch outsiders for this group or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
+          "external_channel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Channel Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "invite_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Link"
+          },
+          "last_message_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message At"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupOwnerResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who answers for the people outside the pod."
+          },
+          "pending": {
+            "default": false,
+            "description": "Asked of the platform and not yet confirmed (WhatsApp).",
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "people": {
+            "items": {
+              "$ref": "#/components/schemas/GroupPersonResponse"
+            },
+            "title": "People",
+            "type": "array"
+          },
+          "people_in_pod": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "People in the pod seen speaking here; none where not kept.",
+            "title": "People In Pod"
+          },
+          "people_outside": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "People outside the pod seen speaking here.",
+            "title": "People Outside"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "shared_externally": {
+            "default": false,
+            "description": "A Slack channel shared with another company.",
+            "title": "Shared Externally",
+            "type": "boolean"
+          },
+          "surface_name": {
+            "title": "Surface Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "waiting": {
+            "items": {
+              "$ref": "#/components/schemas/GroupWaitingResponse"
+            },
+            "title": "Waiting",
+            "type": "array"
+          },
+          "waiting_for_you": {
+            "default": 0,
+            "description": "Questions its people outside the pod passed on to you.",
+            "title": "Waiting For You",
+            "type": "integer"
+          },
+          "welcomes_outsiders": {
+            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
+            "title": "Welcomes Outsiders",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "surface_name",
+          "platform",
+          "answers_outsiders",
+          "welcomes_outsiders",
+          "updated_at",
+          "people",
+          "waiting"
+        ],
+        "title": "GroupDetailResponse",
+        "type": "object"
+      },
+      "GroupLineResponse": {
+        "properties": {
+          "answered_from_public": {
+            "default": false,
+            "description": "On the bot's lines: answered from what the pod made Public.",
+            "title": "Answered From Public",
+            "type": "boolean"
+          },
+          "answered_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On the bot's lines: whom it answered.",
+            "title": "Answered Name"
+          },
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "author_external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author External Id"
+          },
+          "author_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Name"
+          },
+          "from_bot": {
+            "title": "From Bot",
+            "type": "boolean"
+          },
+          "in_pod": {
+            "title": "In Pod",
+            "type": "boolean"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None where the line is withheld from the reader.",
+            "title": "Text"
+          },
+          "withheld": {
+            "default": false,
+            "description": "An answer the bot made with another member's own access: shown to that member alone. ``answered_name`` still says whom it was for.",
+            "title": "Withheld",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "in_pod",
+          "from_bot",
+          "at"
+        ],
+        "title": "GroupLineResponse",
+        "type": "object"
+      },
+      "GroupLinkRequest": {
+        "properties": {
+          "surface_name": {
+            "minLength": 1,
+            "title": "Surface Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface_name"
+        ],
+        "title": "GroupLinkRequest",
+        "type": "object"
+      },
+      "GroupLinkResponse": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "url": {
+            "description": "Opens Telegram's own choose-a-group screen.",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at"
+        ],
+        "title": "GroupLinkResponse",
+        "type": "object"
+      },
+      "GroupListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GroupResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "GroupListResponse",
+        "type": "object"
+      },
+      "GroupOwnerResponse": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "title": "GroupOwnerResponse",
+        "type": "object"
+      },
+      "GroupPersonResponse": {
+        "properties": {
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "in_pod": {
+            "title": "In Pod",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "name",
+          "in_pod"
+        ],
+        "title": "GroupPersonResponse",
+        "type": "object"
+      },
+      "GroupResponse": {
+        "properties": {
+          "answers_outsiders": {
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          },
+          "bot_answers_outsiders": {
+            "default": true,
+            "description": "The bot's own switch, over every group it is in. Off, nobody outside the pod is answered in any of them.",
+            "title": "Bot Answers Outsiders",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "default": false,
+            "description": "The reader may switch outsiders for this group or take it over: they answer for it, nobody in the pod does, or they are an admin of the pod.",
+            "title": "Can Manage",
+            "type": "boolean"
+          },
+          "external_channel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Channel Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "invite_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Link"
+          },
+          "last_message_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message At"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupOwnerResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who answers for the people outside the pod."
+          },
+          "pending": {
+            "default": false,
+            "description": "Asked of the platform and not yet confirmed (WhatsApp).",
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "people_in_pod": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "People in the pod seen speaking here; none where not kept.",
+            "title": "People In Pod"
+          },
+          "people_outside": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "People outside the pod seen speaking here.",
+            "title": "People Outside"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "shared_externally": {
+            "default": false,
+            "description": "A Slack channel shared with another company.",
+            "title": "Shared Externally",
+            "type": "boolean"
+          },
+          "surface_name": {
+            "title": "Surface Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "waiting_for_you": {
+            "default": 0,
+            "description": "Questions its people outside the pod passed on to you.",
+            "title": "Waiting For You",
+            "type": "integer"
+          },
+          "welcomes_outsiders": {
+            "description": "People outside the pod are answered here today: the group's switch is on, a member of the pod answers for them, and the bot's own switch is on.",
+            "title": "Welcomes Outsiders",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "surface_name",
+          "platform",
+          "answers_outsiders",
+          "welcomes_outsiders",
+          "updated_at"
+        ],
+        "title": "GroupResponse",
+        "type": "object"
+      },
+      "GroupStartRequest": {
+        "properties": {
+          "answers_outsiders": {
+            "default": true,
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          },
+          "surface_name": {
+            "minLength": 1,
+            "title": "Surface Name",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface_name",
+          "title"
+        ],
+        "title": "GroupStartRequest",
+        "type": "object"
+      },
+      "GroupTimelineResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GroupLineResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "GroupTimelineResponse",
+        "type": "object"
+      },
+      "GroupUpdateRequest": {
+        "properties": {
+          "answers_outsiders": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Answer people outside the pod in this group. Switching it on where nobody answers for them makes the caller the one who does.",
+            "title": "Answers Outsiders"
+          },
+          "take_over": {
+            "default": false,
+            "description": "The caller answers for this group's outsiders from now on.",
+            "title": "Take Over",
+            "type": "boolean"
+          }
+        },
+        "title": "GroupUpdateRequest",
+        "type": "object"
+      },
+      "GroupWaitingResponse": {
+        "properties": {
+          "asked_at": {
+            "format": "date-time",
+            "title": "Asked At",
+            "type": "string"
+          },
+          "notification_id": {
+            "description": "Answer it with the notification's respond endpoint.",
+            "format": "uuid",
+            "title": "Notification Id",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "notification_id",
+          "question",
+          "asked_at"
+        ],
+        "title": "GroupWaitingResponse",
+        "type": "object"
+      },
       "HarnessKind": {
         "description": "Runtime framework used to execute an agent.\n\nTwo kinds, not one per coding tool: ``LEMMA`` runs in-process, ``HARNESS``\ndispatches through Agent Host. Which tool Agent Host runs is identified by\n``harness_id`` on the runtime profile, so the retired per-tool values\n(``CODEX``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``, ``ANTIGRAVITY``) went\naway with the local daemon that needed them.\n\nNo stored row is read back through this enum \u2014 a persisted runtime profile\nnames a ``RuntimeProfileProtocol``, and the kind is derived from that \u2014 so\ndropping those values cannot fail a history read. Back-compat for retired\n*protocols* is handled where it belongs, in the profile repository.",
         "enum": [
@@ -13678,6 +14286,9 @@
             "description": "Ignored. The DM reset window is a deployment-wide setting (SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so existing pod bundles and clients keep working.",
             "title": "Dm Conversation Reset After Hours"
           },
+          "groups": {
+            "$ref": "#/components/schemas/SurfaceGroupsConfig"
+          },
           "identity": {
             "$ref": "#/components/schemas/SurfaceIdentityConfigInput"
           },
@@ -13761,6 +14372,9 @@
             },
             "title": "Channels",
             "type": "array"
+          },
+          "groups": {
+            "$ref": "#/components/schemas/SurfaceGroupsConfig"
           },
           "identity": {
             "$ref": "#/components/schemas/SurfaceIdentityConfigResponse"
@@ -14055,6 +14669,20 @@
         ],
         "title": "SurfaceCredentialMode",
         "type": "string"
+      },
+      "SurfaceGroupsConfig": {
+        "additionalProperties": false,
+        "description": "How the bot treats people outside the pod in its groups. Mirrored.",
+        "properties": {
+          "answers_outsiders": {
+            "default": true,
+            "description": "Answer people outside the pod in this bot's groups, from what the pod made Public. Off, the bot answers only the pod's members, whatever a group's own switch says.",
+            "title": "Answers Outsiders",
+            "type": "boolean"
+          }
+        },
+        "title": "SurfaceGroupsConfig",
+        "type": "object"
       },
       "SurfaceIdentityConfigInput": {
         "additionalProperties": false,
@@ -29850,6 +30478,389 @@
           "resource": "function.run",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/groups": {
+      "get": {
+        "description": "Every group the pod's bots are in, most recently changed first.",
+        "operationId": "agent.group.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Groups",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.group",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "description": "Start a WhatsApp group with the pod's bot in it, answered for by the caller.\n\nWhatsApp confirms the group moments later: it comes back ``pending``, and\nits invite link appears once confirmed. Telegram and Slack cannot create\ngroups for a bot; add the bot to one of theirs instead.",
+        "operationId": "agent.group.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Group",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.group"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.group",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/pods/{pod_id}/groups/links": {
+      "post": {
+        "description": "A one-use link that adds the pod's Telegram bot to a group the caller picks.\n\nThe group is then the caller's to answer for. Which Telegram account is\ntheirs is still their profile's to say: a link is easily passed on, so the\none that used it is never taken for them. The link works for an hour.",
+        "operationId": "agent.group.link",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupLinkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Group Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.group"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.group",
+          "result": "entity",
+          "verb": "link"
+        }
+      }
+    },
+    "/pods/{pod_id}/groups/{group_id}": {
+      "get": {
+        "description": "One group: who is in it, and what its outsiders are waiting on you for.",
+        "operationId": "agent.group.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Group",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.group",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "patch": {
+        "description": "Switch outsiders on or off in one group, or take it over.\n\nThe member who answers for the group may; so may anybody who configures the\nbot when nobody in the pod answers for it, and an admin of the pod, whose\nchange the member is told about.",
+        "operationId": "agent.group.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Group",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.group"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.group",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/groups/{group_id}/timeline": {
+      "get": {
+        "description": "What was said in the group, oldest first, as far as the pod kept it.\n\nKept for WhatsApp and Telegram groups. A Slack channel's history is\nSlack's; it comes back empty here. An answer the bot made with one member's\nown access comes back withheld to everybody else: they may not be able to\nsee what it was made from.",
+        "operationId": "agent.group.timeline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Group Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 60,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupTimelineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Group Timeline",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "agent.group",
+          "result": "entity",
+          "verb": "timeline"
         }
       }
     },

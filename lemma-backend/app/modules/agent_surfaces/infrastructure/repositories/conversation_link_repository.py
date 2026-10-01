@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.core.domain.uow import IUnitOfWork
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
+from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER
 from app.modules.agent_surfaces.domain.notification import (
     NotificationDeliveryStatus,
     NotificationStatus,
@@ -275,6 +276,13 @@ class SurfaceConversationLinkRepository:
         surface's whole history back to reduce it here. The single-member form
         delegates to this one so a reachability check and the send that follows
         it can never disagree about which thread is theirs.
+
+        Private threads only. Every caller is reaching one person -- a
+        notification, a message the pod sends them -- and a group thread is
+        where they last *spoke*, not somewhere private to reach them: the reply
+        goes to the group, in front of everyone in it. A member whose only
+        thread is a group is therefore unreachable here, and delivery falls
+        back to email or their Lemma inbox, which is the right answer.
         """
         if not external_user_ids:
             return {}
@@ -289,6 +297,7 @@ class SurfaceConversationLinkRepository:
                 AgentSurfaceConversationLinkModel.external_user_id.in_(
                     external_user_ids
                 ),
+                AgentSurfaceConversationLinkModel.conversation_kind != "CHANNEL",
             )
             .distinct(AgentSurfaceConversationLinkModel.external_user_id)
             .order_by(
@@ -303,6 +312,32 @@ class SurfaceConversationLinkRepository:
             if link.external_user_id
         }
 
+    async def conversation_ids_in_channel(
+        self,
+        *,
+        surface_id: UUID,
+        external_channel_id: str,
+        external_user_id: str,
+        limit: int = 20,
+    ) -> list[UUID]:
+        """The conversations one sender key holds in one channel, newest first.
+
+        For a group's people outside the pod the key is shared, and a platform
+        with threads (Slack) gives them one conversation per thread.
+        """
+        stmt = (
+            select(AgentSurfaceConversationLinkModel.conversation_id)
+            .where(
+                AgentSurfaceConversationLinkModel.surface_id == surface_id,
+                AgentSurfaceConversationLinkModel.external_channel_id
+                == external_channel_id,
+                AgentSurfaceConversationLinkModel.external_user_id == external_user_id,
+            )
+            .order_by(AgentSurfaceConversationLinkModel.updated_at.desc())
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def get_by_conversation_id(
         self,
         conversation_id: UUID,
@@ -316,6 +351,17 @@ class SurfaceConversationLinkRepository:
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def is_outsiders_thread(self, conversation_id: UUID) -> bool:
+        """Whether routing linked this conversation as the strangers' thread."""
+        link = AgentSurfaceConversationLinkModel
+        stmt = select(
+            select(link.id)
+            .where(link.conversation_id == conversation_id)
+            .where(link.external_user_id == OUTSIDERS_LINK_USER)
+            .exists()
+        )
+        return bool((await self.session.execute(stmt)).scalar())
 
     async def lock_thread(
         self,

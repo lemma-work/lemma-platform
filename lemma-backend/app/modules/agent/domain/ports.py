@@ -245,7 +245,11 @@ class ConversationRepository(Protocol):
 
     async def run_has_only_user_messages(self, agent_run_id: UUID) -> bool: ...
 
-    async def count_queued_user_messages(self, agent_run_id: UUID) -> int: ...
+    async def count_queued_user_messages(
+        self, agent_run_id: UUID, *, notes: bool | None = None
+    ) -> int: ...
+
+    async def earliest_queued_is_note(self, agent_run_id: UUID) -> bool | None: ...
 
     async def claim_queued_user_messages(
         self,
@@ -253,6 +257,8 @@ class ConversationRepository(Protocol):
         *,
         into_run_id: UUID | None = None,
         message_ids: list[UUID] | None = None,
+        notes: bool | None = None,
+        as_run: bool = False,
     ) -> list[Message]: ...
 
     async def list_agent_runs_with_messages(

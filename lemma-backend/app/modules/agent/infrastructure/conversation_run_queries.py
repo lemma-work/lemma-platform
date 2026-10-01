@@ -37,6 +37,7 @@ from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     MessageModel,
 )
+from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
 from app.modules.agent.infrastructure.queued_message_queries import (
     in_order,
     stamp,
@@ -309,7 +310,9 @@ class ConversationRunQueriesMixin:
         ).one()
         return bool(row.total) and not row.non_user
 
-    async def count_queued_user_messages(self, agent_run_id: UUID) -> int:
+    async def count_queued_user_messages(
+        self, agent_run_id: UUID, *, notes: bool | None = None
+    ) -> int:
         """How many of this run's queued messages are still unanswered.
 
         Counted over ``ix_agent_message_run_sequence`` rather than loading the
@@ -322,10 +325,29 @@ class ConversationRunQueriesMixin:
         """
         return int(
             await self.session.scalar(
-                select(func.count()).where(*unclaimed_queued_messages(agent_run_id))
+                select(func.count()).where(
+                    *unclaimed_queued_messages(agent_run_id, notes=notes)
+                )
             )
             or 0
         )
+
+    async def earliest_queued_is_note(self, agent_run_id: UUID) -> bool | None:
+        """Whether the oldest unanswered message queued behind this run is a
+        private note; None when nothing is queued. A follow-up turn answers one
+        kind, and the oldest message decides which goes first."""
+        flag = await self.session.scalar(
+            select(
+                func.coalesce(
+                    MessageModel.message_metadata[PRIVATE_NOTE_KEY].astext == "true",
+                    False,
+                )
+            )
+            .where(*unclaimed_queued_messages(agent_run_id))
+            .order_by(MessageModel.sequence)
+            .limit(1)
+        )
+        return None if flag is None else bool(flag)
 
     async def claim_queued_user_messages(
         self,
@@ -333,6 +355,8 @@ class ConversationRunQueriesMixin:
         *,
         into_run_id: UUID | None = None,
         message_ids: list[UUID] | None = None,
+        notes: bool | None = None,
+        as_run: bool = False,
     ) -> list[MessageEntity]:
         """Take the messages that arrived mid-run, and mark them taken.
 
@@ -358,7 +382,9 @@ class ConversationRunQueriesMixin:
             await self.session.execute(
                 update(MessageModel)
                 .where(
-                    *unclaimed_queued_messages(agent_run_id),
+                    *unclaimed_queued_messages(
+                        agent_run_id, notes=notes, as_run=as_run
+                    ),
                     *(
                         (MessageModel.id.in_(message_ids),)
                         if message_ids is not None

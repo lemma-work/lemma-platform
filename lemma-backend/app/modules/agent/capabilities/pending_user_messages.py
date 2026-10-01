@@ -127,8 +127,10 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         )
 
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+            # Only the run's own kind: a private note never steers an answer
+            # that goes to the platform, nor the other way round.
             claimed = await ConversationRepository(uow).claim_queued_user_messages(
-                self._agent_run_id
+                self._agent_run_id, as_run=True
             )
             if claimed:
                 await uow.commit()

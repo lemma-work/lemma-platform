@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ArrowDownIcon, MemoryIcon } from "@/ui/icons";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ArrowDownIcon, LockIcon, MemoryIcon } from "@/ui/icons";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { TRANSCRIPT_ROW_ATTRIBUTE, useTranscriptScroll } from "./use-transcript-scroll";
 import { runFailure, transcriptState } from "./transcript-state";
@@ -13,7 +13,7 @@ import { ResourceCard } from "./resource-card";
 import { PlanCard } from "./plan-card";
 import { ToolCardView } from "./tool-card-view";
 import { InteractionCard, type Resolve } from "./interaction-card";
-import { liveNote, spanOf, type Note, type Streaming, type Turn } from "./turns";
+import { liveNote, spanOf, type HumanMessage, type Note, type Streaming, type Turn } from "./turns";
 import type { Persona } from "@/data";
 import type { Noted } from "./memory-notes";
 import { AddModelAction, OpenModelsAction } from "./add-model-action";
@@ -124,6 +124,33 @@ function Reply({ teammate, seed, at, children }: { seed: string; teammate: Perso
     );
 }
 
+/** A person's message. Yours sits on the far side, marked when it was a note
+ *  to the bot alone. In a conversation where people outside the space ask,
+ *  what came in from the group is theirs, not yours: it takes the near side,
+ *  their name, and a chip saying they are not in the space. */
+function Human({ message, bot, outsiders, onRemember }: { message: HumanMessage; bot: string; outsiders?: string; onRemember?: (text: string) => void }) {
+    const guest = Boolean(outsiders && message.from);
+    return (
+        <div className={"msg msg--you" + (guest ? " msg--guest" : "")}>
+            <div className="msg__head">
+                <span className="msg__who">{guest ? message.from : "You"}</span>
+                {guest && <span className="msg__chip">Not in {outsiders}</span>}
+                <span className="msg__at">{message.at}</span>
+            </div>
+            {message.note && (
+                <span className="msg__chip msg__chip--note"><LockIcon size={11} aria-hidden="true" /> Note to {bot}</span>
+            )}
+            <div className="msg__body">
+                <Prose text={message.text} />
+                <div className="message-actions">
+                    {onRemember && <RememberButton text={message.text} teammate={bot} onRemember={onRemember} />}
+                    <CopyButton text={message.text} label="Copy message" />
+                </div>
+            </div>
+        </div>
+    );
+}
+
 /** "Kit noted this · Pricing". The teammate writes its notes silently; this is
  *  the platform saying that it did, from the write itself, so it appears
  *  whether or not the reply mentions it. Each topic opens the note. */
@@ -196,6 +223,7 @@ export function Transcript({
     noModel = false,
     modelsAction = false,
     dockedId,
+    outsiders,
 }: {
     turns: Turn[];
     teammate: Persona;
@@ -241,6 +269,9 @@ export function Transcript({
      *  out of sight. Nothing is lost by the gap: an open pause is always the
      *  last thing in the transcript, because the run is stopped behind it. */
     dockedId?: string | null;
+    /** The space's name, in a conversation where people outside it ask. Set,
+     *  each of their messages carries who wrote it and that they are not in it. */
+    outsiders?: string;
 }) {
     /* Following the bottom is its own problem, and a harder one than it looks:
        a threshold on distance cannot tell "the reader scrolled up" from "a tool
@@ -265,6 +296,12 @@ export function Transcript({
     useEffect(() => {
         earlierRef.current = goEarlier;
     }, [goEarlier]);
+
+    /* Where people outside the space are the ones answered, every run here
+       acts as nobody and has no memory to write to — "Remember this" would
+       ask for what it cannot do, and a reply would carry the ask into the
+       group. So it is not offered there. */
+    const remember = outsiders ? undefined : onRemember;
 
     const display = transcriptState({ loading, hasTurns: turns.length > 0, hasStreamingText: Boolean(streaming?.text), error });
     const live = Boolean(streaming && (streaming.text || streaming.thinking || streaming.tool));
@@ -309,21 +346,7 @@ export function Transcript({
                                     reply — a name tucked *inside* the block made
                                     "cool cool" two lines tall and left the two
                                     speakers built differently for no reason. */}
-                                {turn.human && (
-                                    <div className="msg msg--you">
-                                        <div className="msg__head">
-                                            <span className="msg__who">You</span>
-                                            <span className="msg__at">{turn.human.at}</span>
-                                        </div>
-                                        <div className="msg__body">
-                                            <Prose text={turn.human.text} />
-                                            <div className="message-actions">
-                                                {onRemember && <RememberButton text={turn.human.text} teammate={teammate.name} onRemember={onRemember} />}
-                                                <CopyButton text={turn.human.text} label="Copy message" />
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
+                                {turn.human && <Human message={turn.human} bot={teammate.name} outsiders={outsiders} onRemember={remember} />}
 
                                 {(notes.length > 0 || turn.items.length > 0 || merging) && (
                                     <Reply
@@ -355,7 +378,7 @@ export function Transcript({
                                                     <div className="message-text" key={item.id}>
                                                         <div className="said"><Prose text={item.text} /></div>
                                                         <div className="message-actions">
-                                                            {onRemember && <RememberButton text={item.text} teammate={teammate.name} onRemember={onRemember} />}
+                                                            {remember && <RememberButton text={item.text} teammate={teammate.name} onRemember={remember} />}
                                                             <CopyButton text={item.text} label="Copy message" />
                                                         </div>
                                                     </div>

@@ -16,9 +16,14 @@ decision from anyone else is refused before it is recorded
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.context import ApprovedExecution
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.outsiders import OutsiderRunRefused, answers_outsiders
+from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
@@ -34,11 +39,28 @@ logger = get_logger(__name__)
 
 REQUEST_APPROVAL_TOOL_NAME = "request_approval"
 
+_NOTHING_RUNS_AS_THE_MEMBER = (
+    "Nothing runs with a member's authority in a conversation that answers "
+    "people outside the pod."
+)
+
+
+#: How the executor learns whether a conversation answers people outside the
+#: pod -- the link as well as the mark (``outsider_audience``). A seam, so a
+#: test can hand in a conversation as stored.
+EffectiveAudience = Callable[[object, Conversation], Awaitable[Conversation]]
+
 
 class ApprovalExecutor:
-    def __init__(self, uow_factory: UnitOfWorkFactory):
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        *,
+        effective_audience: EffectiveAudience = with_effective_audience,
+    ):
         self.uow_factory = uow_factory
         self.dispatcher = AgentToolDispatcher(uow_factory)
+        self.effective_audience = effective_audience
 
     async def execute_as_user(
         self,
@@ -50,15 +72,24 @@ class ApprovalExecutor:
     ) -> object:
         if tool_name == REQUEST_APPROVAL_TOOL_NAME:
             raise ValueError("request_approval cannot approve itself")
+        # An approval runs a tool with the approver's own authority. A stranger's
+        # run never pauses to ask for one, and nothing may be run as the member
+        # in the conversation that answers strangers, whatever recorded it.
+        if deps.answers_outsider:
+            raise OutsiderRunRefused(_NOTHING_RUNS_AS_THE_MEMBER)
 
         async with self.uow_factory() as uow:
             conversation = await ConversationRepository(uow).get_conversation(
                 deps.conversation_id,
                 include_runs=False,
             )
+            if conversation is not None:
+                conversation = await self.effective_audience(uow, conversation)
             agent = None
             if conversation is not None and conversation.agent_id is not None:
                 agent = await AgentRepository(uow).get(conversation.agent_id)
+        if answers_outsiders(conversation):
+            raise OutsiderRunRefused(_NOTHING_RUNS_AS_THE_MEMBER)
 
         approved = ApprovedExecution(
             # The run's user is the conversation's owner: the person the agent
@@ -89,6 +120,10 @@ class ApprovalExecutor:
                 name=tool_name,
                 arguments=args or {},
                 agent_run_id=deps.agent_run_id,
+                # An approved answer to a question from outside the pod is a
+                # `respond_to_notification` call -- a tool the run carries as a
+                # capability, not in a toolset this would otherwise assemble.
+                include_notification_tools=True,
             )
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):

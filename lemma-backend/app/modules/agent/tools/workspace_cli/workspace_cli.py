@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
 
 from app.core.log.log import get_logger
+from app.modules.agent.domain.outsiders import refuse_owner_workspace
 from app.modules.agent.tools.authority import workspace_principal
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.services.run_phase_spans import run_phase
@@ -129,6 +130,8 @@ async def get_workspace_session(
     close_on_exit: bool,
     runtime=None,
 ):
+    # Every sandbox and host session a tool opens comes through here.
+    refuse_owner_workspace(ctx)
     runtime_context = workspace_runtime_context(ctx)
     principal = workspace_principal(ctx)
     if runtime is None:

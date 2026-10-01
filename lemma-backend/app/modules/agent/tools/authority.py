@@ -1,7 +1,13 @@
 """Whose authority an agent tool call runs with. One answer, in one place.
 
-There are exactly two:
+There are exactly three:
 
+* **Nobody's**, on a run answering somebody outside the pod (see
+  ``domain/outsiders``). The context is anonymous and pinned to the pod: Public
+  reads, and nothing else. It comes first and nothing overrides it, not even an
+  approval -- such a run never pauses to ask one, and ``user_id`` on it is the
+  member who looks after the conversation, whose authority the stranger must
+  never reach through it.
 * **The agent's own.** A delegated workload context: the agent's resource
   grants, intersected with what the person it works for may do. Anything
   beyond that -- a missing grant, a destructive action, an auth-required step
@@ -28,6 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.core.authorization.anonymous import build_anonymous_context
 from app.core.authorization.context import Context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.authorization.factory import create_authorization_data_service
@@ -39,6 +46,13 @@ async def tool_authorization_context(
     uow: SqlAlchemyUnitOfWork, deps: AgentContext
 ) -> Context:
     """The authorization context one agent tool call runs under."""
+    if deps.answers_outsider:
+        return build_anonymous_context(
+            session=uow.session,
+            pod_id=deps.pod_id,
+            organization_id=deps.org_id,
+            actor_id=f"outsider:{deps.conversation_id}",
+        )
     authorization = create_authorization_data_service(uow)
     approved = deps.approved_execution
     if approved is not None:

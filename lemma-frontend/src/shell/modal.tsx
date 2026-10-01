@@ -10,8 +10,11 @@ import { CloseIcon } from "@/ui/icons";
  *  keypress closed both. Only the innermost answers the keyboard now. */
 const open: symbol[] = [];
 
-export function Modal({ title, subtitle, narrow, wide, flush, onClose, children }: {
-    title: string; subtitle?: string; narrow?: boolean; wide?: boolean; flush?: boolean;
+export function Modal({ title, subtitle, mark, narrow, wide, flush, onClose, children }: {
+    title: string; subtitle?: string;
+    /** What the dialog is about, drawn before its title — a channel's mark. */
+    mark?: ReactNode;
+    narrow?: boolean; wide?: boolean; flush?: boolean;
     onClose: () => void; children: ReactNode;
 }) {
     const panel = useRef<HTMLDivElement>(null);
@@ -45,7 +48,12 @@ export function Modal({ title, subtitle, narrow, wide, flush, onClose, children 
     }, []);
     return createPortal(<div className="modal" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
         <div className={`modal__panel${narrow ? " modal__panel--narrow" : ""}${wide ? " modal__panel--wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} ref={panel}>
-            <header className="modal__head"><div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="modal__close" onClick={onClose} aria-label="Close"><CloseIcon size={20} /></button></header>
+            <header className="modal__head">
+                {mark
+                    ? <div className="modal__titled"><span className="modal__mark" aria-hidden="true">{mark}</span><div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div></div>
+                    : <div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>}
+                <button className="modal__close" onClick={onClose} aria-label="Close"><CloseIcon size={20} /></button>
+            </header>
             <div className={`modal__body${flush ? " modal__body--flush" : ""}`}>{children}</div>
         </div>
     </div>, document.body);

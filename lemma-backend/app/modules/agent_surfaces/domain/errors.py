@@ -216,6 +216,27 @@ class NotificationTransitionError(AgentSurfaceError):
         }
 
 
+class OutsideAnswerNeedsApproval(AgentSurfaceError):
+    """An answer to someone outside the pod, not yet confirmed by its recipient.
+
+    Its words go back to a stranger, and an agent drafting them acts with all
+    of the member's access. So nothing is recorded until the member approves
+    the exact text (``request_approval``) or types it themselves.
+    """
+
+    def __init__(self, *, notification_id: UUID):
+        super().__init__(
+            message=(
+                "This question came from someone outside the pod. Its answer is "
+                "passed back only once the person it was sent to approves the "
+                "exact words."
+            ),
+            code="OUTSIDE_ANSWER_NEEDS_APPROVAL",
+            status_code=403,
+        )
+        self.details = {"notification_id": str(notification_id)}
+
+
 class TelegramManagerNotConfiguredError(AgentSurfaceError):
     def __init__(self):
         super().__init__(
