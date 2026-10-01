@@ -39,7 +39,8 @@ export interface Target {
     kind: "agent" | "workflow" | "none";
     /** The wire name, which is what a call is keyed by. */
     name: string;
-    /** What to call it on screen. `POD_DEFAULT` is Lem, never "Pod default". */
+    /** What to call it on screen. `POD_DEFAULT` is the teammate itself;
+     *  `StandingWork` swaps in its name, because only it knows the name. */
     label: string;
 }
 

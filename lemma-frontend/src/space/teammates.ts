@@ -21,6 +21,17 @@ export function owedByPod(rows: readonly { podId: string; workflowName: string }
     return owed;
 }
 
+/** Both queues a teammate can be waiting on you in: workflow forms, and
+ *  conversations paused on a question or an approval. One map, so a
+ *  scheduled run stopped on `ask_user` badges the rail the same way a form
+ *  does, instead of reading as a teammate with nothing to say. */
+export function owedFrom(
+    waits: readonly { podId: string; workflowName: string }[],
+    asked: readonly { podId: string; title: string }[],
+): Map<string, Owed> {
+    return owedByPod([...waits, ...asked.map((row) => ({ podId: row.podId, workflowName: row.title }))]);
+}
+
 /** The line under a teammate's name while something is waiting on you. */
 export function sayOwed(owed: Owed): string {
     return owed.count === 1 ? owed.first + " is waiting on you" : owed.count + " things are waiting on you";
@@ -51,4 +62,19 @@ export function byNeed<T extends { id: string; waiting: string }>(
     const rest: T[] = [];
     for (const pod of pods) (needsYou(pod, owed) ? needs : rest).push(pod);
     return { needs, rest };
+}
+
+/** "Hired 12 March by Priya". Tenure, said once, from the pod's own record:
+ *  when it was made and by whom. No count of days — a number that grows by
+ *  itself is not news. */
+export function sayHired(pod: { hiredAt?: string; hiredBy?: string; members: readonly { userId?: string; name: string }[] }, now = new Date()): string {
+    if (!pod.hiredAt) return "";
+    const at = new Date(pod.hiredAt);
+    if (Number.isNaN(at.getTime())) return "";
+    const day = at.toLocaleDateString([], at.getFullYear() === now.getFullYear()
+        ? { day: "numeric", month: "long" }
+        : { day: "numeric", month: "long", year: "numeric" });
+    const by = pod.hiredBy ? pod.members.find((member) => member.userId === pod.hiredBy) : undefined;
+    if (!by) return "Hired " + day;
+    return "Hired " + day + " by " + (by.name === "You" ? "you" : by.name);
 }

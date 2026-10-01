@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 from mcp.server.auth.provider import (
@@ -87,12 +87,27 @@ MAX_STATE_LENGTH = 2048
 use a nonce, or a signed blob of a few hundred bytes."""
 
 
+PORTAL_PATH = "/auth"
+"""Where the auth portal's pages live in the frontend: ``/auth/authorize`` is
+the consent page, beside ``/auth/cli/login``."""
+
+
 def consent_page_url(auth_frontend_url: str, request_id: str) -> str:
     """Where the person answers. On the auth portal, beside `lemma auth login`'s
-    page, because both need a signed-in browser and nothing else."""
-    return f"{auth_frontend_url.rstrip('/')}/auth/authorize?" + urlencode(
-        {"request": request_id}
-    )
+    page, because both need a signed-in browser and nothing else.
+
+    ``AUTH_FRONTEND_URL`` is set two ways in the wild: as the portal itself
+    (``https://app.example.com/auth``, which is what the compose bootstrap writes and
+    what the CLI appends ``/cli/login`` to), or as the bare site
+    (``https://app.example.com``, as the configuration guide shows). Appending
+    the portal path to the first gave ``/auth/auth/authorize`` -- a 404 at the
+    one step every connection passes through. So the portal path is added only
+    when the URL does not already end in it.
+    """
+    base = auth_frontend_url.rstrip("/")
+    if not urlsplit(base).path.endswith(PORTAL_PATH):
+        base += PORTAL_PATH
+    return f"{base}/authorize?" + urlencode({"request": request_id})
 
 
 class LemmaAuthorizationServer(

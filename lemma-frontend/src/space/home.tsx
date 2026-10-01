@@ -1,12 +1,16 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { AskBox } from "@/chat/ask-box";
 import { gather } from "@/workflow/waiting-inbox";
+import { byAge, gatherAsked, sayAsked, type AskedRow } from "@/thread/waiting-on-you";
+import { refreshConversationLists } from "@/thread/conversation-list";
+import { lemma } from "@/session/client";
+import { agoOf } from "@/schedule/schedules";
 import { sayStuckFor, sayWaitingOn } from "@/workflow/runs";
-import { AppIcon, ChevronRightIcon, FileIcon, SearchIcon, SlidesIcon, TableIcon } from "@/ui/icons";
+import { AppIcon, ChevronRightIcon, CloseIcon, FileIcon, SearchIcon, SlidesIcon, TableIcon } from "@/ui/icons";
 import { useMaking } from "./making";
 import { TeammateFace } from "./teammate-face";
 
@@ -54,6 +58,34 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
         staleTime: 60_000,
     });
     const owed = (waiting.data?.rows ?? []).filter(row => row.podId === pod.id);
+    /* And the conversations here that stopped to ask you something, under the
+       key the rail reads. */
+    const asking = useQuery({
+        queryKey: ["conversation-asks", pods.map(each => each.id).join(",")],
+        queryFn: () => gatherAsked(pods, source.label === "sample"),
+        enabled: pods.length > 0,
+        staleTime: 60_000,
+    });
+    const { fresh: asked, quiet } = byAge((asking.data ?? []).filter(row => row.podId === pod.id));
+    const [showQuiet, setShowQuiet] = useState(false);
+    const [putAway, setPutAway] = useState<ReadonlySet<string>>(new Set());
+    const cache = useQueryClient();
+    /* Dismissing archives the conversation: the same "put away" the chat
+       list offers, so it leaves this list on every device and is still
+       there under Archived. The run behind it is left exactly as it was. */
+    const dismiss = async (row: AskedRow) => {
+        setPutAway(was => new Set(was).add(row.conversationId));
+        try {
+            if (source.label !== "sample") await lemma(row.podId).conversations.update(row.conversationId, { is_archived: true }, { pod_id: row.podId });
+        } catch {
+            setPutAway(was => { const next = new Set(was); next.delete(row.conversationId); return next; });
+        } finally {
+            void cache.invalidateQueries({ queryKey: ["conversation-asks"] });
+            void refreshConversationLists(cache, row.podId);
+        }
+    };
+    const shownAsks = [...asked, ...(showQuiet ? quiet : [])].filter(row => !putAway.has(row.conversationId));
+    const quietLeft = quiet.filter(row => !putAway.has(row.conversationId)).length;
 
     /* The list the sidebar's Chats already read, under its key. */
     const chats = useQuery({
@@ -90,10 +122,26 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
 
                 {/* Only when something is. A heading over "nothing" is a
                     section somebody has to read to learn it is empty. */}
-                {owed.length > 0 && (
+                {(owed.length > 0 || shownAsks.length > 0 || quietLeft > 0) && (
                     <section className="home__section" aria-label="Waiting on you">
                         <h2>Waiting on you</h2>
                         <ul className="home__owed">
+                            {shownAsks.map(row => (
+                                <li key={row.conversationId} className="home__ask">
+                                    <button onClick={() => onOpenConversation(row.conversationId)}>
+                                        <span className="home__dot" aria-hidden="true" />
+                                        <span className="home__owed-text">
+                                            <span>{row.title}</span>
+                                            <small>{sayAsked(row)} · {agoOf(new Date(row.sinceMs).toISOString())}</small>
+                                        </span>
+                                        <ChevronRightIcon size={16} />
+                                    </button>
+                                    <button className="home__dismiss" onClick={() => void dismiss(row)}
+                                        title="Dismiss — archives the conversation" aria-label={"Dismiss " + row.title}>
+                                        <CloseIcon size={14} />
+                                    </button>
+                                </li>
+                            ))}
                             {owed.map(row => (
                                 <li key={row.wait.id}>
                                     <button onClick={() => onOpenRun(row.run.id, row.workflowName)}>
@@ -107,6 +155,11 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
                                 </li>
                             ))}
                         </ul>
+                        {quietLeft > 0 && (
+                            <button className="home__older" onClick={() => setShowQuiet(was => !was)}>
+                                {showQuiet ? "Hide older" : quietLeft + " older, quiet for over a week"}
+                            </button>
+                        )}
                     </section>
                 )}
 

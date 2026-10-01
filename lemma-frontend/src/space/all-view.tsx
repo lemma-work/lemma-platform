@@ -298,7 +298,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
                 <h1>{TITLES[view]}</h1>
                 <label className="all__search">
                     <SearchIcon size={17} />
-                    <input placeholder="Search" aria-label="Search this space" value={query} onChange={event => setQuery(event.target.value)} />
+                    <input placeholder="Search" aria-label="Search everything here" value={query} onChange={event => setQuery(event.target.value)} />
                 </label>
                 <div className="all__layout" role="group" aria-label="Show as">
                     <button aria-pressed={layout === "list"} title="List" aria-label="List" onClick={() => setLayout("list")}><ListIcon size={17} /></button>

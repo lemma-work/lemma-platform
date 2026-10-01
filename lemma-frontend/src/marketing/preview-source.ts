@@ -1,4 +1,5 @@
 import { conversationWidget } from "./conversation-widgets";
+import { sampleListing } from "@/thread/memory-notes";
 import { teammates, teammateFor } from "./teammates";
 import { fixtureSource } from "@/data/fixtures";
 import type { Conversation, Member, PodSource, Tab } from "@/data/types";
@@ -35,6 +36,40 @@ function persona(id: string) {
 function guidance(id: string) {
     const person = teammateFor(id);
     return `---\nname: brand-voice\ndescription: How ${person.name} works with the team.\n---\n\n# ${person.name} · Working guidance\n\n${person.job}\n\n## What the team taught me\n\n${person.learned}\n`;
+}
+
+/** What each sample teammate has written down, for About's "remembers"
+ *  section in the tour. Kit's are specific because the tour opens on Kit;
+ *  the others keep the one line they were written with. Dated relative to
+ *  now, so the week's dot means what it says. */
+const DAY = 86_400_000;
+function notesOf(id: string): { path: string; gloss: string; daysAgo: number; text: string }[] {
+    if (id === "kit") return [
+        { path: "/memory/launch-checks.md", gloss: "Readiness runs Thursdays at 9", daysAgo: 2, text: "# Launch checks\n\n- Readiness check runs Thursdays at 09:00 (moved from Fridays after the September launch).\n- A launch is not ready until the demo matches the current onboarding.\n" },
+        { path: "/memory/publishing.md", gloss: "Anything public goes to Priya first", daysAgo: 4, text: "# Publishing\n\n- Anything public is prepared and brought to Priya. Kit never publishes on its own.\n- Customer names need written permission first.\n" },
+        { path: "/memory/brand-voice.md", gloss: "Lead with the customer’s problem", daysAgo: 20, text: "# Brand voice\n\n" + teammateFor(id).learned + "\n" },
+        { path: "/me/agents/pod-default/your-preferences.md", gloss: "Summaries as short bullets", daysAgo: 9, text: "# Your preferences\n\n- Summaries as short bullets, decisions first.\n" },
+    ];
+    return [{ path: "/memory/working-notes.md", gloss: teammateFor(id).learned, daysAgo: 6, text: "# Working notes\n\n" + teammateFor(id).learned + "\n" }];
+}
+
+/** A correction and the note it becomes, in a teammate's sample
+ *  conversation: somebody tells it how things work now, it says so, and the
+ *  write under the reply is what draws "Kit noted this". Kit's is specific
+ *  because the landing shows it; the others reuse their first note. */
+function notedIn(id: string) {
+    const note = notesOf(id)[0];
+    const told = id === "kit"
+        ? { ask: "From now on the readiness check runs Thursdays at 9, not Fridays.", reply: "Got it. Readiness checks run Thursdays at 09:00 from now on." }
+        : { ask: "Keep this in mind for next time: " + note.gloss.charAt(0).toLowerCase() + note.gloss.slice(1) + ".", reply: "Noted. I’ll work that way from now on." };
+    return [
+        { id: id + "-told", role: "user", kind: "TEXT", sequence: 4, text: told.ask },
+        { id: id + "-ack", role: "assistant", kind: "TEXT", sequence: 5, text: told.reply },
+        { id: id + "-note", role: "assistant", kind: "TOOL_CALL", sequence: 6, tool_name: "pod_write_file", tool_call_id: id + "-note-call",
+            tool_args: { path: note.path, description: note.gloss, content: note.text, overwrite: true } },
+        { id: id + "-note-back", role: "assistant", kind: "TOOL_RETURN", sequence: 7, tool_call_id: id + "-note-call",
+            tool_result: { success: true, path: note.path, created: false } },
+    ];
 }
 
 /** Isolated fictional work; production and general QA fixtures stay separate. */
@@ -77,14 +112,24 @@ export const previewSource: PodSource = {
             { id: id + "-1", role: "user", kind: "TEXT", sequence: 1, text: person.ask },
             { id: id + "-2", role: "assistant", kind: "TEXT", sequence: 2, text: person.reply },
             { id: id + "-widget", role: "assistant", kind: "TOOL_CALL", sequence: 3, tool_name: "display_resource", tool_args: { type: "WIDGET", content: conversationWidget(id) } },
+            /* The note it keeps while it works, so the "noted" line under the
+               reply is the real one, drawn from this write. */
+            ...notedIn(id),
         ] } satisfies Conversation;
     },
     async listLibrary(id, kind, directory) {
         if (kind === "tables") return { items: [] };
+        const notes = sampleListing(directory, notesOf(id).map(note => ({ path: note.path, updated: new Date(Date.now() - note.daysAgo * DAY).toISOString(), description: note.gloss })));
+        if (directory === "/me" || directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) return { items: notes };
         if (directory === "/skills") return { items: [{ id: "brand-voice", name: "brand-voice", kind: "folder", path: "/skills/brand-voice", updated: "2026-09-23T09:00:00Z", detail: `What the team taught ${teammateFor(id).name}` }] };
-        return { items: [{ id: "guidance", name: "SKILL.md", kind: "file", path: voicePath, updated: "2026-09-23T09:00:00Z", detail: teammateFor(id).learned }] };
+        return { items: [...(directory === "/" ? notes : []), { id: "guidance", name: "SKILL.md", kind: "file", path: voicePath, updated: "2026-09-23T09:00:00Z", detail: teammateFor(id).learned }] };
     },
-    async readFile(id, path) { const text = edits.get(id + path) ?? guidance(id); return { name: "SKILL.md", path, mime: "text/markdown", size: text.length, kind: "markdown", text }; },
+    async readFile(id, path) {
+        const note = notesOf(id).find(one => one.path === path);
+        if (note) { const text = edits.get(id + path) ?? note.text; return { name: path.split("/").pop() ?? path, path, mime: "text/markdown", size: text.length, kind: "markdown", text }; }
+        const text = edits.get(id + path) ?? guidance(id);
+        return { name: "SKILL.md", path, mime: "text/markdown", size: text.length, kind: "markdown", text };
+    },
     async writeFile(id, path, text) { edits.set(id + path, text); },
     async getProfile(id) {
         const person = teammateFor(id);
