@@ -1,0 +1,104 @@
+/* Three apps, one launch list, beat by beat. Base styles are the opening
+   frame; each `.root[data-bN]` rule is what changes from beat N on, written
+   in beat order so a later beat wins over an earlier one. With reduced
+   motion every beat is on, so the last rules here are the finished picture. */
+
+.root { --v-step: 110ms }
+/* The desk the three apps and Kit's space sit on. */
+.stage { position: absolute; inset: 0; background: var(--cream) }
+
+/* ── The messages, each in the app it was sent from ─────────────────── */
+.message { position: absolute; left: 22px; width: 216px; padding: 9px 12px 11px }
+.from { display: flex; align-items: center; gap: 6px; height: 18px; margin: 0 0 8px; font-size: 12px; color: var(--ink-2) }
+.from img { width: 14px; height: 14px; flex: none }
+.from em { font-style: normal; color: var(--ink-3) }
+/* Email has no logo of its own here: an @ stands for it. */
+.at { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 4px; background: var(--cream); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink); font-size: 12px; line-height: 1 }
+.said { display: flex; align-items: flex-start; gap: 9px }
+.said p { margin: 0; font-size: 12.5px; line-height: 1.4; color: var(--ink-2) }
+.said b { display: block; font-size: 12.5px; color: var(--ink) }
+.mention { padding: 0 3px; border-radius: 4px; background: var(--violet-soft); color: var(--violet-deep) }
+
+.slack { top: 36px }
+/* A chat bubble: one corner tucked in. */
+.whatsapp { top: 138px; border-radius: 14px 14px 14px 4px }
+/* An inbox row: squarer than a chat. */
+.email { top: 258px; border-radius: 8px }
+
+/* ── Kit's space: the launch list everyone works from ───────────────── */
+.panel { position: absolute; top: 36px; left: 282px; width: 338px; overflow: hidden }
+.sheet { padding: 4px 14px 14px }
+.head { display: grid; grid-template-columns: 1fr 86px 70px; align-items: center; height: 32px; margin: 0; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3) }
+.checksHead { margin-top: 14px }
+.row { position: relative; display: grid; grid-template-columns: 1fr 86px 70px; align-items: center; min-height: 52px; margin: 0 -8px; padding: 0 8px; border-radius: 6px }
+/* The rule under a row, in line with the header's. */
+.row::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: 0; height: 1px; background: var(--line) }
+.asset { display: flex; flex-direction: column; font-size: 12.5px; line-height: 1.35; color: var(--ink) }
+.asset small { font-size: 12px; color: var(--ink-3) }
+/* An enum cell, as the grid tags it: the old value gives way to the new. */
+.status { position: relative; height: 22px }
+.pill { position: absolute; top: 0; left: 0; height: 22px; padding: 0 9px; border-radius: 99px; background: rgb(20 20 19 / .06); color: var(--ink-2); font-size: 12px; line-height: 22px; white-space: nowrap }
+.now { opacity: 0 }
+/* Who the change ran as. */
+.tag { justify-self: end; height: 22px; padding: 0 8px; border-radius: 99px; background: var(--violet-soft); box-shadow: 0 0 0 1.5px var(--paper); color: var(--violet-deep); font-size: 12px; line-height: 22px; white-space: nowrap; opacity: 0; transform: translateX(-6px) }
+/* The tag arrives while its row is still pulsing in the same violet: the
+   paper ring keeps it from melting into the row. */
+
+/* The readiness check, as the checklist draws it. */
+.check { grid-template-columns: 16px 1fr auto; gap: 8px }
+.check::after { content: none }
+.box { transition: background-color var(--v-quick) var(--ease), border-color var(--v-quick) var(--ease) }
+.box::after { content: ""; width: 5px; height: 9px; border: solid var(--paper); border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); opacity: 0; transition: opacity var(--v-quick) var(--ease) }
+.checkName { white-space: nowrap; text-decoration: line-through; text-decoration-color: transparent; transition: color var(--v-quick) var(--ease), text-decoration-color var(--v-quick) var(--ease) }
+
+/* ── The lines from each message into the space ─────────────────────── */
+.lines { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none }
+.line path { fill: none; stroke: var(--violet); stroke-width: 1.5; stroke-dasharray: 1 1; stroke-dashoffset: 1; transition: stroke-dashoffset var(--v-move) var(--ease) }
+.line circle { fill: var(--violet); opacity: 0 }
+/* A line shows the moment its beat starts and draws itself; when the loop
+   starts over it fades away rather than winding back. */
+.line { opacity: 0 }
+
+@keyframes pulse { 30% { background-color: var(--violet-soft) } }
+
+/* ── Arriving ───────────────────────────────────────────────────────── */
+.whatsapp { opacity: 0; transform: translateY(12px) }
+.email { opacity: 0; transform: translateY(-10px) }
+
+/* 1 · a line from Priya's message into the space: the press release turns
+       Ready, as Priya */
+.root[data-b1] .l1 { opacity: 1; transition: none }
+.root[data-b1] .l1 path { stroke-dashoffset: 0 }
+.root[data-b1] .l1 .start { opacity: 1 }
+.root[data-b1] .l1 .end { opacity: 1; transition-delay: var(--v-move) }
+.root[data-b1] .press .was { opacity: 0; transition-delay: var(--v-move) }
+.root[data-b1] .press .now { opacity: 1; transition-delay: var(--v-move) }
+.root[data-b1] .press { animation: pulse var(--v-slow) var(--ease) var(--v-move) both }
+.root[data-b1] .press .tag { opacity: 1; transform: none; transition-delay: calc(var(--v-move) + 2 * var(--v-step)) }
+/* 2 · Aditi's WhatsApp slides in under the Slack card */
+.root[data-b2] .whatsapp { opacity: 1; transform: none }
+/* 3 · its line: the pricing page copy turns In review, as Aditi */
+.root[data-b3] .l2 { opacity: 1; transition: none }
+.root[data-b3] .l2 path { stroke-dashoffset: 0 }
+.root[data-b3] .l2 .start { opacity: 1 }
+.root[data-b3] .l2 .end { opacity: 1; transition-delay: var(--v-move) }
+.root[data-b3] .pricing .was { opacity: 0; transition-delay: var(--v-move) }
+.root[data-b3] .pricing .now { opacity: 1; transition-delay: var(--v-move) }
+.root[data-b3] .pricing { animation: pulse var(--v-slow) var(--ease) var(--v-move) both }
+.root[data-b3] .pricing .tag { opacity: 1; transform: none; transition-delay: calc(var(--v-move) + 2 * var(--v-step)) }
+/* 4 · Rohan's forwarded email drops in below */
+.root[data-b4] .email { opacity: 1; transform: none }
+/* 5 · its line: the readiness check ticks, as Rohan */
+.root[data-b5] .l3 { opacity: 1; transition: none }
+.root[data-b5] .l3 path { stroke-dashoffset: 0 }
+.root[data-b5] .l3 .start { opacity: 1 }
+.root[data-b5] .l3 .end { opacity: 1; transition-delay: var(--v-move) }
+.root[data-b5] .box { background: var(--ok); border-color: var(--ok); transition-delay: var(--v-move) }
+.root[data-b5] .box::after { opacity: 1; transition-delay: var(--v-move) }
+.root[data-b5] .checkName { color: var(--ink-3); text-decoration-color: var(--ink-3); transition-delay: var(--v-move) }
+.root[data-b5] .check { animation: pulse var(--v-slow) var(--ease) var(--v-move) both }
+.root[data-b5] .check .tag { opacity: 1; transform: none; transition-delay: calc(var(--v-move) + 2 * var(--v-step)) }
+
+/* Reduced motion: what this module times itself stays still too. */
+.root[data-still] .box, .root[data-still] .box::after, .root[data-still] .checkName { transition: none }
+.root[data-still] .press, .root[data-still] .pricing, .root[data-still] .check { animation: none }

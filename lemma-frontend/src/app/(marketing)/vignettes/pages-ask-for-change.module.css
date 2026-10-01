@@ -1,0 +1,109 @@
+/* Ask for change, beat by beat. Base styles are the opening frame; each
+   `.root[data-bN]` rule is what changes from beat N on, written in beat
+   order so a later beat wins over an earlier one. With reduced motion every
+   beat is on, so the last rules here are the finished picture: the point
+   rewritten, the toolbar gone, and Scout's reply in the page's chat.
+
+   Positions are canvas px measured from the body's corner (36 px under the
+   top of the canvas). */
+
+.root { --v-step: 70ms }
+
+/* ── The page ───────────────────────────────────────────────────────── */
+.page { position: absolute; top: 26px; left: 50px; width: 496px }
+.h2 { margin: 0 0 12px; font-size: 17px; font-weight: 500; line-height: 22px; color: var(--ink) }
+.h2 + .list + .h2, span + .h2 { margin-top: 24px }
+.list { margin: 0; padding: 0 0 0 20px; font-size: 15px; line-height: 25px; color: var(--ink) }
+.list li { margin: 0 0 16px; padding-left: 2px }
+.list li::marker { color: var(--ink-3) }
+.list b { font-weight: 500 }
+/* The Budget point is drawn line by line, so its first line never moves
+   and only the words that change can. */
+.line { display: block; white-space: nowrap }
+
+/* The selection: swept along the first line, then the second. */
+.sel { background: linear-gradient(var(--violet-soft), var(--violet-soft)) no-repeat 0 0 / 0% 100%; transition: background-size calc(var(--v-move) * .15) linear }
+/* The second line follows the pointer down, a step behind it. */
+.later { --n: 1; transition: background-size var(--v-move) var(--ease); transition-delay: calc(var(--n) * var(--v-step)) }
+/* The words that change, and the full stop that becomes a colon. */
+.swap { display: inline-grid }
+.swap > span { grid-area: 1 / 1; transition: none }
+.colon { opacity: 0 }
+.cut { display: inline-block; vertical-align: top; max-width: 83px; overflow: hidden; white-space: pre; transition: none }
+
+/* ── The selection toolbar, and the field it turns into ─────────────── */
+.tool { position: absolute; top: 81px; left: 306px; width: 548px; height: 40px; overflow: hidden; border-radius: 99px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 10px 28px rgb(20 20 19 / .14); opacity: 0; transform: translate(-50%, 6px) }
+.tools { position: absolute; top: 4px; left: 4px; display: flex; align-items: center; gap: 2px; white-space: nowrap }
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 99px; font-size: 13px; color: var(--ink) }
+.icon { display: inline-grid; place-items: center; width: 30px; height: 32px; font-size: 14px; color: var(--ink) }
+.icon b, .icon em, .icon s { font-weight: 500 }
+.sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line-2) }
+.form { position: absolute; inset: 0; display: flex; align-items: center; gap: 6px; padding: 0 5px 0 16px; opacity: 0 }
+.field { position: relative; flex: 1; display: flex; align-items: center; height: 32px; font-size: 14px; color: var(--ink) }
+.placeholder { position: absolute; top: 0; left: 0; line-height: 32px; color: var(--ink-3); white-space: nowrap }
+.typed { display: inline-flex; white-space: pre }
+.typed span { display: inline-block; max-width: 0; overflow: hidden; line-height: 32px; transition: max-width var(--v-quick) var(--ease); transition-delay: calc(var(--n) * var(--v-step)) }
+.caret { margin-left: 0 }
+.send { display: inline-flex; align-items: center; height: 30px; padding: 0 14px; border-radius: 99px; background: var(--line-2); color: var(--ink-3); font-size: 13px }
+
+/* The pointer: its tip is the path's corner, 1.5 px in. */
+.pointer { position: absolute; top: 0; left: 0; overflow: visible; transform: translate(64px, 125px); transition: opacity var(--v-quick) var(--ease) }
+.pointer path { fill: var(--ink); stroke: var(--paper); stroke-width: 1.2px; stroke-linejoin: round }
+
+/* ── The page's chat ────────────────────────────────────────────────── */
+.pill { position: absolute; right: 16px; bottom: 16px; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px 0 8px; border-radius: 99px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 8px 24px rgb(20 20 19 / .08); font-size: 14px; color: var(--ink) }
+.pillFace { width: 22px; height: 22px; border-radius: 7px; background: var(--violet-soft); object-fit: contain }
+.chat { position: absolute; right: 16px; bottom: 16px; width: 304px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 24px 60px rgb(20 20 19 / .12), 0 4px 14px rgb(20 20 19 / .05); opacity: 0; transform: translateY(10px) scale(.97); transform-origin: 100% 100% }
+.chatHead { display: flex; align-items: center; gap: 10px; padding: 12px 14px 8px; color: var(--ink-3) }
+.chatHead svg { flex: none }
+.chatTitle { display: flex; flex-direction: column; margin-right: auto; line-height: 1.25 }
+.chatTitle span { font-size: 14px; color: var(--ink) }
+.chatTitle small { font-size: 12px; color: var(--ink-3) }
+.reply { display: grid; grid-template-columns: 24px 1fr; gap: 8px; padding: 6px 16px 16px 14px }
+.replyFace { width: 24px; height: 24px; border-radius: 8px; background: var(--violet-soft); object-fit: contain }
+.who { margin: 2px 0 6px; font-size: 13px; color: var(--ink) }
+.steps { display: inline-grid; width: 106px; height: 26px; overflow: hidden; border: 1px solid var(--line); border-radius: 99px; background: var(--cream) }
+.steps > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 7px; padding: 0 11px 0 4px; font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.state { display: inline-grid; place-items: center; width: 17px; height: 17px; flex: none; border-radius: 99px; background: var(--line); color: var(--ink) }
+.pulse { width: 6px; height: 6px; border-radius: 99px; background: var(--ink); animation: pulse var(--v-slow) var(--ease) infinite }
+@keyframes pulse { 50% { opacity: .25 } }
+.done { opacity: 0 }
+.chev { margin-left: -2px; color: var(--ink-3) }
+.said { max-height: 0; overflow: hidden; margin: 0; font-size: 13.5px; line-height: 20px; color: var(--ink); opacity: 0 }
+.said::before { content: ""; display: block; height: 8px }
+
+/* 1 · the Budget point, selected with a drag */
+.root[data-b1] .sel { background-size: 100% 100% }
+.root[data-b1] .pointer { transform: translate(383px, 150px); transition: transform var(--v-move) var(--ease), opacity var(--v-quick) var(--ease) }
+/* 2 · the selection toolbar, over it */
+.root[data-b2] .tool { opacity: 1; transform: translate(-50%, 0) }
+/* 3 · the pointer on Ask for change */
+.root[data-b3] .pointer { transform: translate(115px, 102px) }
+.root[data-b3] .askBtn { background: var(--cream) }
+/* 4 · the toolbar becomes the field, and the pointer hides as it takes the keys */
+.root[data-b4] .tool { width: 520px }
+.root[data-b4] .pointer { opacity: 0 }
+.root[data-b4] .tools { opacity: 0 }
+.root[data-b4] .form { --n: 3; opacity: 1; transition-delay: calc(var(--n) * var(--v-step)) }
+/* 5 · "one sentence", typed, and Ask lights up */
+.root[data-b5] .placeholder { opacity: 0 }
+.root[data-b5] .typed span { max-width: 1em }
+.root[data-b5] .send { background: var(--ink); color: var(--paper) }
+/* 6 · Enter: the field goes, and the page's chat opens */
+.root[data-b6] .tool { opacity: 0 }
+.root[data-b6] .pill { opacity: 0 }
+.root[data-b6] .chat { opacity: 1; transform: none }
+/* 7 · the change lands: two sentences fold into one, nothing else moves */
+.root[data-b7] .sel { background-size: 0% 100%; transition: none }
+.root[data-b7] .cut { max-width: 0; opacity: 0; transition: opacity var(--v-quick) var(--ease), max-width var(--v-move) var(--ease) var(--v-quick) }
+.root[data-b7] .stop { opacity: 0; transition: opacity var(--v-quick) var(--ease) }
+.root[data-b7] .colon { opacity: 1; transition: opacity var(--v-quick) var(--ease) }
+/* 8 · Scout's reply */
+.root[data-b8] .steps { width: 92px }
+.root[data-b8] .working { opacity: 0 }
+.root[data-b8] .done { opacity: 1 }
+.root[data-b8] .said { max-height: 48px; opacity: 1 }
+
+/* Reduced motion: the transitions written above outrank the kit's
+   `[data-still]` reset, so they are stopped here, last. */
+.root[data-still] :is(.sel, .cut, .stop, .colon, .pointer, .typed span, .form, .pulse) { transition: none; animation: none }

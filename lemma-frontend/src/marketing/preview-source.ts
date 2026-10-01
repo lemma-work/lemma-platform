@@ -2,6 +2,11 @@ import { conversationWidget } from "./conversation-widgets";
 import { sampleListing } from "@/thread/memory-notes";
 import { teammates, teammateFor } from "./teammates";
 import { fixtureSource } from "@/data/fixtures";
+import { sampleShape } from "@/data/sample-tables";
+import { samplePageIn, sampleTableIn, spaceOf } from "./sample-spaces";
+import { SAMPLE_WORKFLOWS } from "./preview-fixtures";
+import { readSchedules } from "@/schedule/schedules";
+import { byEffort } from "@/data/connectable";
 import type { Conversation, Member, PodSource, Tab } from "@/data/types";
 
 const added = new Map<string, Member[]>();
@@ -23,8 +28,10 @@ const edits = new Map<string, string>();
 function members(id: string): Member[] {
     const person = teammateFor(id);
     return [
-        { id: "you", name: "You", initials: "YO", kind: "person", role: "Owner", can: "everything" },
-        { id: "priya", name: "Priya", initials: "PR", kind: "person", role: "Member", can: "reviews external commitments" },
+        { id: "you", name: "You", initials: "YO", kind: "person", role: "Owner", can: "everything", userId: "sample-user" },
+        { id: "priya", name: "Priya", initials: "PR", kind: "person", role: "Member", can: "reviews external commitments", userId: "priya-user" },
+        /* June's imports wait on Dev; nobody else's work does. */
+        ...(id === "june" ? [{ id: "dev", name: "Dev", initials: "DE", kind: "person" as const, role: "Member", can: "approves customer data fixes", userId: "dev-user" }] : []),
         { id: person.id, name: person.name, initials: person.name.slice(0, 2).toUpperCase(), kind: "teammate", role: person.role, can: "prepares work · asks before sending" },
         ...(added.get(id) ?? []),
     ];
@@ -50,6 +57,12 @@ function notesOf(id: string): { path: string; gloss: string; daysAgo: number; te
         { path: "/memory/brand-voice.md", gloss: "Lead with the customer’s problem", daysAgo: 20, text: "# Brand voice\n\n" + teammateFor(id).learned + "\n" },
         { path: "/me/agents/pod-default/your-preferences.md", gloss: "Summaries as short bullets", daysAgo: 9, text: "# Your preferences\n\n- Summaries as short bullets, decisions first.\n" },
     ];
+    if (id === "remy") return [
+        { path: "/memory/northstar.md", gloss: "Anita signs; Raj evaluates", daysAgo: 1, text: "# Northstar\n\n- Anita Rao is the buyer and signs. Raj is the technical evaluator: send him the detail, send her the decision.\n- Procurement deadline is Friday.\n" },
+        { path: "/memory/security-documents.md", gloss: "Only the approved overview goes out", daysAgo: 5, text: "# Security documents\n\n- Send only the approved security overview. Anything else goes to Priya first.\n" },
+        { path: "/memory/follow-ups.md", gloss: "Read colleagues’ threads before chasing", daysAgo: 12, text: "# Follow-ups\n\n- Check what colleagues said to a buyer this week before proposing another follow-up.\n" },
+        { path: "/me/agents/pod-default/your-preferences.md", gloss: "Short drafts; you send them", daysAgo: 8, text: "# Your preferences\n\n- Keep drafts under five lines. You send them yourself.\n- Tell me on Slack, not email.\n" },
+    ];
     return [{ path: "/memory/working-notes.md", gloss: teammateFor(id).learned, daysAgo: 6, text: "# Working notes\n\n" + teammateFor(id).learned + "\n" }];
 }
 
@@ -61,6 +74,8 @@ function notedIn(id: string) {
     const note = notesOf(id)[0];
     const told = id === "kit"
         ? { ask: "From now on the readiness check runs Thursdays at 9, not Fridays.", reply: "Got it. Readiness checks run Thursdays at 09:00 from now on." }
+        : id === "remy"
+        ? { ask: "Raj isn’t the buyer at Northstar. Anita signs; Raj only evaluates.", reply: "Thanks. I’ll send Raj the technical detail and bring decisions to Anita." }
         : { ask: "Keep this in mind for next time: " + note.gloss.charAt(0).toLowerCase() + note.gloss.slice(1) + ".", reply: "Noted. I’ll work that way from now on." };
     return [
         { id: id + "-told", role: "user", kind: "TEXT", sequence: 4, text: told.ask },
@@ -90,6 +105,12 @@ export const previewSource: PodSource = {
     async describePod(id, description) { const person = teammates.find(item => item.id === id); if (person) person.role = description.trim() || person.role; },
     async deletePod(id) { const at = teammates.findIndex(item => item.id === id); if (at >= 0) teammates.splice(at, 1); },
     async listSurfaces(id) { const person = teammateFor(id); return [{ id: id + "-email", platform: "RESEND", name: "email", mine: true, agentName: person.name, handle: person.id + "@acme.example.invalid", email: person.id + "@acme.example.invalid", active: true }]; },
+    /* The general sample has spent the org's shared WhatsApp number, to
+       exercise that sentence. A visitor to the landing has not. */
+    async listConnectable(id) {
+        const all = await fixtureSource.listConnectable(id);
+        return all.map(entry => entry.platform === "WHATSAPP" ? { ...entry, systemFree: true, claimedBy: undefined, effort: "instant" as const } : entry).sort(byEffort);
+    },
     async listMySurfaces() { return teammates.map(person => ({ platform: "RESEND", podId: person.id, name: "email" })); },
     async getPodDetail(id) { return { members: members(id), teammate: persona(id), subtitle: teammateFor(id).role }; },
     async listTabs(id) {
@@ -119,13 +140,21 @@ export const previewSource: PodSource = {
         ] } satisfies Conversation;
     },
     async listLibrary(id, kind, directory) {
-        if (kind === "tables") return { items: [] };
+        /* Each teammate keeps the tables and pages of its own job. */
+        const space = spaceOf(id);
+        if (kind === "tables") return { items: (space?.tables ?? []).map(table => ({ id: table.name, name: table.name, kind: "table" as const, path: table.name, updated: new Date(Date.now() - DAY).toISOString(), detail: table.detail, rls: space?.ownRows?.includes(table.name) })) };
+        if (directory === "/pages") return { items: (space?.pages ?? []).map(page => ({ id: page.path, name: page.path.split("/").pop() ?? page.path, kind: "file" as const, path: page.path, updated: new Date(Date.now() - page.daysAgo * DAY).toISOString(), detail: page.detail })) };
         const notes = sampleListing(directory, notesOf(id).map(note => ({ path: note.path, updated: new Date(Date.now() - note.daysAgo * DAY).toISOString(), description: note.gloss })));
         if (directory === "/me" || directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) return { items: notes };
         if (directory === "/skills") return { items: [{ id: "brand-voice", name: "brand-voice", kind: "folder", path: "/skills/brand-voice", updated: "2026-09-23T09:00:00Z", detail: `What the team taught ${teammateFor(id).name}` }] };
-        return { items: [...(directory === "/" ? notes : []), { id: "guidance", name: "SKILL.md", kind: "file", path: voicePath, updated: "2026-09-23T09:00:00Z", detail: teammateFor(id).learned }] };
+        /* The root holds folders, as a real space's does; the guidance
+           lives in its skill's folder, not at the top as if it were a page. */
+        if (directory === "/") return { items: [...notes, ...["pages", "skills"].map(name => ({ id: name, name, kind: "folder" as const, path: "/" + name, updated: "2026-09-23T09:00:00Z", detail: "" }))] };
+        return { items: [{ id: "guidance", name: "SKILL.md", kind: "file", path: voicePath, updated: "2026-09-23T09:00:00Z", detail: teammateFor(id).learned }] };
     },
     async readFile(id, path) {
+        const page = samplePageIn(id, path);
+        if (page) { const text = edits.get(id + path) ?? page.text; return { name: path.split("/").pop() ?? path, path, mime: "text/markdown", size: text.length, kind: "markdown", text }; }
         const note = notesOf(id).find(one => one.path === path);
         if (note) { const text = edits.get(id + path) ?? note.text; return { name: path.split("/").pop() ?? path, path, mime: "text/markdown", size: text.length, kind: "markdown", text }; }
         const text = edits.get(id + path) ?? guidance(id);
@@ -135,8 +164,16 @@ export const previewSource: PodSource = {
     async getProfile(id) {
         const person = teammateFor(id);
         const profile = await fixtureSource.getProfile(id);
-        return { ...profile, podId: id, name: person.name, iconUrl: person.icon, headline: person.promise, about: person.job + "\n\n" + person.learned, commitments: [], counts: { tables: 0, functions: 0, workflows: 0 }, projects: [{ id: person.id, name: person.app, description: person.role, status: "running", tabId: "app:launch" }] };
+        return { ...profile, podId: id, name: person.name, iconUrl: person.icon, headline: person.promise, about: person.job + "\n\n" + person.learned, commitments: [], counts: { tables: spaceOf(id)?.tables.length ?? 0, functions: 0, workflows: SAMPLE_WORKFLOWS.filter(flow => flow.pod_id === id).length }, projects: [{ id: person.id, name: person.app, description: person.role, status: "running", tabId: "app:launch" }] };
     },
+    async tableColumns(id, name) { return sampleTableIn(id, name)?.columns ?? []; },
+    async tableRows(id, name) { return { items: sampleTableIn(id, name)?.rows() ?? [], next: null }; },
+    async tableCount(id, name) { return sampleTableIn(id, name)?.rows().length ?? null; },
+    async tableRecord(id, name, recordId) { return sampleTableIn(id, name)?.rows().find(row => String(row.id) === recordId) ?? null; },
+    async tableShape(id, name) { const table = sampleTableIn(id, name); return table ? sampleShape(table) : null; },
+    async tableShapes(id) { return (spaceOf(id)?.tables ?? []).map(sampleShape); },
+    async referencing(id, table, column, recordId, limit) { return (sampleTableIn(id, table)?.rows() ?? []).filter(row => String(row[column]) === recordId).slice(0, limit); },
+    async runQuery(id) { return { items: spaceOf(id)?.query() ?? [], truncated: false }; },
     async listAgents() { return []; },
-    async listSchedules() { return []; },
+    async listSchedules(id) { return readSchedules(spaceOf(id)?.schedules ?? []); },
 };

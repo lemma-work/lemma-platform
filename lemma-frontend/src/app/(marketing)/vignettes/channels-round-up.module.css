@@ -1,0 +1,97 @@
+/* Asking around, beat by beat. Base styles are the opening frame: Sam's ask
+   in the #launch thread on the left, and the three people's apps on the
+   right, nothing in them yet. Each `.root[data-bN]` rule is what changes
+   from beat N on, written in beat order so a later beat wins over an
+   earlier one. With reduced motion every beat is on, so the last rules here
+   are the finished picture: three answers and the one round-up. */
+
+.root { --v-step: 140ms }
+/* The desk the thread and the three apps sit on. */
+.stage { position: absolute; inset: 0; background: var(--cream) }
+
+/* ── The thread in #launch ──────────────────────────────────────────── */
+.left { position: absolute; top: 24px; left: 22px; width: 356px }
+.thread { height: 354px; overflow: hidden }
+.logo { width: 14px; height: 14px; flex: none }
+.feed { padding: 14px 14px 0 12px }
+.post { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 9px; align-items: start }
+.post > img { width: 24px; height: 24px; border-radius: 7px }
+.column { min-width: 0 }
+.name { display: flex; align-items: baseline; margin: 0; font-size: 12.5px; line-height: 18px; color: var(--ink) }
+.name b { font-weight: 500 }
+.name time { margin-left: 6px; font-size: 12px; color: var(--ink-3) }
+.said { margin: 1px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-2) }
+.mention { padding: 0 3px; border-radius: 4px; background: var(--violet-soft); color: var(--violet-deep) }
+
+/* Slack's line under the parent: how many replies the thread holds. */
+.replies { position: relative; display: flex; align-items: center; gap: 8px; height: 18px; margin: 12px 0; font-size: 12px; color: var(--ink-3) }
+.replies::after { content: ""; flex: 1; height: 1px; background: var(--line) }
+.one { min-width: 54px }
+.two { position: absolute; top: 0; left: 0; opacity: 0 }
+
+.roundup { margin-top: 16px }
+.line { display: block }
+.line b { font-weight: 500; color: var(--ink) }
+
+/* Under the thread: how many of the three have answered. */
+.count { display: flex; align-items: center; gap: 6px; width: max-content; height: 26px; margin: 12px 0 0; padding: 0 11px 0 10px; border-radius: 99px; background: var(--paper); box-shadow: 0 0 0 1px var(--line); font-size: 12px; color: var(--ink-2) }
+.count i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--line-2) }
+.n { position: relative; width: 7px; height: 18px; margin-left: 3px; line-height: 18px; font-variant-numeric: tabular-nums }
+.n + span { margin-left: -2px }
+.n b { position: absolute; top: 0; left: 0; font-weight: 500; color: var(--ink); opacity: 0 }
+.n b:first-child { opacity: 1 }
+
+/* ── Each person's own conversation, in the app it reached them on ──── */
+.tiles { position: absolute; top: 24px; left: 396px; width: 222px; display: flex; flex-direction: column; gap: 10px }
+.tile { height: 124px; padding: 10px 12px }
+.app { display: flex; align-items: center; gap: 6px; height: 18px; margin: 0; font-size: 12px; color: var(--ink-2) }
+.app img { width: 14px; height: 14px; flex: none }
+.app em { font-style: normal; color: var(--ink-3) }
+/* When their answer came in, shown once it has. */
+.app time { margin-left: auto; color: var(--ink-3) }
+/* Email has no logo of its own here: an @ stands for it. */
+.at { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; border-radius: 4px; background: var(--cream); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink); font-size: 12px; line-height: 1 }
+.ask, .answer { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; margin: 0; font-size: 12.5px; line-height: 18px }
+.ask { margin-top: 8px; color: var(--ink-2) }
+.ask small { display: block; font-size: 12px; color: var(--ink-3) }
+.answer { margin-top: 6px; color: var(--ink) }
+.kit { width: 18px; height: 18px; border-radius: 5px; background: var(--violet-soft); object-fit: contain }
+.initial { width: 18px; height: 18px; font-size: 12px; line-height: 1 }
+
+@keyframes pulse { 30% { background-color: var(--violet-soft) } }
+
+/* ── Hidden until their beat ────────────────────────────────────────── */
+.replies, .count { opacity: 0 }
+.reply, .roundup { opacity: 0; transform: translateY(6px) }
+.line { opacity: 0 }
+.ask { opacity: 0; transform: translateY(4px) }
+.answer { opacity: 0; transform: translateY(4px) }
+.app time { opacity: 0 }
+
+/* 1 · Kit replies in the thread; its question lands in each person's app */
+.root[data-b1] .replies, .root[data-b1] .reply { opacity: 1; transform: none }
+.root[data-b1] .ask { opacity: 1; transform: none; transition-delay: calc(var(--v-move) + var(--n) * var(--v-step)) }
+.root[data-b1] .count { opacity: 1; transition-delay: calc(var(--v-move) + 4 * var(--v-step)) }
+/* 2 · Rohan answers by email: 1 of 3, and the thread stays as it was */
+.root[data-b2] .rohan .answer, .root[data-b2] .rohan time { opacity: 1; transform: none }
+.root[data-b2] .rohan { animation: pulse var(--v-slow) var(--ease) both }
+.root[data-b2] .count i:nth-of-type(1) { background: var(--ok) }
+.root[data-b2] .n b:nth-child(1) { opacity: 0 }
+.root[data-b2] .n b:nth-child(2) { opacity: 1 }
+/* 3 · Priya answers in Slack: 2 of 3 */
+.root[data-b3] .priya .answer, .root[data-b3] .priya time { opacity: 1; transform: none }
+.root[data-b3] .priya { animation: pulse var(--v-slow) var(--ease) both }
+.root[data-b3] .count i:nth-of-type(2) { background: var(--ok) }
+.root[data-b3] .n b:nth-child(2) { opacity: 0 }
+.root[data-b3] .n b:nth-child(3) { opacity: 1 }
+/* 4 · Aditi answers on WhatsApp: 3 of 3 */
+.root[data-b4] .aditi .answer, .root[data-b4] .aditi time { opacity: 1; transform: none }
+.root[data-b4] .aditi { animation: pulse var(--v-slow) var(--ease) both }
+.root[data-b4] .count i:nth-of-type(3) { background: var(--ok) }
+.root[data-b4] .n b:nth-child(3) { opacity: 0 }
+.root[data-b4] .n b:nth-child(4) { opacity: 1 }
+/* 5 · only now, one round-up in the thread, a line per person */
+.root[data-b5] .roundup { opacity: 1; transform: none }
+.root[data-b5] .line { opacity: 1; transition-delay: calc(var(--v-quick) + var(--n) * var(--v-step)) }
+.root[data-b5] .one { opacity: 0 }
+.root[data-b5] .two { opacity: 1 }

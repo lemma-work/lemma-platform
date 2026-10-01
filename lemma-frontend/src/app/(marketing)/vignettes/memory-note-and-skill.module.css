@@ -1,0 +1,124 @@
+/* A note and a skill, beat by beat. Base styles are the opening frame: Remy's
+   About page, its skills as a row of cards over the one note it keeps about
+   security documents, and the message box along the bottom. Each
+   `.root[data-bN]` rule is what changes from beat N on, in beat order, so the
+   last rules here are the finished picture reduced motion shows. Drawn in
+   canvas px on a 640 × 480 canvas. */
+
+.root { --v-step: 140ms }
+
+/* ── A section of the About page: a heading over a hairline ────────── */
+.head { padding-bottom: 9px; border-bottom: 1px solid var(--line) }
+.h { font-size: 15px; font-weight: 500; line-height: 20px; letter-spacing: -.01em; color: var(--ink) }
+.head > p + p { margin-top: 2px }
+
+/* ── What it has been taught: the hand of cards ─────────────────────── */
+.deck { position: relative; height: 200px; margin-top: 12px }
+.hand { position: absolute; inset: 0 }
+.track { display: flex; gap: 12px; margin: 0; padding: 0; list-style: none }
+
+/* The first card is the way to a new one: dashed, no shadow. */
+.newCard { flex: none; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; width: 160px; height: 170px; padding: 14px; border: 1px dashed var(--line-2); border-radius: 12px; color: var(--ink-2) }
+.plus { display: grid; place-items: center; width: 24px; height: 24px; margin-bottom: 4px; border: 1px solid currentColor; border-radius: 50%; font-size: 15px; line-height: 1; opacity: .7 }
+.newName { font-size: 14px; font-weight: 500 }
+.newNote { font-size: 12px; color: var(--ink-3) }
+
+/* A skill: one stock, a seeded band, a front and a back. */
+.card { flex: none; width: 160px; height: 170px; border-radius: 12px; perspective: 900px; box-shadow: 0 1px 2px rgb(20 20 19 / .05), 0 12px 26px -18px rgb(20 20 19 / .4) }
+.inner { position: relative; width: 100%; height: 100%; transform-style: preserve-3d }
+.face { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; padding: 12px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--paper); backface-visibility: hidden }
+.band { position: absolute; inset: 0 0 auto; height: 2px; background: var(--band) }
+.eyebrow { display: flex; align-items: center; justify-content: space-between; height: 18px }
+.eyebrow i { font-style: normal; font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3) }
+.eyebrow svg { color: var(--band) }
+.name { margin-top: 10px; font-size: 15px; font-weight: 500; line-height: 1.25; letter-spacing: -.01em; color: var(--ink) }
+.line { margin-top: 6px; font-size: 12px; line-height: 1.4; color: var(--ink-2) }
+.foot { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 6px; font-size: 12px; color: var(--ink-3) }
+.foot em { font-style: normal; font-family: var(--mono) }
+.foot i { display: inline-flex; align-items: center; gap: 3px; font-style: normal; opacity: .75 }
+
+/* The one it writes: its band is the hue its folder name seeds, an amber. */
+.fresh { --band: var(--wait); --tint: color-mix(in srgb, var(--wait) 12%, var(--paper)); opacity: 0; transform: translateX(36px) }
+/* The back, as skills.css draws it: solid in the seeded hue, its name and
+   its two buttons together at the bottom. */
+.rear { transform: rotateY(180deg); justify-content: flex-end; gap: 9px; padding: 13px; border-color: transparent; background: var(--tint) }
+.rearName { font-size: 13px; font-weight: 500; line-height: 1.3; color: var(--band) }
+.acts { display: flex; flex-wrap: wrap; gap: 7px }
+.read, .turn { display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: 99px; font-size: 12px }
+.read { background: var(--band); color: var(--tint) }
+.turn { border: 1px solid color-mix(in srgb, var(--band) 34%, transparent); color: var(--band) }
+
+/* Under the hand, at its right: the way along it, and how many there are. */
+.oars { position: absolute; top: 178px; right: 0; display: flex; align-items: center; gap: 8px }
+.oar { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--line-2); border-radius: 50%; color: var(--ink-2); opacity: .35 }
+.count { display: grid; padding: 0 4px; font-family: var(--mono); font-size: 12px; color: var(--ink-3) }
+.count > span { grid-area: 1 / 1; text-align: right }
+.two { opacity: 0 }
+
+/* The skill, opened in place of the hand: its path, its frontmatter as the
+   file reader prints it, and the procedure. */
+.reader { position: absolute; inset: 0; opacity: 0; transform: translateY(10px) }
+.readHead { display: flex; align-items: center; gap: 14px; height: 18px; font-size: 12px; color: var(--ink-2) }
+.readHead span { display: inline-flex; align-items: center; gap: 6px }
+.readHead code { font-family: var(--mono); font-size: 12px; color: var(--ink-3) }
+.front { margin: 8px 0 0; padding: 6px 12px; border: 1px solid var(--line); border-left: 2px solid var(--line-2); border-radius: 8px; background: var(--cream); font-family: var(--mono); font-size: 12px; line-height: 16px; color: var(--ink-3); white-space: pre-wrap }
+.reader .docTitle { margin-top: 12px; font-size: 15px; font-weight: 500; line-height: 20px; color: var(--ink) }
+.reader .steps { margin: 4px 0 0; padding-left: 20px; font-size: 13px; line-height: 18px; color: var(--ink) }
+.steps li::marker { color: var(--ink-3) }
+
+/* ── What it remembers: one note, one line ──────────────────────────── */
+.remembers { margin-top: 16px }
+.note { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 4px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--ink); white-space: nowrap }
+.noteDot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--violet) }
+.gloss { flex: 1; margin-left: -4px; color: var(--ink-3) }
+.at { font-size: 12px; color: var(--ink-3) }
+
+/* ── The message box ────────────────────────────────────────────────── */
+.composer { position: absolute; left: 22px; right: 22px; bottom: 16px; display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 10px 0 16px; border: 1px solid var(--line-2); border-radius: 18px; background: var(--paper); box-shadow: 0 1px 2px rgb(20 20 19 / .05), 0 16px 32px -22px rgb(20 20 19 / .45) }
+.typed { position: relative; flex: 1; align-self: stretch }
+.placeholder { position: absolute; left: 0; top: 16px; font-size: 13px; line-height: 18px; color: var(--ink-3) }
+.request { position: absolute; inset: 0; display: flex; align-items: center; font-size: 12px; line-height: 17px; color: var(--ink); opacity: 0 }
+.send { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: var(--paper); opacity: .3 }
+
+/* The pointer, drawn the way the product's recordings draw one. Its centre
+   is where it points; it rests right of the hand. */
+.pointer { position: absolute; top: 0; left: 0; z-index: 3; width: 18px; height: 18px; transform: translate(557px, 227px) }
+.pointer i { display: block; width: 18px; height: 18px; border: 2px solid var(--paper); border-radius: 50%; background: rgb(20 20 19 / .28); box-shadow: 0 2px 8px rgb(20 20 19 / .25) }
+@keyframes press { 50% { transform: scale(.7) } }
+@keyframes pressSend { 50% { transform: scale(.7) } }
+@keyframes pressCard { 50% { transform: scale(.7) } }
+@keyframes pressRead { 50% { transform: scale(.7) } }
+
+/* 1 · the pointer on New skill */
+.root[data-b1] .pointer { transform: translate(113px, 197px) }
+.root[data-b1] .newCard { border-color: var(--violet); background: var(--violet-soft); color: var(--ink) }
+/* 2 · clicked: the request fills the message box */
+.root[data-b2] .pointer i { animation: press var(--v-quick) var(--ease) }
+.root[data-b2] .placeholder { opacity: 0 }
+.root[data-b2] .request { opacity: 1; transition-delay: var(--v-step) }
+.root[data-b2] .send { opacity: 1; transition-delay: var(--v-step) }
+/* 3 · sent: the pointer goes to Send, and the box empties */
+.root[data-b3] .pointer { transform: translate(589px, 437px) }
+.root[data-b3] .pointer i { animation: pressSend var(--v-quick) var(--ease) var(--v-move) }
+.root[data-b3] .newCard { border-color: var(--line-2); background: transparent; color: var(--ink-2) }
+.root[data-b3] .request { opacity: 0; transform: translateY(-14px); transition-delay: calc(var(--v-move) + var(--v-step)) }
+.root[data-b3] .send { opacity: .3; transition-delay: calc(var(--v-move) + var(--v-step)) }
+.root[data-b3] .placeholder { opacity: 1; transition-delay: calc(var(--v-move) + 3 * var(--v-step)) }
+/* 4 · the skill it wrote slides into the row */
+.root[data-b4] .fresh { opacity: 1; transform: none }
+.root[data-b4] .one { opacity: 0 }
+.root[data-b4] .two { opacity: 1 }
+/* 5 · the pointer turns it over */
+.root[data-b5] .pointer { transform: translate(495px, 191px) }
+.root[data-b5] .pointer i { animation: pressCard var(--v-quick) var(--ease) var(--v-move) }
+/* Under the pointer it lifts, as a card on the page does on hover. */
+.root[data-b5] .fresh { transform: translateY(-4px); box-shadow: 0 2px 4px rgb(20 20 19 / .06), 0 18px 30px -18px rgb(20 20 19 / .45); transition-delay: calc(var(--v-move) - var(--v-step)) }
+.root[data-b5] .turns { transform: rotateY(180deg); transition-delay: calc(var(--v-move) + var(--v-step)) }
+/* 6 · Read it: the skill opens in place of the hand, over the one-line note */
+.root[data-b6] .pointer i { animation: pressRead var(--v-quick) var(--ease) var(--v-move) }
+.root[data-b6] .hand { opacity: 0; transition-delay: calc(var(--v-move) + var(--v-step)) }
+.root[data-b6] .reader { opacity: 1; transform: none; transition-delay: calc(var(--v-move) + var(--v-step) + var(--v-quick)) }
+.root[data-b6] .pointer { transform: translate(411px, 220px); opacity: 0; transition-delay: calc(var(--v-move) + 2 * var(--v-step)), calc(0 * var(--v-step)) }
+
+/* Held still, nothing points. */
+.root[data-still] .pointer { display: none }

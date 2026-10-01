@@ -477,9 +477,19 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     /* The file changed somewhere else — the agent rewrote it, or another tab
        did. Taken only when there is nothing of yours to lose; a refetch landing
        on a half-typed paragraph would be the app deleting your work on its own
-       initiative. */
+       initiative.
+
+       Only a new `text` counts as a change from elsewhere. An autosave moves
+       `saved` first and the cached file a tick later, and in that render the
+       old text differs from what was just written: comparing the two read
+       the gap as somebody else's edit and put the old words back over the
+       new ones. Remembering the last text this editor took in, and acting
+       only when that moves, leaves the gap alone. */
+    const takenIn = useRef(text);
     useEffect(() => {
-        if (!editor || text === saved || dirty) return;
+        if (!editor || text === takenIn.current || dirty) return;
+        takenIn.current = text;
+        if (text === saved) return;
         setSaved(text);
         setDraft(text);
         editor.commands.setContent(splitFrontmatter(text).body);

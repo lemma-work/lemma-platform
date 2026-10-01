@@ -1,0 +1,181 @@
+/* Kit's space fills, beat by beat. Base styles are the opening frame: the
+   space's places down the left, each over an empty dashed slot (Files dim,
+   and it stays empty), and an empty chat on the right. Each `.root[data-bN]`
+   rule is what changes from beat N on, in beat order, so the last rules are
+   the finished picture: the chat moved on to its last ask, four places
+   filled, and the workflow waiting on a person. */
+
+.root { --v-step: 100ms }
+/* Margins on paragraphs say `.root`, to outrank the page's own reset. */
+
+/* ── The two shapes ───────────────────────────────────────────────── */
+/* Wide, the places beside the chat; tall on a phone, the places over the
+   chat, where the wide one's words would shrink past reading. One shows. */
+.root.tall { display: none }
+@media (max-width: 560px) {
+    .root.wide { display: none }
+    .root.tall { display: block }
+}
+.tall .side { width: 324px }
+.tall .chat { top: 404px; left: 8px; width: 324px; height: 228px }
+
+/* Where each card starts its trip, as an offset from the slot it settles
+   in: small, over the link its reply left at the foot of the chat. It
+   grows to its size on the way. In canvas px, left edge and middle. */
+.wide .pageCard { --dx: 388px; --dy: 234px }
+.wide .tableCard { --dx: 376px; --dy: 84px }
+.wide .flowCard { --dx: 394px; --dy: -17px }
+.wide .appCard { --dx: 369px; --dy: 163px }
+.tall .pageCard { --dx: 122px; --dy: 474px }
+.tall .tableCard { --dx: 110px; --dy: 324px }
+.tall .flowCard { --dx: 128px; --dy: 222px }
+.tall .appCard { --dx: 103px; --dy: 402px }
+
+/* The space's ground, as the app draws it behind its open things. */
+.ground { position: absolute; inset: 36px 0 0 0; background: var(--cream) }
+
+/* ── The space's places ─────────────────────────────────────────────── */
+/* Above the chat, so a card crossing from a reply passes over it. */
+.side { position: absolute; top: 43px; left: 8px; z-index: 2; width: 258px; display: flex; flex-direction: column }
+.item { display: flex; align-items: center; gap: 8px; height: 18px; padding: 0 8px; font-size: 13px; color: var(--ink) }
+.item svg { flex: none; color: var(--ink-2); transition: color var(--v-quick) var(--ease) }
+.files { margin-bottom: 3px; opacity: .45 }
+
+/* Where a place's answer settles: dashed while it is empty. Inset to the
+   names' edge, so the sidebar keeps one edge for words. */
+.slot { position: relative; flex: none; margin: 2px 2px 5px 31px; border: 1px dashed var(--line-2); border-radius: 8px }
+.pageSlot { height: 38px }
+.appSlot { height: 55px }
+.tableSlot { height: 53px }
+.flowSlot { height: 57px }
+
+.chats { margin: 4px 0 0 8px; padding: 6px 0 0 23px; border-top: 1px solid var(--line); font-size: 12.5px; line-height: 16px; color: var(--ink-3) }
+
+/* ── The cards ──────────────────────────────────────────────────────── */
+/* Each sits on its slot and starts out over the reply it came from. On
+   the way back to the opening frame it fades where it is, then goes home
+   unseen. */
+.card { position: absolute; inset: -1px; padding: 4px 9px; border-radius: 8px; background: var(--paper); box-shadow: 0 0 0 1px var(--line), 0 16px 30px -16px rgb(20 20 19 / .45); opacity: 0; transform: translate(var(--dx), var(--dy)) scale(.6); transform-origin: 0 50%; transition: opacity var(--v-quick) var(--ease), transform var(--v-move) var(--ease) var(--v-quick), box-shadow var(--v-quick) var(--ease) }
+/* The edge a place takes once something is in it. */
+.card::after { content: ""; position: absolute; inset: 0; border-radius: 8px; box-shadow: 0 0 0 1px var(--violet); opacity: 0; transition: opacity var(--v-quick) var(--ease) }
+.name { overflow: hidden; font-size: 13px; line-height: 15px; color: var(--ink); white-space: nowrap; text-overflow: ellipsis }
+.gloss { font-size: 12px; line-height: 14px; color: var(--ink-3) }
+.name .gloss { font-size: 12px }
+
+/* The page: its title and its first line. */
+.root .pageCard .gloss { margin-top: 1px }
+
+/* The app: a dark screen in miniature, four assets each with its amber
+   "Needs review", and no launch named on it. */
+/* Above the table card, which it passes on its way up to Apps. */
+.appCard { z-index: 1; background: var(--ink); box-shadow: 0 0 0 1px var(--ink), 0 16px 30px -16px rgb(20 20 19 / .45) }
+.appHead { display: flex; align-items: center; justify-content: space-between; font-size: 12px; line-height: 14px; color: var(--paper) }
+.appHead em { font-style: normal; font-size: 12px; color: rgb(255 255 255 / .55) }
+.appRow { display: flex; align-items: center; gap: 6px; height: 5px; margin-top: 2.5px }
+.appRow:first-of-type { margin-top: 4.5px }
+.appRow i { width: 5px; height: 5px; flex: none; border-radius: 1.5px; background: rgb(255 255 255 / .3) }
+.appRow b { height: 3px; border-radius: 2px; background: rgb(255 255 255 / .22) }
+.appRow em { width: 24px; height: 5px; margin-left: auto; border-radius: 3px; background: color-mix(in srgb, var(--wait) 65%, var(--paper)) }
+
+/* The table: its name and count, and two of its rows. */
+.root .miniRow { display: grid; grid-template-columns: minmax(0, 1fr) 34px 64px; align-items: center; gap: 6px; font-size: 12px; line-height: 15px; color: var(--ink-2); white-space: nowrap }
+.miniRow em { justify-self: start; padding: 0 6px; border-radius: 5px; background: var(--cream); font-style: normal; font-size: 12px; line-height: 15px; color: var(--ink-2) }
+.miniRow .ready { background: color-mix(in srgb, var(--ok) 13%, var(--paper)); color: var(--ok) }
+
+/* The workflow: five steps on a line, the fourth Priya's. People get
+   initials; teammates get faces. */
+.spine { position: relative; display: flex; align-items: center; justify-content: space-between; width: 106px; height: 20px }
+.spine::before { content: ""; position: absolute; left: 3px; right: 3px; top: 50%; height: 1px; background: var(--line-2) }
+.spine i { position: relative; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--ink-3) }
+.pr { position: relative; display: grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: 50%; background: var(--ink); font-size: 12px; line-height: 1; letter-spacing: -.02em; color: var(--paper); box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 1.5px transparent; transition: box-shadow var(--v-quick) var(--ease) }
+.meta, .waiting { display: flex; align-items: center; gap: 6px; height: 14px; font-size: 12px; line-height: 14px; white-space: nowrap }
+.meta { color: var(--ink-3) }
+.root .waiting { margin-top: -14px; color: var(--wait); opacity: 0 }
+.waiting b { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--wait) }
+
+/* ── The chat ───────────────────────────────────────────────────────── */
+.chat { position: absolute; top: 44px; left: 274px; z-index: 1; width: 358px; height: 348px; border-radius: 12px; background: var(--paper); box-shadow: 0 0 0 1px var(--line), 0 14px 30px -22px rgb(20 20 19 / .35) }
+
+/* Anchored to the composer, as a chat is: what arrives pushes what came
+   before it up, and past the top it is gone. */
+.feed { position: absolute; top: 0; left: 0; right: 0; bottom: 60px; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 16px 2px; overflow: hidden; mask-image: linear-gradient(to bottom, transparent 0, rgb(20 20 19) 44px) }
+/* A line opens into place as it arrives, a reply a moment after its ask.
+   When the loop starts again they all fade first and close unseen. */
+.line { --late: calc(0 * var(--v-step)); display: grid; grid-template-rows: 0fr; flex: none; opacity: 0; transition: grid-template-rows var(--v-move) var(--ease) var(--v-quick), opacity var(--v-quick) var(--ease) }
+.line > div { min-height: 0; overflow: hidden }
+.late { --late: var(--v-step) }
+
+/* Your turn: on the far side, sized by its words. */
+.root .you { width: fit-content; max-width: 250px; margin: 14px 0 0 auto; padding: 7px 12px; border-radius: 14px; background: var(--cream); font-size: 13px; line-height: 1.45; color: var(--ink) }
+
+/* Kit's turn: its face, its name, the steps row, what it said. */
+.reply { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; margin-top: 12px; padding-bottom: 2px }
+.face { width: 24px; height: 24px; border-radius: 7px }
+.who { font-size: 13px; line-height: 24px; color: var(--ink) }
+.stepsRow { position: relative; height: 24px; margin-top: 2px }
+.steps { position: absolute; top: 0; left: 0; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px 0 4px; border: 1px solid var(--line); border-radius: 99px; background: var(--paper); font-size: 12.5px; color: var(--ink-2); white-space: nowrap }
+.steps i { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--violet-soft); color: var(--violet) }
+.steps > svg { color: var(--ink-3) }
+/* A run still going: a pulse, "Working", and the step it is on now. */
+.steps b { width: 6px; height: 6px; border-radius: 50%; background: var(--violet); animation: pulse var(--v-slow) var(--ease) infinite }
+.steps em { padding-left: 8px; border-left: 1px solid var(--line); font-style: normal; color: var(--ink-3) }
+@keyframes pulse { 0%, 100% { opacity: .3; transform: scale(.8) } 50% { opacity: 1; transform: none } }
+.live { opacity: 0 }
+.closed { opacity: 0 }
+.last { opacity: 0 }
+
+.root .said { display: flex; align-items: center; gap: 8px; white-space: nowrap; margin-top: 6px; font-size: 13px; line-height: 24px; color: var(--ink) }
+/* What it made, left in the chat as a link to where it lives. */
+.link { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 12.5px; color: var(--ink) }
+.link svg { flex: none; color: var(--ink-3) }
+
+.composer { position: absolute; left: 14px; right: 14px; bottom: 12px; display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 6px 0 14px; border: 1px solid var(--line-2); border-radius: 20px; background: var(--paper); font-size: 13px; color: var(--ink-3) }
+.composer svg { flex: none }
+.composer i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: auto; border-radius: 50%; background: rgb(20 20 19 / .07); color: var(--ink-3) }
+
+/* ── The beats ──────────────────────────────────────────────────────── */
+/* In each of the four, the ask opens into the chat and Kit's reply after
+   it; then the card fades in small over the reply, crosses to its slot,
+   grows to its size and settles, and its place lights. Delays count from
+   the beat. */
+
+/* 1 · the brief: a page, lifting off its link into Pages */
+.root[data-b1] .in1 { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows var(--v-move) var(--ease) var(--late), opacity var(--v-move) var(--ease) var(--late) }
+.root[data-b1] .pageCard { opacity: 1; transform: none; box-shadow: 0 0 0 1px var(--line), 0 6px 14px -12px rgb(20 20 19 / .3); transition-delay: calc(6.5 * var(--v-step)), calc(8 * var(--v-step)), calc(14.5 * var(--v-step)) }
+.root[data-b1] .pageCard::after { opacity: 1; transition-delay: calc(14.5 * var(--v-step)) }
+.root[data-b1] .pages svg { color: var(--violet); transition-delay: calc(14.5 * var(--v-step)) }
+
+/* 2 · the asset list: the chat moves up an exchange; a table into Tables */
+.root[data-b2] .in2 { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows var(--v-move) var(--ease) var(--late), opacity var(--v-move) var(--ease) var(--late) }
+.root[data-b2] .tableCard { opacity: 1; transform: none; box-shadow: 0 0 0 1px var(--line), 0 6px 14px -12px rgb(20 20 19 / .3); transition-delay: calc(6.5 * var(--v-step)), calc(8 * var(--v-step)), calc(14.5 * var(--v-step)) }
+.root[data-b2] .tableCard::after { opacity: 1; transition-delay: calc(14.5 * var(--v-step)) }
+.root[data-b2] .tables svg { color: var(--violet); transition-delay: calc(14.5 * var(--v-step)) }
+
+/* 3 · the weekly check: the first exchange goes off the top; a workflow
+   into Workflows */
+.root[data-b3] .in3 { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows var(--v-move) var(--ease) var(--late), opacity var(--v-move) var(--ease) var(--late) }
+.root[data-b3] .flowCard { opacity: 1; transform: none; box-shadow: 0 0 0 1px var(--line), 0 6px 14px -12px rgb(20 20 19 / .3); transition-delay: calc(6.5 * var(--v-step)), calc(8 * var(--v-step)), calc(14.5 * var(--v-step)) }
+.root[data-b3] .flowCard::after { opacity: 1; transition-delay: calc(14.5 * var(--v-step)) }
+.root[data-b3] .workflows svg { color: var(--violet); transition-delay: calc(14.5 * var(--v-step)) }
+
+/* 4 · one screen: the steps row works, closes to four steps, and the app
+   settles under Apps */
+.root[data-b4] .in4 { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows var(--v-move) var(--ease) var(--late), opacity var(--v-move) var(--ease) var(--late) }
+.root[data-b4] .live { animation: working calc(8 * var(--v-step)) var(--ease) var(--v-step) both }
+@keyframes working { 0% { opacity: 0 } 20%, 80% { opacity: 1 } 100% { opacity: 0 } }
+.root[data-b4] .closed, .root[data-b4] .last { opacity: 1; transition-delay: calc(7.5 * var(--v-step)) }
+.root[data-b4] .appCard { opacity: 1; transform: none; box-shadow: 0 0 0 1px var(--ink), 0 6px 14px -12px rgb(20 20 19 / .3); transition-delay: calc(8.5 * var(--v-step)), calc(9.5 * var(--v-step)), calc(16.5 * var(--v-step)) }
+.root[data-b4] .appCard::after { opacity: 1; transition-delay: calc(16.5 * var(--v-step)) }
+.root[data-b4] .apps svg { color: var(--violet); transition-delay: calc(16.5 * var(--v-step)) }
+
+/* 5 · the hold, once the app has landed: the workflow is waiting on a
+   person, at Priya's step */
+.root[data-b5] .meta { opacity: 0; transition-delay: calc(4 * var(--v-step)) }
+.root[data-b5] .waiting { opacity: 1; transition-delay: calc(4 * var(--v-step)) }
+.root[data-b5] .pr { box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px color-mix(in srgb, var(--wait) 75%, var(--paper)); transition-delay: calc(4 * var(--v-step)) }
+
+/* Reduced motion: the last frame, still. The rules above that carry their
+   own transition or animation outrank the kit's, so they are stopped here. */
+.root[data-still] .line { transition: none }
+.root[data-still] .live { animation: none }
+.root[data-still] .card::after { transition: none }

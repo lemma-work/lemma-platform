@@ -1,0 +1,159 @@
+/* One run of First import check, beat by beat. Base styles are the opening
+   frame: June's imports table beside the run's steps, every step not yet
+   reached. Each `.root[data-bN]` rule is what changes from beat N on, in
+   beat order so a later beat wins. With reduced motion every beat is on, so
+   the last rules here are the finished picture: every step ticked, the arm
+   not taken still dim, and Dev's exchange beside the step it answered.
+
+   A step's look is a handful of custom properties the beats set on it:
+   `--row` its strength, `--s0/1/2` which state word shows, and the glyph's
+   `--fill`, `--ring`, `--tick` and `--dot`. */
+
+.root {
+    --v-step: 110ms;
+    /* Where the run is now: the running step's wash, and the waiting one's. */
+    --lit: color-mix(in srgb, var(--violet-soft) 70%, var(--paper));
+    --held: color-mix(in srgb, var(--wait) 8%, var(--paper));
+    container-type: inline-size;
+}
+.root .stage { padding: 0 }
+
+/* ── June's imports table ───────────────────────────────────────────── */
+.source { position: absolute; top: 16px; left: 18px; width: 136px; padding: 10px 4px 2px }
+.root .sourceHead { padding: 0 8px 6px; font-size: 13px; color: var(--ink) }
+.source th:last-child, .source td:last-child { text-align: right; font-variant-numeric: tabular-nums }
+.root .source tr:last-child td { border-bottom: 0 }
+/* Harbor's row, folded shut until it is added. */
+.root .fresh td { padding-top: 0; padding-bottom: 0; transition: padding var(--v-move) var(--ease), background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
+.fresh td > span { display: block; max-height: 0; overflow: hidden; opacity: 0 }
+
+/* ── The run ────────────────────────────────────────────────────────── */
+.run { position: absolute; top: 16px; left: 168px; width: 300px }
+.runHead { position: relative; display: flex; align-items: center; height: 24px }
+.trigger { padding-left: 6px; font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.pills { position: absolute; top: 0; right: 0; display: grid; justify-items: end }
+/* One status at a time: the pill going out fades before the next comes in. */
+.pill { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 99px; background: var(--cream); font-size: 12px; color: var(--ink-2); white-space: nowrap; opacity: 0 }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--violet) }
+.pillWait i { background: var(--wait) }
+.pillDone i { background: var(--ok) }
+
+.root .tree { margin: 10px 0 0; padding: 0; list-style: none }
+.root .arm .tree { margin: 0 }
+
+.step {
+    --row: .5; --wash: transparent; --out: 0;
+    --s0: 1; --s1: 0; --s2: 0;
+    --fill: var(--paper); --ring: var(--line-2); --ring-w: 1.5px; --tick: 0; --dot: 0;
+    border-bottom: 1px solid var(--line);
+}
+.head { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 6px; border-radius: 6px; background-color: var(--wash) }
+.head > * { opacity: var(--row) }
+.icon { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 6px; background: var(--cream); color: var(--ink-2) }
+.iconAsk { color: var(--wait); background: color-mix(in srgb, var(--wait) 12%, var(--paper)) }
+.iconCode { color: var(--violet-deep); background: var(--violet-soft) }
+.label { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); white-space: nowrap }
+.state { display: inline-flex; align-items: center; gap: 6px; width: 66px; flex: none; font-size: 12px; color: var(--ink-2) }
+
+/* The state glyph: an empty ring, a ring with the working dot, a filled tick. */
+.glyph { display: grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 50%; background-color: var(--fill); box-shadow: inset 0 0 0 var(--ring-w) var(--ring); color: var(--paper); transition: background-color var(--v-quick) var(--ease), box-shadow var(--v-quick) var(--ease) }
+.glyph > * { grid-area: 1 / 1 }
+.glyph i { width: 6px; height: 6px; border-radius: 50%; background: var(--violet); opacity: var(--dot) }
+.glyph svg { opacity: var(--tick) }
+.words { display: inline-grid }
+.words > em { grid-area: 1 / 1; font-style: normal; white-space: nowrap }
+.say0 { opacity: var(--s0) }
+.say1 { opacity: var(--s1) }
+.say2 { opacity: var(--s2) }
+.ask .say1 { color: var(--wait) }
+
+/* What a step produced, one line under it: folded shut until the step has
+   run, as the run page opens a step only once there is something to show. */
+.out { display: block; height: 22px; max-height: calc(var(--out) * 22px); overflow: hidden; padding-left: 40px; font-size: 12px; line-height: 18px; color: var(--ink-2); white-space: nowrap; opacity: var(--out) }
+.count { display: inline-block; width: 34px; height: 18px; overflow: hidden; vertical-align: top; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink) }
+.strip { display: block }
+.strip > span { display: block; height: 18px }
+.blocking { color: var(--wait); opacity: 0 }
+.file { font-family: var(--mono); color: var(--ink) }
+
+/* The decision's two arms, nested as the run page nests them. */
+.arms { padding: 4px 0 4px 10px; border-bottom: 1px solid var(--line) }
+.arm { padding-left: 10px; border-left: 1.5px solid var(--line-2); transition: border-color var(--v-quick) var(--ease), opacity var(--v-quick) var(--ease) }
+.arm + .arm { margin-top: 4px }
+.arm .step:last-child { border-bottom: 0 }
+.root .armLabel { display: flex; align-items: center; gap: 6px; height: 22px; font-size: 12px; color: var(--ink-3); white-space: nowrap; transition: color var(--v-quick) var(--ease) }
+.armLabel code { padding: 0 6px; border-radius: 4px; background: var(--cream); font-family: var(--mono); font-size: 12px; line-height: 18px; color: var(--ink-2) }
+.armLabel em { font-style: normal; opacity: 0 }
+/* Quieter than the steps until the decision has run. */
+.armLabel > * { opacity: .7 }
+
+.end { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-bottom: 0; font-size: 12px; color: var(--ink-2) }
+.end > * { opacity: var(--row) }
+
+/* ── Dev's chat, beside Dev's step ──────────────────────────────────── */
+.asked, .answer { position: absolute; left: 484px; width: 138px; opacity: 0 }
+.asked { top: 196px; transform: translateX(-14px) }
+.answer { top: 278px; transform: translateY(6px) }
+.from { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: var(--ink) }
+.from img { width: 18px; height: 18px; border-radius: 5px }
+.from span { width: 18px; height: 18px }
+.said { display: block; line-height: 1.4; color: var(--ink) }
+/* The thread hangs off the step: a short rule from the row to the message. */
+.asked::before { content: ""; position: absolute; top: 50%; left: -16px; width: 16px; height: 1px; background: var(--line-2) }
+
+/* ── Harbor's row, carried from the table to the top of the run ─────── */
+/* Going back for the next loop it fades first (the delay on its transform),
+   so it is never seen travelling backwards. */
+.carried { position: absolute; top: 174px; left: 26px; z-index: 2; opacity: 0; transform: scale(.94); background: var(--paper); border-color: var(--violet); color: var(--violet-deep); box-shadow: 0 10px 22px -12px rgb(40 30 110 / .55); transition-delay: 0s, var(--v-quick) }
+
+/* 1 · Harbor's first file lands in the imports table */
+.root[data-b1] .fresh td { padding-top: 6px; padding-bottom: 6px; background: var(--violet-soft); color: var(--violet-deep) }
+.root[data-b1] .fresh td > span { max-height: 20px; opacity: 1 }
+/* 2 · carried to the run, which starts */
+.root[data-b2] .carried { opacity: 1; transform: translate(144px, -158px); transition-delay: 0s, var(--v-step) }
+/* The run starts as the row arrives, not before. */
+.root[data-b2] .trigger { opacity: 0; transition-delay: var(--v-quick) }
+.root[data-b2] .pillRun { opacity: 1; transition-delay: var(--v-move) }
+/* 3 · June checks every row */
+.root[data-b3] .fresh td { background: transparent; color: var(--ink-2) }
+.root[data-b3] .pillRun { transition-delay: 0s }
+.root[data-b3] .check { --row: 1; --wash: var(--lit); --out: 1; --s0: 0; --s1: 1; --ring: var(--violet); --dot: 1 }
+.root[data-b3] .strip { transform: translateY(-72px); transition: transform var(--v-move) steps(4, end) }
+.root[data-b3] .blocking { opacity: 1; transition-delay: var(--v-move) }
+/* 4 · done, and the decision takes the fixing arm */
+.root[data-b4] .check { --wash: transparent; --s1: 0; --s2: 1; --dot: 0; --tick: 1; --fill: var(--ok); --ring: var(--ok) }
+.root[data-b4] .decide { --row: 1; --s0: 0; --s2: 1; --tick: 1; --fill: var(--ok); --ring: var(--ok) }
+.root[data-b4] .armFix { border-left-color: color-mix(in srgb, var(--violet) 55%, var(--line-2)) }
+.root[data-b4] .armLabel > * { opacity: 1 }
+.root[data-b4] .armFix .armLabel { color: var(--ink-2) }
+.root[data-b4] .armStraight { opacity: .5 }
+.root[data-b4] .armStraight em { opacity: 1 }
+.root[data-b4] .fix { --row: 1; --wash: var(--lit); --s0: 0; --s1: 1; --ring: var(--violet); --dot: 1 }
+/* 5 · the corrected file, the original kept */
+.root[data-b5] .fix { --wash: transparent; --out: 1; --s1: 0; --s2: 1; --dot: 0; --tick: 1; --fill: var(--ok); --ring: var(--ok) }
+/* 6 · Dev's step waits, and the run asks Dev */
+.root[data-b6] .ask { --row: 1; --wash: var(--held); --s0: 0; --s1: 1; --ring: var(--wait); --ring-w: 2px }
+.root[data-b6] .pillRun { opacity: 0 }
+.root[data-b6] .pillWait { opacity: 1; transition-delay: var(--v-quick) }
+.root[data-b6] .asked { opacity: 1; transform: none }
+/* 7 · Dev answers, and the run carries on */
+.root[data-b7] .answer { opacity: 1; transform: none }
+.root[data-b7] .ask { --wash: transparent; --s1: 0; --s2: 1; --tick: 1; --fill: var(--ok); --ring: var(--ok); --ring-w: 1.5px }
+.root[data-b7] .pillWait { opacity: 0; transition-delay: 0s }
+.root[data-b7] .pillRun { opacity: 1; transition-delay: var(--v-quick) }
+.root[data-b7] .go { --row: 1; --wash: var(--lit); --s0: 0; --s1: 1; --ring: var(--violet); --dot: 1 }
+/* 8 · the import runs; Finished */
+.root[data-b8] .go { --wash: transparent; --s1: 0; --s2: 1; --dot: 0; --tick: 1; --fill: var(--ok); --ring: var(--ok) }
+.root[data-b8] .end { --row: 1; --s0: 0; --s2: 1; --tick: 1; --fill: var(--ok); --ring: var(--ok) }
+.root[data-b8] .pillRun { opacity: 0; transition-delay: 0s }
+.root[data-b8] .pillDone { opacity: 1; transition-delay: var(--v-quick) }
+
+/* On a phone the vignette shows only the run (`phone` in the .tsx, x 160
+   to 476), so the bar's title and dots move in over it, and the rule that
+   hangs Dev's thread off his step, which would poke in at the edge with
+   nothing on the end of it, goes. Below the same 520px the Vignette
+   switches at. */
+@container (width < 520px) {
+    .root .bar { padding: 0 176px 0 172px }
+    .root .asked::before { display: none }
+}

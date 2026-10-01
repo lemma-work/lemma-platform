@@ -368,7 +368,10 @@ export function TimelineForm({ rows, profile, choice, primaryKey, onOpen, onEdit
 export function BoardForm({ rows, profile, choice, primaryKey, onOpen, onChange, onAdd }: FormProps) {
     const by = choice.around ?? "";
     const axis = profile.columns.find((c) => c.name === by);
-    const beside = supporting(profile, by, 2).filter((c) => c.role !== "name");
+    /* Names dropped before the two are taken, not after: a table whose two
+       best-ranked columns are both names (company, buyer) otherwise leaves
+       every card with nothing beside its status. */
+    const beside = supporting(profile, by, Infinity).filter((c) => c.role !== "name").slice(0, 2);
     const piles = usePiles(rows.map((row) => cellText(row[by])));
     return <div className="form-board">{piles.map((pile) => <Pile
         key={pile}

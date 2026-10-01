@@ -1,0 +1,135 @@
+/* The step that finds its person, beat by beat. Base styles are the opening
+   frame; each `.root[data-bN]` rule is what changes from beat N on, written
+   in beat order so a later beat wins over an earlier one. With reduced
+   motion every beat is on, so the last rules here are the finished picture. */
+
+.root { --v-step: 110ms }
+/* The desk the run and the phone sit on. */
+.stage { position: absolute; inset: 0; background: var(--cream) }
+
+/* Two states of one thing, in one place: the old gives way to the new. */
+.was, .now { white-space: nowrap }
+.now { opacity: 0 }
+
+/* ── The run, as its page draws it ──────────────────────────────────── */
+.run { position: absolute; top: 16px; left: 16px; width: 398px; padding: 14px 16px 4px }
+.head { display: flex; align-items: center; gap: 10px; margin: 0 }
+.name { margin: 0; font-size: 17px; font-weight: 500; letter-spacing: -.01em; color: var(--ink) }
+/* Where the run stands, as the pill beside its name says it. */
+.status { position: relative; display: block; width: 150px; height: 22px; border-radius: 99px; background: rgb(20 20 19 / .05); font-size: 12px; line-height: 22px; color: var(--ink-2); overflow: hidden }
+.status i { position: absolute; top: 7px; left: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--wait); animation: breathe var(--v-slow) var(--ease) infinite alternate }
+.status .was, .status .now { position: absolute; top: 0; left: 24px }
+/* `.run` first: the landing zeroes a paragraph's margins at one class. */
+.run .meta { margin: 4px 0 0; font-size: 12px; color: var(--ink-3) }
+.count { position: relative; display: inline-block; width: 7px }
+.count .now { position: absolute; top: 0; left: 0 }
+.run .steps { margin: 10px 0 0; font-size: 12px; color: var(--ink-3) }
+/* The last step closes the page: no rule under it. */
+.run > .tree > .row:last-child { border-bottom: 0 }
+
+.tree { margin: 0; padding: 0; list-style: none }
+.row { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 2px; border-bottom: 1px solid var(--line) }
+.face { width: 22px; height: 22px; flex: none; border-radius: 6px; background: var(--violet-soft); object-fit: contain }
+.actor { display: grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 6px; background: rgb(20 20 19 / .05); color: var(--ink-2) }
+.formActor { background: color-mix(in srgb, var(--wait) 12%, transparent); color: var(--wait) }
+.who { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25 }
+.who b { font-size: 13px; font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.who small { font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.state { position: relative; flex: none; width: 74px; height: 16px; font-size: 12px; color: var(--ink-2) }
+.state .was, .state .now { position: absolute; inset: 0; display: flex; align-items: center; gap: 6px }
+.glyph { display: grid; place-items: center; width: 14px; height: 14px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--line-2); color: var(--paper) }
+.row[data-state="done"] .was .glyph, .now .glyph { background: var(--ok); box-shadow: none }
+.row[data-state="waiting"] .state .was { color: var(--wait) }
+.row[data-state="waiting"] .was .glyph { box-shadow: inset 0 0 0 2px var(--wait); animation: breathe var(--v-slow) var(--ease) infinite alternate }
+.row[data-state="pending"] { opacity: .55 }
+.time { position: relative; flex: none; width: 52px; height: 16px; font-size: 12px; line-height: 16px; color: var(--ink-3); text-align: right; font-variant-numeric: tabular-nums }
+.time .was, .time .now { position: absolute; right: 0; top: 0 }
+.chev { flex: none; color: var(--ink-3) }
+
+/* The branch the decision took, indented under it. */
+.arms { padding: 2px 0 4px 12px; border-bottom: 1px solid var(--line) }
+.arm { padding-left: 12px; border-left: 1.5px solid color-mix(in srgb, var(--violet) 40%, var(--line-2)) }
+.armLabel { display: flex; align-items: center; gap: 6px; height: 22px; margin: 0; font-size: 12px; color: var(--ink-2) }
+.armLabel svg { color: var(--ink-3) }
+
+/* The step's own form, inline under it. */
+.form { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 2px 0 5px 34px }
+.tick { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: var(--ink) }
+.tick em { margin-left: -4px; font-style: normal; color: var(--bad) }
+.box::after { content: ""; width: 4px; height: 8px; border: solid var(--paper); border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); opacity: 0; transition: opacity var(--v-quick) var(--ease) }
+.run .label { margin: 2px 0 0; font-size: 12px; color: var(--ink-2) }
+.run .field { width: 100%; height: 28px; margin: -1px 0 0; padding: 0 9px; border-radius: 6px; background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-2); font-size: 12px; line-height: 28px; color: var(--ink) }
+.note { display: inline-block; white-space: nowrap; clip-path: inset(0 100% 0 0) }
+.submit { height: 24px; margin-top: 1px; padding: 0 10px }
+
+/* ── Dev's phone ────────────────────────────────────────────────────── */
+.phone { position: absolute; top: 16px; left: 432px; width: 192px; height: 411px; border-radius: 22px; overflow: hidden }
+.phoneHead { display: flex; align-items: center; gap: 7px; height: 42px; margin: 0; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink) }
+.phoneHead img { width: 16px; height: 16px; flex: none }
+.owner { margin-left: auto; width: 22px; height: 22px }
+
+.incoming, .outgoing { position: absolute; margin: 0; padding: 8px 10px; font-size: 12px; line-height: 1.4 }
+/* Messages stack up from the message box, as a chat does: the newest sits
+   just above it and pushes the earlier one up. */
+/* From the teammate: tucked in at the bottom left. */
+.incoming { bottom: 70px; left: 10px; width: 160px; border-radius: 12px 12px 12px 4px; background: var(--cream); color: var(--ink-2); opacity: 0; transform: translateY(6px) }
+.incoming p { margin: 0 }
+.incoming p:first-child { margin-bottom: 6px; color: var(--ink) }
+/* From Dev: on the right, tucked in at the bottom right. It rises out of
+   the message box it was typed in. */
+.outgoing { bottom: 70px; right: 10px; width: 150px; border-radius: 12px 12px 4px 12px; background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink); opacity: 0; transform: translateY(56px) }
+.outgoing mark { padding: 1px 0; border-radius: 3px; background: transparent; color: inherit; transition: background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
+
+.compose { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; align-items: flex-end; gap: 6px }
+.input { position: relative; flex: 1; height: 48px; margin: 0; border-radius: 14px; background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-2); font-size: 12px; line-height: 17px }
+.placeholder { position: absolute; top: 15px; left: 11px; color: var(--ink-3) }
+.typed { position: absolute; top: 7px; left: 11px; right: 8px }
+.typed span { display: block; white-space: nowrap; clip-path: inset(0 100% 0 0) }
+.send { display: grid; place-items: center; width: 30px; height: 30px; flex: none; margin-bottom: 9px; border-radius: 50%; background: var(--ink); color: var(--paper) }
+
+/* The workflow's name, on its way from the waiting step to the phone. */
+.carried { position: absolute; top: 250px; left: 80px; --dx: 362px; --dy: 1px; opacity: 0; background: var(--paper); border-color: var(--violet); color: var(--violet-deep); box-shadow: 0 10px 22px -12px rgb(40 30 110 / .55) }
+@keyframes carry {
+    0% { opacity: 0; transform: none }
+    14% { opacity: 1; transform: none }
+    84% { opacity: 1; transform: translate(var(--dx), var(--dy)) }
+    100% { opacity: 0; transform: translate(var(--dx), var(--dy)) }
+}
+@keyframes breathe { to { opacity: .35 } }
+
+/* 1 · the workflow's name leaves the waiting step and lands on Dev's phone
+       as the message: what's waiting, and what the form asks for */
+.root[data-b1] .carried { animation: carry var(--v-slow) var(--ease) both }
+.root[data-b1] .incoming { opacity: 1; transform: none; transition-delay: calc(var(--v-slow) * .8) }
+/* 2 · his reply types into the message box */
+.root[data-b2] .placeholder { opacity: 0 }
+.root[data-b2] .t1 { clip-path: inset(0 0 0 0); transition: clip-path var(--v-move) steps(20, end) }
+.root[data-b2] .t2 { clip-path: inset(0 0 0 0); transition: clip-path var(--v-move) steps(19, end) var(--v-move) }
+/* 3 · he sends it */
+.root[data-b3] .typed { opacity: 0; transition: none }  /* sent: it leaves the box at once, as the bubble */
+.root[data-b3] .placeholder { opacity: 1; transition-delay: var(--v-quick) }
+.root[data-b3] .outgoing { opacity: 1; transform: none }
+/* His reply takes the bottom; the message he answered moves up to make way. */
+.root[data-b3] .incoming { transform: translateY(-58px); transition-delay: 0s }
+/* 4 · the form fills from his words: "Yes, import it" ticks the box, "skip
+       the two duplicates" becomes the note for June */
+.root[data-b4] .m1, .root[data-b4] .m2 { background: var(--violet-soft); color: var(--violet-deep) }
+.root[data-b4] .box { background: var(--ok); border-color: var(--ok); transition: background-color var(--v-quick) var(--ease) calc(3 * var(--v-step)), border-color var(--v-quick) var(--ease) calc(3 * var(--v-step)) }
+.root[data-b4] .box::after { opacity: 1; transition-delay: calc(3 * var(--v-step)) }
+.root[data-b4] .m2 { transition-delay: var(--v-move) }
+.root[data-b4] .note { clip-path: inset(0 0 0 0); transition: clip-path var(--v-move) steps(23, end) calc(var(--v-move) + 3 * var(--v-step)) }
+/* 5 · the step is done and the run moves on: Run the import starts */
+.root[data-b5] .dev .was, .root[data-b5] .import .was, .root[data-b5] .status .was, .root[data-b5] .count .was { opacity: 0 }
+.root[data-b5] .dev .now, .root[data-b5] .import .now, .root[data-b5] .status .now, .root[data-b5] .count .now { opacity: 1 }
+.root[data-b5] .dev .was .glyph { animation: none }
+.root[data-b5] .status { width: 82px; transition: width var(--v-move) var(--ease) }
+.root[data-b5] .status i { background: var(--violet) }
+.root[data-b5] .import { opacity: 1 }
+.root[data-b5] .import .now { color: var(--violet-deep) }
+.root[data-b5] .import .now .glyph { background: transparent; box-shadow: inset 0 0 0 2px var(--violet); animation: breathe var(--v-slow) var(--ease) infinite alternate }
+.root[data-b5] .import .now .glyph svg { display: none }
+.root[data-b5] .submit { opacity: .4 }
+
+/* Reduced motion: what this module times itself stays still too. */
+.root[data-still] .carried, .root[data-still] .status i, .root[data-still] .row .was .glyph, .root[data-still] .import .now .glyph { animation: none }
+.root[data-still] .typed span, .root[data-still] .note, .root[data-still] .box, .root[data-still] .box::after, .root[data-still] .outgoing mark, .root[data-still] .status { transition: none }

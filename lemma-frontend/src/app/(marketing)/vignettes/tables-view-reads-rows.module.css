@@ -1,0 +1,104 @@
+/* A table that reads its rows, beat by beat. Base styles are the opening
+   frame; each `.root[data-bN]` rule is what changes from beat N on, written
+   in beat order so a later beat wins over an earlier one. With reduced
+   motion every beat is on, so the last rules here are the finished picture.
+
+   Each beat's own timing is set in its rule, so it runs forwards only. The
+   base rules carry `--v-reset`: when the loop starts over, the table fades
+   first and everything in it goes back to the grid while it is out of sight. */
+
+.root {
+    --v-step: 110ms;
+    /* One character of the note at a time. */
+    --v-key: 40ms;
+    --v-reset: opacity var(--v-quick) var(--ease) var(--v-quick), transform var(--v-quick) var(--ease) var(--v-quick), color var(--v-quick) var(--ease) var(--v-quick), background-color var(--v-quick) var(--ease) var(--v-quick), font-weight var(--v-quick) var(--ease) var(--v-quick);
+    /* The grid's header strip, as the product greys it. */
+    --chrome: rgb(20 20 19 / .03);
+}
+
+/* ── The table's page, as library-view draws it ─────────────────────── */
+.head { display: flex; align-items: flex-start; justify-content: space-between }
+.loaded { margin-top: 2px }
+.plus { margin-right: 6px; font-size: 14px; line-height: 1 }
+
+/* Filter, Sort and the line that says what the screen chose: one strip. */
+.tools { display: flex; align-items: center; gap: 16px; height: 26px; margin-top: 14px; font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.filter { color: var(--ink-2) }
+.sort { display: flex; align-items: center; gap: 8px }
+.select { display: inline-flex; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-2) }
+.note { flex: 1; min-width: 0 }
+.note span { opacity: 0 }
+.actions { display: flex; gap: 16px; color: var(--ink) }
+.asTable { opacity: 0 }
+
+/* ── The rows: a grid first ─────────────────────────────────────────── */
+.sheet { position: absolute; top: 112px; left: 22px; width: 596px; height: 236px; opacity: 0; transform: translateY(8px) }
+/* Drawn over the rows, so their paper does not hide the grid's edge. */
+.frame { position: absolute; inset: 0; z-index: 4; border: 1px solid var(--line); border-radius: 8px; pointer-events: none; transition: var(--v-reset) }
+
+.cols { position: absolute; top: 0; left: 0; right: 0; height: 32px; border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; background: var(--chrome); font-size: 13px; font-weight: 500; color: var(--ink); transition: var(--v-reset) }
+.cols span { position: absolute; top: 0; height: 31px; line-height: 31px; transition: var(--v-reset) }
+.colTask { left: 14px }
+
+/* One row of the table, and the line drawn in it. Each moves in its own step
+   of the sort: the row as the done ones sink, the line as the rest sort by
+   due. Paper behind it, so rows passing each other in the sort cover one
+   another rather than printing on top of each other; the rows that move in
+   a step pass over the rest. */
+.row { position: absolute; left: 0; width: 596px; height: 34px; z-index: 1; transition: var(--v-reset) }
+.rises { z-index: 2 }
+.isDone { z-index: 3 }
+.line { position: absolute; inset: 0; border-bottom: 1px solid var(--line); background: var(--paper); font-size: 13px; color: var(--ink); transition: var(--v-reset) }
+.task, .flag, .date, .when, .colDone, .colDue { position: absolute; top: 0; height: 33px; line-height: 33px; white-space: nowrap; transition: var(--v-reset) }
+.task { left: 14px }
+/* The two columns it reads, each its own cell so the highlight that runs
+   down them reads as two columns and not one wide band. */
+.flag, .colDone { left: 334px; width: 112px; padding-left: 12px }
+.date, .colDue { left: 454px; width: 134px; padding-left: 12px }
+.flag, .date { color: var(--ink-2) }
+
+/* What the checklist adds, hidden in the grid. */
+.tick { position: absolute; top: 9px; left: 8px; opacity: 0; transition: var(--v-reset) }
+.when { right: 10px; font-size: 12px; color: var(--ink-3); opacity: 0 }
+.isDone .task::after { content: ""; position: absolute; left: 0; right: 0; top: 17px; height: 1px; background: var(--ink-3); transform: scaleX(0); transform-origin: left; transition: var(--v-reset) }
+.count { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; height: 32px; line-height: 32px; font-size: 12px; color: var(--ink-3); opacity: 0; transition: var(--v-reset) }
+
+/* 1 · the grid arrives */
+.root[data-b1] .sheet { opacity: 1; transform: none; transition: opacity var(--v-move) var(--ease), transform var(--v-move) var(--ease) }
+
+/* 2 · a highlight runs down done, then down due, a cell at a time */
+.root[data-b2] .colDone, .root[data-b2] .flag,
+.root[data-b2] .colDue, .root[data-b2] .date { background: var(--violet-soft); color: var(--violet-deep); transition: background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
+.root[data-b2] .flag { transition-delay: calc((var(--i) + 1) * var(--v-step)) }
+.root[data-b2] .colDue { transition-delay: calc(8 * var(--v-step)) }
+.root[data-b2] .date { transition-delay: calc((var(--i) + 9) * var(--v-step)) }
+
+/* 3 · the rows re-sort: the done ones sink below the open ones, then the
+   open ones go soonest due first */
+.root[data-b3] .row { transform: translateY(var(--sink)); transition: transform var(--v-move) ease-in-out }
+.root[data-b3] .line { transform: translateY(var(--sort)); transition: transform var(--v-move) ease-in-out; transition-delay: calc(8 * var(--v-step)) }
+/* Lifted while they pass over the others. */
+.root[data-b3] .isDone .line { animation: lift var(--v-move) ease-in-out }
+.root[data-b3] .rises .line { animation: lift var(--v-move) ease-in-out; animation-delay: calc(8 * var(--v-step)) }
+@keyframes lift { 30%, 70% { box-shadow: 0 10px 22px -12px rgb(20 20 19 / .4), 0 0 0 1px var(--line) } }
+
+/* 4 · the grid becomes a checklist */
+.root[data-b4] .frame, .root[data-b4] .cols,
+.root[data-b4] .flag, .root[data-b4] .date { opacity: 0; transition: opacity var(--v-quick) var(--ease) }
+/* The checklist names each row in the product's 500, where the grid's cells are plain. */
+.root[data-b4] .task { transform: translateX(20px); font-weight: 500; transition: transform var(--v-move) var(--ease), font-weight var(--v-move) var(--ease), color var(--v-quick) var(--ease) }
+.root[data-b4] .tick { opacity: 1; transition: opacity var(--v-quick) var(--ease); transition-delay: calc((var(--n) + 2) * var(--v-step)) }
+.root[data-b4] .when { opacity: 1; transition: opacity var(--v-quick) var(--ease); transition-delay: calc((var(--n) + 4) * var(--v-step)) }
+.root[data-b4] .isDone .task { color: var(--ink-3); transition-delay: calc(0 * var(--v-step)), calc(0 * var(--v-step)), calc((var(--n) + 4) * var(--v-step)) }
+.root[data-b4] .isDone .task::after { transform: none; transition: transform var(--v-move) var(--ease); transition-delay: calc((var(--n) + 4) * var(--v-step)) }
+
+/* 5 · it says what it chose, and how many are left */
+.root[data-b5] .note span { opacity: 1; transition: opacity var(--v-quick) linear; transition-delay: calc(var(--n) * var(--v-key)) }
+.root[data-b5] .asTable { opacity: 1; transition: opacity var(--v-move) var(--ease) }
+.root[data-b5] .count { opacity: 1; transition: opacity var(--v-move) var(--ease); transition-delay: calc(26 * var(--v-key)) }
+
+/* Reduced motion: every beat is on and nothing moves. The beat rules above
+   set their own timings and outrank the kit's `[data-still]` reset, so they
+   are stopped here, last. */
+.root[data-still] :is(.sheet, .frame, .cols, .cols span, .row, .line, .task, .isDone .task, .flag, .date, .when, .tick, .count, .note span, .asTable),
+.root[data-still] .isDone .task::after { transition: none; animation: none }
