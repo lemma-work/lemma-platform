@@ -32,6 +32,20 @@ describe("ConversationsNamespace.list", () => {
     );
   });
 
+  it("passes a status filter through, for the conversations paused on someone", async () => {
+    const { conversations, request } = setup();
+
+    await conversations.list({ status: "WAITING", limit: 20 });
+
+    expect(request).toHaveBeenCalledWith(
+      "GET",
+      "/pods/pod-1/conversations",
+      expect.objectContaining({
+        params: expect.objectContaining({ status: "WAITING" }),
+      }),
+    );
+  });
+
   it("encodes explicit null as POD_DEFAULT for the default assistant", async () => {
     const { conversations, request } = setup();
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isPreviewPath, readTourStep, previewTabForStep } from "../src/marketing/preview-mode.ts";
+import { isPreviewPath, readTourStep, previewAboutForStep, previewTabForStep } from "../src/marketing/preview-mode.ts";
 import { addPreviewMember, previewSource } from "../src/marketing/preview-source.ts";
 
 test("sample routing is restricted to the two dedicated preview documents", () => {
@@ -63,13 +63,27 @@ test("each sample teammate owns their conversation, app, profile and learned con
     assert.deepEqual(await previewSource.listPods("another-org"), []);
 });
 
-test("the preview opens on conversation and only the app tour step opens Launch studio", () => {
+test("the preview opens on conversation; the build step opens Launch studio and the learning step opens what Kit remembers", () => {
     assert.equal(previewTabForStep(-1), "conversation");
     assert.equal(previewTabForStep(0), "conversation");
     assert.equal(previewTabForStep(1), "conversation");
-    assert.equal(previewTabForStep(2), "space:about");
-    assert.equal(previewTabForStep(3), "app:launch");
+    assert.equal(previewTabForStep(2), "app:launch");
+    assert.equal(previewTabForStep(3), "space:about");
     assert.equal(previewTabForStep(4), "conversation");
+    assert.equal(previewAboutForStep(3), "memory");
+    for (const step of [-1, 0, 1, 2, 4]) assert.equal(previewAboutForStep(step), null);
+});
+
+test("the tour's About step has notes to show, and each one opens as itself", async () => {
+    const items = (await previewSource.listLibrary("kit", "files", "/memory")).items;
+    assert.ok(items.length >= 2);
+    for (const item of items) {
+        assert.ok(item.description, item.path + " has the line it was written with");
+        const file = await previewSource.readFile("kit", item.path);
+        assert.notEqual(file.name, "SKILL.md");
+    }
+    const mine = (await previewSource.listLibrary("kit", "files", "/me/agents/pod-default")).items;
+    assert.equal(mine.length, 1);
 });
 
 // The lazy source proxy calls methods without an object receiver.
