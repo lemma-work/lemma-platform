@@ -1,0 +1,81 @@
+/* A thread and a page, beat by beat. Base styles are the opening frame: the
+   channel on the left with Priya's question at the bottom, and nothing yet
+   beside it. Each `.root[data-bN]` rule is what changes from beat N on, in
+   beat order, so the last rules here are the finished picture: the reply
+   gone from the channel, the page unmoved with a comment on it. */
+
+.root { --v-step: 520ms }
+.stage { position: absolute; inset: 0; background: var(--cream) }
+
+/* ── The two places ─────────────────────────────────────────────────── */
+.pane { position: absolute; top: 16px; height: 368px; overflow: hidden; border-radius: 12px; background: var(--paper); box-shadow: 0 18px 40px -26px rgb(20 20 19 / .35), 0 0 0 1px var(--line) }
+.chat { left: 16px; width: 236px }
+.page { left: 264px; width: 360px; opacity: 0; transform: translateX(16px) }
+.head { gap: 8px; padding: 0 8px 0 12px }
+.hash { font-size: 14px; color: var(--ink-3) }
+
+/* ── The channel ────────────────────────────────────────────────────── */
+/* Anchored to the composer, as a chat is: a line that arrives at the bottom
+   pushes the ones above it up, and past the top they are gone. */
+.feed { position: absolute; top: 36px; left: 0; right: 0; bottom: 60px; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 8px; overflow: hidden; mask-image: linear-gradient(to bottom, transparent 0, rgb(20 20 19) 26px) }
+.line { display: grid; grid-template-rows: 1fr; flex: none }
+.line > div { min-height: 0; overflow: hidden }
+.b1, .b3, .b4 { grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-move) var(--ease); transition-delay: calc(var(--n) * var(--v-step)) }
+
+.post { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 9px; align-items: start; padding: 6px }
+.post > img { width: 24px; height: 24px; border-radius: 6px }
+.name { font-size: 12.5px; line-height: 18px; color: var(--ink) }
+.name time { margin-left: 6px; font-size: 12px; color: var(--ink-3) }
+.text { font-size: 12.5px; line-height: 1.5; color: var(--ink-2) }
+.at { padding: 0 3px; border-radius: 4px; background: var(--violet-soft); color: var(--violet-deep) }
+.day { display: flex; align-items: center; gap: 8px; padding: 8px 6px 4px; font-size: 12px; color: var(--ink-3) }
+.day::before, .day::after { content: ""; flex: 1; height: 1px; background: var(--line) }
+
+.composer { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; align-items: center; height: 40px; padding: 0 6px 0 12px; border-radius: 14px; box-shadow: 0 0 0 1px var(--line-2); font-size: 12.5px; color: var(--ink-3) }
+.composer i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: auto; border-radius: 50%; background: var(--cream); color: var(--ink-3) }
+
+/* ── The page ───────────────────────────────────────────────────────── */
+.pageHead { gap: 6px; padding: 0 8px 0 14px }
+.pageHead b { white-space: nowrap }
+.pill { display: inline-flex; align-items: center; height: 26px; margin-left: auto; padding: 0 10px; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink); white-space: nowrap }
+.pill svg { flex: none }
+.pillLabel, .pillCount { display: inline-block; overflow: hidden; transition: max-width var(--v-move) var(--ease), padding var(--v-move) var(--ease), opacity var(--v-quick) var(--ease) }
+.pillLabel { max-width: 64px; padding-left: 5px }
+.pillCount { max-width: 0; opacity: 0 }
+.share { display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: 99px; background: var(--ink); color: var(--paper) }
+
+.doc { position: absolute; top: 36px; left: 0; right: 0; bottom: 0; padding: 16px 20px 0; overflow: hidden; mask-image: linear-gradient(to bottom, rgb(20 20 19) calc(100% - 30px), transparent) }
+/* Doubled up to outrank the landing's paragraph reset, whichever loads last. */
+.doc .lead { margin-top: 4px }
+/* The words a comment is on, drawn as the editor draws them: a wash and an
+   underline in the waiting colour, swept in from the left. */
+.mark { white-space: nowrap; padding-bottom: 1px; background-image: linear-gradient(color-mix(in srgb, var(--wait) 26%, transparent), color-mix(in srgb, var(--wait) 26%, transparent)), linear-gradient(color-mix(in srgb, var(--wait) 55%, transparent), color-mix(in srgb, var(--wait) 55%, transparent)); background-repeat: no-repeat; background-position: 0 0, 0 100%; background-size: 0% 100%, 0% 2px; transition: background-size var(--v-move) var(--ease) }
+
+.view { margin-top: 14px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--line-2); overflow: hidden }
+.viewBar { display: flex; align-items: center; gap: 4px; height: 34px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.viewKind { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; color: var(--ink-2) }
+.viewBtn { display: inline-flex; align-items: center; height: 24px; padding: 0 7px; color: var(--ink-2) }
+.table { table-layout: fixed }
+/* The view block's header, not the grid's: column names as written, in the
+   page's own face (space.css .pblock__table th). */
+.table th { font-family: inherit; font-weight: 500; font-size: 12.5px; letter-spacing: 0; text-transform: none; border-bottom-color: var(--line-2) }
+.table td { color: var(--ink) }
+.table th:nth-child(1) { width: 92px }
+.table th:nth-child(2) { width: 92px }
+.table td { overflow: hidden; text-overflow: ellipsis }
+.table tr:last-child td { border-bottom: 0 }
+.doc .after { margin-top: 16px }
+.doc .bullet { margin-top: 4px }
+
+/* 1 · Remy answers in the channel */
+.root[data-b1] .b1 { grid-template-rows: 1fr; opacity: 1 }
+/* 2 · the page, beside it, opening with the same line */
+.root[data-b2] .page { opacity: 1; transform: none }
+/* 3 · Wednesday: the channel moves on */
+.root[data-b3] .b3 { grid-template-rows: 1fr; opacity: 1 }
+/* 4 · Thursday: the reply is past the top */
+.root[data-b4] .b4 { grid-template-rows: 1fr; opacity: 1 }
+/* 5 · a comment on the page, and the button counts it */
+.root[data-b5] .mark { background-size: 100% 100%, 100% 2px }
+.root[data-b5] .pillLabel { max-width: 0; padding-left: 0; opacity: 0; transition-delay: var(--v-move) }
+.root[data-b5] .pillCount { max-width: 16px; padding-left: 5px; opacity: 1; transition-delay: var(--v-move), var(--v-move), calc(var(--v-move) + var(--v-quick)) }

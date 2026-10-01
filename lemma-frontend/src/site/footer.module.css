@@ -23,8 +23,13 @@
     margin: auto;
     padding: 46px 0;
     display: grid;
-    grid-template-columns: 1.2fr 1fr 1fr 1fr;
+    /* The brand, then one column per link group, however many there are. */
+    grid-template-columns: 1.2fr repeat(4, minmax(0, 1fr));
     gap: 36px;
+}
+@media (max-width: 1080px) and (min-width: 761px) {
+    .directory { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .brand { grid-column: 1 / -1; }
 }
 .brand svg {
     width: 100px;

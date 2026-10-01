@@ -94,6 +94,7 @@ import { tourStops, type Stop } from "@/tour/stops";
 import { guideFor, placeOf } from "@/tour/guides";
 import { PlaceGuide } from "@/tour/place-guide";
 import { atHome, offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
+import { humanizeName } from "@/schedule/schedules";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -711,7 +712,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     );
 
     const openRun = useCallback(
-        (runId: string, label: string) => openTab({ id: "run:" + runId, kind: "run", label: label === "Workflow run" ? label : label + " · run", runId }),
+        (runId: string, label: string) => openTab({ id: "run:" + runId, kind: "run", label: label === "Workflow run" ? label : humanizeName(label) + " · run", runId }),
         [openTab],
     );
     /* A tab rebuilt from an address knows only its id; the page it shows
@@ -728,7 +729,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         [pod],
     );
     const openWorkflow = useCallback(
-        (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: name, name }),
+        (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: humanizeName(name), name }),
         [openTab],
     );
     /* A group opens on its own page, with Groups one step back. */

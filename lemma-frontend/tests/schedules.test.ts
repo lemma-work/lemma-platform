@@ -100,7 +100,7 @@ test("a webhook says its source; a datastore says its table and operations", () 
         "slack_message_posted",
     );
     const rows = triggerOf("DATASTORE", { table_name: "contacts", operations: ["INSERT", "UPDATE"], when: { status: { eq: "New" } } }, "");
-    assert.equal(rows.trigger, "When a row in contacts insert or update");
+    assert.equal(rows.trigger, "When a row in contacts is added or changes");
     assert.equal(rows.literal, "only when status matches");
 });
 

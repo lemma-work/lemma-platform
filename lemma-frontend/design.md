@@ -42,10 +42,27 @@ and one way in.
 - Every other picture is a real screen from the sample workspace, captured at
   2x by `scripts/capture-landing-shots.mjs` into `public/landing/`. When the
   product changes, run the script; never edit or draw the images.
-- The cast appears in four places only: Kit on the live workspace, the three
-  steps, the open-source picture and the closing line-up.
+- The cast appears in four places on the landing: Kit on the live workspace,
+  the three steps, the open-source picture and the closing line-up. A product
+  page shows only its own teammate's face: on its screen and at its close.
 - Claims stay inside what the code does ("approvals where a person should
   decide", not "approvals on everything").
+
+Each part of a teammate's space has a page of its own under `/product/<part>`:
+pages, tables, workflows, apps, memory and channels (groups joins when it
+ships). The words are in `src/marketing/product-pages.ts`.
+
+- Each page shows a different sample teammate's job (Scout's research,
+  Remy's pipeline, June's imports), so no one name carries the site. The copy
+  says "your teammate" or "it"; names appear only on the screens.
+- Screens and the short loops come from `scripts/capture-product-shots.mjs`
+  against the same sample, whose tables, pages and workflows are in
+  `src/marketing/sample-spaces.ts` and `preview-fixtures.ts`.
+- A part with no screen worth showing yet says its piece in words.
+- A little life, and no more: things rise in once as they arrive, margin
+  notes draw their arrow, loops play only while on screen, and the page's
+  teammate sits on its closing band. Nothing follows the scroll, and reduced
+  motion gets none of it (`lively.tsx`).
 
 Appearance includes Chat text size: Small (14px), Default (15px), and Large
 (17px), with a live preview and a browser-local preference restored before paint.

@@ -227,7 +227,9 @@ export function triggerOf(kind: ScheduleKind, config: Record<string, unknown>, c
             ? (config["operations"] as unknown[]).map((one) => text(one).toLowerCase()).filter(Boolean)
             : [];
         const when = Object.keys(record(config["when"]));
-        const verbs = operations.length ? operations.join(" or ") : "changes";
+        /* The API stores the SQL verbs; a person says what happened to the row. */
+        const happened: Record<string, string> = { insert: "is added", update: "changes", delete: "is deleted" };
+        const verbs = operations.length ? operations.map((one) => happened[one] ?? one).join(" or ") : "changes";
         const said = table ? "When a row in " + table + " " + verbs : "When a row " + verbs;
         return { trigger: said, literal: when.length ? "only when " + when.join(", ") + " matches" : "" };
     }

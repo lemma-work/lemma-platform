@@ -25,6 +25,7 @@ import { SurfaceManage } from "@/shell/surface-manage";
 import { SurfaceGroups } from "@/shell/surface-groups";
 import { AgentMark } from "./agent-mark";
 import { ChatIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, EditIcon, LockIcon, WorkflowIcon } from "@/ui/icons";
+import { samples } from "@/data/samples";
 
 /** One agent, as a page of its own.
  *
@@ -376,7 +377,7 @@ function UsedBy({ pod, detail, onOpenSchedules, onOpenWorkflows }: {
         staleTime: 5 * 60_000,
         queryFn: async () => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOWS } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOWS } = await samples(pod.id);
                 return readWorkflows({ items: SAMPLE_WORKFLOWS });
             }
             return readWorkflows(await lemma(pod.id).workflows.list({ limit: 100 }));

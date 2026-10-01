@@ -1,0 +1,46 @@
+/* Visualize, beat by beat. Base styles are the opening frame; each
+   `.root[data-bN]` rule is what changes from beat N on, written in beat
+   order so a later beat wins over an earlier one. With reduced motion every
+   beat is on, so the last rules here are the finished picture. */
+
+.root { --v-step: 110ms }
+
+.page { width: 330px }
+.slot { position: relative; height: 150px; margin-top: 8px }
+.typing { position: absolute; top: 2px; left: 0; font-size: 14px; color: var(--ink) }
+.menu { position: absolute; top: 26px; left: 0; opacity: 0; transform: translateY(6px) }
+.menu em { margin-left: auto; font-style: normal }
+.marker { position: absolute; top: 0; left: 0; opacity: 0 }
+.chart { position: absolute; top: 0; left: 0; width: 330px; margin: 0; padding: 12px 14px; opacity: 0; transform: translateY(8px) }
+.chart figcaption { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; font-size: 13px }
+.chart figcaption b { font-weight: 500; color: var(--ink) }
+.barRow { display: grid; grid-template-columns: 92px 196px 18px; align-items: center; gap: 8px; height: 26px; font-size: 12px; color: var(--ink-2) }
+.barRow i { display: block; height: 14px; max-width: 0; border-radius: 4px; background: var(--violet) }
+.barRow em { font-style: normal; color: var(--ink-3) }
+
+.source { position: absolute; top: 4px; right: 0; width: 230px; padding: 10px 6px 4px; opacity: 0; transform: translateX(16px) }
+.sourceHead { padding: 0 8px 6px; font-size: 13px; color: var(--ink) }
+.row td { transition-delay: calc(var(--n) * var(--v-step)) }
+
+/* The themes, carried from the table to the page. */
+.carried { position: absolute; left: 512px; opacity: 0; transform: scale(.92); background: var(--paper); border-color: var(--violet); color: var(--violet-deep); box-shadow: 0 10px 22px -12px rgb(40 30 110 / .55); transition-delay: calc(var(--n) * var(--v-step)) }
+
+/* 1 · the slash menu */
+.root[data-b1] .menu { opacity: 1; transform: none }
+/* 2 · the working line, where the menu was */
+.root[data-b2] .typing, .root[data-b2] .menu { opacity: 0 }
+.root[data-b2] .marker { opacity: 1 }
+/* 3 · the table it reads */
+.root[data-b3] .source { opacity: 1; transform: none }
+/* 4 · the rows it counts */
+.root[data-b4] .row td { background: var(--violet-soft); color: var(--violet-deep) }
+.root[data-b4] .carried { opacity: 1; transform: none }
+/* 5 · carried across */
+.root[data-b5] .carried { transform: translate(-490px, var(--dy)) }
+/* 6 · the chart, in place of the working line */
+.root[data-b6] .carried, .root[data-b6] .marker { opacity: 0 }
+.root[data-b6] .chart { opacity: 1; transform: none }
+.root[data-b6] .barRow i { max-width: 196px; transition: max-width var(--v-slow) var(--ease) }
+/* 7 · the table goes back */
+.root[data-b7] .source { opacity: 0; transform: translateX(16px) }
+.root[data-b7] .row td { background: transparent; color: var(--ink-2) }

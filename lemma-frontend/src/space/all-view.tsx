@@ -16,6 +16,7 @@ import { emptyFor, type EmptyPlace } from "./empty-copy";
 import { SpaceEmpty, type EmptyHandlers } from "./empty-state";
 import { AppIdeas } from "@/stage/apps";
 import { guideTitle } from "@/tour/guides";
+import { readableName } from "@/library/reading";
 
 /** One row, whatever it is: a page, an app, a table or a file. */
 type Row = {
@@ -247,7 +248,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
         }
         if (wanted.has("table")) {
             for (const item of tables.data?.items ?? []) {
-                out.push({ key: "table:" + item.name, kind: "table", name: item.name, detail: item.detail, updated: item.updated || null, access: accessOf(item.visibility, item.rls), rls: item.rls, open: () => onOpenTable(item.name) });
+                out.push({ key: "table:" + item.name, kind: "table", name: readableName(item.name), detail: item.detail, updated: item.updated || null, access: accessOf(item.visibility, item.rls), rls: item.rls, open: () => onOpenTable(item.name) });
             }
         }
         const needle = query.trim().toLowerCase();

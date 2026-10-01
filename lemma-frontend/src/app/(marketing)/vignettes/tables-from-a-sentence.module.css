@@ -1,0 +1,154 @@
+/* A table from one finished sentence, beat by beat. Base styles are the
+   opening frame: Remy's Tables page on the left, empty, and a new chat
+   beside it, empty too. Each `.root[data-bN]` rule is what changes from beat
+   N on, in beat order, so the last rules are the finished picture: the
+   sentence and Remy's reply with the table's preview on the right, and
+   Follow Ups in the list on the left, marked RLS, own rows each. */
+
+.root {
+    --v-step: 90ms;
+    /* One key of the sentence being typed. */
+    --v-key: 28ms;
+}
+.root :where(p, figure) { margin: 0 }
+
+/* ── Remy's Tables page ─────────────────────────────────────────────── */
+.tables { position: absolute; top: 36px; left: 0; bottom: 0; width: 206px; padding: 14px 14px 0; background: var(--paper); box-shadow: inset -1px 0 0 var(--line) }
+.head { display: flex; align-items: center; justify-content: space-between; height: 30px }
+.h1 { font-size: 20px; line-height: 30px; letter-spacing: -.02em; color: var(--ink) }
+.newBtn { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px 0 12px; border-radius: 99px; background: rgb(20 20 19 / .06); font-size: 12px; color: var(--ink) }
+.search { display: flex; align-items: center; gap: 7px; height: 30px; margin-top: 10px; padding: 0 12px; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); font-size: 12px; color: var(--ink-3) }
+
+/* The empty place: a picture of a table, what goes here, and the way to
+   make the first one. */
+.empty { position: absolute; top: 94px; left: 8px; right: 8px; display: flex; flex-direction: column; align-items: center; text-align: center }
+.art { width: 104px; height: 66px; flex: none; overflow: visible }
+.artCard { fill: var(--paper); stroke: var(--line-2); stroke-width: 1 }
+.artSoft { fill: var(--cream) }
+.artRule { fill: none; stroke: var(--line-2); stroke-width: 1 }
+.artInk { fill: var(--ink-3); opacity: .45 }
+.artLine { fill: var(--line-2) }
+.artPill { fill: var(--ok); opacity: .26 }
+.artPillOther { fill: var(--ink-3); opacity: .2 }
+.emptyTitle { margin-top: 10px; font-size: 15px; letter-spacing: -.01em; color: var(--ink) }
+.emptyLine { margin-top: 4px; font-size: 12px; line-height: 1.45; color: var(--ink-2); text-wrap: pretty }
+.primary { display: inline-flex; align-items: center; gap: 6px; height: 30px; margin-top: 12px; padding: 0 13px 0 11px; border-radius: 99px; background: var(--ink); color: var(--paper); font-size: 12px; white-space: nowrap }
+.starters { display: flex; gap: 6px; margin-top: 6px }
+.starter { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); font-size: 12px; color: var(--ink) }
+
+/* The list, once there is something in it: one row, Follow Ups, its
+   access said under its name the way the list says it on a phone. */
+.list { position: absolute; top: 102px; left: 14px; right: 14px; opacity: 0; transform: translateY(6px) }
+.th { padding-bottom: 7px; border-bottom: 1px solid var(--line-2); font-size: 12px; color: var(--ink-3) }
+.row { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; align-items: start; padding: 11px 0 12px; border-bottom: 1px solid var(--line) }
+.glyph { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ok) }
+.label { display: flex; flex-direction: column; min-width: 0 }
+.name { display: flex; align-items: center; height: 20px; font-size: 13px; color: var(--ink) }
+.rls { display: inline-flex; align-items: center; height: 18px; margin-left: 7px; padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--ok) 11%, var(--paper)); color: var(--ok); font-size: 12px; font-style: normal; font-weight: 500; letter-spacing: .02em }
+.label small { margin-top: 1px; font-size: 12px; line-height: 1.4; color: var(--ink-3) }
+.access { display: flex; align-items: center; gap: 7px; margin-top: 8px; font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.faces { display: inline-flex }
+.faces i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: rgb(20 20 19 / .07); box-shadow: 0 0 0 2px var(--paper); font-size: 12px; font-style: normal; letter-spacing: -.02em; color: var(--ink-2) }
+.faces i + i { margin-left: -2px }
+
+/* ── The chat beside it ─────────────────────────────────────────────── */
+.chat { position: absolute; top: 36px; left: 206px; right: 0; bottom: 0; background: var(--paper) }
+
+/* Anchored to the composer, as a chat is: what arrives pushes what came
+   before it up. */
+.feed { position: absolute; top: 0; left: 0; right: 0; bottom: 60px; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 16px 6px; overflow: hidden; mask-image: linear-gradient(to bottom, transparent 0, rgb(20 20 19) 10px) }
+.line { display: grid; grid-template-rows: 1fr; flex: none; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-move) var(--ease) }
+.line > div { min-height: 0; overflow: hidden }
+.in3, .in4 { grid-template-rows: 0fr; opacity: 0 }
+
+/* A new conversation, before anything is said in it. */
+.quietIn { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding-bottom: 22px }
+.mark { width: 34px; height: 34px; margin-bottom: 4px; border-radius: 10px; background: var(--violet-soft); object-fit: contain }
+.quietTitle { font-size: 16px; letter-spacing: -.02em; color: var(--ink) }
+.quietBody { font-size: 13px; color: var(--ink-3) }
+
+/* Your turn: on the far side, sized by its words. */
+.you { width: fit-content; max-width: 300px; margin-left: auto; padding: 8px 13px; border-radius: 16px; background: var(--cream); font-size: 13px; line-height: 1.45; color: var(--ink); text-wrap: balance }
+
+/* Remy's turn: its face, its name, the steps it took, what it said, and
+   the table it made, as the chat previews one. */
+.reply { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; margin-top: 12px }
+.face { width: 24px; height: 24px; border-radius: 7px }
+.col { min-width: 0 }
+.who { font-size: 13px; line-height: 24px; color: var(--ink) }
+.steps { display: inline-grid; height: 24px; margin-top: 2px; overflow: hidden; border: 1px solid var(--line); border-radius: 99px; background: var(--paper) }
+.steps > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px 0 3px; font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.state { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 99px; background: var(--cream); color: var(--ink-2) }
+.pulse { width: 6px; height: 6px; border-radius: 99px; background: var(--ink); animation: pulse var(--v-slow) var(--ease) infinite }
+@keyframes pulse { 50% { opacity: .25 } }
+.done { opacity: 0 }
+.chev { margin-left: -2px; color: var(--ink-3) }
+.said { padding-top: 7px; font-size: 13px; line-height: 1.5; color: var(--ink) }
+
+.preview { margin-top: 7px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--paper) }
+.previewHead { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line) }
+.previewName { font-size: 13px; color: var(--ink) }
+/* The kind sits at the far end, beside Open, as the chat's file card sets it. */
+.previewMeta { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-3) }
+.open { margin-left: 4px; padding: 1px 8px; border: 1px solid var(--line-2); border-radius: 6px; font-size: 12px; color: var(--violet) }
+.grid { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left }
+/* Headed the way the chat's preview heads its grid: the column's own name,
+   plain, on the grid's tinted header row. The site's own `thead th` rule
+   (mono, uppercase) is undone here, because the chat's grid has neither. */
+.grid th { padding: 5px 7px; border-bottom: 1px solid var(--line); background: var(--cream); font-family: inherit; font-size: 12px; font-weight: 500; letter-spacing: normal; text-transform: none; color: var(--ink); white-space: nowrap }
+.grid td { padding: 5px 7px; border-bottom: 1px solid var(--line); color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums }
+.grid tr:last-child td { border-bottom: 0 }
+.grid th:first-child, .grid td:first-child { padding-left: 11px }
+
+/* The composer: the placeholder, or what is being written in it. */
+.composer { position: absolute; left: 14px; right: 14px; bottom: 12px; display: flex; align-items: flex-end; gap: 9px; min-height: 44px; padding: 5px 5px 5px 12px; border: 1px solid var(--line-2); border-radius: 22px; background: var(--paper); box-shadow: 0 0 0 3px transparent, 0 8px 20px -14px rgb(20 20 19 / .4); transition: box-shadow var(--v-quick) var(--ease) }
+.attach { flex: none; margin-bottom: 8px; color: var(--ink-3) }
+.field { flex: 1; min-width: 0; display: grid; padding: 6px 0 7px; font-size: 13px; line-height: 19px }
+.placeholder, .typed { grid-area: 1 / 1 }
+.placeholder { color: var(--ink-3); white-space: nowrap }
+.typed { color: var(--ink); opacity: 0 }
+/* A word never breaks across lines; its letters arrive one key at a time. */
+.word { display: inline-flex; vertical-align: top }
+.ch { display: inline-block; max-width: 0; overflow: hidden; white-space: pre; transition: max-width var(--v-quick) steps(1, jump-start); transition-delay: calc(var(--n) * var(--v-key)) }
+.caret { margin-left: 0 }
+.wave { flex: none; margin-bottom: 8px; color: var(--ink-3) }
+.send { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 50%; background: var(--ink); color: var(--paper); opacity: .3 }
+
+/* The pointer: its tip is the path's corner, 1.5 px in. */
+.pointer { position: absolute; top: 0; left: 0; z-index: 4; overflow: visible; transform: translate(185px, 359px) }
+.pointer path { fill: var(--ink); stroke: var(--paper); stroke-width: 1.2px; stroke-linejoin: round }
+
+/* 1 · the button, pressed, and the sentence started in the chat */
+.root[data-b1] .pointer { transform: translate(182px, 297px) }
+.root[data-b1] .primary { background: var(--ink-2); transition-delay: var(--v-move) }
+.root[data-b1] .placeholder { opacity: 0; transition-delay: calc(var(--v-move) + var(--v-quick)) }
+.root[data-b1] .typed { opacity: 1; transition-delay: calc(var(--v-move) + var(--v-quick)) }
+.root[data-b1] .send { opacity: 1; transition-delay: calc(var(--v-move) + var(--v-quick)) }
+/* The composer has the focus: the app's soft ring round it. */
+.root[data-b1] .composer { box-shadow: 0 0 0 3px rgb(20 20 19 / .06), 0 8px 20px -14px rgb(20 20 19 / .4); transition-delay: calc(var(--v-move) + var(--v-quick)) }
+/* 2 · the rest of it, typed; the pointer gone while keys are pressed */
+.root[data-b2] .pointer { opacity: 0 }
+.root[data-b2] .primary { background: var(--ink) }
+.root[data-b2] .ch { max-width: 1em }
+/* 3 · sent: the chat starts, and Remy is working */
+.root[data-b3] .quiet { grid-template-rows: 0fr; opacity: 0 }
+.root[data-b3] .in3 { grid-template-rows: 1fr; opacity: 1 }
+/* Sending empties the box at once, as the app does. */
+.root[data-b3] .typed { opacity: 0; transition: none }
+.root[data-b3] .ch { max-width: 0; transition-delay: 0ms }
+.root[data-b3] .placeholder { opacity: 1; transition-delay: 0ms }
+.root[data-b3] .send { opacity: .3; transition-delay: 0ms }
+.root[data-b3] .composer { box-shadow: 0 0 0 3px transparent, 0 8px 20px -14px rgb(20 20 19 / .4); transition-delay: 0ms }
+/* 4 · Remy's reply, with the table's preview under it, whole */
+.root[data-b4] .working { opacity: 0 }
+.root[data-b4] .done { opacity: 1 }
+/* The space opens first, then the reply and the preview show in it at once,
+   so no row is seen arriving after another. */
+.root[data-b4] .in4 { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-quick) var(--ease) var(--v-move) }
+/* 5 · the Tables page lists Follow Ups */
+.root[data-b5] .empty { opacity: 0; transform: translateY(-6px) }
+.root[data-b5] .list { opacity: 1; transform: none; transition-delay: var(--v-quick) }
+
+/* Reduced motion: the transitions written above outrank the kit's
+   `[data-still]` reset, so they are stopped here, last. */
+.root[data-still] :is(.line, .ch, .pointer, .primary, .placeholder, .typed, .send, .composer, .list, .pulse) { transition: none; animation: none }

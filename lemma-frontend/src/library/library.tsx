@@ -11,7 +11,7 @@ import { cellText, idOf, rowLabel, withRow, withUpdatedRow, withoutRow, type Row
 import { lemma } from "@/session/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { chooseForm, FORM_NAMES, orderedFields, profileTable } from "./profile";
-import { readableName } from "./reading";
+import { dayStart, readableName, readableNumber } from "./reading";
 import { isAsking, matching, NO_FILTERS, ordered as inOrder, type Filters, type Ordering } from "./filters";
 import { FilterBar } from "./filter-bar";
 import { TableForm } from "./forms";
@@ -317,7 +317,7 @@ export function TableView({ podId, name, teammate, onOpenRecord, onAsk }: {
         {!shaped && <div className="library-grid"><table><thead><tr>{visible.map(field => <th key={field}>{field}</th>)}<th>Row</th></tr></thead><tbody>{onScreen.map((row,i) => <tr key={i}>
             {visible.map(field => roles.get(field) === "enum"
                 ? <td key={field}><span className="form-tag">{cellText(row[field])}</span></td>
-                : <td key={field} title={cellText(row[field])}>{cellText(row[field])}</td>)}
+                : <td key={field} title={cellText(row[field])}>{gridText(row[field], roles.get(field))}</td>)}
             {/* Last, not first. The three controls were the widest thing on the
                 row and the first thing read, ahead of anything the row is. */}
             <td className="row-actions">
@@ -377,4 +377,16 @@ export function TableView({ podId, name, teammate, onOpenRecord, onAsk }: {
             </div>
         </Modal>}
     </section>;
+}
+
+/** A grid cell as it would be written down: `2026-09-01T12:16:15Z` is a
+ *  timestamp, "1 Sept 2026" is a date somebody can read in a column of them.
+ *  The cell's title keeps the stored value for anybody who needs it exactly. */
+function gridText(value: unknown, role: string | undefined): string {
+    if ((role === "date" || role === "bookkeeping") && /^\d{4}-\d{2}-\d{2}/.test(String(value))) {
+        const at = dayStart(value);
+        if (Number.isFinite(at)) return new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    }
+    if (role === "number") return readableNumber(value) ?? cellText(value);
+    return cellText(value);
 }

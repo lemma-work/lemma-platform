@@ -1,0 +1,155 @@
+/* A comment handed to the teammate, beat by beat. Base styles are the
+   opening frame: Scout's page with the comments open beside it, empty. Each
+   `.root[data-bN]` rule is what changes from beat N on, in beat order so a
+   later beat wins. With reduced motion every beat is on, so the last rules
+   here are the finished picture: the quotes in the page, the words marked,
+   and the thread answered. */
+
+.root { --v-step: 110ms }
+
+/* ── The bar: where the page is, and the Comment pill beside Share ──── */
+.head { gap: 6px; padding: 0 10px 0 12px }
+.head b { white-space: nowrap }
+.pill { display: inline-flex; align-items: center; height: 26px; margin-left: auto; padding: 0 10px; border-radius: 99px; background: var(--cream); box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink); white-space: nowrap }
+.pill svg { flex: none }
+.pillLabel, .pillCount { display: inline-block; overflow: hidden; transition: max-width var(--v-move) var(--ease), padding var(--v-move) var(--ease), opacity var(--v-quick) var(--ease) }
+.pillLabel { max-width: 64px; padding-left: 5px }
+.pillCount { max-width: 0; opacity: 0 }
+.share { display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: 99px; background: var(--ink); color: var(--paper) }
+
+/* ── The page ───────────────────────────────────────────────────────── */
+.doc { position: absolute; top: 36px; left: 0; bottom: 0; width: 368px; padding: 20px 14px 0 22px; overflow: hidden; mask-image: linear-gradient(to bottom, rgb(20 20 19) calc(100% - 34px), transparent) }
+.h1 { font-size: 24px; line-height: 1.2; letter-spacing: -.02em; color: var(--ink) }
+/* Doubled up to outrank the landing's paragraph reset, whichever loads last. */
+.doc .lead { margin-top: 6px; font-size: 13.5px; line-height: 1.5; color: var(--ink) }
+.doc .h2 { margin-top: 16px; font-size: 16px; line-height: 1.3; letter-spacing: -.01em; color: var(--ink) }
+.doc .list { margin-top: 6px; padding-left: 18px; list-style: disc; font-size: 13.5px; line-height: 1.6; color: var(--ink) }
+.list li + li { margin-top: 5px }
+.list li::marker { color: var(--ink-3) }
+.list b { font-weight: 500 }
+
+/* The words: first selected, then marked as the editor marks a comment's
+   words, a wash and an underline in the waiting colour, swept in. */
+.sel, .mark { background-repeat: no-repeat; transition: background-size var(--v-move) var(--ease) }
+.sel { background-image: linear-gradient(var(--violet-soft), var(--violet-soft)); background-position: 0 50%; background-size: 0% 100% }
+.mark { padding-bottom: 1px; background-image: linear-gradient(color-mix(in srgb, var(--wait) 26%, transparent), color-mix(in srgb, var(--wait) 26%, transparent)), linear-gradient(color-mix(in srgb, var(--wait) 55%, transparent), color-mix(in srgb, var(--wait) 55%, transparent)); background-position: 0 0, 0 100%; background-size: 0% 100%, 0% 2px }
+
+/* The quotes Scout puts under the point. */
+.quotes { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-slow) var(--ease) }
+.quotes > div { min-height: 0; overflow: hidden }
+.quote { display: flex; flex-direction: column; margin: 8px 0 0; padding: 1px 0 1px 11px; border-left: 2px solid var(--line-2); color: var(--ink-2) }
+.quote + .quote { margin-top: 6px }
+.quote span { font-size: 13.5px; line-height: 1.5 }
+.quote small { font-size: 12px; line-height: 1.4; color: var(--ink-3) }
+
+/* The toolbar pages show over a selection. */
+.seltool { position: absolute; top: 82px; left: 8px; display: flex; align-items: center; gap: 1px; padding: 3px; border-radius: 99px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 10px 24px -10px rgb(20 20 19 / .35); font-size: 12px; line-height: 1; color: var(--ink); white-space: nowrap; opacity: 0; transform: translateY(4px); transition-delay: calc(6 * var(--v-step)) }
+.tool { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 5px; border-radius: 99px }
+.icon { display: inline-grid; place-items: center; width: 18px; height: 26px; font-weight: 500 }
+.italic { font-style: italic }
+.sep { width: 1px; height: 14px; margin: 0 2px; background: var(--line-2) }
+.choose { transition-delay: calc(5 * var(--v-step)) }
+
+/* ── The comments panel ─────────────────────────────────────────────── */
+.panel { position: absolute; top: 36px; right: 0; bottom: 0; width: 272px; border-left: 1px solid var(--line); background: var(--paper) }
+.panelHead { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line) }
+.panelTitle { margin-right: auto; font-size: 14px; color: var(--ink) }
+.tab { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 99px; font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.tabOn { background: var(--cream); color: var(--ink) }
+.tabCount { display: inline-block; max-width: 0; overflow: hidden; font-style: normal; white-space: pre; vertical-align: top; opacity: 0 }
+.close { display: inline-grid; place-items: center; width: 24px; height: 24px; color: var(--ink-3) }
+.comments { position: relative; padding: 10px 8px }
+.quiet { position: absolute; top: 10px; left: 8px; right: 8px; padding: 4px; font-size: 12.5px; line-height: 1.5; color: var(--ink-3) }
+
+/* One thread: the words it is about, what was said, and where it stands. */
+.thread { padding: 10px; border-radius: 12px; background: var(--paper); box-shadow: inset 0 0 0 1px var(--ink-3), 0 6px 18px rgb(20 20 19 / .06); opacity: 0; transform: translateY(8px) }
+.threadQuote { margin: 0; padding: 1px 0 1px 9px; border-left: 2px solid color-mix(in srgb, var(--wait) 60%, transparent); font-size: 12.5px; line-height: 1.45; color: var(--ink-2) }
+
+/* A part of the thread that opens or closes, pushing what is under it. */
+.fold { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-move) var(--ease); transition-delay: calc(var(--n, 0) * var(--v-step)) }
+.fold > div { min-height: 0; overflow: hidden }
+/* What closes fades at once; what opens after it waits its turn. */
+.waiting, .acts { --n: 3 }
+.reply { --n: 2 }
+
+/* The draft's box: an empty textarea, then the ask typed into it. */
+.box { position: relative; display: flex; flex-direction: column; min-height: 52px; margin-top: 8px; padding: 6px 9px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-2); font-size: 13px; line-height: 19px; color: var(--ink) }
+.line { display: block; height: 19px; white-space: nowrap }
+.placeholder { position: absolute; top: 6px; left: 10px; color: var(--ink-3) }
+.typed { display: inline-block; max-width: 0; overflow: hidden; vertical-align: top; white-space: nowrap }
+/* Carets blink by animating opacity, which a transition cannot delay, so
+   the one on line two waits behind a stepped transform instead. */
+.c0, .c1, .c2 { margin-left: 0; margin-right: -1.5px; opacity: 0 }
+.c2 { transform: scaleY(0) }
+.note { margin-top: 6px; font-size: 12px; line-height: 1.4; color: var(--ink-3); opacity: 0; transition-delay: calc(3 * var(--v-step)) }
+.boxActs { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 8px }
+.cancel { display: inline-flex; align-items: center; height: 26px; padding: 0 8px; font-size: 12px; color: var(--ink-2) }
+.send { display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: 99px; background: var(--line); font-size: 12px; color: var(--ink-3); transition: background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
+
+/* A message in the thread. */
+.msg { display: flex; gap: 8px; margin-top: 10px }
+.initials { width: 22px; height: 22px }
+.replyFace { align-self: flex-start; width: 22px; height: 22px; border-radius: 6px }
+.who { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; line-height: 1.4; color: var(--ink) }
+.who b { font-weight: 500 }
+.who small { font-size: 12px; color: var(--ink-3) }
+.text { margin-top: 1px; font-size: 13px; line-height: 1.45; color: var(--ink) }
+.at { color: var(--violet-deep) }
+
+/* What Scout is doing about it: the product's own status lines. */
+.status { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 6px 8px; border-radius: 8px; background: var(--cream); font-size: 12px; line-height: 1.4; color: var(--ink-2) }
+.statusFace { width: 18px; height: 18px; border-radius: 5px }
+.statusText { display: flex; flex-direction: column; flex: 1; min-width: 0 }
+/* One line gives way to the next, and the box takes the new one's height. */
+.said { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-quick) var(--ease) }
+.said > span { min-height: 0; overflow: hidden }
+.said > span::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--violet); vertical-align: middle; animation: pulse var(--v-slow) var(--ease) infinite }
+@keyframes pulse { 50% { opacity: .3 } }
+.working { grid-template-rows: 0fr; opacity: 0 }
+.watch { flex: none; max-width: 0; overflow: hidden; color: var(--violet); opacity: 0 }
+
+.actsRow { display: flex; gap: 4px; margin-top: 10px }
+.actsRow span { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); font-size: 12px; color: var(--ink-2) }
+
+/* The pointer, by its tip: resting at the start of the words. */
+.pointer { position: absolute; top: 0; left: 0; z-index: 5; transform: translate(284px, 159px) }
+
+/* 1 · the words selected; the toolbar rises over them */
+.root[data-b1] .sel { background-size: 100% 100% }
+.root[data-b1] .pointer { transform: translate(84px, 209px) }
+.root[data-b1] .seltool { opacity: 1; transform: none }
+/* 2 · onto Comment */
+.root[data-b2] .pointer { transform: translate(298px, 135px) }
+.root[data-b2] .choose { background-color: var(--cream) }
+/* 3 · a draft thread in the panel, quoting the words */
+.root[data-b3] .pointer, .root[data-b3] .seltool { opacity: 0; transition-delay: 0s }
+.root[data-b3] .sel { background-size: 100% 0%; transition-duration: var(--v-quick) }
+.root[data-b3] .quiet { opacity: 0 }
+.root[data-b3] .thread { opacity: 1; transform: none }
+.root[data-b3] .draft { grid-template-rows: 1fr; opacity: 1 }
+.root[data-b3] .c0 { opacity: 1 }
+/* 4 · the ask, typed */
+.root[data-b4] .c0, .root[data-b4] .placeholder { opacity: 0; transition-duration: 0s }
+.root[data-b4] .t1 { max-width: 167px; transition: max-width calc(var(--v-move) * 1.4) steps(24, jump-end) }
+.root[data-b4] .note { opacity: 1 }
+.root[data-b4] .send { background: var(--violet); color: var(--paper) }
+/* The caret rides the end of line one, then drops to line two. */
+.root[data-b4] .c1 { opacity: 1; transform: scaleY(0); transition: opacity var(--v-quick) var(--ease), transform var(--v-quick) steps(1, jump-start) calc(var(--v-move) * 1.4) }
+.root[data-b4] .t2 { max-width: 118px; transition: max-width var(--v-move) steps(18, jump-end) calc(var(--v-move) * 1.4) }
+.root[data-b4] .c2 { opacity: 1; transform: none; transition: opacity var(--v-quick) var(--ease), transform var(--v-quick) steps(1, jump-start) calc(var(--v-move) * 1.4) }
+/* 5 · posted: the words marked, the count ticks, Scout will pick it up */
+.root[data-b5] .draft { grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-quick) var(--ease) }
+.root[data-b5] .asked, .root[data-b5] .waiting, .root[data-b5] .acts { grid-template-rows: 1fr; opacity: 1 }
+.root[data-b5] .mark { background-size: 100% 100%, 100% 2px }
+.root[data-b5] .pillLabel { max-width: 0; padding-left: 0; opacity: 0 }
+.root[data-b5] .pillCount { max-width: 16px; padding-left: 5px; opacity: 1 }
+.root[data-b5] .tabCount { max-width: 16px; opacity: 1 }
+/* 6 · Scout is working on it, and you can watch */
+.root[data-b6] .soon { grid-template-rows: 0fr; opacity: 0 }
+.root[data-b6] .working { grid-template-rows: 1fr; opacity: 1 }
+.root[data-b6] .watch { max-width: 44px; opacity: 1 }
+/* 7 · the quotes, under the point */
+.root[data-b7] .quotes { grid-template-rows: 1fr; opacity: 1 }
+/* 8 · Scout's reply; nothing is waiting any more */
+.root[data-b8] .waiting { grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-quick) var(--ease) }
+.root[data-b8] .reply { grid-template-rows: 1fr; opacity: 1 }

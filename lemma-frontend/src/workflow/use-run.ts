@@ -7,6 +7,7 @@ import { source } from "@/data";
 import { lemma } from "@/session/client";
 import { readRunDetail, readRuns, readWorkflows, stillGoing, type RunDetail, type RunRow } from "./runs";
 import { readGraph } from "./run-tree";
+import { samples } from "@/data/samples";
 
 /** How often to look again, when nothing is pushed.
  *
@@ -29,7 +30,7 @@ export function useRun(podId: string, runId: string) {
         queryKey: key,
         queryFn: async () => {
             if (sample) {
-                const { SAMPLE_RUN_DETAIL } = await import("@/data/fixtures");
+                const { SAMPLE_RUN_DETAIL } = await samples(podId);
                 return readRunDetail(SAMPLE_RUN_DETAIL[runId] ?? null);
             }
             return readRunDetail(await lemma(podId).workflows.runs.get(runId, podId));
@@ -69,7 +70,7 @@ export function useWorkflowList(podId: string) {
         staleTime: 5 * 60_000,
         queryFn: async () => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOWS, hiredHere } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOWS, hiredHere } = await samples(podId);
                 return readWorkflows({ items: hiredHere(podId) ? [] : SAMPLE_WORKFLOWS });
             }
             return readWorkflows(await lemma(podId).workflows.list({ limit: 100 }));
@@ -88,7 +89,7 @@ export function workflowGraphQuery(podId: string, name: string | null) {
         queryFn: async () => {
             let raw: unknown;
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOW_SHAPES } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOW_SHAPES } = await samples(podId);
                 raw = SAMPLE_WORKFLOW_SHAPES[name!] ?? null;
             } else {
                 raw = await lemma(podId).workflows.get(name!);
@@ -110,7 +111,7 @@ export function useSpaceRuns(podId: string) {
         staleTime: 15_000,
         queryFn: async (): Promise<RunRow[]> => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOW_RUNS, hiredHere } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOW_RUNS, hiredHere } = await samples(podId);
                 return readRuns({ items: hiredHere(podId) ? [] : Object.values(SAMPLE_WORKFLOW_RUNS).flat() });
             }
             return readRuns(await lemma(podId).request("GET", "/pods/" + podId + "/workflow-runs", { params: { limit: 100 } }));

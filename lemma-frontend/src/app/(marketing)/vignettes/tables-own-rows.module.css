@@ -1,0 +1,82 @@
+/* Each person, their own rows, beat by beat. Base styles are the opening
+   frame; each `.root[data-bN]` rule is what changes from beat N on, written
+   in beat order so a later beat wins over an earlier one. With reduced
+   motion every beat is on, so the last rules here are the finished picture. */
+
+.root { --v-step: 120ms }
+
+/* ── Follow Ups, as the tables list draws its row ───────────────────── */
+.head { position: absolute; top: 48px; left: 22px; right: 22px; display: flex; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line) }
+.glyph { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ok) }
+.label { display: flex; flex-direction: column; min-width: 0 }
+.tableName { display: flex; align-items: center; font-size: 14px; color: var(--ink) }
+.label small { font-size: 12px; color: var(--ink-3) }
+.rls { display: inline-flex; align-items: center; height: 20px; margin-left: 8px; padding: 0 7px; border-radius: 5px; background: color-mix(in srgb, var(--ok) 10%, var(--paper)); color: var(--ok); font-size: 12px; font-style: normal; font-weight: 500; letter-spacing: .02em }
+.access { display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.faces { display: inline-flex }
+.faces > span { position: relative; width: 22px; height: 22px; box-shadow: 0 0 0 2px var(--paper) }
+.faces > span + span { margin-left: -3px }
+
+/* ── Who opened it ──────────────────────────────────────────────────── */
+.who { position: absolute; top: 118px; display: flex; align-items: center; gap: 7px; height: 24px; margin: 0; font-size: 13px; color: var(--ink); opacity: 0; transform: translateY(4px) }
+.whoPriya { left: 24px }
+.whoAditi { left: 330px }
+
+/* ── The checklist: one outline, then each person's own ─────────────── */
+.list { position: absolute; top: 148px; left: 22px; width: 596px; height: 238px; padding: 0 12px; overflow: hidden }
+.aditi { opacity: 0 }
+.ghost { position: absolute; top: 0; left: 12px; right: 12px }
+.ghost > .ghostRow:last-child { border-bottom: 0 }
+.ghostCount { display: block; height: 30px; padding-top: 11px }
+.ghostCount > span { margin-top: 0 }
+.ghostRow { display: flex; align-items: center; gap: 10px; height: 40px; border-bottom: 1px solid var(--line) }
+.ghostRow > span { flex: 1 }
+.ghostRow > span > span:first-child { margin-top: 0 }
+.ghostRow > span > span + span { margin-top: 7px }
+.count { height: 30px; margin: 0; padding-top: 7px; font-size: 12px; color: var(--ink-3); opacity: 0 }
+.rows { margin: 0; padding: 0; list-style: none }
+.row { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 10px; align-content: center; height: 40px; margin: 0 -6px; padding: 0 6px; border-radius: 6px; opacity: 0; transform: translateY(4px); transition-delay: calc(var(--n) * var(--v-step)) }
+/* The rule between rows, drawn square and inset to the text, so the row's
+   rounded highlight never bends it at the ends. */
+.row::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: 0; height: 1px; background: var(--line); transition: opacity var(--v-quick) var(--ease); transition-delay: inherit }
+.row:last-child::after { display: none }
+.row > i { grid-row: 1 / span 2; align-self: center }
+.name { font-size: 13px; line-height: 17px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color var(--v-quick) var(--ease) }
+.due { font-size: 12px; line-height: 16px; color: var(--ink-3) }
+.done .name { color: var(--ink-3); text-decoration: line-through }
+
+/* ── Priya, in Slack ────────────────────────────────────────────────── */
+.slack { position: absolute; top: 280px; left: 22px; width: 290px; height: 56px; padding: 10px 12px; overflow: hidden; opacity: 0; transform: translateY(8px) }
+.slackMark { position: absolute; top: 11px; right: 11px; width: 14px; height: 14px }
+.message { display: flex; align-items: flex-start; gap: 9px }
+.message p { margin: 0; padding-right: 14px; font-size: 12px; line-height: 17px; color: var(--ink-2) }
+.message b { display: block; font-weight: 500; color: var(--ink) }
+.message > img { width: 24px; height: 24px; border-radius: 7px }
+.reply { margin-top: 10px; opacity: 0; transform: translateY(6px) }
+
+/* ── Who checks it ──────────────────────────────────────────────────── */
+.rule { position: absolute; left: 22px; right: 22px; top: 432px; display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; color: var(--ink-3); opacity: 0; transform: translateY(4px) }
+.rule svg { flex: none; color: var(--ok) }
+/* Who else sees every row, at the far end under Aditi's list, so Priya's
+   side, which is all a phone shows, ends on a whole sentence. */
+.admins { margin-left: auto }
+
+/* 1 · the one checklist splits in two, one for each person who opens it */
+.root[data-b1] .priya { width: 290px; height: 118px }
+.root[data-b1] .aditi { opacity: 1; width: 290px; height: 158px; transform: translateX(306px) }
+.root[data-b1] .who { opacity: 1; transform: none; transition-delay: var(--v-quick) }
+/* 2 · each fills with its own rows, in place of the outline */
+.root[data-b2] .ghost { opacity: 0 }
+.root[data-b2] .count, .root[data-b2] .row { opacity: 1; transform: none }
+.root[data-b2] .aditi .row { transition-delay: calc((var(--n) + 1) * var(--v-step)) }
+/* 3 · Priya asks in Slack, under her list */
+.root[data-b3] .slack { opacity: 1; transform: none }
+/* 4 · Remy's answer lands under it, then the two rows it read light */
+.root[data-b4] .slack { height: 136px }
+.root[data-b4] .reply { opacity: 1; transform: none; transition-delay: var(--v-quick) }
+.root[data-b4] .priya .row { background: var(--violet-soft) }
+.root[data-b4] .priya .row::after { opacity: 0 }
+.root[data-b4] .priya .name { color: var(--violet-deep) }
+.root[data-b4] .priya .row, .root[data-b4] .priya .name { transition-delay: calc(var(--v-move) + var(--n) * var(--v-step)) }
+/* 5 · the line that says who checks it */
+.root[data-b5] .rule { opacity: 1; transform: none }

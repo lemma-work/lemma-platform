@@ -1,0 +1,61 @@
+/* A Slack thread in #launch, beat by beat. Base styles are the opening
+   frame, Priya's question on its own; each `.root[data-bN]` rule is what
+   changes from beat N on, written in beat order so a later beat wins. With
+   reduced motion every beat is on: the question, the reply and its preview,
+   and no reaction left on the message. */
+
+.root { --v-step: 70ms; --v-row: 90ms; container-type: inline-size }
+
+.logo { width: 16px; height: 16px; flex: none }
+
+/* The thread reads top to bottom, in the flow, the way Slack lays it out. */
+.thread { display: flex; flex-direction: column; padding-top: 18px }
+.message { display: grid; grid-template-columns: 28px 1fr; column-gap: 12px; align-items: start }
+.avatar { width: 28px; height: 28px; margin-top: 2px }
+.column { min-width: 0 }
+.who { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--ink) }
+.who b { font-weight: 500 }
+.who time { font-size: 12px; color: var(--ink-3) }
+/* The page resets paragraph margins at a class's specificity, so a
+   paragraph's own spacing here is set from `.thread`. */
+.thread .said { margin-top: 1px; font-size: 14px; color: var(--ink-2) }
+.mention { padding: 0 3px; border-radius: 4px; background: var(--violet-soft); color: var(--violet-deep) }
+
+/* The eyes reaction: a row that opens under the message, then closes. */
+.reactions { height: 0; overflow: hidden; opacity: 0 }
+.reaction { display: inline-flex; align-items: center; gap: 5px; height: 24px; margin-top: 6px; padding: 0 9px 0 6px; border-radius: 99px; border: 1px solid var(--line-2); background: var(--cream); font-size: 12px; color: var(--ink-2) }
+.eyes { font-size: 16px; line-height: 1 }
+
+.thread .replies { display: flex; align-items: center; gap: 10px; margin: 14px 0 12px; font-size: 12px; color: var(--ink-3); opacity: 0 }
+.replies::after { content: ""; flex: 1; height: 1px; background: var(--line) }
+
+.answer { opacity: 0; transform: translateY(6px) }
+.word { opacity: 0 }
+
+/* What it brought: the card Slack draws from the preview. It is the last
+   thing in the thread, so nothing below it has to move: it takes its place
+   from the start and arrives in place, never clipped part-way open. */
+.preview { opacity: 0; transform: translateY(6px) }
+.thread .title { margin-top: 8px; font-size: 14px; font-weight: 500; color: var(--ink) }
+.count { font-size: 13px; color: var(--ink-2) }
+.block { width: max-content; margin: 6px 0 0; padding: 7px 11px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--cream); font-family: var(--mono); font-size: 13px; line-height: 17px; color: var(--ink) }
+.line { display: block; white-space: pre; opacity: 0 }
+.open { margin-top: 10px; opacity: 0 }
+
+/* 1 · eyes on her message: it's working */
+.root[data-b1] .reactions { height: 30px; opacity: 1 }
+/* 2 · the reply, streamed in as it's written */
+.root[data-b2] .replies, .root[data-b2] .answer { opacity: 1; transform: none }
+.root[data-b2] .word { opacity: 1; transition-delay: calc(var(--n) * var(--v-step) + var(--v-quick)) }
+/* 3 · the preview arrives under it, a row at a time */
+.root[data-b3] .preview { opacity: 1; transform: none }
+.root[data-b3] .line, .root[data-b3] .open { opacity: 1; transition-delay: calc(var(--n) * var(--v-row)) }
+/* 4 · the answer has landed: the eyes come off */
+.root[data-b4] .reactions { height: 0; opacity: 0 }
+
+/* On a phone the vignette shows only the left of the canvas (`phone` in
+   the .tsx), so the thread narrows to it and wraps there, as Slack's own
+   thread does on a phone. Below the same 520px the Vignette switches at. */
+@container (width < 520px) {
+    .root .thread { right: 256px }
+}

@@ -12,6 +12,7 @@ import {
     type StepRow, type WorkflowRow,
 } from "./runs";
 import { readShape, type FlowStep, type WorkflowShape } from "./shape";
+import { samples } from "@/data/samples";
 
 /** What this teammate has been told to do the same way twice.
  *
@@ -59,7 +60,7 @@ export function WorkflowsView({ podId, teammate, onDiscuss, onOpenRun, agentName
         queryKey: ["workflows", podId],
         queryFn: async () => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOWS } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOWS } = await samples(podId);
                 return readWorkflows({ items: SAMPLE_WORKFLOWS });
             }
             return readWorkflows(await lemma(podId).workflows.list({ limit: 100 }));
@@ -184,7 +185,7 @@ function RunsPane({ podId, flow, name, teammate, onBack, onOpenRun, onDiscuss }:
         queryKey: ["workflow-shape", podId, name],
         queryFn: async () => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOW_SHAPES } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOW_SHAPES } = await samples(podId);
                 return readShape(SAMPLE_WORKFLOW_SHAPES[name] ?? null);
             }
             return readShape(await lemma(podId).workflows.get(name));
@@ -196,7 +197,7 @@ function RunsPane({ podId, flow, name, teammate, onBack, onOpenRun, onDiscuss }:
         queryKey: ["workflow-runs", podId, name],
         queryFn: async () => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOW_RUNS } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOW_RUNS } = await samples(podId);
                 return byNewest(readRuns({ items: SAMPLE_WORKFLOW_RUNS[name] ?? [] }));
             }
             return byNewest(readRuns(await lemma(podId).workflows.runs.list(name, { limit: 50 })));
@@ -373,22 +374,23 @@ export function Shape({ query, teammate, onDiscuss }: {
 
 /** One step, as a row on the spine.
  *
- *  The id is set in the mono face the run history sets a step id in, and for
- *  the same reason: it is the string `failed_node_id` names when a run dies,
- *  so the two lists have to be readable against each other by eye.
+ *  Led by the name its author gave it, when there is one: "Chase the owners"
+ *  says what the step is for, `chase` only what it is called. The id stays,
+ *  small and in the mono face the run history sets a step id in, because it
+ *  is the string `failed_node_id` names when a run dies, so the two lists
+ *  have to be readable against each other by eye.
  */
 function Step({ step }: { step: FlowStep }) {
+    /* A label that repeats the id is two columns of the same word. */
+    const named = Boolean(step.label && step.label !== step.id);
     return (
         <li className="wf-spine__row" data-kind={step.kind || undefined} data-broken={step.unreadable || undefined}>
             <span className="wf-spine__mark" aria-hidden="true" />
             <span className="wf-spine__body">
                 <span className="wf-spine__title">
-                    {step.id && <b>{step.id}</b>}
+                    {named ? <strong>{step.label}</strong> : step.id && <b>{step.id}</b>}
                     <i>{step.says}</i>
-                    {/* Only when the author wrote one and it is not just the
-                        id again. A label that repeats the id is two columns
-                        of the same word. */}
-                    {step.label && step.label !== step.id && <em>{step.label}</em>}
+                    {named && step.id && <code>{step.id}</code>}
                 </span>
                 {step.detail.map((line, at) => (
                     <span className="wf-spine__note" key={at}>{line}</span>
@@ -413,7 +415,7 @@ export function RunPane({ podId, runId, workflowName, onBack }: {
         queryKey: ["workflow-run", podId, runId],
         queryFn: async () => {
             if (source.label === "sample") {
-                const { SAMPLE_RUN_DETAIL } = await import("@/data/fixtures");
+                const { SAMPLE_RUN_DETAIL } = await samples(podId);
                 return readRunDetail(SAMPLE_RUN_DETAIL[runId] ?? null);
             }
             return readRunDetail(await lemma(podId).workflows.runs.get(runId, podId));
