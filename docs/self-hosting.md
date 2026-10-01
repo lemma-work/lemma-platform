@@ -213,9 +213,9 @@ Whatever terminates TLS has to:
   timeout.
 - **accept large uploads.** Datastore ingestion sends whole documents.
 
-`lemma-backend/nginx.conf` is a worked nginx version of the same contract,
-including the header rewriting an ingress may do instead of leaving hostname
-routing to the backend.
+Leave paths and app-routing headers alone: the backend routes pod apps from
+`Host` itself and drops any `X-App-Public-Slug` or `X-App-Release` that reaches
+it, since only a client could have sent one.
 
 ## Backups
 

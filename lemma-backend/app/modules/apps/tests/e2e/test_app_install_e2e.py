@@ -11,10 +11,19 @@ import pytest
 from fastapi import status
 
 from app.core import app_install
+from app.core.config import settings
 
 pytestmark = pytest.mark.e2e
 
-_SLUG_HEADER = "X-App-Public-Slug"
+
+@pytest.fixture(autouse=True)
+def _app_hosts(monkeypatch):
+    monkeypatch.setattr(settings, "app_base_domain", "apps.test")
+
+
+def host_of(label: str) -> str:
+    """The Host an app is served at; the only thing that names it."""
+    return f"{label}.{settings.app_base_domain}"
 
 
 def build_dist_archive() -> bytes:
@@ -56,16 +65,14 @@ async def test_published_app_serves_what_an_install_needs(
     test_pod,
 ):
     slug = await publish_app(authenticated_client, test_pod["id"])
-    headers = {_SLUG_HEADER: slug}
+    headers = {"host": host_of(slug)}
 
-    entrypoint = await async_client.get("/public/apps", headers=headers)
+    entrypoint = await async_client.get("/", headers=headers)
     assert entrypoint.status_code == status.HTTP_200_OK, entrypoint.text
     assert f'href="{app_install.MANIFEST_PATH}"' in entrypoint.text
     assert app_install.APP_INSTALL_SENTINEL in entrypoint.text
 
-    manifest = await async_client.get(
-        f"/public/apps{app_install.MANIFEST_PATH}", headers=headers
-    )
+    manifest = await async_client.get(f"{app_install.MANIFEST_PATH}", headers=headers)
     assert manifest.status_code == status.HTTP_200_OK, manifest.text
     assert manifest.headers["content-type"].startswith("application/manifest+json")
     body = json.loads(manifest.text)
@@ -74,13 +81,13 @@ async def test_published_app_serves_what_an_install_needs(
 
     # Revalidation, so a rebuild does not re-download an unchanged manifest.
     unchanged = await async_client.get(
-        f"/public/apps{app_install.MANIFEST_PATH}",
+        f"{app_install.MANIFEST_PATH}",
         headers={**headers, "If-None-Match": manifest.headers["etag"]},
     )
     assert unchanged.status_code == status.HTTP_304_NOT_MODIFIED
 
     worker = await async_client.get(
-        f"/public/apps{app_install.SERVICE_WORKER_PATH}", headers=headers
+        f"{app_install.SERVICE_WORKER_PATH}", headers=headers
     )
     assert worker.status_code == status.HTTP_200_OK, worker.text
     # Without this the browser refuses the "/" registration the script asks for,
@@ -88,15 +95,13 @@ async def test_published_app_serves_what_an_install_needs(
     assert worker.headers["service-worker-allowed"] == "/"
 
     icon = await async_client.get(
-        f"/public/apps{app_install.ICON_PATH_TEMPLATE.format(size=512)}",
+        f"{app_install.ICON_PATH_TEMPLATE.format(size=512)}",
         headers=headers,
     )
     assert icon.status_code == status.HTTP_200_OK
     assert icon.headers["content-type"] == "image/png"
 
-    offline = await async_client.get(
-        f"/public/apps{app_install.OFFLINE_PATH}", headers=headers
-    )
+    offline = await async_client.get(f"{app_install.OFFLINE_PATH}", headers=headers)
     assert offline.status_code == status.HTTP_200_OK
 
 
@@ -127,7 +132,5 @@ async def test_an_unpublished_app_does_not_describe_itself_to_the_world(
         app_install.SERVICE_WORKER_PATH,
         app_install.ICON_PATH_TEMPLATE.format(size=512),
     ):
-        response = await async_client.get(
-            f"/public/apps{path}", headers={_SLUG_HEADER: slug}
-        )
+        response = await async_client.get(path, headers={"host": host_of(slug)})
         assert response.status_code == status.HTTP_404_NOT_FOUND, path

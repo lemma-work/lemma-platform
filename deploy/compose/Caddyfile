@@ -16,10 +16,9 @@
 # lemma_stack/config/render.py.
 #
 # Nothing here rewrites paths or invents headers. AppHostRoutingMiddleware
-# resolves an app from the Host header itself and has a branch specifically for
-# a proxy that does not do the rewriting (app/modules/apps/api/host_routing.py).
-# The cloud nginx ingress does rewrite, and both are supported; this one simply
-# passes Host through, which is the smaller contract to keep working.
+# resolves an app from the Host header itself, and ignores any app-routing
+# header that arrives from outside (app/modules/apps/api/host_routing.py), so
+# passing Host through is the whole contract -- the cloud gateway does the same.
 #
 # LEMMA_TLS_ARG is written by bootstrap.sh: `internal` (Caddy's own CA — the
 # default, and the only thing that can work without a real domain) or a Let's
