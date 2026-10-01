@@ -1,0 +1,172 @@
+/* The product pages, and the parts of the landing that point at them. Drawn
+   inside the landing's `.page`, so every colour, radius and motion here is
+   one of its tokens; checked with it by scripts/check-landing-design.mjs. */
+
+/* ── Navigation: pinned on product pages, with a Product menu ───────── */
+.navPinned { position: sticky; background: rgb(245 243 238 / .88); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line) }
+.product { position: relative }
+.product::after { content: ""; position: absolute; left: -24px; right: -24px; top: 100%; height: 22px }
+.productButton { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 7px }
+.productButton::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg) }
+.productButton:hover { color: var(--ink) }
+.menu { position: absolute; z-index: 10; left: -20px; top: calc(100% + 18px); width: 520px; padding: 12px; display: none; grid-template-columns: 1fr 1fr; gap: 2px; border-radius: var(--radius-card); background: var(--paper); border: 1px solid var(--line); box-shadow: var(--shadow-card) }
+.product:hover .menu, .product:focus-within .menu { display: grid }
+.menu a { display: grid; gap: 2px; padding: 12px 14px; border-radius: var(--radius-control) }
+.menu a:hover, .menu a:focus-visible { background: var(--cream) }
+.menu b { font-weight: 500; color: var(--ink); font-size: 15px }
+.menu small { color: var(--ink-3); font-size: 13px; line-height: 1.35 }
+
+/* Anchors and captures land below the pinned header. */
+.proof, .saying { scroll-margin-top: 96px }
+
+/* ── Top of a product page ──────────────────────────────────────────── */
+.hero { padding-top: 96px; text-align: center }
+.headline { font-family: var(--serif); font-weight: 400; font-size: clamp(40px, 4.6vw, 64px); line-height: 1.04; letter-spacing: -.03em; margin: 20px auto 0; max-width: 20ch; text-wrap: balance }
+.intro { margin: 26px auto 0; max-width: 46ch; text-wrap: balance; font-size: 20px; line-height: 1.55; color: var(--ink-2) }
+.centred { justify-content: center }
+.stage { position: relative; margin-top: 72px }
+.stage::before { content: ""; position: absolute; z-index: -1; inset: 80px -4% -60px; border-radius: 40px; background: var(--violet-soft) }
+.stage > figure { text-align: left }
+.shown { display: inline-flex; align-items: center; gap: 10px; margin-top: 20px; font-size: 14px; color: var(--ink-3) }
+.shown img { width: 28px; height: 28px; border-radius: 8px; background: var(--paper); object-fit: contain; transition: transform var(--motion-fast) var(--ease) }
+.shown:hover img { transform: rotate(-8deg) scale(1.1) }
+
+/* ── A window of the app, and a panel to sit a capture on ───────────── */
+.window { margin: 0; border-radius: 14px; overflow: hidden; background: var(--paper); border: 1px solid var(--line); box-shadow: var(--shadow-card); transition: transform var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease) }
+.window > img, .window > video { display: block; width: 100%; height: auto }
+.chrome { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; border-bottom: 1px solid var(--line); background: #faf9f5; font-size: 14px; color: var(--ink) }
+.chrome img { width: 22px; height: 22px; border-radius: 6px; background: var(--violet-soft); object-fit: contain }
+.dots { margin-left: auto; display: flex; gap: 6px }
+.dots i { width: 9px; height: 9px; border-radius: 50%; background: rgb(20 20 19 / .12) }
+.loop { display: block; width: 100%; height: auto; background: var(--paper) }
+
+.panel { position: relative; margin: 0; padding: 44px; border-radius: var(--radius-panel); background: var(--violet-soft) }
+.sand { background: linear-gradient(180deg, #efece4, #e9e5db) }
+.heroPanel { display: grid; place-items: center; padding: 56px }
+.card { width: 100%; border-radius: var(--radius-card); overflow: hidden; background: var(--paper); box-shadow: 0 30px 70px -30px rgb(40 30 110 / .45), 0 0 0 1px rgb(20 20 19 / .06) }
+.card img, .card video { display: block; width: 100%; height: auto }
+
+/* A note in the margin, in a hand, with an arrow down to the picture. */
+.note { display: flex; align-items: flex-end; gap: 6px; margin: 0 0 14px 8px; color: var(--violet) }
+.note span { font-family: var(--serif); font-style: italic; font-size: 20px; line-height: 1.2; max-width: 26ch; transform: rotate(-1.5deg) }
+.arrow { width: 74px; flex: none; transform: translateY(14px) }
+/* The arrow draws itself once its note arrives: paths measured as length 1,
+   so one dash is the whole stroke and the offset hides or shows all of it. */
+.arrow path { stroke-dasharray: 1; transition: stroke-dashoffset var(--motion-draw) var(--ease) }
+:global(html[data-motion]) [data-rise]:not([data-in]) .arrow path { stroke-dashoffset: 1 }
+
+/* ── A claim beside its proof ───────────────────────────────────────── */
+.proof { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); grid-template-areas: "words picture" "points picture"; grid-template-rows: auto 1fr; column-gap: 72px; align-items: start }
+.flip { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); grid-template-areas: "picture words" "picture points" }
+.words { grid-area: words }
+.pointsArea { grid-area: points }
+/* Held beside the words while a long list of points scrolls past. */
+.picture { grid-area: picture; position: sticky; top: 110px }
+.proofTitle { font-family: var(--serif); font-weight: 400; font-size: clamp(30px, 3vw, 40px); line-height: 1.08; letter-spacing: -.02em; margin-top: 14px; text-wrap: balance }
+.proofBody { margin-top: 16px; color: var(--ink-2); font-size: 17px; max-width: 44ch }
+/* Said in words, for a part with no screen to show yet. */
+/* Said in words: the heading centred, the paragraphs in a readable column. */
+.saying { text-align: center }
+.saying .proofBody { margin-left: auto; margin-right: auto; max-width: 62ch; font-size: 18px; text-align: left }
+.saying h2 { max-width: 22ch; margin-left: auto; margin-right: auto }
+
+/* Points: the parts of a thing, each named and said in a line or two. Under
+   the words beside a picture they stack; on their own they lay out in a grid. */
+.points { list-style: none; padding: 0; margin-top: 24px; display: grid; gap: 14px }
+.points li { display: grid; align-content: start; gap: 4px; padding-left: 16px; border-left: 2px solid var(--violet-soft) }
+.points b { font-weight: 500; font-size: 16px; color: var(--ink) }
+.points span { font-size: 15px; line-height: 1.55; color: var(--ink-2) }
+.saying .points { margin: 48px auto 0; max-width: var(--wide); grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px 40px; text-align: left }
+.saying .points li { padding: 20px 0 0; border-left: 0; border-top: 1px solid var(--line-2) }
+.saying .points b { font-family: var(--serif); font-weight: 400; font-size: 22px; letter-spacing: -.01em }
+.proofBody + .proofBody { margin-top: 12px }
+.intro + .intro { margin-top: 14px }
+
+/* A vignette on a panel, and the bigger one at the top of a page. */
+.moment { width: 100% }
+.caption { margin-top: 16px; font-size: 14px; line-height: 1.5; color: var(--ink-3); max-width: 60ch }
+.heroShot { display: grid; justify-items: center }
+/* Four apps, each in its own window, at their own shapes. */
+.gallery { columns: 2; column-gap: 24px }
+.gallery > figure { break-inside: avoid; margin-bottom: 24px }
+.gallery > .caption { column-span: all }
+.heroShot > figure { width: 100% }
+.bigMoment { width: 100%; max-width: 920px; margin: 0 auto }
+
+.siblings { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 10px }
+.siblings a { display: inline-flex; align-items: center; height: 46px; padding: 0 20px; border-radius: 99px; border: 1px solid var(--line-2); background: var(--paper); font-size: 15px; transition: border-color var(--motion-fast) var(--ease) }
+.siblings a:hover { border-color: var(--ink) }
+.siblings a[aria-current] { background: var(--ink); color: var(--paper); border-color: var(--ink) }
+
+/* ── The close, with the teammate whose page this was ──────────────── */
+/* Always inset by the page gutter, so the band never runs flush to the window. */
+.close { position: relative; overflow: hidden; width: min(var(--wide), calc(100% - 2 * var(--gutter))); margin: 160px auto 96px; padding: 80px 40px; border-radius: 28px; background: var(--violet); color: #ffffff; text-align: center }
+.close h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(34px, 4vw, 52px); line-height: 1.04; letter-spacing: -.03em; text-wrap: balance; max-width: 18ch; margin: 0 auto }
+.closeSub { margin: 18px auto 0; max-width: 46ch; text-wrap: balance; font-size: 18px; line-height: 1.55; color: rgb(255 255 255 / .82) }
+.closePrimary { display: inline-flex; align-items: center; height: 50px; padding: 0 24px; border-radius: 99px; background: #ffffff; color: var(--violet); font-size: 16px }
+.closeGhost { display: inline-flex; align-items: center; height: 50px; padding: 0 22px; border-radius: 99px; border: 1px solid rgb(255 255 255 / .45); font-size: 16px; transition: border-color var(--motion-fast) var(--ease) }
+.closeGhost:hover { border-color: #ffffff }
+.close a:focus-visible { outline-color: #ffffff }
+
+/* ── On the landing: why it needs a space ──────────────────────────── */
+.whyIntro { display: grid; gap: 14px }
+.whyHead { align-items: start }
+.whyMoment { margin: 56px auto 0; max-width: 860px }
+/* The four places, in the Trust section's ruled columns. */
+.parts { margin-top: 56px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px 64px }
+.parts > div { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line-2); padding-top: 24px }
+.parts h3 { font-family: var(--serif); font-weight: 400; font-size: 28px; letter-spacing: -.01em }
+.parts p { font-size: 16px; line-height: 1.6; color: var(--ink-2); max-width: 62ch }
+.parts .partLine { font-family: var(--serif); font-style: italic; font-size: 19px; line-height: 1.3; color: var(--ink); margin-top: -4px }
+.parts .partExample { font-size: 14px; color: var(--ink-3) }
+.partExample span { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase }
+.parts a { margin-top: auto; align-self: flex-start; font-size: 15px }
+
+/* ── On the landing: what is in its space, memory, and channels ────── */
+.spaceGrid { margin-top: 56px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 28px }
+.spaceCard { display: flex; flex-direction: column; gap: 14px }
+.spaceCard .window { aspect-ratio: 16 / 10; display: flex; flex-direction: column }
+.spaceCard .window > img { flex: 1; min-height: 0; object-fit: cover; object-position: top left }
+.spaceCard:hover .window { transform: translateY(-4px) }
+.spaceCard h3 { font-family: var(--serif); font-weight: 400; font-size: 26px; letter-spacing: -.01em; display: flex; align-items: baseline; justify-content: space-between; gap: 12px }
+.spaceCard h3 span { font-family: var(--font-ui, "Inter"), system-ui, sans-serif; font-size: 14px; color: var(--ink-3); transition: color var(--motion-fast) var(--ease) }
+.spaceCard:hover h3 span { color: var(--violet) }
+.spaceCard p { color: var(--ink-2); font-size: 16px; margin-top: -6px }
+
+.memoryPair { margin-top: 56px; display: grid; grid-template-columns: 1fr 1fr; gap: 28px }
+.memoryPair > .panel { padding: 36px }
+.memoryPair h3 { font-family: var(--serif); font-weight: 400; font-size: 28px; letter-spacing: -.01em; margin-top: 10px }
+.memoryPair p { color: var(--ink-2); font-size: 16px; margin-top: 8px; max-width: 40ch }
+.memoryPair .card { margin-top: 28px }
+.more { margin-top: 24px; font-size: 16px }
+
+.duo { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 72px; align-items: center }
+.reach { display: grid; place-items: center }
+.reach .card { max-width: 440px }
+
+@media (max-width: 1080px) {
+    .proof, .flip { grid-template-columns: 1fr; grid-template-areas: "words" "picture" "points"; grid-template-rows: none; row-gap: 32px }
+    .picture { position: static }
+    .duo { grid-template-columns: 1fr; gap: 32px }
+    .duo > figure { order: 2 }
+    .memoryPair { grid-template-columns: 1fr }
+    .saying .points { grid-template-columns: 1fr 1fr }
+}
+@media (max-width: 860px) {
+    .hero { padding-top: 56px }
+    .intro { font-size: 18px }
+    .panel { padding: 22px }
+    .heroPanel { padding: 24px }
+    .spaceGrid { grid-template-columns: 1fr }
+    .close { margin: 112px auto 64px; padding: 56px 24px }
+    .saying .points { grid-template-columns: 1fr }
+    .gallery { columns: 1 }
+    .parts { grid-template-columns: 1fr }
+}
+/* On a phone the picture gets the width, not the panel round it. */
+@media (max-width: 520px) {
+    .panel, .heroPanel { padding: 10px; border-radius: 18px }
+}
+@media (prefers-reduced-motion: reduce) {
+    .window, .shown img, .siblings a, .closeGhost, .spaceCard h3 span { transition: none }
+}

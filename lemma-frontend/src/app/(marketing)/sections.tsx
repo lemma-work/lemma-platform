@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { githubUrl } from "@/site/links";
 import s from "./landing.module.css";
 
@@ -137,12 +138,12 @@ const MOMENTS: { label: string; src: string; width: number; height: number; alt:
  *  they leave from. */
 const ARROWS = [
     <svg key="one" className={`${s.arrow} ${s.arrowOne}`} viewBox="0 0 190 130" fill="none" aria-hidden="true">
-        <path d="M8 8 C 40 70, 110 110, 176 116" stroke="#5a3fd4" strokeWidth="2" strokeLinecap="round" />
-        <path d="M162 106 L178 116 L162 126" stroke="#5a3fd4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        <path pathLength={1} d="M8 8 C 40 70, 110 110, 176 116" stroke="#5a3fd4" strokeWidth="2" strokeLinecap="round" />
+        <path pathLength={1} d="M162 106 L178 116 L162 126" stroke="#5a3fd4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>,
     <svg key="two" className={`${s.arrow} ${s.arrowTwo}`} viewBox="0 0 200 80" fill="none" aria-hidden="true">
-        <path d="M190 6 C 160 60, 90 70, 20 60" stroke="#5a3fd4" strokeWidth="2" strokeLinecap="round" />
-        <path d="M34 50 L18 60 L32 72" stroke="#5a3fd4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        <path pathLength={1} d="M190 6 C 160 60, 90 70, 20 60" stroke="#5a3fd4" strokeWidth="2" strokeLinecap="round" />
+        <path pathLength={1} d="M34 50 L18 60 L32 72" stroke="#5a3fd4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>,
 ];
 
@@ -151,11 +152,11 @@ export function Memory() {
         <section className={`${s.wrap} ${s.section}`} aria-labelledby="memory-title">
             <div className={s.head}>
                 <div><p className={s.label}>It remembers</p><h2 id="memory-title" className={s.title}>Correct it once.</h2></div>
-                <p className={s.body}>It writes the lesson down where your people can read it, and works that way from then on. Open any note to change it.</p>
+                <p className={s.body}>It writes the lesson down where your people can read it, and works that way from then on. Open any note to change it.<br /><Link className={`${s.textLink} ${s.moreLink}`} href="/product/memory">How memory works →</Link></p>
             </div>
             <div className={s.storyboard} role="list">
                 {MOMENTS.map((moment, index) => (
-                    <div key={moment.label} className={s.moment} role="listitem">
+                    <div key={moment.label} className={s.moment} role="listitem" data-rise="">
                         <span className={s.label}>{moment.label}</span>
                         <div className={s.momentCard}>
                             <Image src={moment.src} width={moment.width} height={moment.height} sizes="(max-width: 1080px) 100vw, 560px" alt={moment.alt} />

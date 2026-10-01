@@ -1,0 +1,75 @@
+/* The next person, beat by beat. Base styles are the opening frame: Monday's
+   exchange in the app on the left, Wednesday's channel on the right, quiet.
+   Each `.root[data-bN]` rule is what changes from beat N on, in beat order,
+   so the last rules here are the finished picture. */
+
+.root { --v-step: 120ms }
+.stage { position: absolute; inset: 0; background: var(--cream) }
+
+/* ── The two places ─────────────────────────────────────────────────── */
+.pane { position: absolute; top: 16px; width: 236px; height: 348px; overflow: hidden; border-radius: 12px; background: var(--paper); box-shadow: 0 18px 40px -26px rgb(20 20 19 / .35), 0 0 0 1px var(--line) }
+.app { left: 16px }
+.chat { left: 388px }
+.head { gap: 8px; padding: 0 8px 0 12px }
+.head img { width: 20px; height: 20px; border-radius: 6px }
+.day { margin-left: auto; height: 22px; padding: 0 9px }
+.hash { font-size: 14px; color: var(--ink-3) }
+
+/* Monday: the conversation as the app draws it. */
+.thread { position: absolute; top: 36px; left: 0; right: 0; display: flex; flex-direction: column; gap: 16px; padding: 14px 12px 0 }
+.you { align-self: flex-end; max-width: 190px; padding: 8px 12px; border-radius: 14px; background: var(--cream); font-size: 12.5px; line-height: 1.45; color: var(--ink) }
+.reply { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 9px; align-items: start }
+.reply > img { width: 22px; height: 22px; border-radius: 6px }
+.who { font-size: 12.5px; line-height: 22px; color: var(--ink) }
+.steps { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: 3px 0 7px; padding: 0 9px 0 4px; border-radius: 99px; border: 1px solid var(--line); font-size: 12px; color: var(--ink-2) }
+.steps i { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--violet-soft); color: var(--violet-deep) }
+.steps svg:last-child { color: var(--ink-3) }
+.said { font-size: 12.5px; line-height: 1.5; color: var(--ink) }
+.noted { display: flex; align-items: center; gap: 5px; margin-top: 7px; font-size: 12px; color: var(--ink-3); opacity: 0 }
+.noted svg { flex: none }
+.topic { color: var(--ink-2); white-space: nowrap }
+
+.composer { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; align-items: center; height: 40px; padding: 0 6px 0 12px; border-radius: 14px; box-shadow: 0 0 0 1px var(--line-2); font-size: 12.5px; color: var(--ink-3) }
+.composer i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: auto; border-radius: 50%; background: var(--cream); color: var(--ink-3) }
+
+/* Wednesday: a plain team-chat channel. */
+.feed { position: absolute; top: 36px; left: 0; right: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px 8px 0 }
+.post { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 9px; align-items: start; padding: 6px; border-radius: 10px }
+.post > img { width: 24px; height: 24px; border-radius: 6px }
+.name { font-size: 12.5px; line-height: 18px; color: var(--ink) }
+.name time { margin-left: 6px; font-size: 12px; color: var(--ink-3) }
+.text { font-size: 12.5px; line-height: 1.5; color: var(--ink-2) }
+.at { padding: 0 3px; border-radius: 4px; background: var(--violet-soft); color: var(--violet-deep) }
+.ask, .answer { opacity: 0; transform: translateY(8px) }
+
+/* ── The note, between the two ──────────────────────────────────────── */
+.shared { position: absolute; left: 260px; top: 90px; width: 120px; font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; text-align: center; color: var(--ink-3); opacity: 0 }
+/* It appears level with Monday's "noted this" line, just past the topic and
+   clear of the conversation, then rises straight up to its place under
+   "Shared": it never crosses the text it came from. */
+.note { position: absolute; left: 260px; top: 112px; width: 120px; padding: 9px 11px 10px; opacity: 0; transform: translateY(126px) scale(.92); transform-origin: 0 50%; transition: opacity var(--v-quick) var(--ease), transform var(--v-slow) ease-in-out, box-shadow var(--v-quick) var(--ease) }
+.noteTopic { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink) }
+.noteTopic i { width: 6px; height: 6px; border-radius: 50%; background: var(--violet) }
+.noteText { margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--ink-3) }
+
+/* The line that joins the note to Wednesday's answer. */
+.link { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none }
+.link path { fill: none; stroke: var(--violet); stroke-width: 1.5; stroke-linecap: round; stroke-dasharray: 1 2; stroke-dashoffset: 1.2; opacity: 0; transition: opacity var(--v-quick) var(--ease), stroke-dashoffset var(--v-slow) var(--ease) }
+.link circle { fill: var(--violet); opacity: 0 }
+
+/* 1 · the app says it wrote a note */
+.root[data-b1] .noted { opacity: 1 }
+/* 2 · the note rises out of that line and settles between the two */
+.root[data-b2] .note { opacity: 1; transform: none }
+.root[data-b2] .shared { opacity: 1; transition-delay: calc(8 * var(--v-step)) }
+/* …and once it has settled, the line back to where it came from. */
+.root[data-b2] .trail { opacity: 1; stroke-dashoffset: 0; transition-duration: var(--v-quick), var(--v-move); transition-delay: calc(10 * var(--v-step)) }
+/* 3 · Wednesday: Priya asks in the channel */
+.root[data-b3] .ask { opacity: 1; transform: none }
+/* 4 · Remy answers */
+.root[data-b4] .answer { opacity: 1; transform: none }
+/* 5 · the note, drawn into the answer */
+.root[data-b5] .into { opacity: 1; stroke-dashoffset: 0 }
+.root[data-b5] .link circle { opacity: 1; transition-delay: calc(8 * var(--v-step)) }
+.root[data-b5] .note { box-shadow: 0 18px 40px -22px rgb(20 20 19 / .45), 0 0 0 1.5px var(--violet) }
+.root[data-b5] .answer { background: var(--violet-soft); transition-delay: calc(8 * var(--v-step)) }

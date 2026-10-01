@@ -1,3 +1,4 @@
+import { PRODUCT_PAGES } from '@/marketing/product-pages';
 import type { MetadataRoute } from 'next';
 
 import { collectionLastModified, listContent } from '@/site/content/loader';
@@ -10,6 +11,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     const fixed: MetadataRoute.Sitemap = [
         { url: base, changeFrequency: 'weekly', priority: 1 },
         { url: `${base}/templates`, changeFrequency: 'weekly', priority: 0.9 },
+        ...PRODUCT_PAGES.map((page) => ({ url: `${base}/product/${page.slug}`, changeFrequency: 'monthly' as const, priority: 0.8 })),
         { url: `${base}/download`, changeFrequency: 'weekly', priority: 0.9 },
         { url: `${base}/docs`, changeFrequency: 'weekly', priority: 0.8 },
         { url: `${base}/about`, changeFrequency: 'monthly', priority: 0.5 },

@@ -1,0 +1,128 @@
+/* A workflow from one sentence, beat by beat. Base styles are the opening
+   frame: June's conversation on the left, new, with Priya's sentence waiting
+   in the composer; First import check's page on the right, its two headings
+   and nothing under them. Each `.root[data-bN]` rule is what changes from
+   beat N on, in beat order, so the last rules are the finished picture: the
+   sentence in the thread, June's reply under it, and the steps listed down
+   the page. */
+
+.root { --v-step: 380ms; container-type: inline-size }
+/* The landing zeroes these margins in a rule that outranks this module, so
+   the spacing between them is padding. */
+.root :where(p, ol, li) { margin: 0; padding: 0 }
+
+/* ── June's conversation ────────────────────────────────────────────── */
+.chat { position: absolute; top: 36px; left: 0; bottom: 0; width: 282px; background: var(--paper); box-shadow: inset -1px 0 0 var(--line) }
+
+/* A new conversation, before anything is said in it. */
+.quiet { position: absolute; top: 46px; left: 16px; right: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px }
+.mark { width: 34px; height: 34px; margin-bottom: 4px; border-radius: 10px; background: var(--violet-soft); object-fit: contain }
+.quietTitle { font-size: 16px; letter-spacing: -.02em; color: var(--ink) }
+.quietBody { font-size: 13px; color: var(--ink-3) }
+
+/* Anchored to the composer, as a chat is: what arrives pushes what came
+   before it up. */
+.feed { position: absolute; top: 0; left: 0; right: 0; bottom: 64px; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 16px 6px; overflow: hidden }
+/* A turn opens its space on the way in; a new loop clears the thread at
+   once, as a fresh conversation would be. */
+.line { display: grid; grid-template-rows: 1fr; flex: none; transition: none }
+.line > div { min-height: 0; overflow: hidden }
+.in1, .in2, .in5 { grid-template-rows: 0fr; opacity: 0 }
+
+/* Your turn: on the far side, sized by its words, no name over it. */
+.you { width: fit-content; max-width: 232px; margin-left: auto; padding: 8px 13px; border-radius: 16px; background: var(--cream); font-size: 13px; line-height: 1.45; color: var(--ink); text-wrap: pretty }
+
+/* June's turn: its face, its name, the work as one line, what it said. */
+.reply { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; margin-top: 14px }
+.face { width: 24px; height: 24px; border-radius: 7px }
+.col { min-width: 0 }
+.who { font-size: 13px; line-height: 24px; color: var(--ink) }
+.steps { display: inline-grid; height: 24px; margin-top: 2px; overflow: hidden; border: 1px solid var(--line); border-radius: 99px; background: var(--paper) }
+.steps > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 7px; padding: 0 10px 0 3px; font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.state { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 99px; background: var(--violet-soft); color: var(--violet) }
+.pulse { width: 6px; height: 6px; border-radius: 99px; background: var(--violet); animation: pulse var(--v-slow) var(--ease) infinite }
+@keyframes pulse { 50% { opacity: .25 } }
+/* What it is doing right now, in its own words, quieter than "Working". */
+.peek { padding-left: 8px; border-left: 1px solid var(--line); font-style: normal; color: var(--ink-3) }
+/* The product swaps the line, it does not fade it, and the pill fits
+   whichever line it holds. */
+.steps > .done { display: none }
+.chev { margin-left: -3px; color: var(--ink-3) }
+.said { padding-top: 8px; font-size: 13px; line-height: 1.5; color: var(--ink) }
+
+/* The composer, holding the sentence until it is sent. */
+.composer { position: absolute; left: 14px; right: 14px; bottom: 12px; display: flex; align-items: flex-end; gap: 8px; min-height: 44px; padding: 5px 5px 5px 12px; border: 1px solid var(--violet); border-radius: 22px; background: var(--paper); box-shadow: 0 0 0 3px var(--violet-soft), 0 8px 20px -14px rgb(20 20 19 / .4); transition: box-shadow var(--v-quick) var(--ease), border-color var(--v-quick) var(--ease) }
+.attach { flex: none; margin-bottom: 8px; color: var(--ink-3) }
+.field { flex: 1; min-width: 0; display: grid; padding: 6px 0 7px; font-size: 13px; line-height: 19px }
+.placeholder, .typed { grid-area: 1 / 1 }
+.placeholder { color: var(--ink-3); white-space: nowrap; opacity: 0; transition: none }
+.typed { color: var(--ink) }
+.caret { margin-left: 1px }
+.wave { flex: none; margin-bottom: 8px; color: var(--ink-3) }
+.send { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 50%; background: var(--violet); color: var(--paper) }
+
+/* ── The workflows list, as it stands before the ask ─────────────────── */
+.list { position: absolute; top: 36px; left: 282px; right: 0; bottom: 0; padding: 20px 18px 0 20px; background: var(--paper) }
+.listTitle { font-size: 18px; letter-spacing: -.02em; color: var(--ink) }
+.listSub { padding-top: 4px; font-size: 12px; line-height: 17px; color: var(--ink-3) }
+.rows { list-style: none; margin: 16px 0 0; padding: 0 }
+.row { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 0; box-shadow: inset 0 -1px 0 var(--line) }
+.rowTile { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--violet-soft); color: var(--violet) }
+.rowText { display: flex; flex-direction: column; gap: 2px; min-width: 0 }
+.rowName { font-size: 13px; line-height: 18px; color: var(--ink) }
+.rowSays { font-size: 12px; line-height: 16px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+
+/* ── First import check's page, laid over the list once it exists ───── */
+.page { position: absolute; top: 36px; left: 282px; right: 0; bottom: 0; padding: 18px 18px 0 20px; background: var(--paper); opacity: 0; transform: translateY(8px) }
+.head { display: flex; align-items: center; gap: 10px; height: 32px }
+.tile { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 9px; background: var(--violet-soft); color: var(--violet) }
+.title { flex: 1; min-width: 0; font-size: 18px; letter-spacing: -.02em; color: var(--ink); white-space: nowrap }
+.ask { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; flex: none; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); font-size: 12px; color: var(--ink); white-space: nowrap }
+
+/* How it starts: a card, as the page draws it. */
+.starts { margin-top: 18px; padding: 12px 14px 13px; border-radius: 10px; box-shadow: inset 0 0 0 1px var(--line-2) }
+.h2 { font-size: 14px; line-height: 20px; color: var(--ink) }
+.what { padding-top: 6px; font-size: 13px; line-height: 19px; color: var(--ink); opacity: 0; transform: translateY(4px) }
+
+/* How it runs: a heading and a spine of hollow marks, one row a step. */
+.runs { padding-top: 20px }
+.spine { list-style: none; padding: 11px 0 0 4px }
+.step { position: relative; display: grid; grid-template-columns: 7px minmax(0, 1fr); column-gap: 12px; align-items: start; padding-bottom: 13px; opacity: 0; transform: translateY(5px) }
+.step:last-child { padding-bottom: 0 }
+/* The rule up to the step before, so it arrives with its row. */
+.step + .step::before { content: ""; position: absolute; left: 3px; top: -19px; height: 23px; width: 1px; background: var(--line-2) }
+.dot { width: 7px; height: 7px; margin-top: 7px; border-radius: 50%; border: 1px solid var(--ink-3); background: var(--paper) }
+.say { display: flex; align-items: baseline; gap: 8px; min-width: 0; line-height: 20px; white-space: nowrap }
+.say strong { font-size: 13px; font-weight: 500; color: var(--ink) }
+.say i { font-style: normal; font-size: 12px; color: var(--ink-2) }
+
+/* 1 · sent: in the thread, and the composer empty again, as the app does */
+.root[data-b1] .quiet { opacity: 0; transform: translateY(-6px) }
+.root[data-b1] .in1 { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-move) var(--ease) }
+.root[data-b1] .typed { display: none }
+.root[data-b1] .placeholder { opacity: 1 }
+.root[data-b1] .send { background: var(--line-2); color: var(--ink-3) }
+.root[data-b1] .composer { border-color: var(--line-2); box-shadow: 0 0 0 3px transparent, 0 8px 20px -14px rgb(20 20 19 / .4) }
+/* 2 · June working */
+.root[data-b2] .in2 { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-move) var(--ease) }
+/* 3 · the new page opens over the list, with how it starts */
+.root[data-b3] .page { opacity: 1; transform: none; transition: opacity var(--v-move) var(--ease), transform var(--v-move) var(--ease) }
+.root[data-b3] .what { opacity: 1; transform: none; transition: opacity var(--v-move) var(--ease) var(--v-move), transform var(--v-move) var(--ease) var(--v-move) }
+/* 4 · how it runs, a row at a time; the delay only on the way in, so a new
+   loop clears the list at once */
+.root[data-b4] .step { opacity: 1; transform: none; transition-delay: calc(var(--n) * var(--v-step)) }
+/* 5 · June done, and what it said */
+.root[data-b5] .steps > .working { display: none }
+.root[data-b5] .steps > .done { display: inline-flex }
+.root[data-b5] .in5 { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-move) var(--ease) }
+
+/* Reduced motion: the transitions written above outrank the kit's
+   `[data-still]` reset, so they are stopped here, last. */
+.root[data-still] :is(.line, .composer, .placeholder, .step, .pulse, .page, .what) { transition: none; animation: none }
+
+/* On a phone the vignette shows only the page side (`phone` in the .tsx,
+   x 292 to 632), so the bar's breadcrumb moves in over it. Below the same
+   520px the Vignette switches at. */
+@container (width < 520px) {
+    .root .bar { padding: 0 20px 0 304px }
+}

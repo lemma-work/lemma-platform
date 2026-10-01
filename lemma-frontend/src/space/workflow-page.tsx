@@ -7,14 +7,15 @@ import { lemma } from "@/session/client";
 import { useMe } from "@/session/use-me";
 import { isForbidden } from "@/session/auth-state";
 import { byNewest, readRun, readRuns, type RunRow } from "@/workflow/runs";
-import { readShape } from "@/workflow/shape";
+import { readShape, type WorkflowShape } from "@/workflow/shape";
 import { Shape } from "@/workflow/workflows-view";
 import { RunRowButton } from "@/workflow/run-row";
 import { useWorkflowGraph, workflowGraphQuery, useWorkflowList } from "@/workflow/use-run";
 import { automationOf, runsForOf, schedulesFor, turnOnOf, turnOnRequest, type Automation, type TurnOn } from "@/workflow/turn-on";
 import { useSchedules } from "@/schedule/queries";
-import { CADENCES, SCOPE_LABEL, agoOf, healthOf, type StandingJob } from "@/schedule/schedules";
+import { CADENCES, SCOPE_LABEL, agoOf, healthOf, humanizeName, type StandingJob } from "@/schedule/schedules";
 import { ChevronLeftIcon, ClockIcon, PlayIcon, RefreshIcon, WorkflowIcon } from "@/ui/icons";
+import { samples } from "@/data/samples";
 
 /** One workflow, as a page: what it is and who it runs for, whether it is on
  *  — for you, or for the space — and every run it has made, each one a click
@@ -42,6 +43,10 @@ export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, o
         queryFn: async () => readShape((await cache.fetchQuery(workflowGraphQuery(pod.id, name))).raw ?? null),
         staleTime: 5 * 60_000,
     });
+    /* Counted the way a run counts them, without the End, so this page and
+       a run's "3 of 5 steps" agree; the list's node count until the steps
+       arrive. */
+    const steps = shape.data ? [...shape.data.ordered, ...shape.data.orphans].filter((step) => step.kind !== "END").length : flow?.steps ?? null;
     const raw = graph.data?.raw as { start?: unknown; mode?: string; description?: string | null } | null | undefined;
     const automation = automationOf(raw?.start);
     const perPerson = flow?.perPerson ?? raw?.mode === "USER";
@@ -63,12 +68,12 @@ export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, o
                 <header className="wfpage__head">
                     <span className="wfpage__tile"><WorkflowIcon size={26} /></span>
                     <div className="wfpage__who">
-                        <h1>{name}</h1>
+                        <h1>{humanizeName(name)}</h1>
                         <p>{flow?.description || raw?.description || "No description written."}</p>
                         <div className="agentpage__tags">
                             <span className="agentpage__tag" title={runsForOf(automation, perPerson)}>{automation.kind === "rows" ? "Each row’s owner" : perPerson ? "Each person" : "Admin"}</span>
                             {flow && !flow.active && <span className="agentpage__tag">Paused</span>}
-                            {flow && <span className="agentpage__tag">{flow.steps} {flow.steps === 1 ? "step" : "steps"}</span>}
+                            {steps !== null && <span className="agentpage__tag">{steps} {steps === 1 ? "step" : "steps"}</span>}
                         </div>
                     </div>
                     <div className="agentpage__acts">
@@ -86,7 +91,7 @@ export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, o
                         <Shape query={shape} teammate={pod.teammate?.name || pod.name} />
                     </div>
                     <aside className="wfpage__dock" aria-label="Runs">
-                        <Runs pod={pod} name={name} onOpenRun={onOpenRun} />
+                        <Runs pod={pod} name={name} names={stepNames(shape.data)} onOpenRun={onOpenRun} />
                     </aside>
                 </div>
             </div>
@@ -228,13 +233,18 @@ function TurnOnForm({ pod, orgId, name, automation, perPerson, onConnect }: {
 
 /* ── runs ──────────────────────────────────────────────────────────── */
 
-function Runs({ pod, name, onOpenRun }: { pod: Pod; name: string; onOpenRun: (runId: string, label: string) => void }) {
+/** Each step's label by its id, for the run rows beside the steps. */
+function stepNames(shape: WorkflowShape | null | undefined): Map<string, string> {
+    return new Map([...(shape?.ordered ?? []), ...(shape?.orphans ?? [])].filter((step) => step.label).map((step) => [step.id, step.label as string]));
+}
+
+function Runs({ pod, name, names, onOpenRun }: { pod: Pod; name: string; names: ReadonlyMap<string, string>; onOpenRun: (runId: string, label: string) => void }) {
     const runs = useInfiniteQuery({
         queryKey: ["workflow-runs", pod.id, name, "pages"],
         initialPageParam: undefined as string | undefined,
         queryFn: async ({ pageParam }): Promise<{ items: RunRow[]; next: string | null }> => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOW_RUNS } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOW_RUNS } = await samples(pod.id);
                 return { items: byNewest(readRuns({ items: SAMPLE_WORKFLOW_RUNS[name] ?? [] })), next: null };
             }
             const page = await lemma(pod.id).workflows.runs.list(name, { limit: 20, pageToken: pageParam });
@@ -256,7 +266,7 @@ function Runs({ pod, name, onOpenRun }: { pod: Pod; name: string; onOpenRun: (ru
             {runs.isError && <p className="runpage__note" role="alert">{isForbidden(runs.error) ? "You may not read these runs." : "Couldn’t load runs."}</p>}
             {runs.isSuccess && all.length === 0 && <p className="runpage__note">It has never run.</p>}
             <div className="wfdock__list">
-                {all.map((run) => <RunRowButton key={run.id} run={run} onOpen={() => onOpenRun(run.id, name)} />)}
+                {all.map((run) => <RunRowButton key={run.id} run={run} names={names} onOpen={() => onOpenRun(run.id, name)} />)}
             </div>
             {runs.hasNextPage && (
                 <button className="chats-page__more" disabled={runs.isFetchingNextPage} onClick={() => void runs.fetchNextPage()}>

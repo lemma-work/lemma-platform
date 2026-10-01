@@ -5,8 +5,13 @@ import type { ReactNode } from "react";
 import { LemmaLogo } from "@/ui/icons";
 import { copyrightNotice } from "./company";
 import { HostedOnly } from "./hosted-only";
+import { PRODUCT_PAGES } from "@/marketing/product-pages";
 export function SiteFooter() {
     const groups = [
+        {
+            title: "Product",
+            links: PRODUCT_PAGES.map((page) => [page.name, "/product/" + page.slug]),
+        },
         {
             title: "Explore",
             links: [

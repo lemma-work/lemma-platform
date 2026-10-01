@@ -1,0 +1,137 @@
+/* An answer outgrows the chat, beat by beat. Base styles are the opening
+   frame: June's conversation, empty, centred, with the question typed into
+   the composer. Each `.root[data-bN]` rule is what changes from beat N on, in
+   beat order, so the last rules are the finished picture: the conversation
+   to the left ending in the app's card, Customer launchpad open beside it
+   with the four flagged cells in its grid. */
+
+.root {
+    --v-step: 90ms;
+    /* The import check's flag: a burnt ink and the peach wash it sits on. */
+    --issue: color-mix(in srgb, var(--wait) 60%, var(--bad));
+    --peach: color-mix(in srgb, var(--issue) 12%, var(--paper));
+}
+.ground { position: absolute; inset: 36px 0 0 0; background: var(--paper) }
+/* When the loop starts again the window is simply back where it began,
+   rather than easing backwards through every beat at once. */
+.root:not([data-b1]) * { transition: none }
+
+/* ── The conversation ───────────────────────────────────────────────── */
+/* Centred in the window until the app opens, then the left-hand pane. */
+.chat { position: absolute; top: 36px; bottom: 0; left: 0; width: 278px; transform: translateX(181px) }
+/* Lines of text here are divs, not paragraphs: the landing page resets the
+   margin of every `p` and `ol` inside it, and that rule arrives after this
+   file, so it would cancel each margin set below. */
+
+/* Anchored to the composer, as a chat is: what arrives at the bottom pushes
+   what came before it up, and past the top it is gone. */
+.feed { position: absolute; top: 0; left: 0; right: 0; bottom: 56px; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 14px 4px; overflow: hidden; mask-image: linear-gradient(to bottom, transparent 0, rgb(20 20 19) 36px) }
+.line { display: grid; grid-template-rows: 1fr; flex: none }
+.line > div { min-height: 0; overflow: hidden }
+.in1, .in2, .in3, .in4, .in7, .out7 { transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-move) var(--ease) }
+.in1, .in2, .in3, .in4, .in7 { grid-template-rows: 0fr; opacity: 0 }
+
+.day { display: flex; margin: 0; align-items: center; gap: 10px; padding: 10px 0 2px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3) }
+.day::after { content: ""; flex: 1; height: 1px; background: var(--line) }
+
+/* Your turn: on the far side, sized by its words. */
+.you { width: fit-content; max-width: 232px; margin: 10px 0 0 auto; padding: 7px 12px; border-radius: 14px; background: var(--cream); font-size: 13px; line-height: 1.45; color: var(--ink) }
+
+/* June's turn: its face, its name, what it said. */
+.reply { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; margin-top: 10px }
+.face { width: 24px; height: 24px; border-radius: 7px }
+.who { margin: 0; font-size: 13px; line-height: 24px; color: var(--ink) }
+.said { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink) }
+/* The items in the answer, marked as the app takes them. */
+.src { border-radius: 3px; box-shadow: 0 0 0 2px transparent }
+
+/* The line the app draws while a run has no reply yet. */
+.working { display: flex; align-items: center; gap: 8px; margin: 8px 0 0 34px; font-size: 13px; color: var(--ink-3) }
+.working i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--violet); animation: pulse var(--v-slow) var(--ease) infinite }
+@keyframes pulse { 0%, 100% { opacity: .25; transform: scale(.8) } 50% { opacity: 1; transform: none } }
+
+/* What June put on screen: the app, as a card that opens it. */
+.resource { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink-3) }
+.resource svg { flex: none }
+.resourceBody { display: flex; flex-direction: column; flex: 1; min-width: 0 }
+.resourceName { overflow: hidden; font-size: 13px; color: var(--ink); white-space: nowrap; text-overflow: ellipsis }
+.resourceType { font-family: var(--mono); font-size: 12px; color: var(--ink-3) }
+.resourceGo { font-size: 12.5px; color: var(--violet) }
+
+/* The composer grows a line while the question is typed into it, and
+   settles back once it is sent. */
+.composer { position: absolute; left: 14px; right: 14px; bottom: 12px; display: flex; align-items: flex-end; gap: 10px; height: 60px; overflow: hidden; padding: 0 5px 5px 14px; border: 1px solid var(--line-2); border-radius: 20px; background: var(--paper); font-size: 13px; line-height: 19px; color: var(--ink-3) }
+.composer > svg { flex: none; margin-bottom: 6px }
+.typed { position: absolute; top: 9px; left: 39px; right: 44px; color: var(--ink) }
+.placeholder { margin-bottom: 4px; opacity: 0 }
+.composer i { flex: none; display: grid; place-items: center; width: 28px; height: 28px; margin-left: auto; border-radius: 50%; background: var(--ink); color: var(--paper) }
+
+/* ── The app ────────────────────────────────────────────────────────── */
+/* Customer launchpad, in its own look: a dark strip of customers over a
+   pale workbench. */
+.app { position: absolute; top: 36px; bottom: 0; left: 278px; right: 0; overflow: hidden; background: var(--cream); box-shadow: inset 1px 0 0 var(--line); opacity: 0; transform: translateX(24px) }
+.appHead { display: flex; align-items: stretch; height: 30px; padding-left: 10px; background: var(--ink) }
+.tab { display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12px; color: rgb(255 254 251 / .72); white-space: nowrap }
+.tabOn { background: var(--cream); color: var(--ink) }
+.tab em { font-family: var(--mono); font-style: normal; font-size: 12px; color: var(--ink-3) }
+.appBody { padding: 10px 14px 0 }
+.titleRow { display: flex; align-items: center; justify-content: space-between; gap: 8px }
+.appTitle { margin: 0; font-size: 15px; line-height: 22px; color: var(--ink) }
+.state { padding: 2px 7px; border-radius: 5px; background: color-mix(in srgb, var(--wait) 12%, var(--paper)); font-size: 12px; color: var(--wait); white-space: nowrap }
+.meta { margin: 1px 0 0; font-family: var(--mono); font-size: 12px; color: var(--ink-3); white-space: nowrap }
+
+/* The import's five milestones; the first three are done. */
+.app .steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 9px 0 0; padding: 0; list-style: none; background: var(--paper); box-shadow: 0 0 0 1px var(--line) }
+.steps li { padding: 6px 6px 5px 7px; box-shadow: inset 1px 0 0 var(--line); font-size: 12px; line-height: 1.2; color: var(--ink-3) }
+.steps li:first-child { box-shadow: none }
+.steps i { display: grid; place-items: center; width: 16px; height: 16px; margin-bottom: 4px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line-2); font-style: normal; font-size: 12px; line-height: 1; color: var(--ink-3) }
+.steps .done { color: var(--ink-2) }
+.steps .done i svg { opacity: 0 }
+
+/* The working sample, its flagged cells still empty. */
+.sheet { margin-top: 9px; background: var(--paper); box-shadow: 0 0 0 1px var(--line) }
+.grid { table-layout: fixed }
+.grid th { padding: 5px 5px; letter-spacing: .02em; white-space: nowrap; background: color-mix(in srgb, var(--ink) 3%, var(--paper)) }
+.grid th:nth-child(1) { width: 32px }
+.grid th:nth-child(2) { width: 84px }
+.grid th:nth-child(3) { width: 130px }
+.grid td { height: 25px; padding: 0 5px; vertical-align: middle; color: var(--ink); font-variant-numeric: tabular-nums; overflow: hidden }
+.grid td:first-child { color: var(--ink-3); text-align: center }
+.grid td.bad { position: relative; padding: 0 }
+.bad span { position: absolute; inset: 0 0 1px; display: flex; align-items: center; padding: 2px 5px 0 3px; border-left: 2px solid var(--issue); background: var(--peach); color: var(--issue); opacity: 0 }
+.foot { display: flex; align-items: center; justify-content: space-between; height: 38px; padding: 0 7px 0 10px }
+.issues { font-family: var(--mono); font-size: 12px; color: var(--issue); opacity: 0 }
+.import { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 6px; background: rgb(20 20 19 / .06); font-size: 12px; color: var(--ink-3) }
+
+/* ── The items, carried ─────────────────────────────────────────────── */
+/* Each one starts over its words in the answer and ends over its cell. The
+   outer span travels; the inner one lifts and carries the wash. */
+.carry { position: absolute; z-index: 3; transform-origin: 0 50% }
+.lift { display: block; padding: 0 3px; border-radius: 4px; background: var(--peach); font-size: 13px; line-height: 19px; color: var(--issue); font-variant-numeric: tabular-nums; white-space: nowrap; opacity: 0 }
+
+/* 1 · the question, sent */
+.root[data-b1] .in1 { grid-template-rows: 1fr; opacity: 1 }
+.root[data-b1] .composer { height: 40px }
+.root[data-b1] .typed { opacity: 0 }
+.root[data-b1] .placeholder { opacity: 1; transition-delay: var(--v-quick) }
+.root[data-b1] .composer i { background: rgb(20 20 19 / .07); color: var(--ink-3) }
+/* 2 · June's answer */
+.root[data-b2] .in2 { grid-template-rows: 1fr; opacity: 1 }
+/* 3 · Thursday: another exchange pushes it up */
+.root[data-b3] .in3 { grid-template-rows: 1fr; opacity: 1 }
+/* 4 · "Make this something Dev can work in", and the working line */
+.root[data-b4] .in4 { grid-template-rows: 1fr; opacity: 1 }
+/* 5 · the app opens beside the chat, its first three steps ticked */
+.root[data-b5] .chat { transform: none }
+.root[data-b5] .app { opacity: 1; transform: none }
+.root[data-b5] .steps .done i { background: var(--ok); color: var(--paper); transition-delay: calc(var(--v-quick) + var(--n) * var(--v-step) * 2) }
+.root[data-b5] .steps .done i svg { opacity: 1; transition-delay: calc(var(--v-quick) + var(--n) * var(--v-step) * 2) }
+/* 6 · the items lift out of the answer and settle in the grid */
+.root[data-b6] .src { background: var(--peach); box-shadow: 0 0 0 2px var(--peach); color: var(--issue); transition-delay: calc(var(--n) * var(--v-step)) }
+.root[data-b6] .lift { opacity: 1; transform: translateY(-4px); box-shadow: 0 10px 22px -12px rgb(20 20 19 / .55); transition: opacity var(--v-quick) var(--ease), transform var(--v-quick) var(--ease); transition-delay: calc(var(--n) * var(--v-step)) }
+.root[data-b6] .carry { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(.92); transition: opacity var(--v-quick) var(--ease), transform var(--v-move) var(--ease); transition-delay: calc(var(--v-quick) + var(--v-move) + var(--v-quick) + var(--n) * var(--v-step)), calc(var(--v-quick) + var(--n) * var(--v-step)) }
+.root[data-b6] .bad span { opacity: 1; transition-delay: calc(var(--v-quick) + var(--v-move) + var(--n) * var(--v-step)) }
+.root[data-b6] .issues { opacity: 1; transition-delay: calc(var(--v-quick) + var(--v-move) + 4 * var(--v-step)) }
+/* 7 · the app's card, where the working line was */
+.root[data-b7] .out7 { grid-template-rows: 0fr; opacity: 0 }
+.root[data-b7] .in7 { grid-template-rows: 1fr; opacity: 1 }

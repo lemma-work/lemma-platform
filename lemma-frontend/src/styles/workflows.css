@@ -463,6 +463,9 @@
 .wf-spine__row--start .wf-spine__title b { font-family: inherit; font-size: 13px; }
 .wf-spine__row[data-broken] .wf-spine__title i { color: var(--bad); }
 .wf-spine__title em { font-style: normal; font-size: 11px; color: var(--ink-3); }
+.wf-spine__title strong { font-size: 13px; font-weight: 500; color: var(--ink); }
+.wf-spine__title strong + i { color: var(--ink-2); }
+.wf-spine__title code { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
 .wf-spine__note {
     font-size: 11.5px;
     color: var(--ink-2);

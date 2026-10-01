@@ -1,0 +1,156 @@
+/* A person's step, answered from the chat, beat by beat. Base styles are
+   the opening frame: Dev's chat with June, empty but for today's date, and
+   the run page beside it, waiting on Dev with his form open and empty. Each
+   `.root[data-bN]` rule is what changes from beat N on, in beat order, so
+   the last rules are the finished picture: three messages on the left, the
+   step Done with its answer in the form and Run the import going on the
+   right. */
+
+.root { --v-step: 110ms; --type: calc(var(--v-move) * .62) }
+.stage { position: absolute; inset: 0; background: var(--cream) }
+/* When the loop starts again everything is simply back where it began,
+   rather than easing backwards through every beat at once. */
+.root:not([data-b1]) * { transition: none }
+/* The page around it zeroes the margins of p and ol at the same weight
+   and comes later, so the margins here are written under `.root`. */
+.root :where(p, ol) { margin: 0 }
+
+/* ── Dev's phone ────────────────────────────────────────────────────── */
+/* A plain conversation: the teammate's name at the top, the thread
+   anchored to the message box, nothing of any one chat app's chrome. */
+.phone { position: absolute; top: 10px; left: 22px; width: 216px; height: 380px; display: flex; flex-direction: column; overflow: hidden; border-radius: 26px; background: var(--paper); box-shadow: 0 18px 40px -22px rgb(20 20 19 / .45), 0 0 0 1px var(--line) }
+.phoneHead { flex: none; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 14px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--ink-3) }
+.phoneHead b { font-weight: 500; color: var(--ink) }
+.root .phoneFace { width: 24px; height: 24px; border-radius: 7px }
+
+/* What arrives at the bottom pushes what came before it up. */
+.feed { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 10px 8px; overflow: hidden }
+.day { flex: none; padding: 10px 0 0; text-align: center; font-size: 12px; color: var(--ink-3) }
+.line { display: grid; grid-template-rows: 1fr; flex: none }
+.line > div { min-height: 0; overflow: hidden }
+.root .line { transition: grid-template-rows var(--v-move) var(--ease), opacity var(--v-move) var(--ease) }
+.in1, .in3, .in5 { grid-template-rows: 0fr; opacity: 0 }
+
+/* The teammate's turn on the left, Dev's own on the right. */
+.root .theirs, .root .mine { width: fit-content; max-width: 178px; margin-top: 8px; padding: 7px 11px; font-size: 12.5px; line-height: 1.42 }
+.theirs { border-radius: 14px 14px 14px 4px; background: var(--cream); color: var(--ink) }
+.theirs p + p { margin-top: 5px }
+.root .mine { margin-left: auto; border-radius: 14px 14px 4px 14px; background: var(--ink); color: var(--paper) }
+/* The words the form is filled from, lit as they're used. */
+.mine mark { --lit: var(--violet-soft); border-radius: 0; background: transparent; color: inherit; box-shadow: inset 0 -1.5px 0 transparent }
+.root .mine mark { transition: background-color var(--v-quick) var(--ease), box-shadow var(--v-quick) var(--ease) }
+
+/* The message box: one line, until the reply is typed into it. */
+.composer { position: relative; flex: none; height: 34px; margin: 0 10px 10px; border: 1px solid var(--line-2); border-radius: 17px; background: var(--paper); font-size: 12.5px; line-height: 17px }
+.placeholder { position: absolute; top: 7px; left: 13px; color: var(--ink-3) }
+.typed { position: absolute; top: 7px; left: 13px; right: 34px; color: var(--ink) }
+.t1, .t2, .t3 { display: block; width: fit-content; white-space: nowrap; clip-path: inset(0 100% 0 0) }
+.caret { height: 14px; opacity: 0 }
+.send { position: absolute; right: 3px; bottom: 3px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgb(20 20 19 / .07); color: var(--ink-3) }
+.root .send { transition: background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
+
+/* ── The run page ───────────────────────────────────────────────────── */
+.run { position: absolute; top: 10px; left: 252px; width: 366px; height: 380px; overflow: hidden; padding: 12px 14px 0; border-radius: 14px; background: var(--paper); box-shadow: 0 18px 40px -22px rgb(20 20 19 / .45), 0 0 0 1px var(--line) }
+.head { display: flex; align-items: center; gap: 8px; height: 26px }
+.name { font-size: 16px; letter-spacing: -.01em; color: var(--ink); white-space: nowrap }
+/* Where the run stands; the second pill takes the first one's place. */
+.status { position: relative; display: inline-flex }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 99px; background: var(--cream); font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--wait) }
+.pillGo { position: absolute; top: 0; left: 0; opacity: 0 }
+.pillGo i { background: var(--violet) }
+.root .meta { margin-top: 2px; font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.count { display: inline-grid }
+.count > span { grid-area: 1 / 1 }
+.root .steps { margin-top: 12px; font-size: 13px; color: var(--ink-3) }
+
+/* The steps, a row each: who, what, how it stands, for how long. */
+.root .tree { margin-top: 2px; padding: 0; list-style: none }
+.row { display: flex; align-items: center; gap: 10px; height: 42px; border-bottom: 1px solid var(--line) }
+.root .face { width: 26px; height: 26px; flex: none; border-radius: 7px; background: var(--violet-soft); object-fit: contain }
+.actor { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 7px; background: var(--cream); color: var(--ink-2) }
+.formActor { background: color-mix(in srgb, var(--wait) 12%, var(--paper)); color: var(--wait) }
+.who { display: flex; flex: 1; flex-direction: column; min-width: 0; line-height: 1.3 }
+.who b { overflow: hidden; font-size: 13px; font-weight: 500; color: var(--ink); white-space: nowrap; text-overflow: ellipsis }
+.who small { overflow: hidden; font-size: 12px; color: var(--ink-3); white-space: nowrap; text-overflow: ellipsis }
+.state { display: grid; flex: none; width: 70px; font-size: 12.5px; color: var(--ink-2) }
+.state > span { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 6px }
+.time { display: grid; flex: none; width: 54px; font-size: 12px; color: var(--ink-3); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap }
+.time > span { grid-area: 1 / 1 }
+.chev { flex: none; color: var(--ink-3) }
+.now { opacity: 0 }
+
+.glyph { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--line-2); color: var(--paper) }
+.glyph[data-state="done"] { background: var(--ok); box-shadow: none }
+.glyph[data-state="waiting"] { box-shadow: inset 0 0 0 2px var(--wait) }
+/* Running, drawn still: the ring with its leading arc. */
+.glyph[data-state="running"] { border-top: 2px solid var(--violet); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--violet) 22%, transparent) }
+
+/* Dev's step: waiting, in the run page's amber, its form open under it. */
+.dev { border-bottom-color: transparent }
+.dev .state .was { color: var(--wait) }
+.import { opacity: .55 }
+/* The run's end, not reached yet. */
+.end { display: flex; align-items: center; gap: 10px; height: 36px; padding-left: 6px; font-size: 12.5px; color: var(--ink-3) }
+
+/* ── The form, filled in for Dev ────────────────────────────────────── */
+.form { padding: 0 0 8px 36px; border-bottom: 1px solid var(--line) }
+.fill { padding: 7px 10px 8px; border-radius: 10px; background: transparent }
+.tick { display: flex; align-items: center; gap: 8px; height: 18px; font-size: 12.5px; color: var(--ink) }
+.tick em { font-style: normal; color: var(--ink-3) }
+.box { position: relative; display: grid; place-items: center; width: 15px; height: 15px; flex: none; border: 1.5px solid var(--line-2); border-radius: 4px; background: var(--paper) }
+.box::after { content: ""; width: 4px; height: 8px; border: solid var(--paper); border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); opacity: 0 }
+/* The box isn't matched by the kit's easing (its border, its tick), so it
+   says its own. */
+.root .box { transition: background-color var(--v-quick) var(--ease), border-color var(--v-quick) var(--ease) }
+.root .box::after { transition: opacity var(--v-quick) var(--ease) }
+.root .label { margin-top: 7px; font-size: 12px; line-height: 16px; color: var(--ink-2) }
+.root .field { height: 28px; margin-top: 4px; padding: 5px 9px; border-radius: 8px; background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-2); font-size: 12.5px; line-height: 18px; color: var(--ink) }
+.note { display: inline-block; white-space: nowrap; clip-path: inset(0 100% 0 0) }
+.submitSlot { display: block; overflow: hidden; max-height: 31px }
+.submit { height: 24px; margin-top: 7px; padding: 0 10px }
+@keyframes pressed { 40% { transform: scale(.94); background-color: var(--ink-2) } }
+
+/* 1 · June's message arrives */
+.root[data-b1] .in1 { grid-template-rows: 1fr; opacity: 1 }
+/* 2 · Dev's reply types into the box, a line at a time */
+.root[data-b2] .composer { height: 70px }
+.root[data-b2] .placeholder { opacity: 0 }
+/* A line takes --type to type; the next starts as it ends. */
+.root[data-b2] .t1, .root[data-b2] .t2, .root[data-b2] .t3 { clip-path: inset(0 0 0 0); transition: clip-path var(--type) steps(20, end) }
+.root[data-b2] .t2 { transition-delay: var(--type) }
+.root[data-b2] .t3 { transition-delay: calc(var(--type) * 2) }
+.root[data-b2] .caret { opacity: 1; transition-delay: calc(var(--type) * 2) }
+.root[data-b2] .send { background: var(--ink); color: var(--paper); transition-delay: var(--type) }
+/* 3 · sent */
+.root[data-b3] .composer { height: 34px }
+.root[data-b3] .typed { opacity: 0; transition: none }
+.root[data-b3] .placeholder { opacity: 1; transition-delay: var(--v-quick) }
+.root[data-b3] .send { background: rgb(20 20 19 / .07); color: var(--ink-3); transition-delay: 0s }
+.root[data-b3] .in3 { grid-template-rows: 1fr; opacity: 1 }
+/* 4 · the form fills from his words, and goes in */
+.root[data-b4] .fill { background: var(--violet-soft) }
+.root[data-b4] .m1 { box-shadow: inset 0 -1.5px 0 var(--lit); transition-delay: calc(2 * var(--v-step)) }
+.root[data-b4] .box { border-color: var(--ok); background: var(--ok); transition-delay: calc(4 * var(--v-step)) }
+.root[data-b4] .box::after { opacity: 1; transition-delay: calc(4 * var(--v-step)) }
+.root[data-b4] .m2 { box-shadow: inset 0 -1.5px 0 var(--lit); transition-delay: calc(8 * var(--v-step)) }
+.root[data-b4] .note { clip-path: inset(0 0 0 0); transition: clip-path var(--v-move) steps(24, end) calc(9 * var(--v-step)) }
+.root[data-b4] .submit { animation: pressed var(--v-move) var(--ease) calc(var(--v-move) + 10 * var(--v-step)) }
+/* 5 · June says it's in */
+.root[data-b5] .in5 { grid-template-rows: 1fr; opacity: 1 }
+.root[data-b5] .fill { background: transparent }
+.root[data-b5] .m1, .root[data-b5] .m2 { box-shadow: inset 0 -1.5px 0 transparent }
+/* 6 · the step turns Done and the import starts: Dev's row first, then
+   the run's next row, its count and its pill. Each word goes before the
+   one that takes its place comes in. */
+.root[data-b6] .dev .was { opacity: 0 }
+.root[data-b6] .dev .now { opacity: 1; transition-delay: var(--v-quick) }
+.root[data-b6] .submitSlot { max-height: 0; opacity: 0 }
+.root[data-b6] .import { opacity: 1; transition-delay: calc(4 * var(--v-step)) }
+.root[data-b6] .import .was, .root[data-b6] .count .was, .root[data-b6] .pillWait { opacity: 0; transition-delay: calc(4 * var(--v-step)) }
+.root[data-b6] .import .now, .root[data-b6] .count .now, .root[data-b6] .pillGo { opacity: 1; transition-delay: calc(4 * var(--v-step) + var(--v-quick)) }
+
+/* With reduced motion every beat is on from the start and nothing moves:
+   the easings this module writes for itself outrank the kit's, so it
+   switches them off here too. */
+.root[data-still] *, .root[data-still] *::after { transition: none !important; animation: none !important }

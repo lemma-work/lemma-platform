@@ -25,7 +25,11 @@
     --radius-panel: 24px;
     --shadow-card: 0 1px 2px rgb(20 20 19 / .05), 0 24px 60px -30px rgb(20 20 19 / .28);
     --motion-fast: 160ms;
+    --motion-bounce: 400ms;
+    --motion-rise: 700ms;
+    --motion-draw: 1100ms;
     --ease: cubic-bezier(.2, .8, .2, 1);
+    --ease-bounce: cubic-bezier(.3, 1.6, .5, 1);
     --serif: var(--font-serif, "Newsreader"), Georgia, serif;
     --mono: var(--font-mono, "DM Mono"), ui-monospace, monospace;
     --gutter: max(24px, 5vw);
@@ -39,10 +43,17 @@
     line-height: 1.6;
     overflow: clip;
 }
-.page :where(h1, h2, h3, p, ul, ol, figure) { margin: 0 }
+/* Zero specificity, so any class on the page, a vignette's included, sets
+   its own margins over this reset whatever order the stylesheets load in. */
+:where(.page) :where(h1, h2, h3, p, ul, ol, figure) { margin: 0 }
 .page :where(a) { color: inherit; text-decoration: none }
 .page a:focus-visible, .page button:focus-visible, .page summary:focus-visible { outline: 2px solid var(--violet); outline-offset: 3px; border-radius: 6px }
 .page img { display: block; max-width: 100%; height: auto }
+
+/* Rising in, once, as things arrive (see lively.tsx). Hidden only after the
+   script has run, so a page without it still shows everything. */
+.page [data-rise] { transition: opacity var(--motion-rise) var(--ease), transform var(--motion-rise) var(--ease) }
+:global(html[data-motion]) .page [data-rise]:not([data-in]) { opacity: 0; transform: translateY(18px) }
 
 .wrap { max-width: calc(var(--wide) + 2 * var(--gutter)); margin: 0 auto; padding-inline: var(--gutter) }
 .label { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3) }
@@ -84,6 +95,8 @@
 .primary:hover { background: var(--violet-deep) }
 .textLink { font-size: 16px; color: var(--ink); border-bottom: 1px solid var(--line-2); padding-bottom: 2px }
 .textLink:hover { border-color: var(--ink) }
+/* A link to more, on its own line under a paragraph. */
+.moreLink { display: inline-block; margin-top: 12px; white-space: nowrap }
 
 .strip { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 22px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line) }
 .stripItems { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 36px; list-style: none; padding: 0; font-size: 16px; color: var(--ink-2) }
@@ -156,6 +169,9 @@
 /* Each arrow hangs off the bottom of its own card and ends in the gap
    beside the next one, so it points at the card without covering it. */
 .arrow { position: absolute; pointer-events: none; height: auto }
+/* Each arrow draws itself once its moment has risen in (see lively.tsx). */
+.arrow path { stroke-dasharray: 1; transition: stroke-dashoffset var(--motion-draw) var(--ease) }
+:global(html[data-motion]) [data-rise]:not([data-in]) .arrow path { stroke-dashoffset: 1 }
 .arrowOne { top: calc(100% + 4px); right: calc(-1 * var(--story-gap)); width: 190px }
 .arrowTwo { top: calc(100% + 20px); left: calc(-1 * var(--story-gap) - 6px); width: 200px }
 
@@ -217,5 +233,6 @@
     .lineup > :first-child, .lineup > :last-child { display: none }
 }
 @media (prefers-reduced-motion: reduce) {
+    .page [data-rise], .page [data-rise] svg path { transition: none }
     .primary, .productFrame, .try, .tryOn, .closeGhost, .productPoster { transition: none }
 }

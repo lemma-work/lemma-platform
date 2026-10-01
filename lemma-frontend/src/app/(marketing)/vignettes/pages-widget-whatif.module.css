@@ -1,0 +1,103 @@
+/* A what-if in a page, beat by beat. Base styles are the opening frame:
+   Remy's pipeline page with its tool, every switch off and the total at $0.
+   Each `.root[data-bN]` rule is what changes from beat N on, in beat order,
+   so the last rules here are the finished picture: two deals switched on,
+   $28,400, and the conversation with Remy open beside the page with the
+   tool's question waiting, unsent, in its box. */
+
+/* A switch flips as the pointer gets there (the easing has it all but
+   arrived by four fifths of the way), and the total counts for a second. */
+.root { --v-arrive: calc(var(--v-move) * .8); --v-count: calc(var(--v-slow) * .75) }
+
+/* ── The page ───────────────────────────────────────────────────────── */
+.head { gap: 6px; padding: 0 10px 0 12px }
+.head b { white-space: nowrap }
+.comment { display: inline-flex; align-items: center; gap: 5px; height: 24px; margin-left: auto; padding: 0 10px; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink) }
+.share { display: inline-flex; align-items: center; height: 24px; padding: 0 12px; border-radius: 99px; background: var(--ink); color: var(--paper) }
+
+.doc { position: absolute; top: 36px; left: 0; width: 380px; padding: 18px 22px 0 }
+.doc :where(p) { margin: 0 }
+.lead { margin-top: 2px }
+
+/* ── The tool: an HTML block, the thing itself sitting in the page ─── */
+.tool { position: absolute; top: 112px; left: 22px; width: 318px; padding: 14px 16px 14px; border-radius: 12px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2) }
+.tool :where(p) { margin: 0 }
+.toolHead { font-size: 14px; color: var(--ink) }
+
+.deals { margin-top: 8px }
+.deal { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; height: 32px; font-size: 13px; color: var(--ink-2); transition: color var(--v-quick) var(--ease) }
+.deal em { font-style: normal; font-variant-numeric: tabular-nums; color: var(--ink-3) }
+.switch { position: relative; display: block; width: 28px; height: 16px; border-radius: 99px; background: var(--line-2) }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--paper); box-shadow: 0 1px 2px rgb(20 20 19 / .25); transition: transform var(--v-quick) var(--ease) }
+
+/* The month's total, counted as the hundreds go by. `--whatif-hundreds`
+   is the total over 100, an integer the browser can ease from one value to
+   the next. Counters split it into "$", "18,", "5" and "00"; the thousands
+   and the trailing zeros are drawn at no size while they would be zero, so
+   nothing reads "$0,500" or "$000" on the way up. */
+@property --whatif-hundreds { syntax: "<integer>"; inherits: false; initial-value: 0 }
+.total { display: flex; align-items: baseline; justify-content: space-between; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3) }
+.sum { --whatif-hundreds: 0; --any: min(var(--whatif-hundreds), 1); --thousands: round(down, var(--whatif-hundreds) / 10, 1); counter-reset: thousands var(--thousands) hundred mod(var(--whatif-hundreds), 10); font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--ink); transition: none }
+.sum::before { content: "$" }
+.sum i { font-style: normal }
+.sum i:first-child::after { content: counter(thousands) ","; font-size: calc(min(var(--thousands), 1) * 1em) }
+.sum i:last-child::before { content: counter(hundred) }
+.sum i:last-child::after { content: "00"; font-size: calc(var(--any) * 1em) }
+
+/* The tool's own button: it hands Remy a question. */
+.ask { display: inline-flex; align-items: center; gap: 7px; height: 30px; margin-top: 12px; padding: 0 12px; border-radius: 99px; background: var(--violet-soft); color: var(--violet-deep); font-size: 12.5px; white-space: nowrap; transition: background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
+.ask svg { flex: none }
+
+/* ── The conversation, minimised to its pill until it is asked for ── */
+.pill { position: absolute; right: 14px; bottom: 14px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px 0 6px; border-radius: 99px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 8px 24px rgb(20 20 19 / .08); font-size: 13px; color: var(--ink) }
+.pill img { width: 24px; height: 24px }
+
+.chat { position: absolute; top: 48px; right: 12px; z-index: 2; display: flex; flex-direction: column; width: 270px; height: 340px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 24px 60px rgb(20 20 19 / .1), 0 4px 14px rgb(20 20 19 / .05); overflow: hidden; opacity: 0; transform: translateX(290px) }
+.chat :where(p) { margin: 0 }
+.chatHead { display: flex; align-items: center; gap: 10px; padding: 12px 10px 8px 14px }
+.chatTitle { display: flex; flex-direction: column; margin-right: auto; line-height: 1.3 }
+.chatTitle span { font-size: 13.5px; color: var(--ink) }
+.chatTitle small { font-size: 12px; color: var(--ink-3) }
+.min { display: grid; place-items: center; width: 28px; height: 28px; color: var(--ink-3) }
+.context { padding: 0 14px 6px }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 7px 0 9px; border-radius: 99px; background: var(--violet-soft); font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.chip span { color: var(--ink) }
+.chip em { font-style: normal; color: var(--ink-3) }
+.chip svg { flex: none }
+.chip > svg:last-child { margin-left: 2px; color: var(--ink-3) }
+
+/* Empty: two quiet lines just above the box, as a new conversation has. */
+.quiet { margin-top: auto; padding: 0 16px 10px }
+.quietHead { font-size: 13.5px; color: var(--ink) }
+.quietText { margin-top: 2px; font-size: 12.5px; line-height: 1.45; color: var(--ink-3) }
+
+.composer { display: flex; align-items: flex-end; gap: 2px; margin: 0 10px 10px; padding: 5px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 1px 3px rgb(20 20 19 / .04) }
+.attach, .send { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 50%; color: var(--ink-3) }
+.words { flex: 1; min-width: 0; padding: 5px 4px; font-size: 13px; line-height: 1.45; color: var(--ink) }
+.send { background: var(--violet); color: var(--paper) }
+
+/* ── The pointer: the tip of the arrow is the point it is at ───────── */
+.cursor { position: absolute; top: -1.5px; left: -1.5px; z-index: 3; overflow: visible; filter: drop-shadow(0 2px 3px rgb(20 20 19 / .3)); transform: translate(498px, 228px) }
+.cursor path { fill: var(--ink); stroke: var(--paper); stroke-width: 1.5px; stroke-linejoin: round }
+
+/* 1 · switch on Cedar Health; the total counts up to $18,500 */
+.root[data-b1] .cursor { transform: translate(54px, 190px) }
+.root[data-b1] .cedar .switch { background: var(--violet); transition-delay: var(--v-arrive) }
+.root[data-b1] .cedar .switch::after { transform: translateX(12px); transition-delay: var(--v-arrive) }
+.root[data-b1] .cedar { color: var(--ink); transition-delay: var(--v-arrive) }
+.root[data-b1] .sum { --whatif-hundreds: 185; transition: --whatif-hundreds var(--v-count) var(--ease) var(--v-arrive) }
+/* 2 · switch on Fern Works; the total counts on to $28,400 */
+.root[data-b2] .cursor { transform: translate(54px, 222px) }
+.root[data-b2] .fern .switch { background: var(--violet); transition-delay: var(--v-arrive) }
+.root[data-b2] .fern .switch::after { transform: translateX(12px); transition-delay: var(--v-arrive) }
+.root[data-b2] .fern { color: var(--ink); transition-delay: var(--v-arrive) }
+.root[data-b2] .sum { --whatif-hundreds: 284 }
+/* 3 · press the tool's own button */
+.root[data-b3] .cursor { transform: translate(176px, 343px) }
+.root[data-b3] .ask { background: var(--violet); color: var(--paper); transition-delay: var(--v-arrive) }
+/* 4 · the conversation slides in with the question in its box; the
+   pointer comes to rest beside Send, and does not press it */
+.root[data-b4] .ask { background: var(--violet-soft); color: var(--violet-deep); transition-delay: 0ms }
+.root[data-b4] .pill { opacity: 0 }
+.root[data-b4] .chat { opacity: 1; transform: none }
+.root[data-b4] .cursor { transform: translate(562px, 366px); transition-delay: var(--v-move) }

@@ -12,6 +12,7 @@ import {
     byStuckLongest, readAssignments, readWorkflows, sayStuckFor, sayWaitingOn,
     type Assignment,
 } from "./runs";
+import { samples } from "@/data/samples";
 
 /** What is stuck on you.
  *
@@ -233,7 +234,7 @@ export interface WaitingRow {
  */
 export async function gather(pods: Pod[], sample: boolean): Promise<{ rows: WaitingRow[]; unreadable: number }> {
     if (sample) {
-        const { SAMPLE_WAITING, SAMPLE_WORKFLOWS } = await import("@/data/fixtures");
+        const { SAMPLE_WAITING, SAMPLE_WORKFLOWS } = await samples();
         const named = new Map(readWorkflows({ items: SAMPLE_WORKFLOWS }).map((one) => [one.id, one.name]));
         const first = pods[0];
         return {
