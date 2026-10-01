@@ -50,6 +50,11 @@ export function readSurfaceGroup(raw: unknown): SurfaceGroup | null {
         owner: ownerId ? { userId: ownerId, name: words(owner?.display_name) } : null,
         answersOutsiders: row.answers_outsiders === true,
         welcomesOutsiders: row.welcomes_outsiders === true,
+        /* Each read the way the API defaults it: the bot's switch is on
+           unless it says off, and nobody may change a group unless it says
+           they may — a control the server would refuse is not offered. */
+        botAnswersOutsiders: row.bot_answers_outsiders !== false,
+        canManage: row.can_manage === true,
         updatedAt: words(row.updated_at) ?? "",
     };
 }
@@ -67,15 +72,19 @@ export function groupTitle(group: SurfaceGroup): string {
 }
 
 /** The row's one line: a group still being made says so; any other says who
- *  answers there for people outside the space.
+ *  answers there for people outside the space — or, where nobody does, the
+ *  first reason why: the bot's own switch, then nobody to answer for them,
+ *  then the group's switch.
  *
- *  Said off `welcomesOutsiders`, not the switch: an owner with the switch off,
- *  or the switch on with nobody behind it, both answer nobody — and a line
- *  naming a person who is not answering would be the one false thing here. */
+ *  A person is named only while `welcomesOutsiders` holds: an owner with a
+ *  switch off answers nobody, and a line naming a person who is not
+ *  answering would be the one false thing here. */
 export function groupLine(group: SurfaceGroup, space: string, me: string | null, members: Member[] = []): string {
     if (group.pending) return "Being created…";
+    if (!group.botAnswersOutsiders) return "Answering people outside " + space + " is off for this bot";
     const owner = group.owner;
-    if (!group.welcomesOutsiders || !owner) return "Nobody answers for people outside " + space + " yet";
+    if (!owner) return "Nobody answers for people outside " + space + " yet";
+    if (!group.answersOutsiders || !group.welcomesOutsiders) return "People outside " + space + " are not answered here";
     if (me && owner.userId === me) return "You answer for people outside " + space;
     const name = owner.name ?? members.find((member) => member.userId === owner.userId)?.name ?? "Someone in " + space;
     return name + " answers for people outside " + space;
@@ -87,12 +96,28 @@ export function linkShown(link: string): string {
     return link.replace(/^https?:\/\//i, "");
 }
 
-/** Whether "Take this over" is offered: somebody else answers for the group,
- *  or it is switched on with nobody answering. Where it is off and nobody
- *  answers, switching it on already makes you the one who does. */
+/** Whether "Take this over" is offered: only where the reader may change the
+ *  group and its bot answers anybody outside the space at all — then where
+ *  somebody else answers for it, or it is switched on with nobody answering.
+ *  Where it is off and nobody answers, switching it on already makes you the
+ *  one who does. */
 export function offersTakeOver(group: SurfaceGroup, me: string | null): boolean {
+    if (!group.canManage || !group.botAnswersOutsiders) return false;
     if (group.owner) return group.owner.userId !== me;
     return group.answersOutsiders;
+}
+
+/** What a reader who may not change a group is told instead of a control:
+ *  who can. The member answering for it, or an admin of the space; where
+ *  nobody does — or it is the reader, who may no longer change the bot —
+ *  whoever may change the bot. */
+export function whoMayChange(group: Pick<SurfaceGroup, "owner">, space: string, bot: string, me: string | null, members: Member[] = []): string {
+    const owner = group.owner;
+    if (!owner || (me && owner.userId === me)) return "Only someone who can change " + bot + " can change it.";
+    const name = owner.name ?? members.find((member) => member.userId === owner.userId)?.name ?? null;
+    return name
+        ? "Only " + name + " or an admin of " + space + " can change it."
+        : "Only the person who answers for it or an admin of " + space + " can change it.";
 }
 
 /** The list with one group replaced by what the server saved. */

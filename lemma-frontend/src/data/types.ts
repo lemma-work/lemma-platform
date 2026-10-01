@@ -121,12 +121,22 @@ export interface SurfaceGroup {
     inviteLink: string | null;
     /** Asked for and not yet confirmed by the platform: no id, no link. */
     pending: boolean;
-    /** The member whose conversation outsiders' questions land in. */
+    /** The member whose conversation outsiders' questions land in. Null when
+     *  nobody does — a member who has since left the space answers for
+     *  nobody, and the API names nobody. */
     owner: { userId: string; name: string | null } | null;
-    /** Switched on for people outside the space. */
+    /** The group's own switch for people outside the space. */
     answersOutsiders: boolean;
-    /** And actually answered: switched on, with somebody answering for them. */
+    /** And a stranger asking today is answered: the group's switch on, a
+     *  member of the space answering for them, and the bot's switch on. */
     welcomesOutsiders: boolean;
+    /** The bot's own switch, over every group it is in. Off, nobody outside
+     *  the space is answered in any of them, whatever a group's says. */
+    botAnswersOutsiders: boolean;
+    /** The reader may switch people outside on or off here, or take it on:
+     *  they answer for it, nobody in the space does, or they are an admin of
+     *  the space. Anyone else is refused. */
+    canManage: boolean;
     updatedAt: string;
 }
 
@@ -184,7 +194,12 @@ export interface GroupLine {
     /** In the space when it was read — the bot's own lines count as in. */
     inSpace: boolean;
     fromBot: boolean;
-    text: string;
+    /** What was said. Null only where the line is withheld. */
+    text: string | null;
+    /** An answer the bot made with another member's own access: theirs
+     *  alone to read. The reader is told whom it answered, never what it was
+     *  made from. */
+    withheld: boolean;
     at: string;
     /** On the bot's lines: whom it answered, and whether that was somebody
      *  outside the space, answered from what is Public. */

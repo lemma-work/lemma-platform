@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { channelThread, replyChoices, sendMetadata } from "../src/thread/channel-reply.ts";
+import {
+    channelThread,
+    defaultReplyMode,
+    rememberReplyMode,
+    rememberedReplyMode,
+    replyChoices,
+    replyModeFor,
+    sendMetadata,
+} from "../src/thread/channel-reply.ts";
 import { originLabel, originOf } from "../src/thread/conversation-origin.ts";
 import { buildTurns, humanMarks } from "../src/thread/turns.ts";
 
@@ -41,6 +49,88 @@ test("the note comes first, and each choice says what it does", () => {
     assert.equal(email[1].hint, "Kit’s answer goes out by email.");
     const slack = replyChoices(channelThread({ surface_platform: "SLACK", conversation_kind: "CHANNEL", channel_name: "launch" })!, "Kit");
     assert.equal(slack[1].hint, "Kit’s answer goes to #launch.");
+});
+
+test("in a person's own DM or email thread, a note says nothing is sent rather than sounding like a secret", () => {
+    const dm = replyChoices(channelThread({ surface_platform: "TELEGRAM", conversation_kind: "DM" })!, "Sales");
+    assert.equal(dm[0].hint, "Only Sales sees this. Nothing is sent to Telegram.");
+    const email = replyChoices(channelThread({ surface_platform: "RESEND", conversation_kind: "EMAIL" })!, "Sales");
+    assert.equal(email[0].hint, "Only Sales sees this. No email is sent.");
+    // In a group the note is kept from the people in it, and says only that.
+    assert.equal(replyChoices(channelThread(OUTSIDERS)!, "Sales")[0].hint, "Only Sales sees this.");
+});
+
+test("a reply first in a person's own DM or email thread, a note first wherever others read along", () => {
+    assert.equal(defaultReplyMode(channelThread({ surface_platform: "WHATSAPP", conversation_kind: "DM" })!), "reply");
+    assert.equal(defaultReplyMode(channelThread({ surface_platform: "RESEND", conversation_kind: "EMAIL" })!), "reply");
+    assert.equal(defaultReplyMode(channelThread(OUTSIDERS)!), "note");
+    assert.equal(defaultReplyMode(channelThread({ surface_platform: "SLACK", conversation_kind: "CHANNEL", channel_name: "launch" })!), "note");
+    // Not said which it is: the one that cannot speak in front of a group.
+    assert.equal(defaultReplyMode(channelThread({ surface_platform: "SLACK" })!), "note");
+    // What was chosen in the conversation before wins over its default.
+    const dm = channelThread({ surface_platform: "WHATSAPP", conversation_kind: "DM" })!;
+    assert.equal(replyModeFor(dm, null), "reply");
+    assert.equal(replyModeFor(dm, "note"), "note");
+    assert.equal(replyModeFor(channelThread(OUTSIDERS)!, "reply"), "reply");
+});
+
+/** A browser's storage, in memory: what was written is what is read. */
+function memoryStore(): { getItem(name: string): string | null; setItem(name: string, value: string): void; values: Map<string, string> } {
+    const values = new Map<string, string>();
+    return { values, getItem: (name) => values.get(name) ?? null, setItem: (name, value) => { values.set(name, value); } };
+}
+
+test("the choice is kept per conversation, and one conversation's never reaches another", () => {
+    const store = memoryStore();
+    assert.equal(rememberedReplyMode(store, "c-dm"), null);
+    rememberReplyMode(store, "c-dm", "note");
+    rememberReplyMode(store, "c-group", "reply");
+    assert.equal(rememberedReplyMode(store, "c-dm"), "note");
+    assert.equal(rememberedReplyMode(store, "c-group"), "reply");
+    assert.equal(rememberedReplyMode(store, "c-other"), null);
+    // Chosen again, the last choice is the one kept.
+    rememberReplyMode(store, "c-dm", "reply");
+    assert.equal(rememberedReplyMode(store, "c-dm"), "reply");
+    // A conversation not made yet has nothing to keep it against.
+    rememberReplyMode(store, null, "reply");
+    assert.equal(rememberedReplyMode(store, null), null);
+    // One entry for all of them, under the app's own prefix.
+    assert.deepEqual([...store.values.keys()], ["lemma-app:reply-modes"]);
+});
+
+test("only the most recently chosen conversations are kept", () => {
+    const store = memoryStore();
+    for (let at = 0; at < 205; at += 1) rememberReplyMode(store, "c" + at, "reply");
+    assert.equal(rememberedReplyMode(store, "c0"), null);
+    assert.equal(rememberedReplyMode(store, "c4"), null);
+    assert.equal(rememberedReplyMode(store, "c5"), "reply");
+    assert.equal(rememberedReplyMode(store, "c204"), "reply");
+    // Choosing an old one again moves it to the end rather than losing it.
+    rememberReplyMode(store, "c5", "note");
+    rememberReplyMode(store, "c205", "reply");
+    assert.equal(rememberedReplyMode(store, "c5"), "note");
+    assert.equal(rememberedReplyMode(store, "c6"), null);
+});
+
+test("without storage, or with storage that refuses or holds nonsense, it still works", () => {
+    assert.equal(rememberedReplyMode(null, "c-dm"), null);
+    assert.doesNotThrow(() => rememberReplyMode(null, "c-dm", "reply"));
+    const refusing = {
+        getItem(): string | null { throw new Error("SecurityError"); },
+        setItem(): void { throw new Error("QuotaExceededError"); },
+    };
+    assert.equal(rememberedReplyMode(refusing, "c-dm"), null);
+    assert.doesNotThrow(() => rememberReplyMode(refusing, "c-dm", "reply"));
+    const garbled = memoryStore();
+    garbled.setItem("lemma-app:reply-modes", "{not json");
+    assert.equal(rememberedReplyMode(garbled, "c-dm"), null);
+    garbled.setItem("lemma-app:reply-modes", JSON.stringify([["c-dm", "shout"], ["c-ok", "note"], "junk"]));
+    assert.equal(rememberedReplyMode(garbled, "c-dm"), null);
+    assert.equal(rememberedReplyMode(garbled, "c-ok"), "note");
+    // Writing over nonsense keeps what was readable.
+    rememberReplyMode(garbled, "c-dm", "reply");
+    assert.equal(rememberedReplyMode(garbled, "c-ok"), "note");
+    assert.equal(rememberedReplyMode(garbled, "c-dm"), "reply");
 });
 
 test("only a note carries the mark, and only where there is a platform to keep it from", () => {

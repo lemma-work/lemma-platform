@@ -1365,14 +1365,20 @@ let SURFACES: Surface[] = [
    the API does, and switching one changes it everywhere.
 
    Marketing's own hold one of each state a row has to draw: a Telegram group
-   you answer for with a question waiting on you, a WhatsApp group it opened
-   with the link people join by, a Slack channel shared with another company
-   that Priya answers for, a Telegram group nobody answers for, a WhatsApp
-   group WhatsApp has not confirmed yet, and a Slack channel inside the
-   company. The researcher's Design partners is the group whose outsiders'
-   conversation is in Chats; the digest bot's is one you may look at and not
-   switch. Only Marketing has any: every other sample space opens on the
-   Groups page's first run. */
+   you answer for with a question waiting on you — whose log holds an answer
+   made from what is Public and one made with Priya's own access, which only
+   she may read — a WhatsApp group it opened with the link people join by, a
+   Slack channel shared with another company that Priya answers for (yours
+   to take on, as an admin of Marketing, and she is told), a Telegram group
+   Jordan answered for until he left Marketing (so nobody does now, and the
+   API names nobody), a WhatsApp group WhatsApp has not confirmed yet, and a
+   Slack channel inside the company. The researcher's Design partners is the
+   group whose outsiders' conversation is in Chats; its WhatsApp number has
+   the bot's own switch off, so its Customer interviews answers nobody
+   outside whatever the group says. The digest bot's Leadership is Priya's,
+   on a bot you may read and not configure: you may look, not change. Only
+   Marketing has any: every other sample space opens on the Groups page's
+   first run. */
 interface SampleGroup {
     pod: string;
     row: Record<string, unknown>;
@@ -1387,6 +1393,16 @@ interface SampleGroup {
 
 const ME_IN_GROUPS = { name: "Dana Jones", user_id: "sample-user", in_pod: true };
 const PRIYA_IN_GROUPS = { name: "Priya", user_id: "priya-user", in_pod: true };
+
+/* Bots whose own switch for people outside the space is off, by channel
+   name: none of their groups answers anybody outside. Saved from a bot's
+   channel settings. */
+const SAMPLE_BOTS_CLOSED = new Set<string>(["researcher-whatsapp"]);
+
+/* Whether you are an admin of the sample's spaces: Marketing's owner, so
+   yes. It lets you change a group somebody else answers for on a bot you
+   may configure — Priya is told. */
+const SAMPLE_VIEWER_ADMIN = true;
 
 let GROUPS: SampleGroup[] = [
     {
@@ -1418,8 +1434,11 @@ let GROUPS: SampleGroup[] = [
                 answered_name: "Mara Okafor", answered_from_public: true },
             { author_name: "Priya", author_external_id: "tg-10571", in_pod: true, from_bot: false, at: ago(80 * MINUTES),
                 text: "@marketing_acme_bot when is the walkthrough? I will send Mara the invite." },
+            /* Made with Priya's own access, so it comes back withheld to you:
+               whom it answered, never what it said. */
             { author_name: null, author_external_id: null, in_pod: true, from_bot: true, at: ago(79 * MINUTES),
-                text: "Thursday at 3, from this morning’s message.", answered_name: "Priya", answered_from_public: false },
+                text: "Thursday at 3, from this morning’s message.", answered_name: "Priya", answered_from_public: false,
+                answered_user_id: "priya-user" },
             { author_name: "@kbrandt", author_external_id: "tg-31207", in_pod: false, from_bot: false, at: ago(75 * MINUTES),
                 text: "Hi all, joining from the Berlin office." },
             { author_name: "Tomás Rivera", author_external_id: "tg-20988", in_pod: false, from_bot: false, at: ago(13 * MINUTES),
@@ -1470,9 +1489,12 @@ let GROUPS: SampleGroup[] = [
     {
         pod: "marketing",
         row: {
+            /* Jordan's until he left Marketing: the API names nobody now,
+               and anyone who may change the bot may take it on. */
             id: "c41a07f9-8e2d-4b6c-a1f3-9d8e7c6b5a40", surface_name: "telegram", platform: "TELEGRAM",
             external_channel_id: "-1001839204688", title: "Beta testers", invite_link: null, pending: false,
-            shared_externally: false, owner: null, answers_outsiders: true, updated_at: ago(3 * DAYS),
+            shared_externally: false, owner: { user_id: "jordan-user", display_name: "Jordan Lee" },
+            answers_outsiders: true, updated_at: ago(3 * DAYS),
         },
         people: [
             { name: "Sofia Marin", external_id: "tg-40112", user_id: null, in_pod: false },
@@ -1541,6 +1563,31 @@ let GROUPS: SampleGroup[] = [
         ],
     },
     {
+        /* On the researcher's WhatsApp number, whose own switch is off: the
+           group is switched on and you answer for it, and still nobody from
+           outside is answered here. */
+        pod: "marketing",
+        row: {
+            id: "5c0e8b7a-2d4f-4a61-9e3b-7f1a2c3d4e5f", surface_name: "researcher-whatsapp", platform: "WHATSAPP",
+            external_channel_id: "120363052211198765@g.us", title: "Customer interviews",
+            invite_link: "https://chat.whatsapp.com/Hq7RtY2pLm9WcX4zNb6sKe", pending: false, shared_externally: false,
+            owner: { user_id: "sample-user", display_name: null }, answers_outsiders: true, updated_at: ago(5 * HOURS),
+        },
+        people: [
+            { ...ME_IN_GROUPS, external_id: "15551230001" },
+            { name: "Ines Duarte", external_id: "351912345678", user_id: null, in_pod: false },
+        ],
+        waiting: [],
+        lines: [
+            { author_name: "Dana Jones", author_external_id: "15551230001", in_pod: true, from_bot: false, at: ago(6 * HOURS),
+                text: "Ines, thanks for joining. This is where we plan your interview." },
+            { author_name: "Ines Duarte", author_external_id: "351912345678", in_pod: false, from_bot: false, at: ago(5 * HOURS + 20 * MINUTES),
+                text: "Researcher, how long does each interview take?" },
+            { author_name: "Dana Jones", author_external_id: "15551230001", in_pod: true, from_bot: false, at: ago(5 * HOURS),
+                text: "About forty minutes. I’ll send you the times today." },
+        ],
+    },
+    {
         pod: "marketing",
         row: {
             id: "e9b2d4c6-1a3f-4d5e-8b7c-6a5f4e3d2c1b", surface_name: "nightly-digest", platform: "TELEGRAM",
@@ -1592,16 +1639,49 @@ function settleGroups(): void {
     });
 }
 
+/* Whether you may configure a bot: its agent's `agent.update`, read off the
+   sample's agents — the space's own bots are its default agent's. */
+function sampleConfigures(surfaceName: unknown): boolean {
+    const surface = SURFACES.find((candidate) => candidate.name === surfaceName);
+    if (!surface) return false;
+    const agent = surface.mine ? "pod_default" : surface.agentKey;
+    const row = AGENTS.find((candidate) => candidate.name === agent);
+    const actions = Array.isArray(row?.allowed_actions) ? row.allowed_actions : [];
+    return actions.includes("agent.update");
+}
+
+/* The member who answers for a group, while they are still in the space. */
+function sampleOwnerInSpace(row: Record<string, unknown>): string | null {
+    const owner = row.owner && typeof row.owner === "object" ? String((row.owner as { user_id?: unknown }).user_id ?? "") : "";
+    return owner && MEMBERS.some((member) => member.userId === owner) ? owner : null;
+}
+
+/* The API's rule for who may change a group: nobody who cannot configure
+   its bot; then the member who answers for it, anybody when nobody in the
+   space does, or an admin. */
+function sampleManages(row: Record<string, unknown>): boolean {
+    if (!sampleConfigures(row.surface_name)) return false;
+    const owner = sampleOwnerInSpace(row);
+    return !owner || owner === "sample-user" || SAMPLE_VIEWER_ADMIN;
+}
+
 /* A group as the API sends it: who has spoken counted from the people the
-   log names (nothing for Slack, which keeps its own), and what is waiting on
-   the sample user. */
+   log names (nothing for Slack, which keeps its own), what is waiting on the
+   sample user, and the API's own answers — an owner who has left the space
+   named as nobody, a stranger answered only while the group's switch, its
+   owner and its bot's switch all say so, and whether you may change it. */
 function groupWire(entry: SampleGroup): Record<string, unknown> {
     const logged = entry.row.platform !== "SLACK";
     const inside = entry.people.filter((person) => person.in_pod === true).length;
     const lastLine = entry.lines.map((line) => String(line.at)).sort().at(-1) ?? null;
+    const owner = sampleOwnerInSpace(entry.row) ? entry.row.owner : null;
+    const botAnswers = !SAMPLE_BOTS_CLOSED.has(String(entry.row.surface_name));
     return {
         ...entry.row,
-        welcomes_outsiders: entry.row.answers_outsiders === true && entry.row.owner != null,
+        owner,
+        welcomes_outsiders: entry.row.answers_outsiders === true && owner != null && botAnswers,
+        bot_answers_outsiders: botAnswers,
+        can_manage: sampleManages(entry.row),
         people_in_pod: logged ? inside : null,
         people_outside: logged ? entry.people.length - inside : null,
         last_message_at: entry.row.last_message_at ?? lastLine,
@@ -1616,19 +1696,33 @@ function sampleGroup(groupId: string): SampleGroup {
     return entry;
 }
 
-/* The backend's rule, played out here: switching people outside on where
-   nobody answers for them, or taking a group over, makes you the one who
-   does. */
+/* The backend's rule, played out here: only somebody who may change the
+   group may, and switching people outside on where nobody in the space
+   answers for them, or taking a group over, makes you the one who does. */
 function changeSampleGroup(groupId: string, change: { answers_outsiders?: boolean | null; take_over?: boolean }): Record<string, unknown> {
     const entry = sampleGroup(groupId);
     const was = entry.row;
-    const owner = change.take_over || (change.answers_outsiders && !was.owner)
+    if (!sampleManages(was)) {
+        throw Object.assign(new Error("Only the person who answers for this group, or an admin of the space, can change it."), { statusCode: 403 });
+    }
+    const owner = change.take_over || (change.answers_outsiders && !sampleOwnerInSpace(was))
         ? { user_id: "sample-user", display_name: null }
         : was.owner ?? null;
     const answers = typeof change.answers_outsiders === "boolean" ? change.answers_outsiders : was.answers_outsiders === true;
     const saved = { ...entry, row: { ...was, owner, answers_outsiders: answers, updated_at: new Date().toISOString() } };
     GROUPS = GROUPS.map((candidate) => (candidate === entry ? saved : candidate));
     return groupWire(saved);
+}
+
+/* What was said in a group, as the API sends it to you: a line the bot made
+   with another member's own access comes back withheld — whom it answered,
+   and no text. The sample's own note of whose access it was stays here; a
+   bot line with no such note (a hello, the digest) reads as written. */
+function timelineWire(line: Record<string, unknown>): Record<string, unknown> {
+    const { answered_user_id: whose, ...wire } = line;
+    const withheld = wire.from_bot === true && wire.answered_from_public !== true
+        && typeof whose === "string" && whose !== "sample-user";
+    return withheld ? { ...wire, text: null, withheld: true } : { ...wire, withheld: false };
 }
 
 /* Where Design partners' outsiders land: one conversation for the group, yours
@@ -1670,6 +1764,26 @@ const OUTSIDERS: Conversation = {
         {
             id: "out-6", role: "assistant", kind: "TEXT", sequence: 6, created_at: ago(11 * MINUTES),
             text: "Understood. When it comes up I’ll say JSON arrives in November, and give no other dates.",
+        },
+    ],
+};
+
+/* Your own WhatsApp chat with Marketing. The composer starts on Reply here —
+   the one person a reply reaches is you — where a group starts on a note. */
+const WHATSAPP_DM: Conversation = {
+    id: "c7",
+    title: "Pricing page copy",
+    status: "COMPLETED",
+    metadata: { source: "agent_surfaces", surface_platform: "WHATSAPP", conversation_kind: "DM" },
+    messages: [
+        {
+            id: "dm-1", role: "user", kind: "TEXT", sequence: 1, created_at: ago(2 * DAYS),
+            text: "Can you tighten the pricing page intro? Two lines, no jargon.",
+            metadata: { surface_platform: "WHATSAPP", conversation_kind: "DM" },
+        },
+        {
+            id: "dm-2", role: "assistant", kind: "TEXT", sequence: 2, created_at: ago(2 * DAYS - 2 * MINUTES),
+            text: "“One plan for the whole team. Pay for the seats you use, nothing else.” Want a version that mentions the trial?",
         },
     ],
 };
@@ -2544,6 +2658,7 @@ export const fixtureSource: PodSource = {
             config: {
                 channels: surface.platform === "SLACK" ? SAMPLE_SLACK_ROUTES : [],
                 send_policy: { allow_send: SAMPLE_SEND.has(surface.name) },
+                groups: { answers_outsiders: !SAMPLE_BOTS_CLOSED.has(surface.name) },
             },
         } as unknown as AgentSurfaceResponse;
     },
@@ -2567,6 +2682,10 @@ export const fixtureSource: PodSource = {
         }
         if (patch.config?.send_policy?.allow_send) SAMPLE_SEND.add(name);
         else SAMPLE_SEND.delete(name);
+        /* Only a section that is sent changes, as on the server. */
+        const outsiders = patch.config?.groups?.answers_outsiders;
+        if (outsiders === true) SAMPLE_BOTS_CLOSED.delete(name);
+        else if (outsiders === false) SAMPLE_BOTS_CLOSED.add(name);
     },
     async listSurfaceGroups(podId: string, surfaceName: string) {
         await wait(120);
@@ -2594,7 +2713,7 @@ export const fixtureSource: PodSource = {
     async groupTimeline(_podId: string, groupId: string) {
         await wait(160);
         const entry = sampleGroup(groupId);
-        return readTimeline({ items: entry.row.platform === "SLACK" ? [] : entry.lines });
+        return readTimeline({ items: entry.row.platform === "SLACK" ? [] : entry.lines.map(timelineWire) });
     },
     async startGroup(podId: string, start) {
         await wait(700);
@@ -3033,7 +3152,7 @@ export const fixtureSource: PodSource = {
             { id: "c4", title: "Q1 vendor totals", at: "Wed", kind: "CHAT", meta: { lemma_resource: "file:/pages/q1-vendors.md" } },
             { id: "c5", title: "Tracker refresh", at: "Tue", kind: "TASK", meta: { source: "SCHEDULE", schedule_name: "weekly-tracker-refresh" } },
             { id: "c6", title: "Blog outline", at: "Mon", kind: "CHAT", meta: {} },
-            { id: "c7", title: "Pricing page copy", at: "18 Jul", kind: "CHAT", meta: { source: "agent_surfaces", surface_platform: "WHATSAPP" } },
+            { id: "c7", title: WHATSAPP_DM.title, at: "18 Jul", kind: "CHAT", meta: WHATSAPP_DM.metadata ?? {} },
             { id: "c8", title: "hey", at: "Fri 17 Jul", kind: "CHAT", meta: {} },
         ].map(({ meta, ...row }) => ({ ...row, origin: originOf(meta, row.kind) }));
         const needle = search?.toLowerCase();
@@ -3052,6 +3171,7 @@ export const fixtureSource: PodSource = {
             return { id: null, title: "", status: null, messages: [] };
         }
         if (conversationId === OUTSIDERS.id) return OUTSIDERS;
+        if (conversationId === WHATSAPP_DM.id) return WHATSAPP_DM;
         if (conversationId === "c2") return {
             id: "c2", title: "Long report preview", status: "COMPLETED",
             messages: [

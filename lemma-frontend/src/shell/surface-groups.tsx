@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { GroupUpdateRequest } from "lemma-sdk";
 import { source, type Member, type Surface, type SurfaceGroup } from "@/data";
-import { groupLine, groupTitle, linkShown, noGroupsYet, offersTakeOver, withGroup } from "@/data/surface-groups";
+import { groupLine, groupTitle, linkShown, noGroupsYet, offersTakeOver, whoMayChange, withGroup } from "@/data/surface-groups";
 import { isForbidden } from "@/session/auth-state";
 import { useMe } from "@/session/use-me";
 import { CopyButton } from "@/thread/copy-button";
@@ -14,11 +14,12 @@ import { PlaceLink, groupHref } from "./place-link";
 /** The groups a channel's bot is in, under that channel.
  *
  *  A group is where people outside the space can meet the bot. Each row says
- *  who answers them there — one line — and offers the two things a member can
- *  do about it: switch answering them on or off, and take the group over from
- *  whoever looks after it now. A group the bot opened (WhatsApp) also carries
- *  the link people join by, to copy and pass on. Its name opens the group's
- *  own page, where everything else about it is. */
+ *  who answers them there — one line — and, to a reader the server lets
+ *  change it, the two things to do about it: switch answering them on or
+ *  off, and take the group over from whoever looks after it now. Anyone else
+ *  is told who can. A group the bot opened (WhatsApp) also carries the link
+ *  people join by, to copy and pass on. Its name opens the group's own page,
+ *  where everything else about it is. */
 export function SurfaceGroups({ podId, surface, bot, space, members, canChange, onOpenGroup }: {
     podId: string;
     surface: Surface;
@@ -55,10 +56,14 @@ export function SurfaceGroups({ podId, surface, bot, space, members, canChange, 
             void cache.invalidateQueries({ queryKey: ["groups", podId] });
             void cache.invalidateQueries({ queryKey: ["group", podId, saved.id] });
         },
-        onError: (error, { group }) => setProblem({
-            id: group.id,
-            text: isForbidden(error) ? refused : "Couldn’t change that. Try again.",
-        }),
+        onError: (error, { group }) => {
+            setProblem({
+                id: group.id,
+                text: isForbidden(error) ? whoMayChange(group, space, bot, me, members) : "Couldn’t change that. Try again.",
+            });
+            /* Refused: it changed hands since this list was read. */
+            if (isForbidden(error)) void cache.invalidateQueries({ queryKey: key });
+        },
     });
     const shut = canChange === false;
     const list = groups.data ?? [];
@@ -90,6 +95,10 @@ export function SurfaceGroups({ podId, surface, bot, space, members, canChange, 
                         /* Every row's controls say the same words, so each
                            is described by the group it belongs to. */
                         const named = ids + "-" + group.id;
+                        /* Not the reader's to change: no control, and who
+                           can — unless the whole bot is shut to them, which
+                           is said once, below. */
+                        const theirs = group.canManage;
                         return (
                             <li key={group.id} className="sgroup">
                                 <ChannelIcon platform={group.platform || surface.platform} size={16} />
@@ -104,30 +113,34 @@ export function SurfaceGroups({ podId, surface, bot, space, members, canChange, 
                                             <CopyButton text={group.inviteLink} label={"Copy the invite link to " + title} />
                                         </span>
                                     )}
-                                    <div className="sgroup__acts">
-                                        <label className="sgroup__switch">
-                                            <input
-                                                type="checkbox"
-                                                role="switch"
-                                                aria-describedby={named}
-                                                checked={on}
-                                                disabled={shut || change.isPending}
-                                                onChange={(event) => change.mutate({ group, patch: { answers_outsiders: event.target.checked } })}
-                                            />
-                                            <span>Answer people outside {space}</span>
-                                        </label>
-                                        {offersTakeOver(group, me) && (
-                                            <button
-                                                type="button"
-                                                className="sgroup__take"
-                                                aria-describedby={named}
-                                                disabled={shut || change.isPending}
-                                                onClick={() => change.mutate({ group, patch: { take_over: true } })}
-                                            >
-                                                Take this over
-                                            </button>
-                                        )}
-                                    </div>
+                                    {theirs ? (
+                                        <div className="sgroup__acts">
+                                            <label className="sgroup__switch">
+                                                <input
+                                                    type="checkbox"
+                                                    role="switch"
+                                                    aria-describedby={named}
+                                                    checked={on}
+                                                    disabled={shut || change.isPending}
+                                                    onChange={(event) => change.mutate({ group, patch: { answers_outsiders: event.target.checked } })}
+                                                />
+                                                <span>Answer people outside {space}</span>
+                                            </label>
+                                            {offersTakeOver(group, me) && (
+                                                <button
+                                                    type="button"
+                                                    className="sgroup__take"
+                                                    aria-describedby={named}
+                                                    disabled={shut || change.isPending}
+                                                    onClick={() => change.mutate({ group, patch: { take_over: true } })}
+                                                >
+                                                    Take this over
+                                                </button>
+                                            )}
+                                        </div>
+                                    ) : !shut && !group.pending && (
+                                        <span className="sgroup__who">{whoMayChange(group, space, bot, me, members)}</span>
+                                    )}
                                     {problem?.id === group.id && <span className="sgroup__problem" role="alert">{problem.text}</span>}
                                 </div>
                             </li>

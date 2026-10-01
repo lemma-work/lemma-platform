@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { source, type Group, type Pod, type Surface } from "@/data";
 import {
     answering,
@@ -11,9 +11,11 @@ import {
     lastActive,
     offersTakeOn,
     platformName,
+    refusedChange,
     sayAnswering,
     sinceShort,
     slackInvite,
+    takeOn,
     waitingGroups,
     type Starter,
 } from "@/data/groups";
@@ -23,7 +25,7 @@ import { isForbidden } from "@/session/auth-state";
 import { useMe } from "@/session/use-me";
 import { ChannelIcon } from "@/shell/channels";
 import { useSurfaces } from "@/shell/surfaces";
-import { groupKey, useGroupChange, useGroups } from "./group-queries";
+import { groupKey, refreshGroups, useGroupChange, useGroups } from "./group-queries";
 import { GroupSheets, openTelegramLink, type GroupSheet } from "./group-sheets";
 
 /** A space's groups: every WhatsApp group, Telegram group and Slack channel
@@ -249,6 +251,7 @@ function GroupList({ pod, groups, agentOf, onOpenGroup }: {
     onOpenGroup: (group: Group) => void;
 }) {
     const me = useMe();
+    const cache = useQueryClient();
     const change = useGroupChange(pod.id);
     const [problem, setProblem] = useState<{ id: string; text: string } | null>(null);
     const now = new Date();
@@ -274,10 +277,12 @@ function GroupList({ pod, groups, agentOf, onOpenGroup }: {
                                 <button type="button" className="grow__open" onClick={() => onOpenGroup(group)}>{title}</button>
                                 <span className="grow__sub">{groupSubline(group, pod.name, agent)}</span>
                             </span>
-                            <span className="grow__who" data-quiet={state.kind === "pending" || state.kind === "invited" || state.kind === "off" || undefined}>
+                            <span className="grow__who" data-quiet={state.kind === "pending" || state.kind === "invited" || state.kind === "off" || state.kind === "bot-off" || undefined}>
                                 <span className="sr-only">People outside {pod.name}: </span>
                                 <span className="grow__who-text">{sayAnswering(state, pod.name)}</span>
-                                {state.kind === "nobody" && offersTakeOn(state) && (
+                                {/* Only from nobody, here: taking a group from
+                                    somebody is an admin's, on the group's page. */}
+                                {state.kind === "nobody" && offersTakeOn(state, group.canManage) && (
                                     <button
                                         type="button"
                                         className="grow__take"
@@ -285,13 +290,15 @@ function GroupList({ pod, groups, agentOf, onOpenGroup }: {
                                         aria-label={"Take on " + title + ": answer its people from outside " + pod.name}
                                         onClick={() => {
                                             setProblem(null);
-                                            change.mutate({ groupId: group.id, change: { take_over: true } }, {
-                                                onError: (error) => setProblem({
-                                                    id: group.id,
-                                                    text: isForbidden(error)
-                                                        ? "Only someone who can change " + (agent ?? pod.name) + " can take this on."
-                                                        : "Couldn’t take it on. Try again.",
-                                                }),
+                                            change.mutate({ groupId: group.id, change: takeOn(group) }, {
+                                                onError: (error) => {
+                                                    setProblem({
+                                                        id: group.id,
+                                                        text: isForbidden(error) ? refusedChange(pod.name) : "Couldn’t take it on. Try again.",
+                                                    });
+                                                    /* Refused: somebody took it first. Read who. */
+                                                    if (isForbidden(error)) refreshGroups(cache, pod.id);
+                                                },
                                             });
                                         }}
                                     >

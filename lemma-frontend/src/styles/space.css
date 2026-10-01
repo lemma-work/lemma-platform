@@ -7384,9 +7384,10 @@ samp,
 }
 
 /* ── A conversation that also lives on a chat platform ─────────────────
-   Two ways to send, over the box: a note to the bot alone (the default), or
-   a reply the platform gets. The line under the box says what the chosen one
-   does, and a note's box sits a shade back from a reply's. */
+   Two ways to send, over the box: a note to the bot alone (the default in a
+   group or a channel), or a reply the platform gets (the default in a
+   person's own DM or email thread). The line under the box says what the
+   chosen one does, and a note's box sits a shade back from a reply's. */
 .composer__modes {
     flex: 1 0 100%;
     display: flex;

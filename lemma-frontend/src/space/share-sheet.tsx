@@ -35,8 +35,10 @@ function useKnownAccess(podId: string, subject: ShareSubject): { visibility?: st
 function whoCanOpen(space: string, known: { visibility?: string; rls?: boolean }): string {
     const said = (known.visibility ?? "").toUpperCase();
     /* PUBLIC waives the space, not sign-in: it is every Lemma account, never
-       the open internet. That is what a public link below is for. */
-    if (said === "PUBLIC") return "Anyone signed in to Lemma can open this, including people outside " + space + ".";
+       the open internet. That is what a public link below is for. It is
+       also what the space's bots answer people outside it from, in the
+       groups where they answer them — so it reaches them too. */
+    if (said === "PUBLIC") return "Anyone with a Lemma account can open this, and people outside " + space + " get answers from it in its groups.";
     if (said === "PERSONAL") return "Only you can open this. It is in your private files.";
     if (said === "RESTRICTED") return "Only the people it was shared with can open this.";
     if (known.rls) return "Everyone in " + space + " can open this, and each sees only their own rows.";

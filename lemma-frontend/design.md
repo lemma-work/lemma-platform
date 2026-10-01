@@ -114,6 +114,18 @@ any of its bots is in, from `podGroups`.
   Lemma account; Invite opens Share), or Not recognised — which offers
   nothing, because linking somebody else's chat account would hand them its
   owner's access. Slack keeps its own history, so its page links there.
+- Every member reads every group, except what the bot said to one member
+  with that member's own access: the others see whom it answered, never what
+  it said.
+- Only the member who answers for a group's outsiders, or an admin of the
+  space, switches the group or takes it over; anybody else is told who can,
+  in place of the controls. An admin's change is told to that member. A bot
+  also has its own switch, "Answer people outside {space}", in its channel
+  settings; off, it closes every group the bot is in, and a group's page says
+  so and links there.
+- The composer in a conversation that lives on a chat platform starts on
+  Reply in the person's own DM or email thread, and on Note anywhere others
+  read along. The last choice is kept per conversation, in this browser.
 - Only the sample's Marketing has groups; every other sample space opens on
   the first run.
 

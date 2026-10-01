@@ -12,11 +12,13 @@ import {
     inviteMailto,
     lineAuthor,
     offersTakeOn,
+    onlyWho,
     personInitials,
     readGroup,
     readGroupDetail,
     readGroups,
     readTimeline,
+    refusedChange,
     sayAnswering,
     sayAnsweringFully,
     sayStanding,
@@ -25,10 +27,14 @@ import {
     slackChannelUrl,
     slackInvite,
     standing,
+    takeOn,
     timelineDays,
+    toldWhenChanged,
     waitingGroups,
     waitingTotal,
     whatsappShareUrl,
+    whomItAnswers,
+    withheldNote,
 } from "../src/data/groups.ts";
 import type { Group, GroupDetail, GroupLine, Member, Surface } from "../src/data/types.ts";
 
@@ -48,6 +54,8 @@ function group(partial: Partial<Group> = {}): Group {
         owner: { userId: "me", name: null },
         answersOutsiders: true,
         welcomesOutsiders: true,
+        botAnswersOutsiders: true,
+        canManage: true,
         peopleInSpace: 2,
         peopleOutside: 3,
         lastMessageAt: "2026-10-01T09:48:00Z",
@@ -64,6 +72,7 @@ function line(partial: Partial<GroupLine> = {}): GroupLine {
         inSpace: false,
         fromBot: false,
         text: "Is partner export ready yet?",
+        withheld: false,
         at: "2026-10-01T09:14:00Z",
         answeredName: null,
         answeredFromPublic: false,
@@ -85,6 +94,13 @@ test("reads a group off the space-wide list, and refuses one without an id", () 
     assert.equal(read?.peopleOutside, 3);
     assert.equal(read?.waitingForYou, 1);
     assert.deepEqual(read?.owner, { userId: "u1", name: "Priya" });
+    // Said nothing about either: the bot's switch is on, and nothing is the reader's to change.
+    assert.equal(read?.botAnswersOutsiders, true);
+    assert.equal(read?.canManage, false);
+    assert.equal(readGroup({ id: "g2", can_manage: true, bot_answers_outsiders: false })?.canManage, true);
+    assert.equal(readGroup({ id: "g2", can_manage: true, bot_answers_outsiders: false })?.botAnswersOutsiders, false);
+    // A member who has left answers for nobody, and the API names nobody.
+    assert.equal(readGroup({ id: "g3", owner: null, answers_outsiders: true })?.owner, null);
     assert.equal(readGroup({ title: "no id" }), null);
     // Slack keeps its own history, so the space counts nobody there.
     const slack = readGroup({ id: "s1", platform: "SLACK", shared_externally: true, people_in_pod: null, people_outside: null });
@@ -128,6 +144,29 @@ test("what was said reads oldest first, the bot's own lines counted in the space
     assert.deepEqual(lines.map((one) => one.text), ["answer", "same second, second", "later"]);
     assert.equal(lines[0].inSpace, true);
     assert.equal(lines[0].answeredFromPublic, true);
+    assert.equal(lines.every((one) => !one.withheld), true);
+});
+
+test("a withheld line keeps whom it answered and none of what it said", () => {
+    const [kept, sent, junk] = [
+        readTimeline({ items: [{ from_bot: true, in_pod: true, text: null, withheld: true, at: "2026-10-01T09:00:00Z", answered_name: "Priya" }] }),
+        // Withheld wins over any text that came with it.
+        readTimeline({ items: [{ from_bot: true, in_pod: true, text: "Thursday at 3", withheld: true, at: "2026-10-01T09:00:00Z", answered_name: "Priya" }] }),
+        // Anything else without text has nothing to show.
+        readTimeline({ items: [{ from_bot: true, in_pod: true, text: null, at: "2026-10-01T09:00:00Z" }] }),
+    ];
+    assert.deepEqual(kept.map((one) => [one.text, one.withheld, one.answeredName]), [[null, true, "Priya"]]);
+    assert.deepEqual(sent.map((one) => [one.text, one.withheld]), [[null, true]]);
+    assert.deepEqual(junk, []);
+
+    const withheld = line({ fromBot: true, inSpace: true, text: null, withheld: true, answeredName: "Deepak" });
+    assert.equal(withheldNote(withheld, "Sales"), "Answered Deepak with their access. Only Deepak can read it here.");
+    assert.equal(withheldNote({ ...withheld, answeredName: null }, "Sales"), "Answered someone in Sales with their access. Only they can read it here.");
+    // Said once, in place of the text: no second note under it.
+    assert.equal(answeredNote(withheld), null);
+    // A line the reader may see is unchanged, and stands for nothing withheld.
+    assert.equal(withheldNote(line({ fromBot: true, answeredName: "Mara", answeredFromPublic: true }), "Sales"), null);
+    assert.equal(answeredNote(line({ fromBot: true, answeredName: "Mara", answeredFromPublic: true })), "Answered Mara from what is Public");
 });
 
 test("says who answers people outside the space, and never a person who is not", () => {
@@ -136,8 +175,10 @@ test("says who answers people outside the space, and never a person who is not",
     assert.deepEqual(answering(group({ owner: { userId: "priya", name: null } }), "me", members), { kind: "someone", name: "Priya Shah" });
     assert.deepEqual(answering(group({ owner: { userId: "gone", name: null } }), "me"), { kind: "someone", name: null });
     assert.deepEqual(answering(group({ owner: null }), "me"), { kind: "nobody" });
-    // Off is off, whoever looks after it.
-    assert.deepEqual(answering(group({ answersOutsiders: false }), "me"), { kind: "off" });
+    // Off is off, whoever looks after it — and who that is stays known, for who may change it.
+    assert.deepEqual(answering(group({ answersOutsiders: false }), "me"), { kind: "off", owner: { you: true, name: null } });
+    assert.deepEqual(answering(group({ answersOutsiders: false, owner: { userId: "priya", name: null } }), "me", members),
+        { kind: "off", owner: { you: false, name: "Priya Shah" } });
     assert.deepEqual(answering(group({ pending: true }), "me"), { kind: "pending" });
     // Inside the company, a colleague who is not in the space is invited, not answered.
     assert.deepEqual(answering(group({ platform: "SLACK", sharedExternally: false }), "me"), { kind: "invited" });
@@ -153,13 +194,65 @@ test("says who answers people outside the space, and never a person who is not",
     assert.equal(sayAnsweringFully({ kind: "off" }, "Marketing"), "People outside Marketing are not answered");
 });
 
-test("offers to take a group on from nobody or from somebody else, never from you", () => {
-    assert.equal(offersTakeOn({ kind: "nobody" }), true);
-    assert.equal(offersTakeOn({ kind: "someone", name: "Priya" }), true);
-    assert.equal(offersTakeOn({ kind: "you" }), false);
-    // Switched off, turning it on is what makes you the one who answers.
-    assert.equal(offersTakeOn({ kind: "off" }), false);
-    assert.equal(offersTakeOn({ kind: "invited" }), false);
+test("says the first reason nobody outside is answered: the bot, then nobody, then the group", () => {
+    // The bot's own switch comes before everything a group says.
+    const botOff = answering(group({ botAnswersOutsiders: false, owner: null, answersOutsiders: false }), "me");
+    assert.deepEqual(botOff, { kind: "bot-off", platform: "TELEGRAM" });
+    assert.equal(sayAnswering(botOff, "Sales"), "Off for this bot");
+    assert.equal(sayAnsweringFully(botOff, "Sales"), "Answering people outside Sales is off for this Telegram bot");
+    // Then nobody to answer for them — an owner who left reads as none — even with the group switched off.
+    assert.deepEqual(answering(group({ owner: null, answersOutsiders: false }), "me"), { kind: "nobody" });
+    // Then the group's own switch.
+    assert.equal(answering(group({ answersOutsiders: false, owner: { userId: "priya", name: "Priya" } }), "me").kind, "off");
+    // All three on: somebody answers.
+    assert.equal(answering(group({ owner: { userId: "priya", name: "Priya" } }), "me").kind, "someone");
+    // An internal Slack channel invites rather than answers, whatever the bot says.
+    assert.equal(answering(group({ platform: "SLACK", sharedExternally: false, botAnswersOutsiders: false }), "me").kind, "invited");
+});
+
+test("offers to take a group on only to a reader who may, from nobody or from somebody else", () => {
+    assert.equal(offersTakeOn({ kind: "nobody" }, true), true);
+    // From somebody else: only an admin is ever told it may.
+    assert.equal(offersTakeOn({ kind: "someone", name: "Priya" }, true), true);
+    assert.equal(offersTakeOn({ kind: "someone", name: "Priya" }, false), false);
+    assert.equal(offersTakeOn({ kind: "nobody" }, false), false);
+    assert.equal(offersTakeOn({ kind: "you" }, true), false);
+    // Switched off with somebody behind it, turning it on is the thing to do.
+    assert.equal(offersTakeOn({ kind: "off", owner: { you: true, name: null } }, true), false);
+    // With the bot's switch off, taking it on would answer nobody.
+    assert.equal(offersTakeOn({ kind: "bot-off", platform: "TELEGRAM" }, true), false);
+    assert.equal(offersTakeOn({ kind: "invited" }, true), false);
+});
+
+test("taking a group on that is switched off switches it on, so its people are answered", () => {
+    assert.deepEqual(takeOn(group()), { take_over: true });
+    assert.deepEqual(takeOn(group({ answersOutsiders: false })), { take_over: true, answers_outsiders: true });
+});
+
+test("a reader who may not change a group is told who can, and an admin who may is told who hears of it", () => {
+    assert.equal(onlyWho({ kind: "someone", name: "Priya" }, "Sales", "Sales"), "Only Priya or an admin of Sales can change it.");
+    assert.equal(onlyWho({ kind: "someone", name: null }, "Sales", "Sales"), "Only the person who answers for them or an admin of Sales can change it.");
+    assert.equal(onlyWho({ kind: "off", owner: { you: false, name: "Priya" } }, "Sales", "Sales"), "Only Priya or an admin of Sales can change it.");
+    assert.equal(onlyWho({ kind: "nobody" }, "Sales", "Researcher"), "Only someone who can change Researcher can take it on.");
+    assert.equal(onlyWho({ kind: "bot-off", platform: "WHATSAPP" }, "Sales", "Researcher"), "Only someone who can change Researcher can turn it on.");
+    // Your own group on a bot you may no longer change.
+    assert.equal(onlyWho({ kind: "you" }, "Sales", "Sales"), "Only someone who can change Sales can change it.");
+    assert.equal(onlyWho({ kind: "invited" }, "Sales", "Sales"), null);
+    assert.equal(onlyWho({ kind: "pending" }, "Sales", "Sales"), null);
+
+    assert.equal(toldWhenChanged({ kind: "someone", name: "Priya" }), "Priya is told when you change it.");
+    assert.equal(toldWhenChanged({ kind: "someone", name: null }), "They are told when you change it.");
+    assert.equal(toldWhenChanged({ kind: "off", owner: { you: false, name: "Priya" } }), "Priya is told when you change it.");
+    assert.equal(toldWhenChanged({ kind: "off", owner: { you: true, name: null } }), null);
+    assert.equal(toldWhenChanged({ kind: "you" }), null);
+    assert.equal(toldWhenChanged({ kind: "nobody" }), null);
+    assert.equal(refusedChange("Sales"), "Only the person who answers for this group or an admin of Sales can change it.");
+});
+
+test("says everyone else is answered from what is Public only while somebody outside would be", () => {
+    assert.equal(whomItAnswers(group(), "Sales"), "People in Sales are answered with their own access. Everyone else, from what is Public.");
+    assert.equal(whomItAnswers(group({ welcomesOutsiders: false }), "Sales"), "People in Sales are answered with their own access. Nobody else is answered here.");
+    assert.match(whomItAnswers(group({ platform: "SLACK", sharedExternally: false, welcomesOutsiders: false }), "Sales"), /private note inviting them in/);
 });
 
 test("a row says the platform, the agent when it is not the space's own, and who has spoken", () => {

@@ -201,6 +201,11 @@ function StartWhatsApp({ pod, bot, surface, onClose, onOpenGroup }: {
 
     const start = async (event: FormEvent) => {
         event.preventDefault();
+        /* This sheet is drawn through a portal, and React carries a submit up
+           the component tree, not the page: opened from a bot's channel
+           settings, it reached that form too, which saved and closed — taking
+           this sheet with it before the link could appear. It ends here. */
+        event.stopPropagation();
         const name = title.trim();
         if (!name || busy) return;
         setBusy(true);

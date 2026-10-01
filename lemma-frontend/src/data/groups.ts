@@ -102,18 +102,23 @@ export function readGroupDetail(raw: unknown): GroupDetail | null {
     };
 }
 
+/** One line of the log. A withheld one keeps no text even if some arrived —
+ *  what it was made from is not the reader's — and any other line without
+ *  text has nothing to show, so it is dropped rather than drawn empty. */
 function readLine(raw: unknown): GroupLine | null {
     if (!raw || typeof raw !== "object") return null;
     const row = raw as Record<string, unknown>;
     const at = words(row.at);
-    if (typeof row.text !== "string" || !at) return null;
+    const withheld = row.withheld === true;
+    if (!at || (!withheld && typeof row.text !== "string")) return null;
     const fromBot = row.from_bot === true;
     return {
         authorName: words(row.author_name),
         authorExternalId: words(row.author_external_id),
         inSpace: fromBot || row.in_pod === true,
         fromBot,
-        text: row.text,
+        text: withheld ? null : (row.text as string),
+        withheld,
         at,
         answeredName: words(row.answered_name),
         answeredFromPublic: row.answered_from_public === true,
@@ -139,28 +144,34 @@ export function readTimeline(listed: unknown): GroupLine[] {
  *  An internal Slack channel is its own answer: a colleague there who is not
  *  in the space is somebody to invite, and gets a private note saying so —
  *  nobody is answered from what is Public in front of the channel. Everywhere
- *  else the switch and the owner decide it, and the switch alone never does:
- *  on with nobody behind it answers nobody. */
+ *  else three things must all hold, and where one does not, the first that
+ *  fails is the reason said: the bot's own switch, then somebody in the
+ *  space to answer for them, then the group's switch. A switch alone never
+ *  answers anybody: on with nobody behind it answers nobody. */
 export type Answering =
     | { kind: "pending" }
     | { kind: "invited" }
-    | { kind: "off" }
+    | { kind: "bot-off"; platform: string }
     | { kind: "nobody" }
+    /** Switched off, with somebody who would answer for them. */
+    | { kind: "off"; owner: { you: boolean; name: string | null } }
     | { kind: "you" }
     | { kind: "someone"; name: string | null };
 
 export function answering(
-    group: Pick<Group, "pending" | "platform" | "sharedExternally" | "answersOutsiders" | "owner">,
+    group: Pick<Group, "pending" | "platform" | "sharedExternally" | "answersOutsiders" | "botAnswersOutsiders" | "owner">,
     me: string | null,
     members: readonly Member[] = [],
 ): Answering {
     if (group.pending) return { kind: "pending" };
     if (group.platform.toUpperCase() === "SLACK" && !group.sharedExternally) return { kind: "invited" };
-    if (!group.answersOutsiders) return { kind: "off" };
+    if (!group.botAnswersOutsiders) return { kind: "bot-off", platform: group.platform };
     const owner = group.owner;
     if (!owner) return { kind: "nobody" };
-    if (me && owner.userId === me) return { kind: "you" };
-    return { kind: "someone", name: owner.name ?? members.find((member) => member.userId === owner.userId)?.name ?? null };
+    const you = Boolean(me && owner.userId === me);
+    const name = you ? null : owner.name ?? members.find((member) => member.userId === owner.userId)?.name ?? null;
+    if (!group.answersOutsiders) return { kind: "off", owner: { you, name } };
+    return you ? { kind: "you" } : { kind: "someone", name };
 }
 
 /** The state said under a "People outside {space}" heading, where the
@@ -169,6 +180,7 @@ export function sayAnswering(state: Answering, space: string): string {
     switch (state.kind) {
         case "pending": return "Not yet";
         case "invited": return "Invited to join";
+        case "bot-off": return "Off for this bot";
         case "off": return "Not answered";
         case "nobody": return "Nobody answers them";
         case "you": return "You answer for them";
@@ -181,6 +193,7 @@ export function sayAnsweringFully(state: Answering, space: string): string {
     switch (state.kind) {
         case "pending": return "Being created";
         case "invited": return "People outside " + space + " are invited to join";
+        case "bot-off": return "Answering people outside " + space + " is off for this " + platformName(state.platform) + " bot";
         case "off": return "People outside " + space + " are not answered";
         case "nobody": return "Nobody answers people outside " + space;
         case "you": return "You answer for people outside " + space;
@@ -188,10 +201,52 @@ export function sayAnsweringFully(state: Answering, space: string): string {
     }
 }
 
-/** Whether "Take it on" is offered: nobody answers them, or somebody else
- *  does. Switched off, turning it on is what makes you the one who answers. */
-export function offersTakeOn(state: Answering): boolean {
-    return state.kind === "nobody" || state.kind === "someone";
+/** Whether "Take it on" is offered: only to a reader who may change the
+ *  group, and only where nobody answers them or somebody else does — the
+ *  second only ever reaches an admin, since the server tells anyone else they
+ *  may not. With the bot's switch off, taking it on would answer nobody; the
+ *  bot is what to change. */
+export function offersTakeOn(state: Answering, canManage: boolean): boolean {
+    return canManage && (state.kind === "nobody" || state.kind === "someone");
+}
+
+/** What "Take it on" asks for. Where the group is switched off it is
+ *  switched on too: the button promises that its people are answered. */
+export function takeOn(group: Pick<Group, "answersOutsiders">): { take_over: true; answers_outsiders?: true } {
+    return group.answersOutsiders ? { take_over: true } : { take_over: true, answers_outsiders: true };
+}
+
+/** What a reader who may not change a group is told in place of the
+ *  controls: who can. The member who answers for it, or an admin of the
+ *  space; where that is nobody — or the reader, who may no longer change the
+ *  bot — whoever may change the bot. */
+export function onlyWho(state: Answering, space: string, bot: string): string | null {
+    const theirs = (name: string | null) => name
+        ? "Only " + name + " or an admin of " + space + " can change it."
+        : "Only the person who answers for them or an admin of " + space + " can change it.";
+    switch (state.kind) {
+        case "pending":
+        case "invited": return null;
+        case "bot-off": return "Only someone who can change " + bot + " can turn it on.";
+        case "nobody": return "Only someone who can change " + bot + " can take it on.";
+        case "off": return state.owner.you ? "Only someone who can change " + bot + " can change it." : theirs(state.owner.name);
+        case "you": return "Only someone who can change " + bot + " can change it.";
+        case "someone": return theirs(state.name);
+    }
+}
+
+/** Said to an admin about to change a group somebody else answers for: that
+ *  member is told, so it is not done behind their back. */
+export function toldWhenChanged(state: Answering): string | null {
+    const name = state.kind === "someone" ? state.name : state.kind === "off" && !state.owner.you ? state.owner.name : undefined;
+    if (name === undefined) return null;
+    return (name ?? "They") + (name ? " is" : " are") + " told when you change it.";
+}
+
+/** A change the server refused: somebody else answers for the group now, and
+ *  only they or an admin may change it. */
+export function refusedChange(space: string): string {
+    return "Only the person who answers for this group or an admin of " + space + " can change it.";
 }
 
 /* ── what a row says ───────────────────────────────────────────────── */
@@ -383,13 +438,24 @@ export function lineAuthor(line: GroupLine, people: readonly GroupPerson[], me: 
 }
 
 /** The small print under a bot's line: whom it answered, and on whose
- *  access. */
+ *  access. A withheld line says that in place of its text instead. */
 export function answeredNote(line: GroupLine): string | null {
-    if (!line.fromBot) return null;
+    if (!line.fromBot || line.withheld) return null;
     if (line.answeredFromPublic) {
         return line.answeredName ? "Answered " + line.answeredName + " from what is Public" : "Answered from what is Public";
     }
     return line.answeredName ? "Answered " + line.answeredName + ", with their access" : null;
+}
+
+/** What stands where a withheld line's text would be: whom the bot
+ *  answered, that it was with their own access, and so that only they can
+ *  read it — never a word of what it said. */
+export function withheldNote(line: GroupLine, space: string): string | null {
+    if (!line.withheld) return null;
+    const name = line.answeredName;
+    return name
+        ? "Answered " + name + " with their access. Only " + name + " can read it here."
+        : "Answered someone in " + space + " with their access. Only they can read it here.";
 }
 
 /** The timeline, cut at each day, the days named the way a chat names
@@ -424,12 +490,15 @@ export function howToAsk(platform: string, bot: string): string {
     }
 }
 
-/** And whom it answers how. */
-export function whomItAnswers(group: Pick<Group, "platform" | "sharedExternally">, space: string): string {
+/** And whom it answers how — everyone else only while a stranger asking
+ *  today would be answered. */
+export function whomItAnswers(group: Pick<Group, "platform" | "sharedExternally" | "welcomesOutsiders">, space: string): string {
     if (group.platform.toUpperCase() === "SLACK" && !group.sharedExternally) {
         return "People in " + space + " are answered with their own access. Anyone else here gets a private note inviting them in.";
     }
-    return "People in " + space + " are answered with their own access. Everyone else, from what is Public.";
+    return group.welcomesOutsiders
+        ? "People in " + space + " are answered with their own access. Everyone else, from what is Public."
+        : "People in " + space + " are answered with their own access. Nobody else is answered here.";
 }
 
 /** How to take the bot out, where the platform lets a person do it. A

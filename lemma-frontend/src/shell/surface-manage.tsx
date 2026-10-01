@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentSurfaceResponse, SurfaceSetupResponse } from "lemma-sdk";
 import { source, type Group, type Pod, type Surface } from "@/data";
 import { filtersSupported, routesSupported, surfaceDraft, surfacePatch, type SurfaceDraft } from "@/data/surface-settings";
-import { answering, byActivity, isGroupPlatform, sayAnsweringFully } from "@/data/groups";
+import { answering, byActivity, isGroupPlatform, sayAnswering, sayAnsweringFully } from "@/data/groups";
 import { groupTitle } from "@/data/surface-groups";
 import { useMe } from "@/session/use-me";
 import { GroupSheets, type GroupSheet } from "@/space/group-sheets";
-import { useGroups } from "@/space/group-queries";
+import { refreshGroups, useGroups } from "@/space/group-queries";
 import { SetupActions } from "./surface-setup";
 import { ChannelIcon, channelName } from "./channels";
 import { PlaceLink, goTo, groupHref } from "./place-link";
@@ -109,10 +109,16 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
 }) {
     const [draft, setDraft] = useState(() => surfaceDraft(surface));
     const [dropping, setDropping] = useState(false);
+    const cache = useQueryClient();
     const change = (patch: Partial<SurfaceDraft>) => setDraft(current => ({ ...current, ...patch }));
     const agents = useQuery({ queryKey: ["surface-agents", pod.id], queryFn: () => source.listAgents(pod.id) });
     const channels = useQuery({ queryKey: ["surface-channels", pod.id, surface.name], queryFn: () => source.surfaceChannels(pod.id, surface.name), enabled: routesSupported(surface.platform) });
-    const save = useMutation({ mutationFn: () => source.updateSurface(pod.id, surface.name, surfacePatch(surface.platform, draft)), onSuccess: onSaved });
+    const save = useMutation({
+        mutationFn: () => source.updateSurface(pod.id, surface.name, surfacePatch(surface.platform, draft)),
+        /* Whether its groups answer people outside rides on this save, and
+           every list of them says so: read them all again. */
+        onSuccess: () => { refreshGroups(cache, pod.id); onSaved(); },
+    });
     const drop = useMutation({ mutationFn: () => source.disconnect(pod.id, surface.name), onSuccess: onSaved });
     const options = channels.data?.channels ?? [];
     const name = channelName(surface.platform);
@@ -173,6 +179,15 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                     <small>In chats that already exist, for a reminder or a follow-up. Off: it only replies.</small>
                 </span>
             </label>
+            {isGroupPlatform(surface.platform) && (
+                <label className="smanage__check">
+                    <input type="checkbox" role="switch" checked={draft.answersOutsiders} onChange={event => change({ answersOutsiders: event.target.checked })} />
+                    <span>
+                        <span className="smanage__label">Answer people outside {pod.name}</span>
+                        <small>From what {pod.name} has made Public, in every group this bot is in.</small>
+                    </span>
+                </label>
+            )}
         </fieldset>
         {isGroupPlatform(listed.platform) && <GroupsHere pod={pod} surface={listed} bot={bot} onLeave={onLeave} />}
         {save.isError && <p role="alert">{save.error.message}</p>}
@@ -213,12 +228,17 @@ function GroupsHere({ pod, surface, bot, onLeave }: { pod: Pod; surface: Surface
             {groups.isSuccess && here.length === 0 && <p className="smanage__quiet">None yet.</p>}
             {here.length > 0 && (
                 <ul className="smanage__group-list">
-                    {here.map((group) => (
-                        <li key={group.id}>
-                            <PlaceLink href={groupHref(pod.id, group.id)} onGo={onLeave}>{groupTitle(group)}</PlaceLink>
-                            <small>{sayAnsweringFully(answering(group, me, pod.members), pod.name)}</small>
-                        </li>
-                    ))}
+                    {here.map((group) => {
+                        const state = answering(group, me, pod.members);
+                        return (
+                            <li key={group.id}>
+                                <PlaceLink href={groupHref(pod.id, group.id)} onGo={onLeave}>{groupTitle(group)}</PlaceLink>
+                                {/* The bot is this one, so its own switch is said
+                                    short: the full sentence would name it again. */}
+                                <small>{state.kind === "bot-off" ? sayAnswering(state, pod.name) : sayAnsweringFully(state, pod.name)}</small>
+                            </li>
+                        );
+                    })}
                 </ul>
             )}
             {surface.active && (

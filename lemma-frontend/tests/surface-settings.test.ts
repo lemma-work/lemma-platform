@@ -37,6 +37,17 @@ test("email restrictions can be edited and explicitly cleared without adding cha
     assert.deepEqual(surfacePatch("RESEND", draft).config?.identity, { allowed_domains: [], allowed_email_addresses: [] });
 });
 
+test("a bot that can be in groups saves whether it answers people outside the space, on unless switched off", () => {
+    const draft = surfaceDraft(surface);
+    assert.equal(draft.answersOutsiders, true, "a bot that never said is on");
+    assert.deepEqual(surfacePatch("TELEGRAM", draft).config?.groups, { answers_outsiders: true });
+    draft.answersOutsiders = false;
+    assert.deepEqual(surfacePatch("WHATSAPP", draft).config?.groups, { answers_outsiders: false });
+    assert.equal(surfaceDraft({ ...surface, config: { ...surface.config, groups: { answers_outsiders: false } } }).answersOutsiders, false);
+    // Where the bot is never in a group, the section is left alone.
+    assert.equal(Object.hasOwn(surfacePatch("RESEND", draft).config!, "groups"), false);
+});
+
 test("disabled connections remain disabled when saving unrelated settings", () => {
     const draft = surfaceDraft({ ...surface, status: "INACTIVE" as AgentSurfaceResponse["status"] });
     draft.agent = "pod_default";
