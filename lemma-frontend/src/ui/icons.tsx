@@ -33,6 +33,9 @@ export {
     Eye as ShowIcon, EyeSlash as HideIcon,
     // The space's home, and the presentation starter on it.
     House as HomeIcon, PresentationChart as SlidesIcon, Play as PlayIcon,
+    // An empty Files list's way in, and the help menu's three doors: the
+    // tour, the documentation and what changed.
+    UploadSimple as UploadIcon, Compass as TourIcon, BookOpenText as DocsIcon,
 } from "@phosphor-icons/react";
 
 export function LemmaLogo({ compact = false }: { compact?: boolean }) {

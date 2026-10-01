@@ -66,7 +66,7 @@ export const PAGE_TEMPLATES: PageTemplate[] = [
 ## Comments
 
 - [ ] **Comment on anything.** Select text and choose *Comment*. Threads sit beside the page; resolve them when they are done.
-- [ ] **Ask a bot in a comment.** Mention it — \`@${bot} tighten this\` — and it reads the page, makes the change and answers in the thread. Switch it on once, on the bot's page: *Answers comments that mention it*.
+- [ ] **Ask ${bot} in a comment.** Mention it — \`@${bot} tighten this\` — and it reads the page, makes the change and answers in the thread. The first time, choose *Let ${bot} answer* under the comment box.
 - [ ] **Bring people in.** Mention someone with \`@\` and they get a notification.
 
 ## Live data and visuals
@@ -82,7 +82,7 @@ ${DEMO_WIDGET}
 
 ## Sharing
 
-- [ ] **Share**, top right, shows who can open this page and invites more people. Everything here is a plain file in your space, so your bots can read and edit it too.
+- [ ] **Share**, top right, shows who can open this page and invites more people. Everything here is a plain file in ${bot}’s space, so ${bot} can read and edit it too.
 `,
     },
     {

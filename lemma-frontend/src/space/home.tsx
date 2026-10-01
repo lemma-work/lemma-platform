@@ -200,7 +200,7 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
                 </section>
             </div>
 
-            <div className="home__chat">
+            <div className="home__chat" data-tour="ask">
                 <AskBox placeholder={"Ask " + mate + "…"} fill={fill} onFilled={() => setFill(null)} onAsk={onAsk} />
             </div>
         </div>

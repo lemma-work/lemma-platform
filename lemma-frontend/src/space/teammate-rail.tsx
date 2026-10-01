@@ -68,7 +68,7 @@ export function TeammateRail({ pods, activeId, atTeam, hiring = false, owed, org
     });
 
     return (
-        <nav className="trail" aria-label={MATES}>
+        <nav className="trail" aria-label={MATES} data-tour="rail">
             <button
                 className="trail__home"
                 aria-current={atTeam ? "page" : undefined}

@@ -269,6 +269,15 @@ export function sampleTable(name: string): SampleTable | undefined {
     return SAMPLE_TABLES.find((t) => t.name === name);
 }
 
+/* Set up and not filled in yet: the state a table is in the moment a
+   teammate makes one, and the one table here with no rows to shape. */
+SAMPLE_TABLES.push({
+    name: "interview_feedback",
+    detail: "Set up, not filled in yet",
+    columns: columns("id", "candidate", "interviewer", "verdict", "notes", "created_at"),
+    rows: () => [],
+});
+
 /** A sample table in the shape the schema endpoint would return it. */
 export function sampleShape(table: SampleTable) {
     return {
