@@ -23,6 +23,17 @@ export function offersTour(createdAt: string | null | undefined, { seen, now = D
     return now - created <= TOUR_WINDOW_MS;
 }
 
+/** Whether somebody is on Home, rather than being shown it for a moment.
+ *
+ *  Until a teammate's tabs have loaded, the shell draws Home in place of the
+ *  tab the address asked for, so a link to a conversation shows Home first.
+ *  Offering the tour then opens it over the conversation the link was for —
+ *  and over the composer somebody came to type in. So Home counts only when
+ *  the chosen tab says so and the address does not name somewhere else. */
+export function atHome(addressTab: string | null, chosenTab: string): boolean {
+    return chosenTab === "space:home" && (addressTab === null || addressTab === "space:home");
+}
+
 export function readTourSeen(userId: string): boolean {
     try {
         return localStorage.getItem(tourSeenKey(userId)) === "1";

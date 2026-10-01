@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tourStops } from "../src/tour/stops.ts";
-import { offersTour, TOUR_WINDOW_MS, tourSeenKey } from "../src/tour/when.ts";
+import { atHome, offersTour, TOUR_WINDOW_MS, tourSeenKey } from "../src/tour/when.ts";
 
 const NOW = Date.parse("2026-10-01T12:00:00Z");
 const stops = tourStops({ name: "Hazel", org: "Acme" });
@@ -56,6 +56,16 @@ test("an account with no readable creation date is never interrupted", () => {
     assert.equal(offersTour(undefined, { seen: false, now: NOW }), false);
     assert.equal(offersTour("", { seen: false, now: NOW }), false);
     assert.equal(offersTour("not a date", { seen: false, now: NOW }), false);
+});
+
+test("Home counts only when it is where somebody is, not the fallback drawn while tabs load", () => {
+    assert.equal(atHome(null, "space:home"), true);
+    assert.equal(atHome("space:home", "space:home"), true);
+    // A link to a conversation draws Home until the tabs arrive; the tour
+    // must not open over the composer the link was for.
+    assert.equal(atHome("conversation", "space:home"), false);
+    assert.equal(atHome(null, "conversation"), false);
+    assert.equal(atHome("space:pages", "space:pages"), false);
 });
 
 test("having seen it is remembered per person", () => {

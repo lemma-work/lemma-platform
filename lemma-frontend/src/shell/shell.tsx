@@ -89,7 +89,7 @@ import { HelpMenu } from "@/tour/help-menu";
 import { tourStops, type Stop } from "@/tour/stops";
 import { guideFor, placeOf } from "@/tour/guides";
 import { PlaceGuide } from "@/tour/place-guide";
-import { offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
+import { atHome, offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -1089,7 +1089,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         if (preview || source.label !== "live" || !meId) return;
         if (offersTour(meCreated, { seen: readTourSeen(meId) })) setTourWanted((was) => was ?? "offered");
     }, [preview, meId, meCreated]);
-    const onHome = activeTab?.id === "space:home";
+    const onHome = atHome(address.tabId, activeTabId);
     const tourBlocked = !pod || atTeam || hiring || Boolean(stranger) || settings !== null || huddle.expanded;
     useEffect(() => {
         if (preview || touring || !tourWanted || tourBlocked) return;
