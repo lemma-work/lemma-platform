@@ -108,7 +108,7 @@ function HowItStarts({ pod, orgId, name, automation, perPerson, onConnect }: {
     const schedules = useSchedules(pod.id);
     const jobs = useMemo(() => schedulesFor(schedules.data ?? [], name), [schedules.data, name]);
     const state = turnOnOf(automation, perPerson, jobs, me);
-    const owner = (job: StandingJob) => (job.ownerId && job.ownerId === me ? "you" : pod.members.find((member) => member.userId === job.ownerId)?.name ?? "someone in the space");
+    const owner = (job: StandingJob) => (job.ownerId && job.ownerId === me ? "you" : pod.members.find((member) => member.userId === job.ownerId)?.name ?? "someone here");
 
     return (
         <section className="agentpage__card wfstart">
@@ -189,7 +189,7 @@ function TurnOnForm({ pod, orgId, name, automation, perPerson, onConnect }: {
         mutationFn: () => lemma(pod.id).request("POST", "/pods/" + pod.id + "/schedules", { body: request }),
         onSuccess: () => void cache.invalidateQueries({ queryKey: ["schedules", pod.id] }),
     });
-    const verb = perPerson && automation.kind !== "rows" ? "Turn on for me" : "Turn on for the space";
+    const verb = perPerson && automation.kind !== "rows" ? "Turn on for me" : "Turn on for everyone";
 
     return (
         <div className="wfstart__form">

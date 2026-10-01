@@ -314,27 +314,37 @@ def _leading_text_error(content: str) -> str | None:
 
 
 def _sdk_loader_errors(content: str) -> list[str]:
-    """Errors in how a data-backed fragment reaches the browser SDK, else []."""
+    """Errors in how a data-backed fragment reaches the browser SDK, else [].
+
+    The page a widget is served in loads the SDK itself (`lemma.client()`,
+    `lemma.query`, `lemma.compose`), so the usual mistake is no longer a loader
+    written wrong but a widget reaching for `window.LemmaClient` directly, which
+    is not there until something has loaded it. One error says so and names the
+    kit. A complete hand-written loader is still accepted: widgets written
+    before the kit keep working.
+    """
     if "lemma-client.js" not in content and "LemmaClient" not in content:
         return []
-    errors: list[str] = []
-    if not _RUNTIME_CONFIG_REFERENCE.search(content):
-        errors.append(
-            "SDK-backed widgets must read window.__LEMMA_CONFIG__ at runtime."
+    complete = (
+        _RUNTIME_CONFIG_REFERENCE.search(content)
+        and _API_URL_IDENTIFIER.search(content)
+        and "lemma-client.js" in content
+        and re.search(
+            r"\.onload\s*=|addEventListener\(\s*['\"]load['\"]",
+            content,
+            re.IGNORECASE,
         )
-    if not _API_URL_IDENTIFIER.search(content):
-        errors.append("Build the browser SDK URL from window.__LEMMA_CONFIG__.apiUrl.")
-    if "lemma-client.js" not in content:
-        errors.append(
-            "The widget uses LemmaClient but does not load /public/sdk/lemma-client.js."
+    )
+    if complete:
+        return []
+    return [
+        (
+            "The widget reaches for the browser SDK directly, and nothing has loaded "
+            "it. The page does that for you: use `lemma.query(sql)`, "
+            "`lemma.records(table)`, `lemma.compose(text)` and `lemma.canCompose()`, "
+            "or `await lemma.client()` for any other SDK call — and write no loader."
         )
-    if not re.search(
-        r"\.onload\s*=|addEventListener\(\s*['\"]load['\"]",
-        content,
-        re.IGNORECASE,
-    ):
-        errors.append("Boot SDK-backed widget code from the SDK script's load handler.")
-    return errors
+    ]
 
 
 def validate_widget_html(html: str) -> list[str]:

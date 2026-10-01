@@ -240,7 +240,7 @@ function Instructions({ detail }: { detail: AgentDetail }) {
     if (detail.front && !detail.instruction) {
         return (
             <Rail title="Instructions">
-                <p className="agentpage__quiet">Follows the space’s own memory and skills.</p>
+                <p className="agentpage__quiet">Follows its own memory and skills.</p>
             </Rail>
         );
     }
@@ -341,7 +341,7 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
             {selected && (
                 <Modal title={"Channels for " + detail.label} onClose={() => setSelected(null)}>
                     {pod.isPending && <p role="status">Loading channel settings…</p>}
-                    {(pod.isError || (pod.isSuccess && !pod.data)) && <p role="alert">Could not load the space. <button className="btn" onClick={() => void pod.refetch()}>Retry</button></p>}
+                    {(pod.isError || (pod.isSuccess && !pod.data)) && <p role="alert">Could not load the channel settings. <button className="btn" onClick={() => void pod.refetch()}>Retry</button></p>}
                     {pod.data && <SurfaceManage pod={pod.data} surface={selected} onBack={() => setSelected(null)} onSaved={saved} onLeave={() => setSelected(null)} />}
                 </Modal>
             )}
@@ -353,7 +353,7 @@ function Facts({ detail }: { detail: AgentDetail }) {
     const runtime = runtimeLine(detail);
     return (
         <Rail title="Runs on">
-            <p className="agentpage__fact">{runtime || "The space’s default model"}</p>
+            <p className="agentpage__fact">{runtime || "The default model here"}</p>
             {(detail.input || detail.output) && (
                 <dl className="agentpage__schema">
                     {detail.input && <><dt>Takes</dt><dd>{detail.input.opaque ? "structured input" : detail.input.fields.join(", ")}</dd></>}
@@ -439,7 +439,7 @@ function CommentReplies({ pod, detail }: { pod: Pod; detail: AgentDetail }) {
             <p className="agentpage__quiet">
                 {job ? "Mention it on any page and it reads the page, does what you ask, and replies in the thread." : "Off: a mention in a comment is only a mention."}
             </p>
-            {flip.isError && <p className="agentpage__quiet">{isForbidden(flip.error) ? "Only an editor of this space can change this." : "Couldn’t change that."}</p>}
+            {flip.isError && <p className="agentpage__quiet">{isForbidden(flip.error) ? "Only an editor here can change this." : "Couldn’t change that."}</p>}
         </Rail>
     );
 }

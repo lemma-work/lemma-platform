@@ -1,5 +1,6 @@
 import { isPlanToolName, planStepsFromToolInvocation, type PlanStepState } from "lemma-sdk";
 import { isDisplayResourceTool, parseDisplayResource, type DisplayResource } from "./display-resource";
+import { notedBy, type Noted } from "./memory-notes";
 import { parseToolCard, type SignInAsk, type ToolCard } from "./tool-cards";
 import { toolKey, toolLabel, toolTitle } from "./tool-name";
 import {
@@ -117,6 +118,10 @@ export interface Turn {
     notes: Note[];
     /** Speech, cards and pauses, in the order they happened. */
     items: TurnItem[];
+    /** Memory notes this turn wrote, one per note however many times it was
+     *  saved. Drawn as a quiet line under the reply: the model writes its
+     *  notes silently, and this is the platform saying that it did. */
+    noted?: Noted[];
     notice?: string;
     /** First and last assistant activity, for "Worked for 2m 14s". */
     startedAtMs?: number;
@@ -352,6 +357,20 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
         if (kind === "TOOL_CALL") {
             if (!current) current = open(message);
             worked(current, message);
+
+            /* Read before anything claims the call, and without claiming it:
+               the write is still a step in the trace, and the line under the
+               reply is a second, plainer account of the same fact. */
+            const noted = notedBy(
+                message.tool_name,
+                message.tool_args,
+                message.tool_call_id ? returns.get(message.tool_call_id)?.tool_result : undefined,
+                message.metadata ?? null,
+            );
+            if (noted) {
+                const list = current.noted ?? (current.noted = []);
+                if (!list.some((one) => one.path === noted.path)) list.push(noted);
+            }
 
             /* A pause is not work. It is the run handing control back, and it
                belongs in the conversation at the point it happened — never

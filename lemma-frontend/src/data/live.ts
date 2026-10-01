@@ -255,11 +255,13 @@ function humanizeName(raw: string): string {
 }
 
 
-function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null; description?: string | null }): Pod {
+function podSummary(pod: { id: string; name: string; organization_id: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null }): Pod {
     const name = humanizeName(pod.name);
     const description = pod.description?.trim();
     return { id: pod.id, orgId: pod.organization_id, name, iconUrl: pod.icon_url ?? null,
         ...(description ? { description } : {}),
+        ...(pod.created_at ? { hiredAt: pod.created_at } : {}),
+        ...(pod.user_id ? { hiredBy: pod.user_id } : {}),
         teammate: { name, initials: initialsOf(name), iconUrl: pod.icon_url ?? null },
         subtitle: "", members: [], waiting: "" };
 }
@@ -443,8 +445,8 @@ export const liveSource: PodSource = {
     async listPods(orgId: string): Promise<Pod[]> {
         const listed = (await lemma().pods.listByOrganization(orgId)) as Listish;
         return itemsOf(listed)
-            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null; description?: string | null })
-            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null; description?: string | null } =>
+            .map((raw) => raw as { id?: string; name?: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null })
+            .filter((pod): pod is { id: string; name: string; organization_id?: string; icon_url?: string | null; description?: string | null; created_at?: string | null; user_id?: string | null } =>
                 Boolean(pod.id && pod.name),
             )
             .map((pod) => podSummary({ ...pod, organization_id: pod.organization_id ?? orgId }));
@@ -469,7 +471,7 @@ export const liveSource: PodSource = {
             return { next: result.next_page_token, items: result.items.map(t => ({ id: t.id, name: t.name, kind: "table" as const, path: t.name, updated: t.updated_at, detail: `${t.column_count ?? "—"} columns`, visibility: t.visibility, rls: t.enable_rls })) };
         }
         const result = await client.files.list({ directoryPath: directory, limit: 50, pageToken: page });
-        return { next: result.next_page_token, items: result.items.map(f => ({ id: f.id, name: f.name, kind: /folder|directory/i.test(f.kind) ? "folder" as const : "file" as const, path: f.path, updated: f.updated_at, detail: f.description || f.mime_type || f.kind, status: f.status, visibility: f.visibility, owner: f.owner_user_id ?? null })) };
+        return { next: result.next_page_token, items: result.items.map(f => ({ id: f.id, name: f.name, kind: /folder|directory/i.test(f.kind) ? "folder" as const : "file" as const, path: f.path, updated: f.updated_at, detail: f.description || f.mime_type || f.kind, ...(f.description ? { description: f.description } : {}), status: f.status, visibility: f.visibility, owner: f.owner_user_id ?? null })) };
     },
     async tableColumns(podId, name) { return (await lemma(podId).tables.get(name)).columns; },
     /* Nothing binds parameters here — `datastore.query` takes SQL text and

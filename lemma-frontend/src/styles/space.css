@@ -28,31 +28,11 @@
     letter-spacing: -0.02em;
 }
 
-/* Three overlapping dots in place of the three bars. */
-.lemma-brand-mark {
-    align-items: center;
-    gap: 0;
-    height: 18px;
-}
-.lemma-brand-mark i,
-.lemma-brand-mark i:nth-child(1),
-.lemma-brand-mark i:nth-child(2),
-.lemma-brand-mark i:nth-child(3) {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    mix-blend-mode: multiply;
-}
-.lemma-brand-mark i + i { margin-left: -4px; }
-.lemma-brand-mark i:nth-child(1) { background: var(--brand-dot-1); }
-.lemma-brand-mark i:nth-child(2) { background: var(--brand-dot-2); }
-.lemma-brand-mark i:nth-child(3) { background: var(--brand-dot-3); }
-.lemma-brand-mark--inline i,
-.lemma-brand-mark--inline i:nth-child(n) { width: 8px; height: 8px; }
-.lemma-brand-mark--inline i + i { margin-left: -3px; }
-:root[data-theme="dark"] .lemma-brand-mark i { mix-blend-mode: screen; }
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .lemma-brand-mark i { mix-blend-mode: screen; }
+/* The Lemma mark is the three rising bars of the app icon, drawn by
+   refinement.css; here they only take the brand's own purple, which does not
+   move with the accent a person picks. */
+.lemma-brand-mark i {
+    background: var(--brand-bars);
 }
 
 .side .icon-button {
@@ -2586,6 +2566,50 @@ samp,
 }
 .home__owed button > svg {
     color: var(--ink-3);
+}
+/* An ask can be put away. The row is two controls side by side: open it,
+   or dismiss it, which archives the conversation. The dismiss is quiet
+   until the row is under the pointer, and always there on touch. */
+.home__owed .home__ask {
+    display: flex;
+    align-items: center;
+}
+.home__owed .home__ask > button:first-child {
+    flex: 1;
+    min-width: 0;
+}
+.home__owed .home__dismiss {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+    border-radius: var(--r-sm);
+    color: var(--ink-3);
+    opacity: 0;
+}
+.home__owed .home__ask:hover .home__dismiss,
+.home__owed .home__dismiss:focus-visible {
+    opacity: 1;
+}
+.home__owed .home__dismiss:hover {
+    color: var(--ink);
+}
+@media (hover: none) {
+    .home__owed .home__dismiss { opacity: 1; }
+}
+.home__older {
+    margin-top: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.home__older:hover {
+    color: var(--ink);
 }
 .home__starters {
     display: grid;
@@ -6988,7 +7012,7 @@ samp,
     display: flex;
     align-items: center;
     gap: 28px;
-    margin-bottom: 36px;
+    margin-bottom: 24px;
 }
 .aboutpage__who h1 {
     margin: 0;
@@ -7051,7 +7075,60 @@ samp,
 }
 .aboutpage__section {
     padding-top: 28px;
-    scroll-margin-top: 16px;
+    /* Clear of the sticky row of jumps above it. */
+    scroll-margin-top: 52px;
+}
+/* The page's sections as a row that stays put while the page scrolls under
+   it. Plain words, the tab look the Files view uses, and it scrolls sideways
+   on a phone rather than wrapping into a block. */
+.aboutpage__jumps {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    gap: 2px;
+    margin: 0 -8px;
+    padding: 8px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.aboutpage__jumps::-webkit-scrollbar {
+    display: none;
+}
+.aboutpage__jumps button {
+    flex: none;
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13.5px;
+    cursor: pointer;
+}
+.aboutpage__jumps button:hover {
+    color: var(--ink);
+    background: var(--accent-soft);
+}
+.aboutpage__jumps button[aria-current="true"] {
+    color: var(--ink);
+    background: var(--line-2);
+}
+.aboutpage__jumps button:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+/* A count beside a tab label, quieter than the label. */
+.notes-view__count {
+    margin-left: 6px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+.notes-view .all__scope-note {
+    margin: 6px 2px 12px;
 }
 .aboutpage__section + .aboutpage__section {
     margin-top: 12px;
@@ -7103,6 +7180,88 @@ samp,
     margin: 0;
     font-size: 14px;
     color: var(--ink-3);
+}
+.aboutpage__hired {
+    margin: -10px 0 16px;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+
+/* What the teammate has written down: one line a note, the sidebar's
+   density. A filled dot is a note changed this week, a ring is one that has
+   not; the date says when either way. */
+.notes {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+}
+.notes li {
+    border-bottom: 1px solid var(--line);
+}
+.notes__row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    height: 36px;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.notes__row:hover {
+    background: var(--wash-b);
+}
+.notes__row:focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: -2px;
+}
+.notes__dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.notes__dot--fresh {
+    background: var(--info);
+    box-shadow: none;
+}
+.notes__line {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.notes__line > svg {
+    flex: none;
+    color: var(--ink-3);
+}
+.notes__topic {
+    flex: none;
+}
+.notes__gloss {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ink-3);
+}
+.notes__gloss::before {
+    content: "· ";
+}
+.notes__at {
+    flex: none;
+    font-size: 12.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
 }
 .aboutpage__foot {
     margin: 36px 0 0;

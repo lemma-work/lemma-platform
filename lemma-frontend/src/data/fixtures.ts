@@ -1,9 +1,10 @@
 import { key } from "@/session/storage";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
-import type { Conversation, FileContent, Invitation, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
+import type { Conversation, FileContent, Invitation, LibraryItem, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
+import { sampleListing } from "@/thread/memory-notes";
 import { agentChanges, agentRows, answeringAs, readAgentDetail, type AgentDraft } from "./agents";
 import { readGroup, readGroupDetail, readGroups, readTimeline, WHATSAPP_TITLE_MAX } from "./groups";
 import {
@@ -119,6 +120,8 @@ const PODS: Pod[] = [
         subtitle: "with Priya and you",
         members: MEMBERS,
         waiting: "1 decision waiting",
+        hiredAt: "2026-03-12T09:00:00Z",
+        hiredBy: "sample-user",
     },
     {
         id: "personal",
@@ -130,6 +133,8 @@ const PODS: Pod[] = [
         subtitle: "just you",
         members: MEMBERS,
         waiting: "",
+        hiredAt: "2026-06-02T18:30:00Z",
+        hiredBy: "sample-user",
     },
     {
         id: "panini",
@@ -902,6 +907,32 @@ const CONVERSATION: Conversation = {
                 decision: "APPROVE_ONCE",
                 answers: { "Opening quote": "Jordan Kim", "The other quote": "Halfway down" },
             },
+        },
+        /* The answer is a preference worth keeping, so the teammate writes it
+           down: the write the "noted" line under this reply is drawn from. */
+        {
+            id: "m9a",
+            role: "assistant",
+            kind: "TOOL_CALL",
+            sequence: 9.3,
+            created_at: new Date().toISOString(),
+            tool_name: "pod_write_file",
+            tool_call_id: "call_note_voice",
+            tool_args: {
+                path: "/memory/brand-voice.md",
+                description: "No exclamation marks in announcements",
+                content: "# Brand voice\n\n- Customer quotes open with the stronger line, even when it is riskier (chose Jordan over Maya, launch post).\n",
+                overwrite: true,
+            },
+        },
+        {
+            id: "m9b",
+            role: "assistant",
+            kind: "TOOL_RETURN",
+            sequence: 9.4,
+            created_at: new Date().toISOString(),
+            tool_call_id: "call_note_voice",
+            tool_result: { success: true, path: "/memory/brand-voice.md", size_bytes: 118, created: false },
         },
 
         {
@@ -2355,7 +2386,36 @@ const SAMPLE_SKILLS: { folder: string; updated: string; md: string | null }[] = 
 const SAMPLE_EDITS = new Map<string, string>();
 
 /** The sample file tree, before anything was typed into it. */
+/** What the sample teammate has written down, in the folders the backend
+ *  keeps memory in. Dated relative to now, so the week's dot has something
+ *  on each side of it. */
+const SAMPLE_MEMORY: { path: string; description: string; daysAgo: number; text: string }[] = [
+    { path: "/memory/pricing.md", description: "Enterprise quotes go through Priya first", daysAgo: 3,
+        text: "# Pricing\n\n- Enterprise quotes go to Priya for review before they are sent (from 2026-09-28; before that the account owner sent them directly).\n- Discounts above 15% need Priya and the account owner.\n" },
+    { path: "/memory/launch-checks.md", description: "Readiness runs Thursdays at 9", daysAgo: 5,
+        text: "# Launch checks\n\n- Readiness check runs Thursdays at 09:00, not Fridays (moved 2026-09-26).\n- A launch is not ready until the demo video matches the current onboarding.\n" },
+    { path: "/memory/brand-voice.md", description: "No exclamation marks in announcements", daysAgo: 21,
+        text: "# Brand voice\n\n- No exclamation marks in announcements.\n- Name the customer only with written permission.\n" },
+    { path: "/memory/agents/pod-default/working-style.md", description: "Drafts go to the team channel, never straight out", daysAgo: 40,
+        text: "# Working style\n\n- Anything public is drafted and posted to #launch for review. Nothing goes out directly.\n" },
+    { path: "/me/agents/pod-default/your-preferences.md", description: "Summaries as short bullets", daysAgo: 12,
+        text: "# Your preferences\n\n- Summaries as short bullets, decisions first.\n" },
+];
+
+function sampleMemoryIn(directory: string): LibraryItem[] {
+    const index = (dir: string) => ({ path: dir + "/AGENTS.md", updated: new Date(Date.now() - 86_400_000).toISOString(), description: "" });
+    return sampleListing(directory, [
+        index("/memory"),
+        ...SAMPLE_MEMORY.map(note => ({ path: note.path, updated: new Date(Date.now() - note.daysAgo * 86_400_000).toISOString(), description: note.description })),
+    ]);
+}
+
 async function sampleFile(path: string): Promise<FileContent> {
+    const note = SAMPLE_MEMORY.find(one => one.path === path);
+    if (note) {
+        await wait(40);
+        return { name: path.split("/").pop() ?? path, path, mime: "text/markdown", size: note.text.length, kind: "markdown" as const, text: note.text };
+    }
     /* Before the markdown fallback below, because a SKILL.md is markdown
        and would otherwise come back as the sample report — which would
        give every skill in the deck the same description, and a healthy
@@ -2492,13 +2552,15 @@ export const fixtureSource: PodSource = {
         if (kind === "tables") return { items: SAMPLE_TABLES.map(table => ({
             id: table.name, name: table.name, kind: "table" as const, path: table.name, updated, detail: table.detail,
         })) };
-        if (directory === "/me") return { items: [{ id: "personal-note", name: "My notes.md", kind: "file" as const, path: "/me/notes.md", updated, detail: "Personal notes" }] };
+        if (directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) return { items: sampleMemoryIn(directory) };
+        if (directory === "/me") return { items: [...sampleMemoryIn("/me"), { id: "personal-note", name: "My notes.md", kind: "file" as const, path: "/me/notes.md", updated, detail: "Personal notes" }] };
         if (directory === "/skills") return { items: SAMPLE_SKILLS.map(skill => ({ id: "skill-" + skill.folder, name: skill.folder, kind: "folder" as const, path: "/skills/" + skill.folder, updated: skill.updated, detail: "Instructions and supporting resources" })) };
         if (directory.startsWith("/skills/")) return { items: [{ id: "skill-md", name: "SKILL.md", kind: "file" as const, path: directory + "/SKILL.md", updated, detail: "Skill instructions" }] };
         return { items: directory === "/" ? [
             { id: "pdf", name: "Project overview.pdf", kind: "file" as const, path: "/sample-document.pdf", updated, detail: "PDF document" },
             { id: "me", name: "me", kind: "folder" as const, path: "/me", updated, detail: "Personal" },
             { id: "skills", name: "skills", kind: "folder" as const, path: "/skills", updated, detail: "Skills" },
+            { id: "memory", name: "memory", kind: "folder" as const, path: "/memory", updated, detail: "What the teammate has written down" },
             { id: "report", name: "Weekly report.md", kind: "file" as const, path: "/sample-report.md", updated, detail: "Weekly progress and next steps" },
             { id: "clip", name: "sample-clip.mp4", kind: "file" as const, path: "/videos/sample-clip.mp4", updated, detail: "Video" },
             { id: "page", name: "launch-preview.html", kind: "file" as const, path: "/launch-preview.html", updated, detail: "Web page" },

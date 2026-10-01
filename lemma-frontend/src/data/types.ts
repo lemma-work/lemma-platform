@@ -288,6 +288,11 @@ export interface Pod {
     members: Member[];
     /** Set when something in here is waiting on a person. */
     waiting: string;
+    /** When it was hired: the pod's `created_at`. Absent where the source
+     *  does not say. */
+    hiredAt?: string;
+    /** Who hired it, as the account id (`user_id` on the pod). */
+    hiredBy?: string;
 }
 
 /** Conversation is a tab like any other. It is always first, and it is the
@@ -296,6 +301,9 @@ export interface Pod {
  *  PROCESSING, COMPLETED, FAILED, …); absent for tables and sample rows. */
 export interface LibraryItem {
     id: string; name: string; kind: "file" | "folder" | "table"; path: string; updated: string; detail: string; status?: string;
+    /** The line a file was written with, when it was given one. `detail`
+     *  falls back to the mime type; this never does. */
+    description?: string;
     /** Who can open it: `PERSONAL`, `POD`, `RESTRICTED` or `PUBLIC`, as the
      *  datastore records it. Absent where the source does not say. */
     visibility?: string;

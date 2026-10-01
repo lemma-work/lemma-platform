@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ArrowDownIcon, LockIcon } from "@/ui/icons";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ArrowDownIcon, LockIcon, MemoryIcon } from "@/ui/icons";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { TRANSCRIPT_ROW_ATTRIBUTE, useTranscriptScroll } from "./use-transcript-scroll";
 import { runFailure, transcriptState } from "./transcript-state";
@@ -15,6 +15,7 @@ import { ToolCardView } from "./tool-card-view";
 import { InteractionCard, type Resolve } from "./interaction-card";
 import { liveNote, spanOf, type HumanMessage, type Note, type Streaming, type Turn } from "./turns";
 import type { Persona } from "@/data";
+import type { Noted } from "./memory-notes";
 import { AddModelAction, OpenModelsAction } from "./add-model-action";
 import { noModelSentence } from "./model-setup";
 
@@ -127,7 +128,7 @@ function Reply({ teammate, seed, at, children }: { seed: string; teammate: Perso
  *  to the bot alone. In a conversation where people outside the space ask,
  *  what came in from the group is theirs, not yours: it takes the near side,
  *  their name, and a chip saying they are not in the space. */
-function Human({ message, bot, outsiders }: { message: HumanMessage; bot: string; outsiders?: string }) {
+function Human({ message, bot, outsiders, onRemember }: { message: HumanMessage; bot: string; outsiders?: string; onRemember?: (text: string) => void }) {
     const guest = Boolean(outsiders && message.from);
     return (
         <div className={"msg msg--you" + (guest ? " msg--guest" : "")}>
@@ -141,10 +142,59 @@ function Human({ message, bot, outsiders }: { message: HumanMessage; bot: string
             )}
             <div className="msg__body">
                 <Prose text={message.text} />
-                <div className="message-actions"><CopyButton text={message.text} label="Copy message" /></div>
+                <div className="message-actions">
+                    {onRemember && <RememberButton text={message.text} teammate={bot} onRemember={onRemember} />}
+                    <CopyButton text={message.text} label="Copy message" />
+                </div>
             </div>
         </div>
     );
+}
+
+/** "Kit noted this · Pricing". The teammate writes its notes silently; this is
+ *  the platform saying that it did, from the write itself, so it appears
+ *  whether or not the reply mentions it. Each topic opens the note. */
+function NotedLine({ teammate, noted, onOpenFile }: { teammate: string; noted: Noted[]; onOpenFile?: (path: string) => void }) {
+    const mine = noted.every((one) => one.private);
+    return (
+        <p className="noted">
+            <MemoryIcon size={13} aria-hidden="true" />
+            <span>{teammate} noted this{mine ? " for you" : ""}</span>
+            {noted.map((one) => (
+                <span key={one.path} className="noted__topic">
+                    {" · "}
+                    {onOpenFile
+                        ? <button className="linkish" onClick={() => onOpenFile(one.path)}>{one.topic}</button>
+                        : one.topic}
+                </span>
+            ))}
+        </p>
+    );
+}
+
+/** Ask the teammate to write this down. One click, sent as an ordinary
+ *  message, so what happens next is visible the usual way: it answers, and
+ *  the "noted" line appears under the answer when it has saved the note. */
+function RememberButton({ text, teammate, onRemember }: { text: string; teammate: string; onRemember: (text: string) => void }) {
+    const [asked, setAsked] = useState(false);
+    const label = asked ? "Asked " + teammate + " to remember this" : "Ask " + teammate + " to remember this";
+    return (
+        <span className="copy-control">
+            <button type="button" className="copy-control__button" title={label} aria-label={label} disabled={asked}
+                onClick={() => { setAsked(true); onRemember(text); }}>
+                {asked ? <CheckIcon size={15} /> : <MemoryIcon size={15} />}
+            </button>
+        </span>
+    );
+}
+
+/** What "Remember this" sends: the words, quoted, and the ask. Long replies
+ *  are cut, because the note is about the point, and the point is near the
+ *  top of what was said. */
+export function rememberRequest(text: string): string {
+    const clean = text.trim();
+    const kept = clean.length > 1500 ? clean.slice(0, 1500).trimEnd() + "…" : clean;
+    return "Remember this for next time:\n\n" + kept.split("\n").map((line) => "> " + line).join("\n");
 }
 
 export function Transcript({
@@ -169,6 +219,7 @@ export function Transcript({
     onEarlier,
     onResolve,
     onRetry,
+    onRemember,
     noModel = false,
     modelsAction = false,
     dockedId,
@@ -203,6 +254,9 @@ export function Transcript({
     onEarlier?: () => void | boolean | Promise<void | boolean>;
     onResolve?: Resolve;
     onRetry?: () => void;
+    /** Send the teammate a request to remember these words. Absent where
+     *  nothing can be sent, and then the control is not drawn. */
+    onRemember?: (text: string) => void;
     /** The failure is "this teammate has no model". Said in the teammate's
      *  name with the one action that fixes it, and without "Try again",
      *  which would fail the same way. */
@@ -242,6 +296,12 @@ export function Transcript({
     useEffect(() => {
         earlierRef.current = goEarlier;
     }, [goEarlier]);
+
+    /* Where people outside the space are the ones answered, every run here
+       acts as nobody and has no memory to write to — "Remember this" would
+       ask for what it cannot do, and a reply would carry the ask into the
+       group. So it is not offered there. */
+    const remember = outsiders ? undefined : onRemember;
 
     const display = transcriptState({ loading, hasTurns: turns.length > 0, hasStreamingText: Boolean(streaming?.text), error });
     const live = Boolean(streaming && (streaming.text || streaming.thinking || streaming.tool));
@@ -286,7 +346,7 @@ export function Transcript({
                                     reply — a name tucked *inside* the block made
                                     "cool cool" two lines tall and left the two
                                     speakers built differently for no reason. */}
-                                {turn.human && <Human message={turn.human} bot={teammate.name} outsiders={outsiders} />}
+                                {turn.human && <Human message={turn.human} bot={teammate.name} outsiders={outsiders} onRemember={remember} />}
 
                                 {(notes.length > 0 || turn.items.length > 0 || merging) && (
                                     <Reply
@@ -317,7 +377,10 @@ export function Transcript({
                                                 return (
                                                     <div className="message-text" key={item.id}>
                                                         <div className="said"><Prose text={item.text} /></div>
-                                                        <div className="message-actions"><CopyButton text={item.text} label="Copy message" /></div>
+                                                        <div className="message-actions">
+                                                            {remember && <RememberButton text={item.text} teammate={teammate.name} onRemember={remember} />}
+                                                            <CopyButton text={item.text} label="Copy message" />
+                                                        </div>
                                                     </div>
                                                 );
                                             }
@@ -365,6 +428,10 @@ export function Transcript({
                                             <div className="said">
                                                 <Prose text={streaming.text} />
                                             </div>
+                                        )}
+
+                                        {turn.noted && turn.noted.length > 0 && (
+                                            <NotedLine teammate={teammate.name} noted={turn.noted} onOpenFile={onOpenFile} />
                                         )}
                                     </Reply>
                                 )}

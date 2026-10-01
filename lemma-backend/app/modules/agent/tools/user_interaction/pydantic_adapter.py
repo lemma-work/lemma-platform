@@ -77,8 +77,10 @@ async def display_resource(
     Set `type` and, for most types, a `name` — omit `name` to show all resources
     of that type. FILE takes a pod `path`, so upload sandbox deliverables with
     `lemma files upload` first; a workspace path is not pod-visible. WIDGET takes
-    exactly one of `path`, `content`, or `public_url`; load the `lemma-widget`
-    skill before your first widget. React, routing, or real state means an app.
+    exactly one of `path`, `content`, or `public_url`. Its page already carries
+    the widget tokens and `window.lemma` (query, the common drawing shapes,
+    compose), so most widgets need no skill; load `lemma-widget` for a design of
+    your own. React, routing, or real state means an app.
 
     A WIDGET is a live view, not a picture: it reads pod data through the browser
     SDK, filters and opens records in place, and can offer the person their next

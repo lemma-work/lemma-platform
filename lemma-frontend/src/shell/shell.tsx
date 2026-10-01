@@ -37,7 +37,8 @@ import { RunPage } from "@/space/run-page";
 import { AboutPage, isAboutSection, type AboutSection } from "@/space/about-page";
 import { TeammateRail } from "@/space/teammate-rail";
 import { TeammatesPage } from "@/space/teammates-page";
-import { owedByPod } from "@/space/teammates";
+import { owedFrom } from "@/space/teammates";
+import { byAge, gatherAsked } from "@/thread/waiting-on-you";
 import type { SpaceView } from "@/data";
 import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
 import type { FileContent, Tab } from "@/data";
@@ -77,7 +78,7 @@ import { pressSlot } from "@/identity/palette";
 import { useHuddle } from "@/call/use-huddle";
 import { CallScreen } from "@/call/call-screen";
 import { CallBar } from "@/call/call-bar";
-import { isLandingPreview, previewTabForStep } from "@/marketing/preview-mode";
+import { isLandingPreview, previewAboutForStep, previewTabForStep } from "@/marketing/preview-mode";
 import { DesktopNotices } from "@/desktop/desktop-notices";
 import { ReconnectStrip } from "./reconnect-strip";
 import { useOpenSettingsEvent } from "@/desktop/open-settings";
@@ -310,7 +311,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         if (!preview || demoStep === undefined) return;
         setPreviewTeam(false);
         setPreviewPod("kit");
-        setAboutSection((was) => ({ at: demoStep === 2 ? "skills" : null, id: was.id + 1 }));
+        setAboutSection((was) => ({ at: previewAboutForStep(demoStep), id: was.id + 1 }));
         setSelection(previous => previous.id === null ? previous : { id: null, generation: previous.generation + 1 });
         setSettings(null);
         setSearching(false);
@@ -389,7 +390,15 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         enabled: !preview && (pods.data?.length ?? 0) > 0,
         staleTime: 60_000,
     });
-    const owed = useMemo(() => owedByPod(waiting.data?.rows ?? []), [waiting.data]);
+    /* And the conversations paused on you: a question or an approval a run
+       stopped on, scheduled ones included. Same key Home reads. */
+    const asked = useQuery({
+        queryKey: ["conversation-asks", (pods.data ?? []).map((one) => one.id).join(",")],
+        queryFn: () => gatherAsked(pods.data ?? [], source.label === "sample"),
+        enabled: !preview && (pods.data?.length ?? 0) > 0,
+        staleTime: 60_000,
+    });
+    const owed = useMemo(() => owedFrom(waiting.data?.rows ?? [], byAge(asked.data ?? []).fresh), [waiting.data, asked.data]);
 
     /* Changing teammate drops the conversation you were reading — unless the
        address named one, which is exactly what a link to a conversation is.
