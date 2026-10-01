@@ -23,17 +23,26 @@ def build_asset_response(
     is_entrypoint: bool,
     not_modified: bool = False,
     extra_headers: dict[str, str] | None = None,
+    private: bool = False,
 ) -> Response:
     """Build a cache-correct response for a served asset.
 
     - Entrypoints (``index.html``) carry injected pod context, so they are
       ``no-cache`` (always revalidate; the ETag still enables 304).
     - Other assets are content-hashed by the bundler, so they are immutable.
+    - A ``private`` asset is one only some people may read. It is kept out of
+      shared caches and revalidated on every use, so each read reaches the
+      server's permission check; the ETag still lets an allowed read be a 304.
     """
-    cache_control = (
-        "public, no-cache" if is_entrypoint else "public, max-age=31536000, immutable"
-    )
+    if private:
+        cache_control = "private, no-cache"
+    elif is_entrypoint:
+        cache_control = "public, no-cache"
+    else:
+        cache_control = "public, max-age=31536000, immutable"
     headers = {"Cache-Control": cache_control}
+    if private:
+        headers["X-Robots-Tag"] = "noindex"
     if etag:
         headers["ETag"] = etag
     if extra_headers:

@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **204** |
 
-Scenario tests declaring a promise: 424.
+Scenario tests declaring a promise: 425.
 
 ## Contract coverage
 
@@ -206,7 +206,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-PACK-020` A person publishes a pod so others can install it | `covered` | `test_an_expired_publication_says_so`, `test_publishing_needs_an_account` |
 | `PS-PACK-021` A shared bundle can be viewed before it is installed | `covered` | `test_a_stranger_can_read_a_shared_bundle`, `test_reading_a_bundle_grants_nothing_else`, `test_a_forged_link_is_refused` |
 | `PS-PACK-030` A person builds an app for a pod | `covered` | `test_an_app_can_be_changed`, `test_a_bad_bundle_is_refused`, `test_an_earlier_deployment_can_be_restored`, `test_an_app_is_created`, `test_a_duplicate_app_name_is_refused`, `test_deleting_an_app_removes_it`, `test_promoting_a_missing_result_is_refused` |
-| `PS-PACK-031` An app reaches the people it is meant for | `covered` | `test_an_asset_without_a_release_is_not_found`, `test_shipping_a_release_publishes_the_app`, `test_opening_an_app_starts_a_session`, `test_an_outsider_cannot_read_apps` |
+| `PS-PACK-031` An app reaches the people it is meant for | `covered` | `test_an_asset_without_a_release_is_not_found`, `test_shipping_a_release_publishes_the_app`, `test_opening_an_app_starts_a_session`, `test_an_outsider_cannot_read_apps`, `test_private_app_address_requires_app_access` |
 | `PS-PACK-032` A person can retrieve what an app was built from | `covered` | `test_an_app_without_a_release_is_honest`, `test_an_apps_source_is_returned_byte_for_byte`, `test_an_outsider_cannot_take_the_source` |
 
 ## [Scheduling and triggers](journeys/scheduling-and-triggers.md)

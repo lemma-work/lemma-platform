@@ -11,9 +11,15 @@ import asyncio
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
+from uuid import UUID
+
 import structlog
 
 from app.core import runtime_config
+from app.core.authorization.context import (
+    ResourceVisibility,
+    normalize_resource_visibility,
+)
 from app.core.config import settings
 from app.modules.apps.domain.branding import AppBrandingEntitlementPort
 from app.modules.apps.domain.entities import (
@@ -39,6 +45,47 @@ class AppAssetResolver:
     ) -> None:
         self.repository = repository
         self.branding_entitlement = branding_entitlement
+
+    async def resolve_by_public_slug(
+        self,
+        public_slug: str,
+        *,
+        asset_path: str | None,
+        request_etag: str | None,
+        release_ref: str | None,
+        viewer_app_id: UUID | None,
+    ) -> _AssetReadInputs | AppAssetDocument | None:
+        """Resolve an app host's asset, or None when this caller may not see it.
+
+        An app published to everyone is served to anyone. Any other app is
+        served only when ``viewer_app_id`` names it -- the caller has already
+        proved, with an app access cookie, that this person may read it. A
+        missing slug and a private one both answer None, so the host can refuse
+        them identically instead of confirming the slug to a guesser.
+
+        ``release_ref`` serves a specific release instead of the live one, for
+        the preview host ``<slug>--r7.<app_base_domain>``. See ``preview_url``
+        for why it is a host and not a prefix.
+        """
+        app = await self.repository.get_by_public_slug(public_slug)
+        if app is None or (not _is_public(app) and app.id != viewer_app_id):
+            return None
+        release = None
+        public_url = self.public_url(app)
+        if release_ref is not None:
+            from app.modules.apps.services.app_release_service import resolve_preview
+
+            release, public_url = await resolve_preview(
+                self.repository, self, app, release_ref
+            )
+        return await self.resolve(
+            app,
+            raise_not_found_name=public_slug,
+            asset_path=asset_path,
+            request_etag=request_etag,
+            public_url=public_url,
+            release=release,
+        )
 
     @staticmethod
     def public_url(app: AppEntity) -> str:
@@ -146,6 +193,7 @@ class AppAssetResolver:
         app: AppEntity,
         normalized_asset_path: str,
         request_etag: str | None,
+        private: bool,
     ) -> AppAssetDocument | None:
         """Answer a ``/.lemma/`` request -- what makes this app installable.
 
@@ -165,6 +213,7 @@ class AppAssetResolver:
                 etag=quoted_etag,
                 not_modified=True,
                 is_entrypoint=True,
+                private=private,
             )
 
         asset = app_install_assets.render_reserved_asset(app, name)
@@ -174,6 +223,7 @@ class AppAssetResolver:
             etag=quoted_etag,
             is_entrypoint=True,
             headers=asset.headers,
+            private=private,
         )
 
     async def resolve(
@@ -187,7 +237,8 @@ class AppAssetResolver:
         release: AppReleaseEntity | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
         normalized_asset_path = self._normalize_asset_path(asset_path)
-        reserved = self._reserved(app, normalized_asset_path, request_etag)
+        private = not _is_public(app)
+        reserved = self._reserved(app, normalized_asset_path, request_etag, private)
         if reserved is not None:
             return reserved
 
@@ -231,6 +282,7 @@ class AppAssetResolver:
                 etag=quoted_etag,
                 not_modified=True,
                 is_entrypoint=is_entrypoint,
+                private=private,
             )
 
         return _AssetReadInputs(
@@ -241,4 +293,11 @@ class AppAssetResolver:
             quoted_etag=quoted_etag,
             app=app_identity,
             branding=branding,
+            private=private,
         )
+
+
+def _is_public(app: AppEntity) -> bool:
+    # Apps default to PUBLIC (see the note on ``AppModel.visibility``); an empty
+    # or unrecognized stored value is not PUBLIC, so it is refused, not guessed.
+    return normalize_resource_visibility(app.visibility) is ResourceVisibility.PUBLIC

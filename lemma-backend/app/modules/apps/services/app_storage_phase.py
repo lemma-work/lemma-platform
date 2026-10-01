@@ -51,6 +51,7 @@ class _AssetReadInputs:
     quoted_etag: str
     app: dict[str, str] | None = None
     branding: dict[str, str] | None = None
+    private: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +152,7 @@ class AppStoragePhase:
             ),
             etag=inputs.quoted_etag,
             is_entrypoint=is_entrypoint,
+            private=inputs.private,
         )
 
     async def read_archive(self, app_id: UUID, archive_path: str) -> bytes:

@@ -7,6 +7,8 @@ from app.modules.apps.config import AppsSettings
 def test_apps_settings_own_archive_limits(monkeypatch):
     expected = {
         "app_source_archive_max_bytes": 100 * 1024 * 1024,
+        # Revocation reaches private app files within this many seconds.
+        "app_access_cache_ttl_seconds": 60,
         "app_dist_archive_max_bytes": 100 * 1024 * 1024,
         "app_bundle_upload_max_bytes": 200 * 1024 * 1024,
         "app_archive_max_entries": 10_000,
@@ -31,6 +33,12 @@ def test_apps_settings_own_archive_limits(monkeypatch):
 
     monkeypatch.setenv("APP_ARCHIVE_MAX_ENTRIES", "17")
     assert AppsSettings().app_archive_max_entries == 17
+
+
+def test_app_access_recheck_cannot_outlast_the_one_minute_promise(monkeypatch):
+    monkeypatch.setenv("APP_ACCESS_CACHE_TTL_SECONDS", "61")
+    with pytest.raises(ValidationError, match="app_access_cache_ttl_seconds"):
+        AppsSettings()
 
 
 def test_retention_ceiling_cannot_be_lower_than_its_floor(monkeypatch):

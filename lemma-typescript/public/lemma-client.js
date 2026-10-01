@@ -9110,6 +9110,7 @@ var LemmaClient = (() => {
     getTestingToken: () => getTestingToken,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
     setTestingToken: () => setTestingToken,
+    startAppAccess: () => startAppAccess,
     subscribeLemmaHostTheme: () => subscribeLemmaHostTheme
   });
 
@@ -18401,6 +18402,104 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/app-access.ts
+  var import_session3 = __toESM(require_session2(), 1);
+  var COPY = {
+    checking: { title: "Opening this app", message: "Checking that it\u2019s shared with you." },
+    "signed-out": { title: "Sign in to open this app", message: "This app is private. Sign in with the Lemma account it\u2019s shared with, and you\u2019ll come straight back here." },
+    denied: { title: "This app isn\u2019t shared with you", message: "You\u2019re signed in, but this account can\u2019t open it. Ask the person who shared the link to give you access." },
+    unavailable: { title: "We couldn\u2019t check your access", message: "Something went wrong on our side. Try again in a moment." },
+    blocked: { title: "Your browser blocked app access", message: "Allow cookies for this site, then try again." }
+  };
+  function failureKind(error) {
+    if (error instanceof ApiError && error.statusCode === 401) return "signed-out";
+    if (error instanceof ApiError && [403, 404].includes(error.statusCode)) return "denied";
+    return "unavailable";
+  }
+  function signInUrlForApp(authUrl, redirectUri) {
+    const url = new URL(authUrl);
+    if (url.pathname === "/") url.pathname = "/auth";
+    return buildAuthUrl(url.href, { redirectUri });
+  }
+  async function refreshMainSession() {
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("The session service did not answer")), 1e4);
+    });
+    try {
+      return await Promise.race([import_session3.default.attemptRefreshingSession(), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function requestTicket(options) {
+    const http = new HttpClient(options.apiUrl, new AuthManager(options.apiUrl, options.authUrl), { timeoutMs: 1e4, maxRetries: 0 });
+    const send = () => http.request("POST", "/apps/access/tickets?superTokensDoNotDoInterception=true", { headers: { rid: "session" } });
+    try {
+      return await send();
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.statusCode !== 401 || !await refreshMainSession()) throw error;
+      return await send();
+    }
+  }
+  async function redeem(ticket) {
+    const response = await fetch("/_lemma/app-access/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticket }),
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: AbortSignal.timeout(1e4)
+    });
+    if (!response.ok) throw new Error("App access could not be established");
+  }
+  async function startAppAccess(options) {
+    const title = document.getElementById("app-access-title");
+    const status = document.getElementById("app-access-status");
+    const signIn = document.getElementById("app-access-sign-in");
+    const retry = document.getElementById("app-access-retry");
+    const home = document.getElementById("app-access-home");
+    const host = document.getElementById("app-access-host");
+    if (!status || !signIn || !retry) return;
+    if (host) host.textContent = window.location.host;
+    const show = (state) => {
+      document.body.dataset.state = state;
+      if (title) title.textContent = COPY[state].title;
+      status.textContent = COPY[state].message;
+      retry.hidden = state !== "unavailable" && state !== "blocked";
+      signIn.hidden = state !== "signed-out";
+      if (home) {
+        home.hidden = state !== "denied";
+        if (options.homeUrl) home.href = options.homeUrl;
+      }
+      if (state === "signed-out") {
+        signIn.href = signInUrlForApp(options.authUrl, window.location.href);
+        signIn.target = window.parent === window ? "_self" : "_top";
+        signIn.focus();
+      }
+    };
+    retry.onclick = () => {
+      void startAppAccess(options);
+    };
+    show("checking");
+    try {
+      const { ticket } = await requestTicket(options);
+      await redeem(ticket);
+      const verified = await fetch("/", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/octet-stream" }, signal: AbortSignal.timeout(1e4) });
+      if (verified.status === 401) {
+        show("blocked");
+        return;
+      }
+      if (!verified.ok) {
+        show("unavailable");
+        return;
+      }
+      window.location.reload();
+    } catch (error) {
+      show(failureKind(error));
+    }
+  }
+
   // src/browser-theme.ts
   var LEMMA_APP_THEME_MESSAGE_TYPE = "lemma-app-theme";
   var LEMMA_THEME_EVENT = "lemma:theme";
@@ -18494,6 +18593,7 @@ var LemmaClient = (() => {
   if (typeof globalThis !== "undefined") {
     const scope = globalThis;
     const surface = {
+      startAppAccess,
       LemmaClient,
       AuthManager,
       buildAuthUrl,
