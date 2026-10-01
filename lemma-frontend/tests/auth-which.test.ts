@@ -44,4 +44,7 @@ test("the CLI's login link resolves", () => {
     assert.equal(screenFor(["cli", "login"], "?callback=http%3A%2F%2F127.0.0.1%3A51210%2Fcallback&state=x"), "cli");
     assert.equal(screenFor(["cli"]), "unknown");
     assert.equal(screenFor(["cli", "login", "extra"]), "unknown");
+    // The API's `/oauth/authorize` sends a browser here for an MCP client's consent.
+    assert.equal(screenFor(["authorize"], "?request=abc"), "authorize");
+    assert.equal(screenFor(["authorize", "extra"]), "unknown");
 });

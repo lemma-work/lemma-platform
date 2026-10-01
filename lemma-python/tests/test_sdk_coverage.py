@@ -47,6 +47,10 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # import wizard. The CLI imports client-side via per-resource facades, not
     # these; a Python facade is a deliberate follow-up.
     "pod.bundle.",
+    # Connected MCP clients (list, disconnect, a space's MCP link): driven by
+    # the space's Settings › AI tools page. The clients themselves speak OAuth
+    # and MCP, not this API. A Python facade is a deliberate follow-up.
+    "mcp_access.",
     # Membership/governance surface not yet exposed in CLI/SDK facades
     "org.invitation.",
     "org.member.",

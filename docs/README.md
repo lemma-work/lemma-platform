@@ -34,6 +34,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Host execution on Desktop](architecture/desktop-host-execution.md) | Running a user's agent commands on their own Mac under Seatbelt: op frames, the exec-server, and how a run chooses it (by Agent Host pairing) |
 | [Agent Host](architecture/agent-host.md) | Running local coding agents against a pod, how Desktop supervises them, and the link they talk to Lemma over |
 | [Agent Host run events](architecture/agent-host-events.md) | What a local agent run reports: the normalized events, the canonical tool names, and the recorded transcripts they are held to |
+| [Pods as remote MCP servers](architecture/mcp-connector.md) | Adding a pod to Claude, ChatGPT or any MCP client by URL: what each client requires, the OAuth server, scopes, revocation and limits |
 | [Agent memory](architecture/agent-memory.md) | Where an agent's durable facts live, what is loaded into every prompt, and what bounds it |
 | [Usage accounting](design/usage-accounting.md) | Spending authority, batched receipts, ongoing limits, failure recovery and rollout |
 | [Database connection scope](design/db-connection-scope.md) | How long a pooled connection is held, the gates that keep it short, and what authorization costs |

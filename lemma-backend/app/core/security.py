@@ -184,6 +184,21 @@ async def _get_local_auth_state(user_id: UUID) -> AccountStanding | None:
     return standing
 
 
+async def account_may_sign_in(user_id: UUID) -> bool:
+    """The standing `verify_auth` demands of a session, for a credential that
+    is not one.
+
+    An OAuth token held by an MCP client belongs to no SuperTokens session, so
+    the checks a session passes on its way through `verify_auth` have to be
+    asked for by name -- otherwise a deactivated account's connected clients
+    would keep working until their grants were revoked.
+    """
+    state = await _get_local_auth_state(user_id)
+    if state is None or not state.is_active or state.is_deleted:
+        return False
+    return state.is_verified or not settings.auth_email_verification_required
+
+
 # Define the security scheme for OpenAPI
 # auto_error=False allows us to handle the error manually and support exclusions
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="HTTPBearer")
@@ -239,6 +254,19 @@ EXCLUDED_PATHS = (
     # The user-facing host routes are under `/me/runtime/...` and stay
     # session-protected.
     "/agent-host/",
+    # Outside MCP clients. The pod endpoint checks its own bearer token and
+    # answers 401 with the challenge that starts a client's sign-in; the rest is
+    # OAuth discovery and the endpoints a client calls before it has anything
+    # to authenticate with. Consent and connected clients, also under `/oauth`,
+    # need the person's session and are deliberately not listed.
+    "/mcp/",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/openid-configuration",
+    "/.well-known/oauth-protected-resource",
+    "/oauth/authorize",
+    "/oauth/token",
+    "/oauth/register",
+    "/oauth/revoke",
 )
 
 # Paths excluded by an EXACT match rather than a prefix, for the cases where the

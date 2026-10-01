@@ -109,7 +109,7 @@
     justify-content: center;
     padding: 40px;
 }
-.portal__form { width: min(100%, 25rem); }
+.portal__form { width: min(100%, 25rem); overflow-wrap: anywhere; }
 .portal__form h2 { margin: 0 0 8px; }
 .portal__lead {
     margin: 0 0 4px;
@@ -345,4 +345,25 @@
     box-shadow: 0 0 0 100px var(--paper) inset;
     caret-color: var(--ink);
     transition: background-color 100000s ease-in-out 0s;
+}
+
+/* The consent screen's "what may it do" choice: two radios under a quiet
+   legend, no box — the choice is a sentence, not a form section. */
+.auth__choices {
+    border: 0;
+    margin: 12px 0 4px;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+}
+.auth__choices legend {
+    padding: 0;
+    margin-bottom: 4px;
+    color: var(--ink-3);
+}
+.auth__choices label {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    cursor: pointer;
 }

@@ -14,6 +14,7 @@ app.core.runtime_config; this module only builds the document shell.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 # Content that already declares a full document is served as-is (only config is
 # injected). Mirrors the frontend's normalizeWidgetContent check.
@@ -103,6 +104,30 @@ _EMBED_STYLES = """
       body { padding: var(--lemma-widget-inset, 16px); }"""
 
 
+# What every widget used to carry in its own body: the `--lemma-widget-*` token
+# preamble and the SDK boot. Pasting them was most of what a widget cost to write
+# -- eight kilobytes of CSS and a dozen lines of loader, reproduced every time --
+# so the page supplies them and a widget writes only its own markup and a render
+# function. The token block is the same one the lemma-widget skill ships, and a
+# test holds the two copies equal. A widget that still carries its own copy
+# works as before: the later declaration wins, and it is the same text.
+_KIT_DIR = Path(__file__).parent / "widget_kit"
+# The drawing half -- `lemma.stats / bars / line / table / record` -- rides along
+# for the same reason: a trend with a hover layer and an accessible table was
+# twelve kilobytes a widget wrote out by hand; drawn by the page, it is one call.
+_WIDGET_KIT = "".join(
+    (
+        "\n    <style data-lemma-widget-tokens>\n",
+        (_KIT_DIR / "widget-tokens-v1.css").read_text(encoding="utf-8"),
+        (_KIT_DIR / "widget-draw-v1.css").read_text(encoding="utf-8"),
+        "\n    </style>\n    <script data-lemma-widget-kit>\n",
+        (_KIT_DIR / "widget-kit-v1.js").read_text(encoding="utf-8"),
+        (_KIT_DIR / "widget-draw-v1.js").read_text(encoding="utf-8"),
+        "\n    </script>",
+    )
+)
+
+
 def _escape(value: str) -> str:
     return (
         value.replace("&", "&amp;")
@@ -133,7 +158,7 @@ def wrap_html_fragment(content: str, *, title: str = "", embed: bool = True) -> 
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{_escape(title)}</title>
+    <title>{_escape(title)}</title>{_WIDGET_KIT}
     <style>{styles}
     </style>
   </head>
