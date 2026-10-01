@@ -52,6 +52,10 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_a_prompt_that_arrived_as_words,
 )
+from app.modules.agent_surfaces.services.group_log import (
+    GroupLog,
+    answered_in_group,
+)
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 
 logger = get_logger(__name__)
@@ -210,6 +214,7 @@ class SurfaceDelivery:
             adapter=adapter,
             event=parsed_event,
             credentials=await self.egress_credentials(surface, event=parsed_event),
+            conversation_user_id=conversation.user_id,
         )
 
     async def egress_metadata(
@@ -314,4 +319,13 @@ class SurfaceDelivery:
             envelope=envelope,
             receipt=receipt,
         )
+        # What the bot said in a group, for the pod's log of it. After the
+        # delivery, so the log never holds a line the group did not see.
+        if target.link.conversation_kind == "CHANNEL" and envelope.text:
+            await GroupLog(self.uow).note_agent_answer(
+                surface=target.surface,
+                external_channel_id=target.link.external_channel_id,
+                text=envelope.text,
+                answered=answered_in_group(target.link, target.conversation_user_id),
+            )
         return True

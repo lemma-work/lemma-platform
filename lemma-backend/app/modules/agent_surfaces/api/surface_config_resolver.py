@@ -15,6 +15,7 @@ from app.modules.agent_surfaces.api.schemas import (
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceChannelRoute,
     SurfaceConfig,
+    SurfaceGroupPolicy,
     SurfaceIdentityPolicy,
     SurfacePlatform,
     SurfaceSendPolicy,
@@ -53,7 +54,7 @@ async def require_surface_agent_action(
     )
 
 
-async def _may_perform_surface_agent_action(
+async def may_perform_surface_agent_action(
     *,
     ctx,
     pod_id: UUID,
@@ -94,7 +95,7 @@ async def surface_setup_for_reader(
     return await service.get_surface_setup_by_name(
         pod_id=pod_id,
         name=surface_name,
-        reveal_secrets=await _may_perform_surface_agent_action(
+        reveal_secrets=await may_perform_surface_agent_action(
             ctx=ctx,
             pod_id=pod_id,
             agent_id=surface.agent_id,
@@ -280,5 +281,9 @@ async def merge_surface_config(
             platform=platform,
             app_name=config_input.slack.app_name,
             ctx=ctx,
+        )
+    if "groups" in config_input.model_fields_set:
+        updates["groups"] = SurfaceGroupPolicy(
+            answers_outsiders=config_input.groups.answers_outsiders
         )
     return existing.model_copy(update=updates)

@@ -166,3 +166,51 @@ def test_slack_app_mention_is_allowed_without_a_recorded_bot_id():
     surface = _slack_surface(bot_user_id=None)
     event = _slack_channel_event(event_type="app_mention", mentioned_user_ids=[])
     assert surface.allows_inbound_event(event) is True
+
+
+def _slack_group_dm_event(*, mentioned: bool) -> ParsedInboundSurfaceEvent:
+    return ParsedInboundSurfaceEvent(
+        platform="SLACK",
+        conversation_type=ConversationType.EXTERNAL_GROUP,
+        # Not on the surface's allow-list: nobody can list a group DM there.
+        external_channel_id="G-TRIO",
+        external_thread_id="1700000000.000300",
+        message_text="<@U-BOT> which invoices are late?",
+        is_dm=False,
+        mentioned_agent=mentioned,
+        metadata={
+            "event_type": "message",
+            "channel_type": "mpim",
+            "mentioned_user_ids": ["U-BOT"] if mentioned else [],
+        },
+    )
+
+
+def test_a_slack_group_dm_needs_no_allow_list_entry():
+    """Somebody started the group DM with the bot in it; that is the invitation."""
+    surface = _slack_surface(bot_user_id="U-BOT")
+    assert surface.allows_inbound_event(_slack_group_dm_event(mentioned=True)) is True
+
+
+def test_a_slack_group_dm_is_still_only_answered_when_the_bot_is_asked():
+    surface = _slack_surface(bot_user_id="U-BOT")
+    assert surface.allows_inbound_event(_slack_group_dm_event(mentioned=False)) is False
+
+
+def test_a_slack_channel_off_the_allow_list_is_still_refused():
+    surface = _slack_surface(bot_user_id="U-BOT")
+    event = _slack_group_dm_event(mentioned=True)
+    event.metadata["channel_type"] = "channel"
+    assert surface.allows_inbound_event(event) is False
+
+
+def test_a_slack_group_dm_is_one_conversation_per_group_dm():
+    from app.modules.agent_surfaces.services.surface_router import _channel_route_key
+
+    surface = _slack_surface(bot_user_id="U-BOT")
+
+    assert (
+        _channel_route_key(surface, _slack_group_dm_event(mentioned=True))
+        == "channel:G-TRIO"
+    )
+    assert _channel_route_key(surface, _slack_group_dm_event(mentioned=False)) is None

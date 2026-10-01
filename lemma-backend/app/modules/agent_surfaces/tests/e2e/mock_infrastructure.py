@@ -982,6 +982,10 @@ class FakeWhatsAppServer:
         )
         app.router.add_get("/v21.0/{media_id}", self._get_media_info)
         app.router.add_get("/media/{media_id}", self._download_media)
+        # The Groups API, at the version it was published under.
+        app.router.add_post("/v23.0/{phone_number_id}/messages", self._send_message)
+        app.router.add_post("/v23.0/{phone_number_id}/groups", self._create_group)
+        app.router.add_get("/v23.0/{group_id}/invite_link", self._invite_link)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -1036,6 +1040,35 @@ class FakeWhatsAppServer:
         return web.Response(
             body=f"fake WhatsApp media {media_id}".encode(),
             content_type="text/plain",
+        )
+
+    async def _create_group(self, request: web.Request) -> web.Response:
+        """Meta answers a creation with a request id only; the group comes later."""
+        body = await request.json()
+        request_id = f"req-{len(self._store.get_all('WHATSAPP_GROUP_CREATE')) + 1}"
+        self._store.add(
+            "WHATSAPP_GROUP_CREATE",
+            {
+                **body,
+                "phone_number_id": request.match_info["phone_number_id"],
+                "request_id": request_id,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response(
+            {"messaging_product": "whatsapp", "request_id": request_id}
+        )
+
+    async def _invite_link(self, request: web.Request) -> web.Response:
+        group_id = request.match_info["group_id"]
+        self._store.add(
+            "WHATSAPP_GROUP_LINK", {"group_id": group_id, **_request_contract(request)}
+        )
+        return web.json_response(
+            {
+                "messaging_product": "whatsapp",
+                "invite_link": f"https://chat.whatsapp.com/{group_id}",
+            }
         )
 
     async def _send_message(self, request: web.Request) -> web.Response:

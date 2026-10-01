@@ -19,10 +19,15 @@ from pydantic_ai.toolsets import AbstractToolset, ToolsetTool
 from pydantic_ai.usage import RunUsage
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.outsiders import answers_outsiders
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.outsider_tools import outsider_may_call
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
+
+logger = get_logger(__name__)
 
 
 # Fallback when a tool advertises no explicit retry budget. The dispatcher does a
@@ -98,6 +103,7 @@ class AgentToolDispatcher:
         agent_run_id: UUID | None = None,
         include_final_answer: bool = False,
         tool_call_id: str | None = None,
+        include_notification_tools: bool = False,
     ) -> object:
         async with AsyncExitStack() as exit_stack:
             prepared = await self._prepare(
@@ -108,6 +114,7 @@ class AgentToolDispatcher:
                 agent_run_id=agent_run_id,
                 exit_stack=exit_stack,
                 include_final_answer=include_final_answer,
+                include_notification_tools=include_notification_tools,
             )
             tool = prepared.get(name)
             if tool is None:
@@ -135,6 +142,7 @@ class AgentToolDispatcher:
         exit_stack: AsyncExitStack,
         toolsets: list[object] | None = None,
         include_final_answer: bool = False,
+        include_notification_tools: bool = False,
     ) -> dict[str, PreparedTool]:
         if toolsets is None:
             toolsets = await self._assembler.assemble(
@@ -151,8 +159,11 @@ class AgentToolDispatcher:
                     else None
                 ),
                 # The Agent Host bridge is the caller that asks for
-                # `final_answer`, and it has no capability to carry these.
-                include_notification_tools=include_final_answer,
+                # `final_answer`, and it has no capability to carry these; the
+                # approval executor runs an approved answer to one of them.
+                include_notification_tools=(
+                    include_final_answer or include_notification_tools
+                ),
             )
         run_ctx = self._run_context(ctx, agent_run_id)
         prepared: dict[str, PreparedTool] = {}
@@ -171,6 +182,16 @@ class AgentToolDispatcher:
                     tool=tool,
                     run_ctx=run_ctx,
                 )
+        if getattr(ctx, "answers_outsider", False) or answers_outsiders(conversation):
+            # The same last word the in-process harness gets from
+            # `OutsiderToolGateCapability`, for the MCP bridge and the approval
+            # executor -- whichever toolsets the caller passed in.
+            withheld = [name for name in prepared if not outsider_may_call(name)]
+            for name in withheld:
+                logger.warning(
+                    "agent.outsider_tool_gate.withheld.degraded", tool_name=name
+                )
+                del prepared[name]
         return prepared
 
     def _run_context(

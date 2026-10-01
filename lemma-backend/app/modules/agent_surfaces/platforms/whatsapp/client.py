@@ -17,6 +17,7 @@ payload shapes are borrowed from pywa's public API but implemented in-package.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -35,6 +36,28 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
 # The one canonical WhatsApp Graph API base. ``api_base_url`` in the bot
 # credentials overrides it (used by tests to point at a fake server).
 _WHATSAPP_API_BASE = "https://graph.facebook.com/v21.0"
+
+#: The Graph version the Groups API was published under. Ordinary messaging
+#: stays on the base above; everything that names a group -- creating one,
+#: its invite link, a message to it -- goes through this version instead.
+_GROUPS_API_VERSION = "v23.0"
+
+#: Meta's limits on a group's name and description.
+GROUP_SUBJECT_MAX_CHARS = 128
+GROUP_DESCRIPTION_MAX_CHARS = 2048
+
+
+def groups_api_base(api_base: str) -> str:
+    """The same Graph base at the Groups API's version.
+
+    A base that names no version (a test server, a proxy) is left alone: there
+    is nothing to change and nothing it would understand if changed.
+    """
+    trimmed = api_base.rstrip("/")
+    head, _, tail = trimmed.rpartition("/")
+    if head and re.fullmatch(r"v\d+\.\d+", tail):
+        return f"{head}/{_GROUPS_API_VERSION}"
+    return trimmed
 
 
 def resolve_api_base(credentials: dict[str, Any] | None) -> str:
@@ -212,6 +235,7 @@ class WhatsAppClient:
         send_type: str,
         file_name: str,
         caption: str | None = None,
+        recipient_type: str = "individual",
     ) -> str | None:
         """Send a previously uploaded media object to a recipient."""
         media_payload: dict[str, Any] = {"id": media_id}
@@ -221,6 +245,7 @@ class WhatsAppClient:
             media_payload["caption"] = caption
         payload = {
             "messaging_product": "whatsapp",
+            "recipient_type": recipient_type,
             "to": to,
             "type": send_type,
             send_type: media_payload,
@@ -242,7 +267,12 @@ class WhatsAppClient:
         the next one, and a retry there would only delay the caller waiting on
         a typing bubble.
         """
-        url = f"{self._api_base}/{phone_number_id}/messages"
+        base = (
+            groups_api_base(self._api_base)
+            if payload.get("recipient_type") == "group"
+            else self._api_base
+        )
+        url = f"{base}/{phone_number_id}/messages"
         is_indicator = payload.get("status") == "read" or payload.get("type") == (
             "reaction"
         )
@@ -306,6 +336,38 @@ class WhatsAppClient:
                 return await read_capped(
                     response.aiter_bytes(), max_bytes=INBOUND_ATTACHMENT_BYTE_CAP
                 )
+
+    async def create_group(
+        self, *, phone_number_id: str, subject: str, description: str | None = None
+    ) -> str | None:
+        """Ask Meta to create a group; return the request id it will confirm.
+
+        Creation is asynchronous: the group's id arrives later, in a
+        ``group_lifecycle_update`` webhook that echoes this request id. Meta's
+        spec calls the field ``request_id``; a proxy (360dialog) has been seen
+        answering ``id`` instead, so both are read.
+        """
+        payload: dict[str, object] = {
+            "messaging_product": "whatsapp",
+            "subject": subject[:GROUP_SUBJECT_MAX_CHARS],
+        }
+        if description:
+            payload["description"] = description[:GROUP_DESCRIPTION_MAX_CHARS]
+        data = await self._post_json(
+            f"{groups_api_base(self._api_base)}/{phone_number_id}/groups",
+            json=payload,
+            method="groups.create",
+        )
+        return str(data.get("request_id") or data.get("id") or "").strip() or None
+
+    async def get_invite_link(self, group_id: str) -> str | None:
+        """The link people join a group by."""
+        url = f"{groups_api_base(self._api_base)}/{group_id}/invite_link"
+        await assert_safe_api_base(url, platform="WhatsApp")
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(url, headers=self._auth_headers)
+        data = self._parse(response, method="groups.invite_link")
+        return str(data.get("invite_link") or "").strip() or None
 
     async def get_phone_number_field(self, field: str) -> str | None:
         """Read one field off the phone-number node (e.g. display_phone_number)."""

@@ -1690,7 +1690,7 @@
   {
     "tool_name": "message_user",
     "toolset": "MESSAGING",
-    "description": "Message a pod member who is not in this conversation.\n\nReaches them on the chat app they last used, or by email, and always leaves\na copy in their Lemma inbox.\n\nIt does **not** pause your turn, and their reply never comes back as a tool\nresult. Send every message you need, give each a `background_instruction`,\nthen **finish your turn and stop**. Do not sleep on it and do not poll: you\nget a fresh turn in this conversation as soon as the last person answers,\nand you read what they said with `check_messages` then.\n\nSay what you have done and who you are waiting on before you stop. That is\nthe last thing whoever asked you sees until the answers land.\n\nLeave `channel` unset unless you have a reason to pick one \u2014 the default is\nalready the app they last spoke to you on. When you do name one it is\nhonoured or refused, never swapped, so read `reachable_on` from\n`list_pod_members` before choosing.\n\nTo answer the person you are already talking to, just reply \u2014 don't use this.",
+    "description": "Message a pod member who is not in this conversation.\n\nReaches them on the chat app they last used, or by email, and always leaves\na copy in their Lemma inbox.\n\nIt does **not** pause your turn, and their reply never comes back as a tool\nresult. Send every message you need, give each a `background_instruction`,\nthen **finish your turn and stop**. Do not sleep on it and do not poll: you\nget a fresh turn in this conversation as soon as the last person answers,\nand you read what they said with `check_messages` then.\n\nSay what you have done and who you are waiting on before you stop. That is\nthe last thing whoever asked you sees until the answers land.\n\nLeave `channel` unset unless you have a reason to pick one \u2014 the default is\nalready the app they last spoke to you on. When you do name one it is\nhonoured or refused, never swapped, so read `reachable_on` from\n`list_pod_members` before choosing.\n\nTo answer the person you are already talking to, just reply \u2014 don't use this.\n\nWhen you are answering someone outside the pod, this reaches the person who\nlooks after the conversation and nobody else; `to` and `channel` are ignored.",
     "input_schema": {
       "$defs": {
         "MessageChannel": {
@@ -3216,7 +3216,7 @@
   {
     "tool_name": "respond_to_notification",
     "toolset": "MESSAGING",
-    "description": "Record this person's answer to something the pod asked them.\n\nCall it once you actually have the answer \u2014 not when they say they will get\nto it. Record only what they told you: an invented answer is worse than a\nmissing one, because the asker acts on it. If they decline, leave the request\nopen and say so.",
+    "description": "Record this person's answer to something the pod asked them.\n\nCall it once you actually have the answer \u2014 not when they say they will get\nto it. Record only what they told you: an invented answer is worse than a\nmissing one, because the asker acts on it. If they decline, leave the request\nopen and say so.\n\nA question from someone outside the pod is answered only with words the\nperson approves: this returns `needs_approval`, and you then call\n`request_approval` with the exact `approval` it gives you.",
     "input_schema": {
       "properties": {
         "notification_id": {
@@ -3280,6 +3280,24 @@
           ],
           "default": null,
           "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "needs_approval": {
+          "default": false,
+          "description": "Nothing was recorded: the answer goes to someone outside the pod, and the person you work for must approve the exact words first.",
+          "type": "boolean"
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pass these straight to `request_approval` as tool_name/args."
         }
       },
       "title": "RespondToNotificationResponse",

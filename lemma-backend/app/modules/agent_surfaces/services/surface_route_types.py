@@ -59,3 +59,5 @@ class SurfaceEgressTarget:
     adapter: SurfacePlatformAdapterPort
     event: ParsedInboundSurfaceEvent
     credentials: dict[str, Any]
+    #: Whose conversation this is: the member a group answer was made for.
+    conversation_user_id: UUID | None = None

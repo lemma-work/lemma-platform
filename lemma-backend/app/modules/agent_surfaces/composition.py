@@ -21,6 +21,7 @@ and the `Annotated` aliases a route signature needs. Everything else asks here.
 
 from __future__ import annotations
 
+from functools import partial
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -58,6 +59,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.services.outside_questions import outside_origin
 from app.modules.agent_surfaces.services.app_event_handler import AppEventHandler
 from app.modules.agent_surfaces.services.configuration_access import (
     ConfigurationAccess,
@@ -248,6 +250,7 @@ def build_notification_service(uow: SqlAlchemyUnitOfWork) -> NotificationService
         external_user_repository=ExternalSurfaceUserRepository(uow),
         egress=build_surface_egress(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
+        outside_origin_reader=partial(outside_origin, uow),
         rate_limiter=NotificationRateLimiter(),
         surface_provisioner=_build_system_email_provisioner(uow),
     )

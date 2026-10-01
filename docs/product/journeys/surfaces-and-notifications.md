@@ -63,7 +63,8 @@ it is asked, not skipped.
   own bot rather than sharing one.
 - Where a platform has channels or groups, the system shall treat the ones a
   person names as the places that surface's agent may be spoken to, and shall
-  not answer elsewhere.
+  not answer elsewhere. A group somebody brought the bot into — a Telegram
+  group, a Slack group DM — is named by bringing it in.
 - When a surface is connected, the system shall record `surface.connected`.
 - The system shall tell a person what is still needed to finish setup, at each
   step, rather than failing at the first message.
@@ -230,7 +231,9 @@ it is asked, not skipped.
   itself grant access to the pod.
 - If a message arrives from someone with no access to the pod, then the system
   shall not answer with pod content, and shall tell them how to get access
-  rather than failing silently.
+  rather than failing silently. The one exception is a group the pod has opened
+  to people outside it (PS-SURF-015), where they are answered for the pod from
+  what it has marked Public and nothing else.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.surface.list_mine`
 
@@ -256,6 +259,136 @@ it is asked, not skipped.
   so rather than failing the whole message.
 
 **Contracts:** `surface.webhook.handle_platform`, `file.upload`
+
+### PS-SURF-015 — Somebody outside the pod is answered in a group opened to them
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_telegram_group_outsiders_e2e.py`.
+> A scenario needs the forged Telegram chat to speak in a group and to deliver
+> `my_chat_member`, which it does not yet.
+
+A group chat holds people who are not in the pod: a vendor, a client, a
+colleague from another team. Members of the pod are answered there as
+themselves, exactly as in private. Everybody else is answered *for the pod*.
+
+- When a member of the pod who may configure the bot adds it to a group, the
+  system shall make them the person who answers for that group's people from
+  outside the pod.
+- Where a group has somebody answering for it and has not been closed to
+  outsiders, when somebody outside the pod addresses the bot there, the system
+  shall answer them in the group.
+- The system shall answer them from the conversation and from what the pod has
+  marked Public, and from nothing else — not the pod's other data, not the
+  answering member's own access, files, memory or connected accounts.
+- The system shall keep their questions in one conversation per group that
+  belongs to the member answering for it, and shall show who asked each one.
+- The system shall never take anything somebody outside the pod types as that
+  member deciding something: no approval, no answer to a question the bot asked
+  the member.
+- The system shall let the member pass a question on: the bot may message the
+  member answering for the group, and no one else, and relays what they say.
+- The system shall limit how often one person outside the pod, and one group in
+  a day, can put the bot to work, and shall charge the group only for turns
+  that run.
+- Where nobody answers for a group, or it has been closed to outsiders, the
+  system shall not answer people outside the pod there at all. A member who has
+  left the pod answers for nobody.
+- The system shall let a member who may configure a bot close all of its groups
+  to people outside the pod at once.
+- The system shall never answer somebody outside the pod on a coding agent's
+  runtime, which holds a member's credentials in a shell of its own; it shall
+  use a model that runs in Lemma, or not answer.
+- The system shall treat a group on a pod's own bot or number exactly as one on
+  a shared bot.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`,
+`agent.group.update`
+
+### PS-SURF-016 — The bot remembers what was said in a group
+**Status:** planned
+
+> Proven at module level by the same test. Same reason for `planned`.
+
+- Where a platform will not let the bot read a group's history, the system shall
+  keep its own record of what the bot heard in a group the pod knows, and of
+  what the bot said there.
+- When the bot answers in such a group, the system shall show it the recent
+  record as background, marking what was said by people outside the pod.
+
+**Contracts:** `surface.webhook.handle_platform`
+
+### PS-SURF-017 — A person can say something to the agent without the group reading it
+**Status:** planned
+
+> Proven at unit level by `agent/tests/unit/test_private_notes.py` and
+> `agent_surfaces/tests/unit/test_private_note_runs.py`.
+
+A conversation that lives on a chat platform can also be read and written in
+Lemma, and what the agent says in it goes to the platform.
+
+- Where a person writes in Lemma into a conversation that lives on a chat
+  platform, the system shall let them mark it as a note to the agent alone.
+- The system shall start the composer on a note in a group or channel, and on
+  a reply in the person's own direct chat or email thread, and shall remember
+  the last choice made in that conversation on that device.
+- When the agent answers a note, the system shall keep that answer in Lemma and
+  send nothing of it to the platform — no reply, no progress, no attachment.
+- The system shall tell the agent in every later turn that the note was not seen
+  in the chat, so it acts on it without repeating it there -- except in the
+  person's own direct chat, where it only says the note was not sent.
+- The system shall answer a note and a message for the platform in separate
+  runs: a note never shapes an answer that goes to the chat, and a run that
+  continues a note -- resumed, retried or following on -- stays in Lemma.
+
+**Contracts:** `agent.conversation.message.send`
+
+### PS-SURF-018 — An email thread with other people on it is answered like one
+**Status:** planned
+
+> Proven at unit level by `agent_surfaces/tests/unit/test_email_threads.py`.
+
+- When the pod answers an email that other people were on, the system shall
+  reply to the sender and copy the others, as a person replying to all would,
+  and shall not copy more than a handful.
+- Where the pod's address is only copied on an email, the system shall answer
+  only if a line of it speaks to the agent by name.
+- When an email reaches the pod without naming it in To or Cc -- forwarded, sent
+  to an alias, or Bcc'd -- the system shall answer it.
+- Where other people are on a thread, the system shall not answer a message
+  that says nothing but thanks, and shall send a refusal or a sign-up reply to
+  the sender alone.
+
+**Contracts:** `surface.webhook.handle_platform`
+
+### PS-SURF-019 — A member opens a WhatsApp group with the bot in it
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_whatsapp_groups_e2e.py`
+> and `agent_surfaces/tests/unit/test_whatsapp_groups.py`. A scenario needs the
+> forged WhatsApp chat to create a group and to speak in one, which it does not
+> yet.
+
+A WhatsApp bot cannot be added to a group. It can open one, and people join
+by its link.
+
+- When a member asks the bot, in their own chat with it, to open a group, the
+  system shall create the group and hand back the link people join by.
+- When a member who may configure the bot starts a group from the pod's groups
+  in Lemma, the system shall do the same, show the group as waiting for
+  WhatsApp until WhatsApp confirms it, and then show the link.
+- The system shall make that member the person who answers for the group's
+  people from outside the pod, as if they had brought the bot in.
+- Where the member asks again for a group they already have, the system shall
+  answer with that group rather than open a second one.
+- The system shall answer in the group as the pod that opened it, whichever
+  other pods the person asking also belongs to.
+- The system shall answer in the group only when somebody addresses the bot —
+  by name, by mentioning it, or by replying to it.
+- The system shall send a group only what a group can show: questions,
+  approvals and links as words.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`,
+`agent.group.start`
 
 ---
 
@@ -387,6 +520,117 @@ it is asked, not skipped.
   nowhere.
 
 **Contracts:** `notification.respond`, `notification.acknowledge`
+
+### PS-SURF-033 — What is meant for one person is not said in a group
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`.
+
+- The system shall deliver a notification meant for one person only somewhere
+  private to them.
+- Where the only place a person has spoken to the bot is a group, the system
+  shall reach them another way -- email, or their Lemma inbox -- rather than in
+  front of the group.
+
+**Contracts:** `notification.send`
+
+---
+
+## Capability: Look after the pod's groups
+
+A pod's bots end up in many groups -- WhatsApp groups a member opened, Telegram
+groups somebody added the bot to, Slack channels and group DMs -- and each is a
+place the pod speaks for itself. They are one list in the pod, so nobody has to
+remember where the bot is, who is in there, or what is waiting on them.
+
+### PS-SURF-040 — A pod sees every group its bots are in
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_space_groups_e2e.py`.
+> A scenario needs the forged chats to create and speak in groups, which they
+> do not yet.
+
+- The system shall list, for every member of the pod, each group its bots are
+  in: the platform, the group's name, who answers for its people outside the
+  pod, how many people in and outside the pod have spoken there, when it was
+  last active, and how many questions are waiting on the member looking.
+- Where the pod keeps its own record of a group, the system shall show a member
+  what was said there, marking who is in the pod, and for each of the bot's
+  answers, whom it answered and whether it answered from what the pod made
+  Public. An answer made with one member's own access shall show its words to
+  that member alone.
+- The system shall keep its record of a group for 90 days, and the bot shall say
+  so in the group when it arrives.
+- The system shall never show a member's private conversation with the bot, or
+  a note written to the agent in Lemma, as part of a group.
+- When the member who answers for a group switches its people outside the pod
+  off, the system shall stop answering them there; when it is switched on with
+  nobody answering for them, the system shall make the member who switched it
+  the one who does.
+- The system shall let only the member who answers for a group, or an admin of
+  the pod, change it or take it over, and shall tell that member when an admin
+  does.
+
+**Contracts:** `agent.group.list`, `agent.group.get`, `agent.group.timeline`,
+`agent.group.update`
+
+### PS-SURF-041 — The member answering for a group sees what its people are waiting on
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_space_groups_e2e.py`.
+
+- When the bot passes on a question it could not answer somebody outside the
+  pod, the system shall show it on that group's page, to the member it was
+  passed to, until they answer it.
+- When the member answers, the system shall relay the answer in the group.
+
+**Contracts:** `agent.group.get`, `notification.respond`
+
+### PS-SURF-042 — A member adds the pod's Telegram bot to a group from Lemma
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_space_groups_e2e.py`
+> and `agent_surfaces/tests/unit/test_telegram_group_links.py`.
+
+- When a member who may configure the bot asks for it, the system shall give
+  them a link that opens Telegram's own choice of group and adds the bot there.
+- When the bot is added through the link, the system shall make the group the
+  pod's, with that member answering for its people outside the pod, and the bot
+  shall say in the group that it is there and how to ask it.
+- The system shall let a link be used once, and for an hour.
+- The system shall not take the Telegram account that used a link for the
+  member it was made for: a link is easily passed on.
+
+**Contracts:** `agent.group.link`, `surface.webhook.handle_platform`
+
+### PS-SURF-043 — A Slack channel shared with another company answers that company for the pod
+**Status:** planned
+
+> Proven at unit level by `agent_surfaces/tests/unit/test_slack_connect_groups.py`.
+
+- The system shall list the Slack channels and group DMs a pod's bot answers in
+  among the pod's groups, and mark the ones shared with another company.
+- Where a channel is shared with another company, when somebody from that
+  company addresses the bot, the system shall answer them for the pod from what
+  it made Public, as in any group opened to people outside the pod.
+- The system shall never answer somebody from the pod's own Slack workspace as
+  an outsider; one who is not in the pod is told how to join it instead.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`
+
+### PS-SURF-044 — People in a group ask the bot by the name they see
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_whatsapp_groups_e2e.py`.
+
+- Where a platform does not mark who a message is to, the system shall treat a
+  group message that speaks to the bot by the name the app shows it under -- the
+  pod's own name for the pod's assistant, an agent's own name otherwise -- as
+  put to the bot, and shall still answer the pod's assistant as "Lem".
+- The system shall not take a name merely at the start of a line ("Sales
+  numbers are up") as speaking to the bot.
+
+**Contracts:** `surface.webhook.handle_platform`
 
 ---
 

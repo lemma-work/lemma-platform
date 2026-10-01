@@ -23,6 +23,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.services.conversation_access import (
     resolve_agent,
 )
+from app.modules.agent.domain.private_notes import privacy_of
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.pausing_tools import (
@@ -176,11 +177,17 @@ class PauseResume:
             or agent.agent_runtime
             or await default_agent_runtime_for_pod(self.uow, pod_id=conversation.pod_id)
         )
+        paused_run = await self.conversation_repository.get_agent_run(paused_run_id)
         resume_run = await self.conversation_repository.create_agent_run(
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=selected_agent_runtime,
-            metadata={"source": source, "resumed_tool_call_id": resumed_tool_call_id},
+            metadata={
+                "source": source,
+                "resumed_tool_call_id": resumed_tool_call_id,
+                # A note that paused for an approval finishes where it began.
+                **privacy_of(paused_run.metadata if paused_run else None),
+            },
         )
         self.uow.collect_events(
             [

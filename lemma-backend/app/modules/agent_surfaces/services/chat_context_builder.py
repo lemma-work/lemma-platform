@@ -26,9 +26,15 @@ def build_chat_context(
     route: ResolvedSurfaceRoute,
     conversation_id: UUID,
     created_conversation_title: str | None,
+    answers_outsider: bool = False,
 ) -> SurfaceChatContext:
-    """The run to start for a bound conversation, as the worker will read it."""
+    """The run to start for a bound conversation, as the worker will read it.
+
+    ``answers_outsider``: ``user_id`` is the member who answers for a group and
+    ``resolved_user`` the stranger who asked -- see ``services/outsiders``.
+    """
     return SurfaceChatContext(
+        answers_outsider=answers_outsider,
         created_conversation_title=created_conversation_title,
         platform=surface.surface_type,
         pod_id=surface.pod_id,

@@ -82,5 +82,15 @@ class AgentContext(BaseModel):
     # The text of the doc this conversation is attached to, rendered as a prompt
     # section; read fresh each run because the doc changes between turns.
     attached_document: str | None = None
+    # This run answers somebody outside the pod (see `domain/outsiders`). Tools
+    # then authorize as nobody -- Public reads only -- rather than as
+    # `user_id`, which on such a run is whoever looks after the conversation,
+    # not whoever asked. Resolved once from the conversation by every builder of
+    # this context, so no tool has to read the conversation to find out.
+    answers_outsider: bool = False
+    # False for a run started by a private note (see `domain/private_notes`):
+    # its answer stays in Lemma instead of going to the chat platform the
+    # conversation also lives on. Read by the surface's run observer.
+    delivers_to_surface: bool = True
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

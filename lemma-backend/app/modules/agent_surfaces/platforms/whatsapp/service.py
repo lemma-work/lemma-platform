@@ -35,12 +35,14 @@ from app.modules.agent_surfaces.platforms.whatsapp.models import (
     WhatsAppFileAttachment,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
+    WhatsAppRecipient,
     build_whatsapp_approval_interactive,
     build_whatsapp_interactive,
     whatsapp_cta_url_payload,
     whatsapp_display_resource_text,
     flow_with_message,
     whatsapp_message_bodies,
+    whatsapp_recipient,
     whatsapp_text_payload,
     truncate_whatsapp_text,
 )
@@ -52,18 +54,24 @@ logger = get_logger(__name__)
 
 
 class WhatsAppPlatformService:
-    def __init__(self, credentials: dict[str, Any]):
+    def __init__(
+        self, credentials: dict[str, Any], *, client: WhatsAppClient | None = None
+    ):
         self.credentials = credentials
         self._access_token = credentials.get("access_token") or ""
         self._phone_number_id = credentials.get("phone_number_id") or ""
         # Resolve the base here (honoring a credential override) and hand it to
         # the typed client so all transport goes through one place.
         self._api_base = resolve_api_base(credentials)
-        self._client = WhatsAppClient(
+        self._client = client or WhatsAppClient(
             access_token=self._access_token,
             phone_number_id=self._phone_number_id,
             api_base=self._api_base,
         )
+
+    def _arrival_number(self, event: ParsedInboundSurfaceEvent) -> str:
+        """The number to send from: the one the message arrived on, else ours."""
+        return event.reply_target.get("phone_number_id") or self._phone_number_id
 
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent
@@ -104,25 +112,23 @@ class WhatsAppPlatformService:
         message: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        phone_number_id = (
-            event.reply_target.get("phone_number_id") or self._phone_number_id
-        )
-        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
-        if not sender_wa_id or not phone_number_id or not self._access_token:
+        phone_number_id = self._arrival_number(event)
+        recipient = _recipient(event)
+        if recipient is None or not phone_number_id or not self._access_token:
             if (metadata or {}).get("private_onboarding"):
                 raise RuntimeError("WhatsApp cannot deliver private onboarding")
             raise unsendable(
                 "WhatsApp",
                 access_token=self._access_token,
                 phone_number_id=phone_number_id,
-                recipient=sender_wa_id,
+                recipient=recipient.to if recipient else None,
             )
 
         flow = (metadata or {}).get("onboarding_flow")
-        if event.is_dm and flow:
+        if event.is_dm and flow and not recipient.is_group:
             await self._client.send_interactive(
                 phone_number_id=phone_number_id,
-                to=sender_wa_id,
+                to=recipient.to,
                 interactive=flow_with_message(flow, message),
             )
             return
@@ -133,7 +139,8 @@ class WhatsAppPlatformService:
                     phone_number_id=phone_number_id,
                     payload={
                         "messaging_product": "whatsapp",
-                        "to": sender_wa_id,
+                        "recipient_type": recipient.recipient_type,
+                        "to": recipient.to,
                         "type": "text",
                         "text": {"body": body},
                     },
@@ -222,11 +229,9 @@ class WhatsAppPlatformService:
         sends what it is given, best-effort, so a failed update cannot touch the
         run.
         """
-        phone_number_id = (
-            event.reply_target.get("phone_number_id") or self._phone_number_id
-        )
-        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
-        if not sender_wa_id or not phone_number_id or not self._access_token:
+        phone_number_id = self._arrival_number(event)
+        recipient = _recipient(event)
+        if recipient is None or not phone_number_id or not self._access_token:
             return
         body = to_whatsapp_text(progress_text)
         if not body:
@@ -234,7 +239,8 @@ class WhatsAppPlatformService:
         await self._client.send_message_payload(
             phone_number_id=phone_number_id,
             payload=whatsapp_text_payload(
-                recipient_wa_id=sender_wa_id,
+                recipient_wa_id=recipient.to,
+                recipient_type=recipient.recipient_type,
                 body=body,
                 preview_url=False,
             ),
@@ -254,15 +260,17 @@ class WhatsAppPlatformService:
         WhatsApp ids allow 256 chars).
         """
         del metadata
-        phone_number_id = (
-            event.reply_target.get("phone_number_id") or self._phone_number_id
-        )
-        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
-        if not sender_wa_id or not phone_number_id or not self._access_token:
+        phone_number_id = self._arrival_number(event)
+        recipient = _recipient(event)
+        if recipient is None or not phone_number_id or not self._access_token:
             # Nothing can be sent. Declining here lets the caller's text fallback
             # try, and that hits the raising guard in `send_message`, so the
             # missing part is named there rather than in a debug line here.
             return False
+        if recipient.is_group:
+            # A group takes no interactive message: the question goes as text.
+            return False
+        sender_wa_id = recipient.to
         if any(q.multi_select for q in question_plan.questions):
             return False
         interactives = []
@@ -320,12 +328,14 @@ class WhatsAppPlatformService:
         (caller falls back to text) when the buttons can't be encoded natively.
         """
         del metadata
-        phone_number_id = (
-            event.reply_target.get("phone_number_id") or self._phone_number_id
-        )
-        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
-        if not sender_wa_id or not phone_number_id or not self._access_token:
+        phone_number_id = self._arrival_number(event)
+        recipient = _recipient(event)
+        if recipient is None or not phone_number_id or not self._access_token:
             return False
+        if recipient.is_group:
+            # No buttons in a group: the approval is asked in words.
+            return False
+        sender_wa_id = recipient.to
         interactive = build_whatsapp_approval_interactive(approval_plan)
         if interactive is None:
             return False
@@ -349,28 +359,30 @@ class WhatsAppPlatformService:
         resource read as delivered natively whichever way it actually arrived.
         """
         del metadata
-        phone_number_id = (
-            event.reply_target.get("phone_number_id") or self._phone_number_id
-        )
-        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
-        if not phone_number_id or not sender_wa_id or not self._access_token:
+        phone_number_id = self._arrival_number(event)
+        recipient = _recipient(event)
+        if not phone_number_id or recipient is None or not self._access_token:
             raise unsendable(
                 "WhatsApp",
                 access_token=self._access_token,
                 phone_number_id=phone_number_id,
-                recipient=sender_wa_id,
+                recipient=recipient.to if recipient else None,
             )
         action = render_plan.primary_action
-        if action is None:
+        if action is None or recipient.is_group:
+            # A card is an interactive message, which a group does not take;
+            # there the link goes as text, with its preview.
             await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
                 payload=whatsapp_text_payload(
-                    recipient_wa_id=sender_wa_id,
+                    recipient_wa_id=recipient.to,
+                    recipient_type=recipient.recipient_type,
                     body=whatsapp_display_resource_text(render_plan),
-                    preview_url=False,
+                    preview_url=action is not None,
                 ),
             )
             return False
+        sender_wa_id = recipient.to
 
         try:
             await self._client.send_message_payload(
@@ -420,13 +432,18 @@ class WhatsAppPlatformService:
         an API call every twenty seconds to say something already said.
         """
         is_refresh = bool((metadata or {}).get("is_refresh"))
-        phone_number_id = (
-            event.reply_target.get("phone_number_id") or self._phone_number_id
-        )
-        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
+        phone_number_id = self._arrival_number(event)
+        recipient = _recipient(event)
         message_id = str(event.external_message_id or "").strip()
         if not phone_number_id or not self._access_token:
             return
+        if recipient is not None and recipient.is_group:
+            # Meta documents neither a read receipt, a typing bubble nor a
+            # reaction from a business in a group -- its November 2025 guide
+            # listed marking read as unsupported there. Nothing is sent rather
+            # than a call a group may refuse on every turn.
+            return
+        sender_wa_id = recipient.to if recipient is not None else None
 
         if message_id:
             try:
@@ -488,16 +505,15 @@ class WhatsAppPlatformService:
 
         Returns True on success; False so the caller falls back to a URL link.
         """
-        phone_number_id = (
-            event.reply_target.get("phone_number_id") or self._phone_number_id
-        )
-        recipient_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
-        if not self._access_token or not phone_number_id or not recipient_wa_id:
+        phone_number_id = self._arrival_number(event)
+        recipient = _recipient(event)
+        if not self._access_token or not phone_number_id or recipient is None:
             return False
         return await media.send_file(
             self._client,
             phone_number_id=phone_number_id,
-            recipient_wa_id=recipient_wa_id,
+            recipient_wa_id=recipient.to,
+            recipient_type=recipient.recipient_type,
             file_name=file_name,
             file_bytes=file_bytes,
             mime_type=mime_type,
@@ -549,3 +565,8 @@ class WhatsAppPlatformService:
             if candidate:
                 return candidate
         return None
+
+
+def _recipient(event: ParsedInboundSurfaceEvent) -> WhatsAppRecipient | None:
+    """Who a reply to this event goes to: its group, else the person."""
+    return whatsapp_recipient(event.reply_target, fallback_wa_id=event.sender_phone)

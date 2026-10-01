@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -51,6 +52,45 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def pod_members_among(
+        self, pod_id: UUID, user_ids: Iterable[UUID]
+    ) -> set[UUID]:
+        """Which of these users are live members of this pod, in one read."""
+        wanted = sorted(set(user_ids))
+        if not wanted:
+            return set()
+        stmt = (
+            select(OrganizationMember.user_id)
+            .join(PodMember, PodMember.organization_member_id == OrganizationMember.id)
+            .join(User, User.id == OrganizationMember.user_id)
+            .where(
+                PodMember.pod_id == pod_id,
+                OrganizationMember.user_id.in_(wanted),
+                *_live_user_predicates(),
+            )
+            .limit(len(wanted))
+        )
+        return set((await self.session.execute(stmt)).scalars().all())
+
+    async def display_names(self, user_ids: Iterable[UUID]) -> dict[UUID, str]:
+        """``get_user_display_name`` for several people, in one read."""
+        wanted = sorted(set(user_ids))
+        if not wanted:
+            return {}
+        rows = (
+            await self.session.execute(
+                select(User.id, User.first_name, User.last_name, User.email)
+                .where(User.id.in_(wanted))
+                .limit(len(wanted))
+            )
+        ).all()
+        names: dict[UUID, str] = {}
+        for user_id, first_name, last_name, email in rows:
+            name = " ".join(part for part in (first_name, last_name) if part).strip()
+            if name or email:
+                names[user_id] = name or email
+        return names
 
     async def get_user_email(self, user_id: UUID) -> str | None:
         stmt = select(User.email).where(User.id == user_id)

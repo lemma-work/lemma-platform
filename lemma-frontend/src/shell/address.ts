@@ -101,6 +101,7 @@ export function readAddress(pathname: string): Address {
         case "tables":
         case "files":
         case "workflows":
+        case "groups":
         case "settings":
         case "about":
             return rest.length > 1 ? here(null) : here("space:" + rest[0]);
@@ -118,6 +119,8 @@ export function readAddress(pathname: string): Address {
             return rest.length === 2 && rest[1] ? here("run:" + rest[1]) : here(null);
         case "workflow":
             return rest.length === 2 && rest[1] ? here("workflow:" + rest[1]) : here(null);
+        case "group":
+            return rest.length === 2 && rest[1] ? here("group:" + rest[1]) : here(null);
         case "app":
             return rest.length === 2 && rest[1] ? here("app:" + rest[1]) : here(null);
         case "record":
@@ -167,6 +170,7 @@ function tailOf(address: Address): string[] {
         case "bot":
         case "run":
         case "workflow":
+        case "group":
             return [kind, encodeURIComponent(rest)];
         case "record": {
             /* The row id may itself carry a colon, so the table name is taken
@@ -190,7 +194,7 @@ function tailOf(address: Address): string[] {
 
 /** The tab a URL names, rebuilt from its id alone.
  *
- *  Five kinds carry everything they need in their own id, so a link to one can
+ *  Most kinds carry everything they need in their own id, so a link to one can
  *  be honoured before a single request has come back. The other three cannot
  *  and do not need to: `conversation`, `library` and `profile` are always in
  *  the pod's own tab list, and an `app:` tab needs the URL and status that
@@ -204,6 +208,12 @@ export function tabFromId(tabId: string): Tab | null {
     if (tabId.startsWith("workflow:")) {
         const name = tabId.slice("workflow:".length);
         return name ? { id: tabId, kind: "workflow", label: name, name } : null;
+    }
+    if (tabId.startsWith("group:")) {
+        const groupId = tabId.slice("group:".length);
+        /* Named "Group" until the page has read the group and says what it
+           is called. */
+        return groupId ? { id: tabId, kind: "group", label: "Group", groupId } : null;
     }
     if (tabId.startsWith("run:")) {
         const runId = tabId.slice("run:".length);

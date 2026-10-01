@@ -256,6 +256,7 @@ export type { PodPermissionsNamespace } from "./namespaces/pod-permissions.js";
 export type { PodRolesNamespace } from "./namespaces/pod-roles.js";
 export type { PodsNamespace } from "./namespaces/pods.js";
 export type { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
+export type { PodGroupsNamespace } from "./namespaces/pod-groups.js";
 export type { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 export type { RecordsNamespace } from "./namespaces/records.js";
 export type { ResourceAccessNamespace } from "./namespaces/resource-access.js";

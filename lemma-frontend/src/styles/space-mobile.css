@@ -522,3 +522,215 @@
         display: none;
     }
 }
+/* A channel's groups, and note-or-reply: every control a thumb's height on
+   anything touched, a tablet included. */
+@media (max-width: 767px), (pointer: coarse) {
+    .sgroup__switch,
+    .sgroup__take {
+        min-height: 44px;
+    }
+    .sgroup__link .copy-control__button {
+        width: 44px;
+        height: 44px;
+    }
+    .composer__mode {
+        height: 44px;
+    }
+}
+
+@media (max-width: 767px) {
+    .sgroup__acts {
+        gap: 0 16px;
+    }
+
+    /* Note or reply: the two choices share the width and shorten their
+       labels before they push the box around. */
+    .composer__modes {
+        gap: 6px;
+    }
+    .composer__mode {
+        flex: 1 1 0;
+        justify-content: center;
+        padding: 0 10px;
+    }
+    .composer__hint {
+        padding: 0 4px;
+    }
+
+    /* Somebody outside the space takes the near side; the gutter that keeps
+       your own bubble off the edge goes to the far side for theirs. */
+    .msg--guest {
+        padding-left: 0;
+        padding-right: 20px;
+    }
+}
+
+
+/* A space's groups on a phone: rows stack their columns under the name, the
+   page's aside follows what was said, and every control is a thumb high. */
+@media (max-width: 767px), (pointer: coarse) {
+    .grow__take,
+    .gpeople__invite,
+    .gsheet__copy,
+    .gsheet__acts .ghost-pill,
+    .gsheet__foot .pill-button,
+    .gsheet__foot .ghost-pill,
+    .smanage__foot .pill-button,
+    .smanage__foot .ghost-pill,
+    .smanage .smanage__recheck,
+    .gway__go,
+    .gpage__open,
+    .gnew__button {
+        min-height: 44px;
+    }
+    .gsheet__inline,
+    .gswitch,
+    .gowner,
+    .sgroup__open {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+    }
+    .gswitch,
+    .gowner {
+        display: flex;
+    }
+    .gsheet__check,
+    .smanage__check {
+        min-height: 44px;
+    }
+    .gask__form input,
+    .gask__form .pill-button {
+        height: 44px;
+    }
+    .gpeople__invite {
+        padding: 0 16px;
+    }
+}
+
+@media (max-width: 767px) {
+    .groups__head {
+        flex-wrap: wrap;
+        align-items: flex-start;
+    }
+    .groups__title h1 {
+        font-size: 26px;
+    }
+    .gnew__menu {
+        position: fixed;
+        top: auto;
+        left: 16px;
+        right: 16px;
+        bottom: 16px;
+        width: auto;
+        max-width: none;
+    }
+    .gnew__item {
+        min-height: 56px;
+    }
+    .gwait {
+        align-items: flex-start;
+        padding: 14px;
+    }
+    .gwait__dot {
+        margin-top: 6px;
+    }
+    .glist__cols {
+        display: none;
+    }
+    .grow {
+        grid-template-columns: 32px minmax(0, 1fr) auto;
+        grid-template-areas:
+            "mark main when"
+            ". who who";
+        row-gap: 6px;
+        padding: 14px 4px;
+    }
+    .grow__mark {
+        grid-area: mark;
+        align-self: start;
+    }
+    .grow__main {
+        grid-area: main;
+    }
+    .grow__when {
+        grid-area: when;
+        align-self: start;
+    }
+    .grow__who {
+        grid-area: who;
+    }
+    .grow__sub {
+        white-space: normal;
+    }
+    .gfirst {
+        padding-top: 16px;
+    }
+    .gfirst__head h1 {
+        font-size: 26px;
+    }
+    .gway {
+        display: grid;
+        grid-template-columns: 40px minmax(0, 1fr);
+    }
+    .gway__go {
+        grid-column: 1 / -1;
+        justify-content: center;
+    }
+    .gfirst__how {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .gpage__main {
+        padding: 20px 16px 16px;
+    }
+    .gpage__head {
+        flex-wrap: wrap;
+    }
+    .gpage__who h1 {
+        font-size: 23px;
+    }
+    .gpage__open {
+        order: 3;
+        width: 100%;
+        justify-content: center;
+    }
+    .gask {
+        padding: 16px 14px;
+    }
+    .gask__form {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .gask__form input {
+        flex: none;
+    }
+    .gask__form .pill-button {
+        max-width: none;
+        justify-content: center;
+    }
+    .gpage__side {
+        padding: 20px 16px 100px;
+    }
+    .gsheet__facts div {
+        flex-direction: column;
+        gap: 2px;
+    }
+    .gsheet__facts dd {
+        text-align: left;
+    }
+    .gsheet__code {
+        flex-wrap: wrap;
+        padding: 8px 8px 8px 12px;
+    }
+    .gsheet__foot--split {
+        flex-wrap: wrap;
+    }
+    .smanage__group-list li {
+        flex-direction: column;
+        gap: 2px;
+    }
+    .smanage__group-list small {
+        max-width: none;
+        text-align: left;
+    }
+}

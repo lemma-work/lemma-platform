@@ -10,6 +10,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -17,6 +18,9 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.whatsapp.group_updates import (
+    whatsapp_group_updates,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppMessageParser,
     split_whatsapp_deliveries,
@@ -34,6 +38,11 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
 
     def split_inbound_payloads(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         return split_whatsapp_deliveries(payload)
+
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        return whatsapp_group_updates(payload)
 
     async def parse_inbound_event(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

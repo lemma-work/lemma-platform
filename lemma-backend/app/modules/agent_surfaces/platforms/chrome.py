@@ -23,6 +23,7 @@ from typing import Any
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
 from app.modules.agent_surfaces.domain.models import SurfaceChannelInfo
 
 
@@ -140,6 +141,13 @@ class SurfaceChromeMixin:
         """Parse an event about the app itself. Default: not a lifecycle event."""
         del payload, headers
         return
+
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        """What happened to groups themselves. Default: a bot that creates none."""
+        del payload
+        return []
 
     # The in-chat set-up flow. Only Slack drives configuration from inside the
     # chat app today, but `AppEventHandler` calls all of these on

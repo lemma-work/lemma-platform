@@ -99,9 +99,14 @@ def _next_cursor(response: Any) -> str | None:
 
 
 def _context_messages(
-    raw: list[Any], *, current_ts: str
+    raw: list[Any], *, current_ts: str, home_team: str = ""
 ) -> list[SurfaceContextMessage]:
-    """Slack message dicts as context, without the message being handled."""
+    """Slack message dicts as context, without the message being handled.
+
+    A message from another workspace -- a Slack Connect channel's other company
+    -- is marked ``outside_pod``, the same mark the pod's own group log puts on
+    a stranger's line, so a member's run can leave it out.
+    """
     out: list[SurfaceContextMessage] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -110,11 +115,13 @@ def _context_messages(
         ts = payload_text(item, "ts")
         if not text or (current_ts and ts == current_ts):
             continue
+        theirs = (payload_text(item, "user_team") or payload_text(item, "team")).strip()
         out.append(
             SurfaceContextMessage(
                 author=payload_first(item, "user", "username").strip() or None,
                 text=text,
                 ts=ts or None,
+                outside_pod=bool(home_team and theirs and theirs != home_team),
             )
         )
     return out
@@ -253,7 +260,9 @@ class SlackChannelReadsMixin:
             )
             return []
         return _context_messages(
-            raw[-limit:], current_ts=str(event.external_message_id or "")
+            raw[-limit:],
+            current_ts=str(event.external_message_id or ""),
+            home_team=str(event.tenant_id or ""),
         )
 
     async def _recent_messages(

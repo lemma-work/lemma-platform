@@ -13,6 +13,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceChannelRoute,
     SurfaceConfig,
     SurfaceCredentialMode,
+    SurfaceGroupPolicy,
     SurfaceIdentityPolicy,
     SurfacePlatform,
     SurfaceSendPolicy,
@@ -62,6 +63,21 @@ class SurfaceSendPolicyConfig(BaseModel):
     allow_send: bool = False
 
 
+class SurfaceGroupsConfig(BaseModel):
+    """How the bot treats people outside the pod in its groups. Mirrored."""
+
+    answers_outsiders: bool = Field(
+        default=True,
+        description=(
+            "Answer people outside the pod in this bot's groups, from what the "
+            "pod made Public. Off, the bot answers only the pod's members, "
+            "whatever a group's own switch says."
+        ),
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class SurfaceTelegramConfigInput(BaseModel):
     """Selects the pod app exposed as this bot's Telegram Mini App."""
 
@@ -105,6 +121,7 @@ class SurfaceBehaviorConfigInput(BaseModel):
         default_factory=SurfaceTelegramConfigInput
     )
     slack: SurfaceSlackConfigInput = Field(default_factory=SurfaceSlackConfigInput)
+    groups: SurfaceGroupsConfig = Field(default_factory=SurfaceGroupsConfig)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -147,6 +164,7 @@ class SurfaceConfigResponse(BaseModel):
     slack: SurfaceSlackConfigResponse = Field(
         default_factory=SurfaceSlackConfigResponse
     )
+    groups: SurfaceGroupsConfig = Field(default_factory=SurfaceGroupsConfig)
 
     @classmethod
     def from_domain(cls, config: SurfaceConfig) -> "SurfaceConfigResponse":
@@ -168,6 +186,9 @@ def surface_config_from_input(
         send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
         telegram=SurfaceTelegramConfig(app_name=config_input.telegram.app_name),
         slack=SurfaceSlackConfig(app_name=config_input.slack.app_name),
+        groups=SurfaceGroupPolicy(
+            answers_outsiders=config_input.groups.answers_outsiders
+        ),
     )
 
 

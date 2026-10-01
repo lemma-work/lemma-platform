@@ -6,7 +6,7 @@ import { AgentMark } from "./agent-mark";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { ChannelIcon } from "@/shell/channels";
 import { ChatIcon, ClockIcon, FileIcon, PlusIcon, SearchIcon, WorkflowIcon, BellIcon } from "@/ui/icons";
-import type { ConversationOrigin, OriginKind } from "@/thread/conversation-origin";
+import { originLabel, type ConversationOrigin, type OriginKind } from "@/thread/conversation-origin";
 import { emptyFor } from "./empty-copy";
 import { SpaceEmpty } from "./empty-state";
 
@@ -104,6 +104,7 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
                 <tbody>
                     {shown.map((row: ConversationRef) => {
                         const origin = row.origin ?? { kind: "chat" as const, label: "Chat" };
+                        const cameFrom = originLabel(origin, pod.name);
                         return (
                             <tr key={row.id} tabIndex={0} aria-current={row.id === openId ? "true" : undefined}
                                 onClick={() => onOpen(row.id)} onKeyDown={event => { if (event.key === "Enter") onOpen(row.id); }}>
@@ -119,7 +120,7 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
                                 <td className="chats-page__col-source">
                                     <span className="chats-page__origin" data-kind={origin.kind}>
                                         <OriginIcon origin={origin} />
-                                        <span>{origin.label}</span>
+                                        <span title={cameFrom}>{cameFrom}</span>
                                         {origin.runId && (
                                             <button className="chats-page__run" onClick={event => { event.stopPropagation(); onOpenRun(origin.runId!); }}>
                                                 Open run

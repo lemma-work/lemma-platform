@@ -25,6 +25,7 @@ from app.core.authorization.dependencies import (
     require_pod_membership,
 )
 from app.core.authorization.permissions import Permissions
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.api.dependencies import NotificationServiceDep
 from app.modules.agent_surfaces.api.schemas import (
     NotificationListResponse,
@@ -33,10 +34,13 @@ from app.modules.agent_surfaces.api.schemas import (
     NotificationUnreadCountResponse,
     NotifyMemberRequest,
 )
+from app.modules.agent_surfaces.domain.errors import OutsideAnswerNeedsApproval
 from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/pods/{pod_id}/notifications", tags=["notifications"])
 
@@ -176,13 +180,26 @@ async def respond_to_notification(
     ctx: PodContextDep,
     service: NotificationServiceDep,
 ) -> NotificationResponse:
-    del ctx
+    # A person typing an answer in the app has confirmed its words. An agent
+    # holding their delegated token has not -- and the one thing that matters
+    # here is an answer to somebody outside the pod, which is approved by the
+    # person, word for word, through `request_approval` instead.
+    delegated = ctx.delegated_by_user_id is not None
+    if delegated and await service.is_from_outside(
+        pod_id=pod_id, notification_id=notification_id, user_id=user.id
+    ):
+        logger.info(
+            "agent_surfaces.notification_controller.delegated_outside_answer.refused",
+            notification_id=str(notification_id),
+        )
+        raise OutsideAnswerNeedsApproval(notification_id=notification_id)
     notification = await service.respond(
         pod_id=pod_id,
         notification_id=notification_id,
         responder_user_id=user.id,
         summary=request.summary,
         data=request.data,
+        owner_confirmed=not delegated,
     )
     return NotificationResponse.from_entity(notification)
 

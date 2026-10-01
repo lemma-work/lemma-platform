@@ -21,6 +21,7 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.outsiders import answers_outsiders
 from app.modules.datastore.contracts import (
     DatastoreAccessDeniedError,
     DatastoreFileNotFoundError,
@@ -33,6 +34,15 @@ ATTACHED_FILE_KEY = "lemma_attached_file"
 
 
 def attached_file_path(conversation: Conversation) -> str | None:
+    """The attached doc's path, or None -- always None for a stranger's run.
+
+    The doc is read as the conversation's user, and in a conversation that
+    answers people outside the pod that user is the member looking after it
+    (see `domain/outsiders`). A doc they opened beside it is theirs; it must
+    never be the text a stranger's turn starts from.
+    """
+    if answers_outsiders(conversation):
+        return None
     value = (conversation.metadata or {}).get(ATTACHED_FILE_KEY)
     return value if isinstance(value, str) and value.startswith("/") else None
 

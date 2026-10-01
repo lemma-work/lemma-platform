@@ -255,6 +255,8 @@ class TelegramMessageParser:
             metadata={
                 "chat_type": chat_type,
                 "chat_id": chat_id,
+                # The group's own name, which Telegram sends with every message.
+                "chat_title": payload_text(chat, "title").strip() or None,
                 "is_topic_message": bool(message.get("is_topic_message")),
                 "message_thread_id": payload_text(message, "message_thread_id"),
                 "is_thread_reply": is_reply_to_bot,

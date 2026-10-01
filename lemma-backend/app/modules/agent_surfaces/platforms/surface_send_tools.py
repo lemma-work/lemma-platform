@@ -26,7 +26,9 @@ class SurfaceSendMessageResult(BaseModel):
     )
 
 
-def build_surface_send_toolset() -> FunctionToolset[ConversationContext]:
+def build_surface_send_toolset(
+    deliver=deliver_surface_message_to_surface,
+) -> FunctionToolset[ConversationContext]:
     async def surface_send_message(
         ctx: RunContext[ConversationContext],
         message: str,
@@ -42,10 +44,15 @@ def build_surface_send_toolset() -> FunctionToolset[ConversationContext]:
             return SurfaceSendMessageResult(
                 success=False, message="No active surface conversation."
             )
+        if not getattr(ctx.deps, "delivers_to_surface", True):
+            # A private note's run answers in Lemma only -- the same rule
+            # `display_resource` and the progress observer keep.
+            return SurfaceSendMessageResult(
+                success=False,
+                message="This was a private note: its answer stays in Lemma.",
+            )
         sent = await guarded_tool_result(
-            deliver_surface_message_to_surface(
-                conversation_id=conversation_id, message=message
-            ),
+            deliver(conversation_id=conversation_id, message=message),
             tool="surface_send_message",
             failure=None,
         )

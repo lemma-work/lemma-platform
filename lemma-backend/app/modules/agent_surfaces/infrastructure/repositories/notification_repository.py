@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -54,6 +56,9 @@ class NotificationRepository:
             origin_kind=entity.origin_kind.value,
             origin_id=entity.origin_id,
             origin_conversation_id=entity.origin_conversation_id,
+            from_outside=entity.from_outside,
+            origin_group_title=entity.origin_group_title,
+            asked_by_name=entity.asked_by_name,
             title=entity.title,
             body=entity.body,
             background_instruction=entity.background_instruction,
@@ -235,6 +240,36 @@ class NotificationRepository:
         )
         return [m.to_entity() for m in result.scalars().all()]
 
+    async def list_open_asks_from(
+        self,
+        *,
+        recipient_user_id: UUID,
+        origin_conversation_ids: Sequence[UUID],
+        limit: int = 20,
+    ) -> list[NotificationEntity]:
+        """Questions these conversations put to this person that are still open.
+
+        How a group's page finds what its people outside the pod are waiting
+        on: each such question was passed on by the group's own outsiders
+        conversation, to the member who answers for them.
+        """
+        if not origin_conversation_ids:
+            return []
+        result = await self.session.execute(
+            select(NotificationModel)
+            .where(
+                NotificationModel.recipient_user_id == recipient_user_id,
+                NotificationModel.origin_conversation_id.in_(
+                    list(origin_conversation_ids)
+                ),
+                NotificationModel.expects_response.is_(True),
+                NotificationModel.status == NotificationStatus.OPEN.value,
+            )
+            .order_by(NotificationModel.created_at.desc())
+            .limit(limit)
+        )
+        return [m.to_entity() for m in result.scalars().all()]
+
     async def count_open_from_origin_conversation(self, conversation_id: UUID) -> int:
         """How many asks this conversation made are still waiting on a person.
 
@@ -284,15 +319,27 @@ class NotificationRepository:
         return [m.to_entity() for m in result.scalars().all()]
 
     async def list_by_ids(
-        self, *, pod_id: UUID, notification_ids: list[UUID]
+        self,
+        *,
+        pod_id: UUID,
+        origin_conversation_id: UUID | None,
+        notification_ids: list[UUID],
     ) -> list[NotificationEntity]:
-        """Powers ``check_messages``. Pod-scoped so a stray id from another pod
-        reads as absent rather than leaking that it exists."""
+        """Powers ``check_messages``: what *this conversation* sent, by id.
+
+        Scoped to the pod and to the asking conversation, so an id from another
+        pod or another conversation reads as absent rather than handing over
+        someone else's answer -- a stranger's run included, which may have been
+        told an id it has no business reading.
+        """
         if not notification_ids:
             return []
         result = await self.session.execute(
             select(NotificationModel).where(
                 NotificationModel.pod_id == pod_id,
+                NotificationModel.origin_conversation_id.is_not_distinct_from(
+                    origin_conversation_id
+                ),
                 NotificationModel.id.in_(notification_ids),
             )
         )

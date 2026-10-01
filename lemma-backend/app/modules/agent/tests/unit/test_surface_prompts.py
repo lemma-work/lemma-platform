@@ -50,10 +50,17 @@ def test_slack_guidance_has_native_choices_channel_and_mrkdwn():
     assert "20 MB" in text  # effective inline cap = min(30MB hard, 20MB soft)
 
 
-def test_whatsapp_guidance_has_native_choices_and_omits_channel():
+def test_whatsapp_guidance_has_native_choices_and_the_group_warning():
+    """A WhatsApp bot now speaks in groups it created, so it is warned too.
+
+    Other people's words reach it there, from the pod's log of the group, and
+    they are just as injectable as Telegram's. What it is not promised is a
+    history tool: Meta has none.
+    """
     text = surface_platform_guidance("WHATSAPP")
     assert "Talking over WhatsApp" in text
-    assert "Channel background context" not in text  # not channel-capable
+    assert "BACKGROUND CONTEXT" in text
+    assert "recent-channel-message tools" not in text
     assert "ask_user" in text and "native tappable options" in text
 
 

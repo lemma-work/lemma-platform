@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.modules.agent.domain.outsiders import refuse_owner_workspace
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.subscription_models import SubscriptionModels
 from app.modules.agent.domain.vision import AgentVisionMode
@@ -93,6 +94,7 @@ class BaseAgentContext(AgentContext):
         # where a relative one was required.
         # The VM workspace's cwd even on a host-execution run: this manager
         # reaches the VM, and the host root means nothing there.
+        refuse_owner_workspace(self)
         return WorkspaceFileManager(
             self.user_id, cwd=self.workspace_cwd or WORKSPACE_ROOT
         )

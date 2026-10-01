@@ -27,6 +27,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent.domain.outsiders import OUTSIDE_ANSWER_TOOL
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.services.vision_service import vision_delegate_available
@@ -186,7 +187,7 @@ class ResumeToolReturnBuilder:
             )
             return "request_approval", content.model_dump(mode="json")
 
-        if decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION:
+        if _remembered_for_the_session(decision, inner_tool):
             # Beyond the one-off run below, remember the approval so the
             # workload can keep performing this action type in this
             # conversation (the authorizer honors it as an ephemeral grant,
@@ -422,3 +423,17 @@ class ResumeToolReturnBuilder:
             # (desktop-host-execution.md §2), not silently in the VM.
             host_workspace=await recorded_host_workspace(agent_run_id),
         )
+
+
+def _remembered_for_the_session(
+    decision: AgentRunApprovalDecision, tool_name: str
+) -> bool:
+    """Whether this approval also stands for later calls in the conversation.
+
+    Never for an answer to someone outside the pod: it is approved word for
+    word, once, and nothing about it carries to the next one.
+    """
+    return (
+        decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION
+        and tool_name != OUTSIDE_ANSWER_TOOL
+    )

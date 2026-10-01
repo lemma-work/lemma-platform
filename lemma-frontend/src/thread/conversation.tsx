@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { source } from "@/data";
+import { initialsOf } from "@/data/agent-names";
 import { isLandingPreview } from "@/marketing/preview-mode";
 import type { Message, Pod } from "@/data";
 import type { ApprovalDecision } from "./approval";
@@ -10,6 +11,7 @@ import { Transcript } from "./transcript";
 import { Composer } from "./composer";
 import { InteractionDock } from "./interaction-dock";
 import { toAttachments, type Attachment } from "./attachments";
+import { useChannelReply } from "./use-channel-reply";
 
 /** How much of the sample history one "Earlier" hands back. Small, because the
  *  point is to reach the top in a few presses rather than to be realistic. */
@@ -109,11 +111,25 @@ export function ConversationPane({
 
     const open = conversationId && conversationId !== NEW_CONVERSATION ? conversationId : conversation.data?.id ?? null;
 
+    /* Who answers it, the way the live pane works it out: a conversation names
+       its bot by uuid, and anything else is the space's own. Asked only when
+       there is a bot to find. */
+    const agentId = conversation.data?.agentId ?? null;
+    const bots = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000, enabled: Boolean(agentId) });
+    const bot = agentId ? (bots.data ?? []).find((row) => !row.front && row.id === agentId) ?? null : null;
+    const teammate = useMemo(
+        () => (bot ? { name: bot.label, initials: initialsOf(bot.label), iconUrl: bot.iconUrl } : pod.teammate),
+        [bot, pod.teammate],
+    );
+    const reply = useChannelReply(conversation.data?.metadata, teammate.name, open);
+
     return (
         <>
             <Transcript
                 turns={turns}
-                teammate={pod.teammate}
+                teammate={teammate}
+                speakerSeed={bot ? pod.id + ":" + bot.name : undefined}
+                outsiders={reply.thread?.outsiders ? pod.name : undefined}
                 streaming={null}
                 state="idle"
                 error={error ?? (conversation.isError ? "Could not read this conversation." : null)}
@@ -145,7 +161,7 @@ export function ConversationPane({
             />
             <InteractionDock
                 interaction={waitingOn}
-                teammate={pod.teammate.name}
+                teammate={teammate.name}
                 onResolve={resolve}
                 signIn={signingIn}
                 conversationId={open}
@@ -154,7 +170,12 @@ export function ConversationPane({
             <Composer
                 placeholder={waitingOn?.kind === "question"
                     ? "Or answer in your own words…"
-                    : placeholder ?? "Ask " + (pod.teammate?.name || pod.name) + "…"}
+                    : reply.placeholder ?? placeholder ?? "Ask " + (teammate.name || pod.name) + "…"}
+                choices={
+                    /* What is typed while a question is docked answers it and
+                       goes nowhere else, so where it goes is not asked. */
+                    waitingOn?.kind === "question" ? undefined : reply.choices
+                }
                 note={waitingOn?.kind === "approval"
                     ? "sending a message skips this request"
                     : waitingOn || signingIn || isLandingPreview() ? undefined : pod.waiting || undefined}

@@ -5,6 +5,7 @@ from app.core.domain.errors import DomainError
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.modules.agent.domain.outsiders import OUTSIDE_ANSWER_TOOL
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision, JsonObject
 from app.modules.agent.services.widget_token import widget_serve_path
 from app.modules.agent.tools.context import BaseAgentContext
@@ -212,7 +213,9 @@ async def _maybe_deliver_to_surface(
     if deps is None or not response.success:
         return
     platform = getattr(deps, "surface_platform", None)
-    if not platform:
+    # A private note's run stays in Lemma, resources included: the chat app is
+    # where the group reads, and a note is the one thing it must not.
+    if not platform or not getattr(deps, "delivers_to_surface", True):
         return
 
     from app.modules.agent_surfaces.contracts.platforms import (
@@ -403,6 +406,10 @@ async def _run_if_exact_match_already_approved(
     and made the identical sequence succeed, which is what made it look like
     magic rather than a bug.
     """
+    if tool_name == OUTSIDE_ANSWER_TOOL:
+        # Every answer to someone outside the pod is read and approved by the
+        # person it is from; no earlier approval stands in for that.
+        return None
     from app.core.authorization.session_approvals import (
         exact_command_permission_id,
         has_session_approval,

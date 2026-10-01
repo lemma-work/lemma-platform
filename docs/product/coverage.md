@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 170 |
 | `gap` | 2 |
 | `manual` | 21 |
-| `planned` | 0 |
+| `planned` | 11 |
 | `withdrawn` | 0 |
-| **total** | **193** |
+| **total** | **204** |
 
 Scenario tests declaring a promise: 424.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 243 | 270 |
+| OpenAPI operations | 243 | 276 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -274,6 +274,11 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_reaching_the_bot_is_not_membership_of_the_pod`, `test_a_sender_is_the_same_person_on_every_message` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
+| `PS-SURF-015` Somebody outside the pod is answered in a group opened to them | `planned` | — |
+| `PS-SURF-016` The bot remembers what was said in a group | `planned` | — |
+| `PS-SURF-017` A person can say something to the agent without the group reading it | `planned` | — |
+| `PS-SURF-018` An email thread with other people on it is answered like one | `planned` | — |
+| `PS-SURF-019` A member opens a WhatsApp group with the bot in it | `planned` | — |
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_message_reaches_a_real_person`, `test_a_message_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |
 | `PS-SURF-021` Questions and approvals work on every platform | `covered` | `test_a_question_is_asked_with_native_controls`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-SURF-022` Email surfaces behave like email | `manual` | `test_an_email_surface_has_an_address`, `test_mail_reaches_the_pod_that_owns_the_address`, `test_mail_to_an_unknown_address_starts_nothing`, `test_an_unsigned_email_is_refused`, `test_connecting_email_does_not_mint_a_second_mailbox`, `test_a_new_pod_already_has_an_address` |
@@ -281,6 +286,12 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-030` A person has one place to see what needs them | `covered` | `test_a_notification_arrives_in_the_inbox`, `test_an_outsider_sees_no_notifications`, `test_removal_closes_the_inbox_it_left_behind` |
 | `PS-SURF-031` A person clears what they have dealt with | `covered` | `test_reading_clears_the_unread_count`, `test_read_all_clears_everything`, `test_read_state_is_personal` |
 | `PS-SURF-032` A person can answer from the notification | `covered` | `test_a_notification_can_be_answered`, `test_a_notification_can_be_acknowledged` |
+| `PS-SURF-033` What is meant for one person is not said in a group | `planned` | — |
+| `PS-SURF-040` A pod sees every group its bots are in | `planned` | — |
+| `PS-SURF-041` The member answering for a group sees what its people are waiting on | `planned` | — |
+| `PS-SURF-042` A member adds the pod's Telegram bot to a group from Lemma | `planned` | — |
+| `PS-SURF-043` A Slack channel shared with another company answers that company for the pod | `planned` | — |
+| `PS-SURF-044` People in a group ask the bot by the name they see | `planned` | — |
 
 ## [Working with data](journeys/working-with-data.md)
 

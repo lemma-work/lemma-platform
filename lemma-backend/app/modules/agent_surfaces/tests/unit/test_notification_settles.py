@@ -28,6 +28,12 @@ from app.modules.agent_surfaces.services.notification_service import (
     NotificationService,
 )
 
+
+async def _no_outside_origin(_conversation_id):
+    """No conversation here answers people outside the pod."""
+    return
+
+
 pytestmark = pytest.mark.unit
 
 
@@ -65,6 +71,7 @@ def _service(*, outstanding: int, notification: NotificationEntity):
     # awaitable stand-in for it would pass a test the real one fails.
     uow.collect_events = MagicMock()
     return NotificationService(
+        outside_origin_reader=_no_outside_origin,
         uow=uow,
         notification_repository=notifications,
         surface_repository=AsyncMock(),

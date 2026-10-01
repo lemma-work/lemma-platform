@@ -104,6 +104,15 @@ class SurfaceSlackConfig(BaseModel):
     app_name: str | None = None
 
 
+class SurfaceGroupPolicy(BaseModel):
+    """How this bot treats the people in its groups who are not in the pod."""
+
+    #: Off, the bot answers only the pod's members, in every group it is in,
+    #: whatever a group's own switch says. On, a group a member answers for
+    #: answers its people outside the pod from what the pod made Public.
+    answers_outsiders: bool = True
+
+
 class SurfaceConfig(BaseModel):
     """User-editable surface behavior. Exactly what the API accepts and returns.
 
@@ -116,3 +125,4 @@ class SurfaceConfig(BaseModel):
     send_policy: SurfaceSendPolicy = Field(default_factory=SurfaceSendPolicy)
     telegram: SurfaceTelegramConfig = Field(default_factory=SurfaceTelegramConfig)
     slack: SurfaceSlackConfig = Field(default_factory=SurfaceSlackConfig)
+    groups: SurfaceGroupPolicy = Field(default_factory=SurfaceGroupPolicy)

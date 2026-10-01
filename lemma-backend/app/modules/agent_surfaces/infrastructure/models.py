@@ -12,6 +12,10 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (  # noq
 from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (  # noqa: F401
     WhatsAppNumber,
 )
+from app.modules.agent_surfaces.infrastructure.group_models import (  # noqa: F401
+    AgentSurfaceGroupMessageModel,
+    AgentSurfaceGroupModel,
+)
 
 from datetime import datetime
 from uuid import UUID
@@ -523,6 +527,10 @@ class NotificationModel(UUIDAuditBase):
     origin_conversation_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("agent_conversations.id", ondelete="SET NULL"), nullable=True
     )
+    # From a stranger's thread: answered only as words the recipient approved.
+    from_outside: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    origin_group_title: Mapped[str | None] = mapped_column(String(255))
+    asked_by_name: Mapped[str | None] = mapped_column(String(255))
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
@@ -566,6 +574,9 @@ class NotificationModel(UUIDAuditBase):
             origin_kind=NotificationOriginKind(self.origin_kind),
             origin_id=self.origin_id,
             origin_conversation_id=self.origin_conversation_id,
+            from_outside=self.from_outside,
+            origin_group_title=self.origin_group_title,
+            asked_by_name=self.asked_by_name,
             title=self.title,
             body=self.body,
             background_instruction=self.background_instruction,

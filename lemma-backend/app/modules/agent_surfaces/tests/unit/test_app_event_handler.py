@@ -21,6 +21,9 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.services.app_event_handler import AppEventHandler
+from app.modules.agent_surfaces.services.configuration_prompt import (
+    prompt_for_configuration,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -64,7 +67,8 @@ async def test_a_visitor_with_no_pod_is_told_so_rather_than_crashing():
     adapter = AsyncMock()
     handler = _handler()
 
-    await handler._prompt_for_configuration(
+    await prompt_for_configuration(
+        handler.uow.session,
         adapter=adapter,
         parsed=_home_opened(),
         actor_external_user_id="U-VISITOR",
@@ -83,7 +87,8 @@ async def test_a_member_of_several_pods_is_offered_the_choice_not_an_error():
     adapter = AsyncMock()
     handler = _handler()
 
-    await handler._prompt_for_configuration(
+    await prompt_for_configuration(
+        handler.uow.session,
         adapter=adapter,
         parsed=_home_opened(),
         actor_external_user_id="U-VISITOR",
@@ -107,7 +112,8 @@ async def test_a_freshly_joined_channel_is_offered_to_the_person_who_added_it():
         external_channel_id="C999",
     )
 
-    await handler._prompt_for_configuration(
+    await prompt_for_configuration(
+        handler.uow.session,
         adapter=adapter,
         parsed=parsed,
         actor_external_user_id="U-ADDER",

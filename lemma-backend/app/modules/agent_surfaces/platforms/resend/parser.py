@@ -22,6 +22,11 @@ from app.modules.agent_surfaces.platforms.email_identity import (
     parse_email_identity,
 )
 from app.modules.agent_surfaces.platforms.email_text import inbound_email_text
+from app.modules.agent_surfaces.platforms.resend.email_recipients import (
+    other_people,
+    only_acknowledges,
+    pod_was_addressed,
+)
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     header_map,
     normalize_attachments,
@@ -70,8 +75,17 @@ def merge_received_email(
         fallback_name=event.sender_display_name,
     )
 
+    should_start = _fetched_recipients(
+        received,
+        reply_target,
+        sender=identity.email or event.sender_email or "",
+        own_address=str(event.external_channel_id or ""),
+        otherwise=event.should_start_conversation,
+    ) and not (reply_target.get("cc") and only_acknowledges(message_text))
+
     return event.model_copy(
         update={
+            "should_start_conversation": should_start,
             "message_text": message_text,
             "external_thread_id": thread["thread_id"],
             "external_message_id": thread["message_id"],
@@ -83,6 +97,30 @@ def merge_received_email(
             "metadata": metadata,
         }
     )
+
+
+def _fetched_recipients(
+    received: dict[str, object],
+    reply_target: dict[str, object],
+    *,
+    sender: str,
+    own_address: str,
+    otherwise: bool,
+) -> bool:
+    """Who else a fetched email copies, into ``reply_target``; whether it asks us.
+
+    The fetched email is the complete one: its To and Cc win over whatever the
+    webhook happened to carry about who else is on the thread. An email that
+    names nobody leaves both as the webhook had them.
+    """
+    to = received.get("to") or []
+    cc = received.get("cc") or []
+    if not to and not cc:
+        return otherwise
+    reply_target["cc"] = other_people(
+        addressed_to=to, cc=cc, sender=sender, own_address=own_address
+    )
+    return pod_was_addressed(addressed_to=to, cc=cc, own_address=own_address)
 
 
 def _first_non_empty(*candidates: Any) -> list:
@@ -167,6 +205,17 @@ class ResendInboundParser:
 
         # The outbound reply references chain = inbound references + this id.
         reply_references = references + ([message_id] if message_id else [])
+        others = other_people(
+            addressed_to=payload.get("addressed_to") or [],
+            cc=payload.get("cc") or [],
+            sender=sender,
+            own_address=destination,
+        )
+        addressed = pod_was_addressed(
+            addressed_to=payload.get("addressed_to") or [],
+            cc=payload.get("cc") or [],
+            own_address=destination,
+        )
 
         return ParsedInboundSurfaceEvent(
             platform="RESEND",
@@ -190,12 +239,16 @@ class ResendInboundParser:
             ),
             message_text=message_text,
             is_dm=True,
-            should_start_conversation=True,
+            # Copied rather than addressed: answered only if a line names the
+            # agent, which ingress decides once it knows the agent's name.
+            should_start_conversation=addressed
+            and not (others and only_acknowledges(message_text)),
             reply_target={
                 "recipient_email": sender,
                 "subject": subject,
                 "in_reply_to": message_id,
                 "references": reply_references,
+                "cc": others,
             },
             metadata={
                 "platform": "RESEND",

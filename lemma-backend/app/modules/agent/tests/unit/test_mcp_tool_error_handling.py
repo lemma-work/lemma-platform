@@ -127,7 +127,10 @@ async def test_approval_executor_returns_error_on_tool_failure(monkeypatch):
             pass
 
         async def get_conversation(self, _cid, include_runs=False):
-            return SimpleNamespace(agent_id=None)
+            return SimpleNamespace(agent_id=None, metadata={})
+
+    async def as_stored(_uow, conversation):
+        return conversation
 
     monkeypatch.setattr(
         "app.modules.agent.tools.approval.executor.ConversationRepository",
@@ -139,7 +142,7 @@ async def test_approval_executor_returns_error_on_tool_failure(monkeypatch):
 
     monkeypatch.setattr(AgentToolDispatcher, "call_tool", raising_call_tool)
 
-    executor = ApprovalExecutor(lambda: _FakeUoW())
+    executor = ApprovalExecutor(lambda: _FakeUoW(), effective_audience=as_stored)
     deps = _ctx(conversation_id, pod_id, user_id)
     result = await executor.execute_as_user(
         deps=deps, tool_name="exec_command", args={"cmd": "ls"}
@@ -162,3 +165,19 @@ async def test_an_outside_clients_token_read_from_a_header_is_never_honoured():
     assert not await service.authorize(pod_id=uuid4(), token="lemma_mcp_at_x")
     with pytest.raises(ValueError):
         await service.list_tools(pod_id=uuid4(), token="lemma_mcp_at_x")
+
+
+@pytest.mark.asyncio
+async def test_approval_executor_runs_nothing_for_a_strangers_run():
+    """An approval runs a tool with the approver's own authority; a stranger's
+    run never reaches that, whatever recorded a decision for it."""
+    from app.modules.agent.domain.outsiders import OutsiderRunRefused
+
+    def no_database():
+        raise AssertionError("nothing should be read for a stranger's run")
+
+    deps = _ctx(uuid4(), uuid4(), uuid4()).model_copy(update={"answers_outsider": True})
+    with pytest.raises(OutsiderRunRefused):
+        await ApprovalExecutor(no_database).execute_as_user(
+            deps=deps, tool_name="exec_command", args={"cmd": "env"}
+        )

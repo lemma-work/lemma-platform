@@ -61,6 +61,11 @@ class SurfaceChatContext(SurfaceContextBase):
     # It is how the platform learns a fresh thread began — the one moment worth
     # naming the thread on Slack. None on every subsequent message.
     created_conversation_title: str | None = None
+    # Somebody outside the pod asked this, in a group that answers them. Then
+    # `user_id` is not who wrote the message: it is the member who answers for
+    # the group and owns the conversation, and nothing the message says may be
+    # taken as that member deciding anything -- see `write_inbound_message`.
+    answers_outsider: bool = False
 
 
 AgentSurfaceContext = Annotated[
