@@ -194,8 +194,7 @@ their credentials do not travel with it.
 - When a person opens a private release preview, the system shall additionally
   require permission to edit that app.
 - When a person loses access to a private app, the system shall refuse to load
-  its pages and files even if they opened them before, and no shared cache shall
-  keep them.
+  its pages and files even if they opened them before.
 - When a person opens a private app, the system shall grant no access to other
   apps merely because they opened it.
 - When an app acts on a person's behalf, the system shall allow only actions

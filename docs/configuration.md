@@ -484,8 +484,9 @@ and lasts 12 hours before the page quietly fetches a new one.
 
 Each private read rechecks that the session behind the cookie is still live,
 the account in good standing and the app permission unchanged, at most every
-`APP_ACCESS_CACHE_TTL_SECONDS` (default 60; `0` checks every request). That is
-how late a sign-out, a deactivation or a removed share reaches an app's files.
+`APP_ACCESS_CACHE_TTL_SECONDS` (default and maximum 60; `0` checks every
+request). That is how late a sign-out, a deactivation or a removed share reaches
+an app's files.
 Private files are `Cache-Control: private, no-cache` with an ETag, so browsers
 revalidate every use and shared caches keep nothing.
 

@@ -35,6 +35,12 @@ def test_apps_settings_own_archive_limits(monkeypatch):
     assert AppsSettings().app_archive_max_entries == 17
 
 
+def test_app_access_recheck_cannot_outlast_the_one_minute_promise(monkeypatch):
+    monkeypatch.setenv("APP_ACCESS_CACHE_TTL_SECONDS", "61")
+    with pytest.raises(ValidationError, match="app_access_cache_ttl_seconds"):
+        AppsSettings()
+
+
 def test_retention_ceiling_cannot_be_lower_than_its_floor(monkeypatch):
     monkeypatch.setenv("APP_RELEASE_KEEP_LAST", "10")
     monkeypatch.setenv("APP_RELEASE_MAX_KEEP", "2")

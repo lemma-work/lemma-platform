@@ -538,7 +538,7 @@ async def test_redis_outage_falls_back_to_the_live_check(
         port = reservation.getsockname()[1]
     # A cache built now, at a TTL no earlier test used, talks to nothing.
     monkeypatch.setattr(settings, "redis_url", f"redis://127.0.0.1:{port}/0")
-    monkeypatch.setattr(apps_settings, "app_access_cache_ttl_seconds", 61)
+    monkeypatch.setattr(apps_settings, "app_access_cache_ttl_seconds", 59)
     opened = await browser.get(hosted_app.origin + "/assets/app.js")
     assert opened.status_code == 200, opened.text
 
