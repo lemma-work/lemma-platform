@@ -32,6 +32,8 @@ extend-ignore-re = [
 
 [default.extend-words]
 # Real words and product names typos does not know.
+# Google Cloud's spelling, in the IAM role roles/cloudkms.cryptoKeyEncrypterDecrypter.
+Encrypter = "Encrypter"
 unparseable = "unparseable"
 Unparseable = "Unparseable"
 overrideable = "overrideable"
