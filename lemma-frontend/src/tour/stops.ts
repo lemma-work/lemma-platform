@@ -67,7 +67,7 @@ export function tourStops({ name, org }: { name: string; org: string }): Stop[] 
         {
             id: "about", target: "about", area: "sidebar", side: "right",
             title: "Get to know " + name,
-            line: "Its name opens what it has been taught, the work it does on its own, and the channels where you can reach it.",
+            line: "Its name opens what it remembers and has been taught, the work it does on its own, and where you can reach it.",
         },
     ];
 }
