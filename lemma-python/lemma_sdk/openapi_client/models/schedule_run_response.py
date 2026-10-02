@@ -10,6 +10,7 @@ from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
 from ..models.schedule_run_status import ScheduleRunStatus
+from ..models.triage_route import TriageRoute
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -39,8 +40,10 @@ class ScheduleRunResponse:
         updated_at (datetime.datetime):
         user_id (None | UUID):
         completed_at (datetime.datetime | None | Unset):
+        digest_run_id (None | Unset | UUID):
         error_code (None | str | Unset):
         error_type (None | str | Unset):
+        held_for (None | TriageRoute | Unset):
         redrive_of_run_id (None | Unset | UUID):
         redriven_by_user_id (None | Unset | UUID):
         source_occurred_at (datetime.datetime | None | Unset):
@@ -61,8 +64,10 @@ class ScheduleRunResponse:
     updated_at: datetime.datetime
     user_id: None | UUID
     completed_at: datetime.datetime | None | Unset = UNSET
+    digest_run_id: None | Unset | UUID = UNSET
     error_code: None | str | Unset = UNSET
     error_type: None | str | Unset = UNSET
+    held_for: None | TriageRoute | Unset = UNSET
     redrive_of_run_id: None | Unset | UUID = UNSET
     redriven_by_user_id: None | Unset | UUID = UNSET
     source_occurred_at: datetime.datetime | None | Unset = UNSET
@@ -109,6 +114,14 @@ class ScheduleRunResponse:
         else:
             completed_at = self.completed_at
 
+        digest_run_id: None | str | Unset
+        if isinstance(self.digest_run_id, Unset):
+            digest_run_id = UNSET
+        elif isinstance(self.digest_run_id, UUID):
+            digest_run_id = str(self.digest_run_id)
+        else:
+            digest_run_id = self.digest_run_id
+
         error_code: None | str | Unset
         if isinstance(self.error_code, Unset):
             error_code = UNSET
@@ -120,6 +133,14 @@ class ScheduleRunResponse:
             error_type = UNSET
         else:
             error_type = self.error_type
+
+        held_for: None | str | Unset
+        if isinstance(self.held_for, Unset):
+            held_for = UNSET
+        elif isinstance(self.held_for, TriageRoute):
+            held_for = self.held_for.value
+        else:
+            held_for = self.held_for
 
         redrive_of_run_id: None | str | Unset
         if isinstance(self.redrive_of_run_id, Unset):
@@ -174,10 +195,14 @@ class ScheduleRunResponse:
         )
         if completed_at is not UNSET:
             field_dict["completed_at"] = completed_at
+        if digest_run_id is not UNSET:
+            field_dict["digest_run_id"] = digest_run_id
         if error_code is not UNSET:
             field_dict["error_code"] = error_code
         if error_type is not UNSET:
             field_dict["error_type"] = error_type
+        if held_for is not UNSET:
+            field_dict["held_for"] = held_for
         if redrive_of_run_id is not UNSET:
             field_dict["redrive_of_run_id"] = redrive_of_run_id
         if redriven_by_user_id is not UNSET:
@@ -259,6 +284,23 @@ class ScheduleRunResponse:
 
         completed_at = _parse_completed_at(d.pop("completed_at", UNSET))
 
+        def _parse_digest_run_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                digest_run_id_type_0 = UUID(data)
+
+                return digest_run_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        digest_run_id = _parse_digest_run_id(d.pop("digest_run_id", UNSET))
+
         def _parse_error_code(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -276,6 +318,23 @@ class ScheduleRunResponse:
             return cast(None | str | Unset, data)
 
         error_type = _parse_error_type(d.pop("error_type", UNSET))
+
+        def _parse_held_for(data: object) -> None | TriageRoute | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                held_for_type_0 = TriageRoute(data)
+
+                return held_for_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | TriageRoute | Unset, data)
+
+        held_for = _parse_held_for(d.pop("held_for", UNSET))
 
         def _parse_redrive_of_run_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -364,8 +423,10 @@ class ScheduleRunResponse:
             updated_at=updated_at,
             user_id=user_id,
             completed_at=completed_at,
+            digest_run_id=digest_run_id,
             error_code=error_code,
             error_type=error_type,
+            held_for=held_for,
             redrive_of_run_id=redrive_of_run_id,
             redriven_by_user_id=redriven_by_user_id,
             source_occurred_at=source_occurred_at,

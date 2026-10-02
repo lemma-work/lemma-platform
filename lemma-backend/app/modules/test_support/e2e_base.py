@@ -820,6 +820,7 @@ def _import_e2e_models() -> None:
     from app.modules.apps.infrastructure import models as app_models
     from app.modules.connectors.infrastructure import models as connector_models
     from app.modules.datastore.infrastructure.models import datastore_models
+    from app.modules.decisions.infrastructure import models as decisions_models
     from app.modules.function.infrastructure import models as function_models
     from app.modules.mcp_access.infrastructure import models as mcp_access_models
     from app.modules.identity.infrastructure.models import (
@@ -847,6 +848,7 @@ def _import_e2e_models() -> None:
         function_models,
         app_models,
         connector_models,
+        decisions_models,
         schedule_models,
         usage_models,
         agent_surface_models,

@@ -9,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
+from lemma_pod_bundle.normalize import _without_nulls
 from lemma_sdk.errors import LemmaAPIError
 from lemma_cli.cli_core.sdk import _FlatPodProxy
 from lemma_cli.cli_app.pod_bundle import (
@@ -57,6 +58,50 @@ def _list_all_from_tree(files):
     return list_all
 
 
+class FakeDeciderApi:
+    """``/pods/{pod_id}/deciders`` as the server answers it, over an in-memory set.
+
+    Deciders have no generated SDK operations yet, so the CLI reaches them
+    through the SDK's raw ``Pod.request``; this is what stands behind it. A
+    client given none has a pod with no deciders.
+    """
+
+    def __init__(self, *deciders: dict, missing: bool = False) -> None:
+        self.deciders = {decider["name"]: dict(decider) for decider in deciders}
+        # A server that predates deciders has no route for them at all.
+        self.missing = missing
+
+    def request(self, method, path, *, params=None, json=None):
+        if self.missing:
+            raise LemmaAPIError(status_code=404, message="Not Found")
+        _, _, name = path.partition("/deciders")
+        name = name.removeprefix("/")
+        if method == "GET" and not name:
+            return {"items": [self.deciders[key] for key in sorted(self.deciders)]}
+        if method == "POST" and not name:
+            created = _server_decider(json["name"], json["definition"], version=1)
+            self.deciders[json["name"]] = created
+            return created
+        if method == "PUT" and name in self.deciders:
+            current = self.deciders[name]
+            saved = {
+                **current,
+                "version": current["version"] + 1,
+                "definition": json["definition"],
+            }
+            self.deciders[name] = saved
+            return saved
+        raise AssertionError(f"unexpected decider request: {method} {path}")
+
+
+class _PodWithRawRequests(_FlatPodProxy):
+    """The flat proxy, plus the SDK's ``Pod.request`` escape hatch it cannot route."""
+
+    def request(self, method, path, *, params=None, json=None):
+        api = getattr(self._client, "decider_api", None) or FakeDeciderApi()
+        return api.request(method, path, params=params, json=json)
+
+
 class FakeClient(SimpleNamespace):
     def pod(self, pod_id):
         files = getattr(self, "files", None)
@@ -66,7 +111,7 @@ class FakeClient(SimpleNamespace):
             and hasattr(files, "tree")
         ):
             files.list_all = _list_all_from_tree(files)
-        return _FlatPodProxy(self, pod_id)
+        return _PodWithRawRequests(self, pod_id)
 
 
 def _plain(payload):
@@ -4045,3 +4090,298 @@ def test_exported_no_build_app_re_imports(tmp_path: Path):
     assert result["errors"] == []
     assert result["ok"] is True
     assert result["summary"]["apps"] == ["created:support_app"]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pod_bundle_module._schedule_create_fields,
+        pod_bundle_module._schedule_update_fields,
+    ],
+)
+def test_a_time_schedule_is_imported_without_the_filter_it_never_applied(build):
+    """The API refuses a filter on a TIME schedule, which used to take one and
+    ignore it. A bundle exported back then still imports, without it."""
+    payload = {
+        "name": "digest",
+        "schedule_type": "TIME",
+        "config": {"cron": "0 9 * * *"},
+        "agent_name": "kit",
+        "filter_instruction": "Only on weekdays.",
+        "filter_output_schema": {"type": "object"},
+    }
+
+    fields = build(payload)
+
+    assert "filter_instruction" not in fields
+    assert "filter_output_schema" not in fields
+    assert fields["config"] == {"cron": "0 9 * * *"}
+
+
+def test_an_event_schedule_keeps_its_filter_on_import():
+    fields = pod_bundle_module._schedule_create_fields(
+        {
+            "name": "intake",
+            "schedule_type": "WEBHOOK",
+            "config": {"source": "composio"},
+            "workflow_name": "intake",
+            "filter_instruction": "Only customer mail.",
+        }
+    )
+
+    assert fields["filter_instruction"] == "Only customer mail."
+
+
+# --- deciders ----------------------------------------------------------------
+
+# A decider's definition as the server answers with it: its defaults filled in,
+# and what was never set written as null.
+_TRIAGE_DEFINITION = {
+    "description": "What Kit does with each new email.",
+    "guidance": None,
+    "input": {"fields": ["from", "subject", "labels"], "max_chars": 8000},
+    "questions": {
+        "action": {
+            "type": "choice",
+            "prompt": "What should Kit do with this email?",
+            "options": {
+                "act": {
+                    "description": "A customer is waiting.",
+                    "not_for": None,
+                    "examples": [],
+                },
+                "ignore": {
+                    "description": "Newsletters.",
+                    "not_for": None,
+                    "examples": [],
+                },
+            },
+            "fallback": "ignore",
+        }
+    },
+    "rules": [
+        {
+            "when": "contains(labels, 'PROMOTIONS')",
+            "phrases": None,
+            "field": "text",
+            "answer": {"action": "ignore"},
+        }
+    ],
+    "policy": {
+        "lane": "ambient",
+        "escalate_to_model": True,
+        "abstain_below": 0.6,
+        "yes_no_band": [0.35, 0.65],
+        "rules_only": {},
+        "require_confidence": {},
+    },
+}
+
+
+def _server_decider(name="email-triage", definition=None, *, version=1) -> dict:
+    """A decider as `GET /pods/{pod_id}/deciders` lists it, the pod's own
+    fields included -- none of which may reach a bundle."""
+    return {
+        "id": f"decider-{name}",
+        "name": name,
+        "version": version,
+        "visibility": "POD",
+        "user_id": "user-1",
+        "created_at": "2026-10-01T09:00:00Z",
+        "updated_at": "2026-10-01T09:00:00Z",
+        "warnings": [],
+        "definition": definition or _TRIAGE_DEFINITION,
+    }
+
+
+def _write_decider(root: Path, name: str, definition: dict) -> Path:
+    resource_dir = root / "deciders" / name
+    resource_dir.mkdir(parents=True)
+    path = resource_dir / f"{name}.json"
+    path.write_text(
+        json.dumps({"name": name, "definition": definition}), encoding="utf-8"
+    )
+    return path
+
+
+def _client_with_deciders(api: FakeDeciderApi) -> FakeClient:
+    client = _bare_pod_client()
+    client.pods = SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "inbox"})
+    client.decider_api = api
+    return client
+
+
+def _errors(result: dict) -> list[str]:
+    return [error["message"] for error in result["errors"]]
+
+
+def test_export_writes_a_decider_as_its_name_and_definition_alone(tmp_path: Path):
+    """Not its id, version or author, which are the source pod's, and nothing
+    the server only reports about it."""
+    client = _client_with_deciders(FakeDeciderApi(_server_decider(version=4)))
+
+    result = export_pod_bundle(
+        client, pod_id="pod_1", output_dir=tmp_path, include={"deciders"}
+    )
+
+    manifest = tmp_path / "inbox" / "deciders" / "email-triage" / "email-triage.json"
+    assert json.loads(manifest.read_text(encoding="utf-8")) == {
+        "name": "email-triage",
+        "definition": _without_nulls(_TRIAGE_DEFINITION),
+    }
+    assert result["counts"]["deciders"] == 1
+
+
+def test_export_from_a_server_without_deciders_says_so_and_carries_on(
+    tmp_path: Path,
+):
+    client = _client_with_deciders(FakeDeciderApi(missing=True))
+
+    result = export_pod_bundle(
+        client, pod_id="pod_1", output_dir=tmp_path, include={"deciders"}
+    )
+
+    assert result["counts"]["deciders"] == 0
+    assert result["warnings"] == [
+        "deciders were left out: this server has no deciders API."
+    ]
+
+
+def test_a_decider_round_trips_and_importing_it_again_changes_nothing(
+    tmp_path: Path,
+):
+    source = _client_with_deciders(FakeDeciderApi(_server_decider(version=4)))
+    export_pod_bundle(source, pod_id="pod_1", output_dir=tmp_path, include={"deciders"})
+    bundle = tmp_path / "inbox"
+    target_api = FakeDeciderApi()
+    target = _client_with_deciders(target_api)
+
+    first = import_pod_bundle(target, pod_id="pod_2", source_dir=bundle)
+    again = import_pod_bundle(target, pod_id="pod_2", source_dir=bundle)
+
+    assert first["summary"]["deciders"] == ["created:email-triage"]
+    assert again["summary"]["deciders"] == ["unchanged:email-triage"]
+    saved = target_api.deciders["email-triage"]
+    assert saved["version"] == 1
+    assert _without_nulls(saved["definition"]) == _without_nulls(_TRIAGE_DEFINITION)
+
+
+def test_importing_a_changed_decider_saves_its_next_version(tmp_path: Path):
+    revised = {**_without_nulls(_TRIAGE_DEFINITION), "guidance": "Invoices are Kit's."}
+    _write_decider(tmp_path, "email-triage", revised)
+    api = FakeDeciderApi(_server_decider(version=2))
+
+    planned = import_pod_bundle(
+        _client_with_deciders(api), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+    result = import_pod_bundle(
+        _client_with_deciders(api), pod_id="pod_1", source_dir=tmp_path
+    )
+
+    assert planned["summary"]["deciders"] == ["updated:email-triage"]
+    assert result["summary"]["deciders"] == ["updated:email-triage"]
+    assert api.deciders["email-triage"]["version"] == 3
+    assert (
+        api.deciders["email-triage"]["definition"]["guidance"] == "Invoices are Kit's."
+    )
+
+
+def test_dry_run_reports_a_decider_no_server_would_save(tmp_path: Path):
+    _write_decider(
+        tmp_path,
+        "triage",
+        {
+            "description": "What to do with an email.",
+            "questions": {
+                "action": {
+                    "type": "choice",
+                    "prompt": "What now?",
+                    "options": {"act": "Do it."},
+                    "fallback": "skip",
+                }
+            },
+            "rules": [{"when": "true", "answer": {"tone": "warm"}}],
+        },
+    )
+    api = FakeDeciderApi()
+
+    result = import_pod_bundle(
+        _client_with_deciders(api), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+    )
+
+    assert result["ok"] is False
+    errors = "\n".join(_errors(result))
+    assert "fallback 'skip' is not one of its options" in errors
+    assert "rule 0 answers unknown question 'tone'" in errors
+    assert api.deciders == {}
+
+
+def test_a_decider_file_left_loose_fails_the_plan(tmp_path: Path):
+    """Every reader of a bundle looks in deciders/<name>/, so a loose file would
+    be imported by nothing, and say so to nobody."""
+    loose = tmp_path / "deciders" / "triage.json"
+    loose.parent.mkdir()
+    loose.write_text(
+        json.dumps({"name": "triage", "definition": _TRIAGE_DEFINITION}),
+        encoding="utf-8",
+    )
+
+    result = import_pod_bundle(
+        _client_with_deciders(FakeDeciderApi()),
+        pod_id="pod_1",
+        source_dir=tmp_path,
+        dry_run=True,
+    )
+
+    assert result["ok"] is False
+    assert any("deciders/<name>/<name>.json" in error for error in _errors(result))
+
+
+def test_deciders_cannot_be_imported_into_a_server_without_them(tmp_path: Path):
+    _write_decider(tmp_path, "email-triage", _without_nulls(_TRIAGE_DEFINITION))
+
+    result = import_pod_bundle(
+        _client_with_deciders(FakeDeciderApi(missing=True)),
+        pod_id="pod_1",
+        source_dir=tmp_path,
+        dry_run=True,
+    )
+
+    assert result["ok"] is False
+    assert _errors(result) == [
+        "The bundle's deciders cannot be imported: this server has no deciders API."
+    ]
+
+
+def test_a_grant_on_a_decider_resolves_against_the_bundle_and_the_pod(
+    tmp_path: Path,
+):
+    def ask(name):
+        return {
+            "resource_type": "decider",
+            "resource_name": name,
+            "permission_ids": ["decider.execute"],
+        }
+
+    _write_agent(
+        tmp_path,
+        "kit",
+        {
+            "name": "kit",
+            "permissions": {
+                "grants": [ask("email-triage"), ask("lead-score"), ask("missing")]
+            },
+        },
+    )
+    _write_decider(tmp_path, "email-triage", _without_nulls(_TRIAGE_DEFINITION))
+    pod_has = FakeDeciderApi(_server_decider("lead-score"))
+
+    result = import_pod_bundle(
+        _client_with_deciders(pod_has),
+        pod_id="pod_1",
+        source_dir=tmp_path,
+        dry_run=True,
+    )
+
+    [error] = _errors(result)
+    assert "unknown decider 'missing'" in error

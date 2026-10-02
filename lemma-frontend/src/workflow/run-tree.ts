@@ -12,14 +12,16 @@
  *  what happened there.
  *
  *  Two facts about the payload shape this. A decision's arms are
- *  `config.rules[].next_node_id`, not edges; its one outgoing edge is the
- *  default for when no rule matched (`domain/nodes/decision.py`). A loop's
+ *  `config.rules[].next_node_id` and its question's branches, not edges; its
+ *  one outgoing edge is the default for when neither picked a node
+ *  (`domain/nodes/decision.py`). A loop's
  *  body is `config.child_node_id` and the body's last step edges back to the
  *  loop (`domain/nodes/loop.py`). Neither throws here, and nothing is dropped:
  *  a node the walk never reaches is appended at the end rather than lost.
  */
 
 import { isRecord, str, type StepRow } from "./runs";
+import { questionTargets, readQuestion } from "./question";
 
 export interface GraphNode {
     id: string;
@@ -37,9 +39,10 @@ export interface Graph {
 }
 
 export interface Arm {
-    /** "Rule 1", or the author's own label for the target, or "Otherwise". */
+    /** "Rule 1", or the author's own label for the target, the answers that
+     *  take a question's arm ("act / digest", "Left open"), or "Otherwise". */
     label: string;
-    /** The rule's condition; null for the default arm. */
+    /** The rule's condition; null for a question's arm and the default arm. */
     condition: string | null;
     items: TreeItem[];
 }
@@ -83,6 +86,17 @@ function rulesOf(node: GraphNode): { condition: string | null; next: string }[] 
         .filter((rule): rule is { condition: string | null; next: string } => Boolean(rule && rule.next));
 }
 
+/** A question's arms, one per target: the answers that go there, in the
+ *  order they were written, and "Left open" for `on_open`. */
+function askedOf(node: GraphNode): { label: string; next: string }[] {
+    const question = readQuestion(node.config);
+    if (!question) return [];
+    const arms = new Map<string, string[]>();
+    for (const { answer, target } of question.branches) arms.set(target, [...(arms.get(target) ?? []), answer]);
+    if (question.onOpen) arms.set(question.onOpen, [...(arms.get(question.onOpen) ?? []), "Left open"]);
+    return [...arms].map(([next, answers]) => ({ label: answers.join(" / "), next }));
+}
+
 function bodyOf(node: GraphNode): string | null {
     return node.kind === "LOOP" ? str(node.config.child_node_id) : null;
 }
@@ -91,7 +105,9 @@ function bodyOf(node: GraphNode): string | null {
 function successors(graph: Graph, id: string): string[] {
     const node = graph.nodes.get(id);
     const out = [...(graph.edges.get(id) ?? [])];
-    if (node?.kind === "DECISION") out.push(...rulesOf(node).map((rule) => rule.next));
+    if (node?.kind === "DECISION") {
+        out.push(...rulesOf(node).map((rule) => rule.next), ...questionTargets(readQuestion(node.config)));
+    }
     const body = node ? bodyOf(node) : null;
     if (body) out.push(body);
     return out.filter((next) => graph.nodes.has(next));
@@ -163,8 +179,9 @@ export function buildTree(graph: Graph): TreeItem[] {
             placed.add(at);
             if (node.kind === "DECISION") {
                 const rules = rulesOf(node);
+                const asked = askedOf(node);
                 const fallback = graph.edges.get(at)?.[0] ?? null;
-                const starts = [...rules.map((rule) => rule.next), ...(fallback ? [fallback] : [])];
+                const starts = [...rules.map((rule) => rule.next), ...asked.map((arm) => arm.next), ...(fallback ? [fallback] : [])];
                 const join = joinOf(graph, starts, distance);
                 const inner = new Set(stops);
                 if (join) inner.add(join);
@@ -173,6 +190,7 @@ export function buildTree(graph: Graph): TreeItem[] {
                     condition: rule.condition,
                     items: walk(rule.next, inner),
                 }));
+                for (const arm of asked) arms.push({ label: arm.label, condition: null, items: walk(arm.next, inner) });
                 if (fallback) arms.push({ label: "Otherwise", condition: null, items: walk(fallback, inner) });
                 items.push({ type: "decision", id: at, arms });
                 at = join;
@@ -246,6 +264,36 @@ export function progressOf(graph: Graph, steps: StepRow[]): { done: number; tota
     const counted = graph.order.filter((id) => graph.nodes.get(id)?.kind !== "END");
     const finished = new Set(steps.filter((step) => step.status.toUpperCase() === "COMPLETED").map((step) => step.nodeId));
     return { done: counted.filter((id) => finished.has(id)).length, total: counted.length };
+}
+
+const ANSWERED_BY: Record<string, string> = {
+    rules: "its rules",
+    system_one: "System One",
+    model: "the model",
+    person: "a person",
+    agent: "an agent",
+};
+
+/** What a decision step's output says happened, in a sentence.
+ *
+ *  A rules-only node records only `matched_condition`, null when it fell
+ *  through. One with a question records the rest too (`DecisionOutcome` in
+ *  `domain/decision_step.py`): the answer it branched on, who answered, and
+ *  which questions were left open — an open choice still carries its
+ *  fallback, which is the way it went.
+ */
+export function decisionSays(output: unknown): string {
+    const said = isRecord(output) ? output : {};
+    const matched = said.matched_condition;
+    if (typeof matched === "string" && matched) return "Matched " + matched + ".";
+    const asked = "decision_id" in said || "choice" in said;
+    if (!asked) return matched === null ? "No rule matched, so it took the default path." : "Decided.";
+    const choice = typeof said.choice === "string" ? said.choice : said.choice == null ? null : JSON.stringify(said.choice);
+    if (Array.isArray(said.open) && said.open.length > 0) {
+        return "Nothing could answer" + (choice ? ", so it took " + choice : "") + ".";
+    }
+    const by = typeof said.answered_by === "string" ? ANSWERED_BY[said.answered_by] ?? said.answered_by : null;
+    return choice ? "Answered " + choice + (by ? " — by " + by : "") + "." : "Decided.";
 }
 
 /** The first sentence a step's output offers, from the keys people and agents

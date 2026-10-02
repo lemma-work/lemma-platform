@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from ..models.create_schedule_request_filter_output_schema_type_0 import (
         CreateScheduleRequestFilterOutputSchemaType0,
     )
+    from ..models.triage_config import TriageConfig
 
 
 T = TypeVar("T", bound="CreateScheduleRequest")
@@ -33,15 +34,23 @@ class CreateScheduleRequest:
         config (CreateScheduleRequestConfig | Unset):
         connector_trigger_id (None | str | Unset): Connector trigger id for agent WEBHOOK schedules. Do not provide this
             for workflow schedules; workflow WEBHOOK schedules derive it from the workflow start configuration.
-        filter_instruction (None | str | Unset): Optional schedule-level LLM filter instruction. Filters belong to the
-            schedule, not the workflow start.
-        filter_output_schema (CreateScheduleRequestFilterOutputSchemaType0 | None | Unset): Optional schema for the
-            schedule-level filter output. Filters belong to the schedule, not the workflow start.
+        filter_instruction (None | str | Unset): WEBHOOK and DATASTORE schedules only: a yes/no condition, in your own
+            words, that each event must meet to fire the schedule. It is asked as a decision (System One when configured,
+            the system model otherwise), and every event it turns down is recorded as a FILTERED run carrying the decision's
+            id. Refused on TIME schedules, which have no event to judge.
+        filter_output_schema (CreateScheduleRequestFilterOutputSchemaType0 | None | Unset): Optional JSON schema of
+            fields to extract from an event the filter let through; the target reads them, with `should_proceed` and
+            `decision_id`, as `llm_output`. Refused on TIME schedules.
         instruction (None | str | Unset): What the target should do when this fires, in your own words. Reaches an agent
             as the run's conversation instructions, layered after the agent's own. Required when targeting the default
             assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides
             whether to fire.
         name (None | str | Unset): Stable pod-scoped schedule name used for import/export upserts.
+        triage (None | TriageConfig | Unset): WEBHOOK and DATASTORE schedules only, instead of a filter: a pod decider
+            asked about each event, and what each option of its choice question does with it -- act (wake the target now),
+            digest (hold it for the next digest, one run for many events), ask (hold it and ask the event's owner, whose
+            answer routes it and teaches the decider) or ignore (record it as skipped). Every declared option must be
+            routed.
         visibility (None | str | Unset):
         workflow_name (None | str | Unset):
     """
@@ -57,6 +66,7 @@ class CreateScheduleRequest:
     ) = UNSET
     instruction: None | str | Unset = UNSET
     name: None | str | Unset = UNSET
+    triage: None | TriageConfig | Unset = UNSET
     visibility: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -65,6 +75,7 @@ class CreateScheduleRequest:
         from ..models.create_schedule_request_filter_output_schema_type_0 import (
             CreateScheduleRequestFilterOutputSchemaType0,
         )
+        from ..models.triage_config import TriageConfig
 
         schedule_type = self.schedule_type.value
 
@@ -120,6 +131,14 @@ class CreateScheduleRequest:
         else:
             name = self.name
 
+        triage: dict[str, Any] | None | Unset
+        if isinstance(self.triage, Unset):
+            triage = UNSET
+        elif isinstance(self.triage, TriageConfig):
+            triage = self.triage.to_dict()
+        else:
+            triage = self.triage
+
         visibility: None | str | Unset
         if isinstance(self.visibility, Unset):
             visibility = UNSET
@@ -155,6 +174,8 @@ class CreateScheduleRequest:
             field_dict["instruction"] = instruction
         if name is not UNSET:
             field_dict["name"] = name
+        if triage is not UNSET:
+            field_dict["triage"] = triage
         if visibility is not UNSET:
             field_dict["visibility"] = visibility
         if workflow_name is not UNSET:
@@ -168,6 +189,7 @@ class CreateScheduleRequest:
         from ..models.create_schedule_request_filter_output_schema_type_0 import (
             CreateScheduleRequestFilterOutputSchemaType0,
         )
+        from ..models.triage_config import TriageConfig
 
         d = dict(src_dict)
         schedule_type = ScheduleType(d.pop("schedule_type"))
@@ -270,6 +292,23 @@ class CreateScheduleRequest:
 
         name = _parse_name(d.pop("name", UNSET))
 
+        def _parse_triage(data: object) -> None | TriageConfig | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                triage_type_0 = TriageConfig.from_dict(data)
+
+                return triage_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | TriageConfig | Unset, data)
+
+        triage = _parse_triage(d.pop("triage", UNSET))
+
         def _parse_visibility(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -298,6 +337,7 @@ class CreateScheduleRequest:
             filter_output_schema=filter_output_schema,
             instruction=instruction,
             name=name,
+            triage=triage,
             visibility=visibility,
             workflow_name=workflow_name,
         )

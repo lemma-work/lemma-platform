@@ -23,7 +23,9 @@ class FakeExisting:
         schedules=None,
         apps=None,
         surfaces=None,
+        deciders=None,
     ):
+        self._deciders = dict(deciders or {})
         self._tables = set(tables or [])
         self._table_manifests = table_manifests or {}
         self._functions = set(functions or [])
@@ -38,6 +40,9 @@ class FakeExisting:
 
     async def table_manifest(self, name):
         return self._table_manifests.get(name)
+
+    async def deciders(self):
+        return self._deciders
 
     async def function_names(self):
         return self._functions
@@ -297,6 +302,39 @@ async def test_function_grants_step_deferred_after_resources(tmp):
     assert StepKind.FUNCTION in kinds and StepKind.FUNCTION_GRANTS in kinds
     assert kinds.index(StepKind.FUNCTION) < kinds.index(StepKind.FUNCTION_GRANTS)
     assert kinds.index(StepKind.FILE) < kinds.index(StepKind.FUNCTION_GRANTS)
+
+
+async def test_deciders_are_planned_before_everything_that_can_name_one(tmp):
+    """A workflow's DECISION step, a schedule and an agent's
+    `decider:<name>:execute` grant all name a decider, so it has to exist
+    before any of them is applied."""
+    root = _build_bundle(tmp)
+    _write(root / "tables" / "leads" / "leads.json", _table_manifest("leads", ["id"]))
+    _write(
+        root / "deciders" / "triage" / "triage.json",
+        {
+            "name": "triage",
+            "definition": {
+                "description": "Is this lead worth a call?",
+                "questions": {"call": {"type": "yes_no", "prompt": "Call them?"}},
+            },
+        },
+    )
+    _write(root / "functions" / "score" / "score.json", {"name": "score"})
+    _write(root / "agents" / "bot" / "bot.json", {"name": "bot"})
+    _write(root / "workflows" / "intake" / "intake.json", {"name": "intake"})
+    _write(root / "schedules" / "nightly" / "nightly.json", {"name": "nightly"})
+
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+
+    assert [s.kind for s in plan.steps] == [
+        StepKind.TABLE,
+        StepKind.DECIDER,
+        StepKind.FUNCTION,
+        StepKind.AGENT,
+        StepKind.WORKFLOW,
+        StepKind.SCHEDULE,
+    ]
 
 
 async def test_function_without_grants_gets_no_grants_step(tmp):

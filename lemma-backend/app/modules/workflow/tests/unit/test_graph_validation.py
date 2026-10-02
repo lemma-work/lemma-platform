@@ -7,6 +7,7 @@ from app.modules.workflow.domain.graph import WorkflowGraphValidator, WorkflowEd
 from app.modules.workflow.domain.nodes import (
     DecisionNode,
     DecisionNodeConfig,
+    DecisionNodeQuestion,
     DecisionRule,
     EndNode,
     FormNode,
@@ -225,3 +226,124 @@ def test_form_input_schema_valid_binding_passes():
         ),
     )
     assert WorkflowGraphValidator.validate([node], []) == "intake"
+
+
+TRIAGE = {
+    "description": "What to do with a message.",
+    "questions": {
+        "action": {
+            "type": "choice",
+            "prompt": "What should happen to it?",
+            "options": {"act": "Needs a reply.", "ignore": "Needs nothing."},
+            "fallback": "ignore",
+        }
+    },
+}
+
+
+def _asking(node_id: str = "triage", **question) -> DecisionNode:
+    values = {
+        "input": {"text": {"type": "expression", "value": "intake.text"}},
+        "definition": TRIAGE,
+        "branches": {"act": "reply", "ignore": "archive"},
+    }
+    return DecisionNode(
+        id=node_id,
+        config=DecisionNodeConfig(
+            question=DecisionNodeQuestion.model_validate({**values, **question})
+        ),
+    )
+
+
+def test_question_branches_are_incoming_for_entry_and_reachability():
+    # No edge leads from the decision to either branch: like a rule's target,
+    # a branch is reached through the question alone, so neither is a second
+    # entry node and neither is unreachable.
+    nodes = [
+        _form(),
+        _asking(),
+        _function("reply"),
+        _function("archive"),
+        EndNode(id="end"),
+    ]
+    edges = [
+        _edge("e1", "intake", "triage"),
+        _edge("e2", "reply", "end"),
+        _edge("e3", "archive", "end"),
+    ]
+    assert WorkflowGraphValidator.validate(nodes, edges) == "intake"
+
+
+def test_on_open_is_incoming_too():
+    nodes = [
+        _form(),
+        _asking(branches={"act": "reply"}, on_open="review"),
+        _function("reply"),
+        _form("review"),
+        EndNode(id="end"),
+    ]
+    edges = [
+        _edge("e1", "intake", "triage"),
+        _edge("e2", "triage", "end"),
+        _edge("e3", "reply", "end"),
+        _edge("e4", "review", "end"),
+    ]
+    assert WorkflowGraphValidator.validate(nodes, edges) == "intake"
+
+
+def test_question_targets_must_exist():
+    issues = _issues(
+        [_form(), _asking(branches={"act": "ghost"}, on_open="nowhere")],
+        [_edge("e1", "intake", "triage")],
+    )
+    assert any("branch 'act' targets missing node 'ghost'" in i for i in issues)
+    assert any("on_open targets missing node 'nowhere'" in i for i in issues)
+
+
+def test_question_input_bindings_are_compile_checked():
+    issues = _issues(
+        [
+            _form(),
+            _asking(
+                input={"text": {"type": "expression", "value": "]["}},
+                branches={},
+            ),
+        ],
+        [_edge("e1", "intake", "triage")],
+    )
+    assert any("question input 'text'" in issue for issue in issues)
+
+    single = _issues(
+        [_form(), _asking(input={"type": "expression", "value": "]["}, branches={})],
+        [_edge("e1", "intake", "triage")],
+    )
+    assert any("question input 'input'" in issue for issue in single)
+
+
+def test_a_decision_with_neither_rules_nor_a_question_is_refused():
+    issues = _issues(
+        [_form(), DecisionNode(id="route", config=DecisionNodeConfig())],
+        [_edge("e1", "intake", "route")],
+    )
+    assert any("has no rules and no question" in issue for issue in issues)
+
+
+def test_rules_and_a_question_together_validate():
+    decision = _asking(branches={"act": "reply"})
+    decision.config.rules = [
+        DecisionRule(condition="intake.spam == `true`", next_node_id="archive")
+    ]
+    nodes = [
+        _form(),
+        decision,
+        _function("reply"),
+        _function("archive"),
+        EndNode(id="end"),
+    ]
+    edges = [
+        _edge("e1", "intake", "triage"),
+        _edge("e2", "triage", "end"),
+        _edge("e3", "reply", "end"),
+        _edge("e4", "archive", "end"),
+    ]
+    assert WorkflowGraphValidator.validate(nodes, edges) == "intake"

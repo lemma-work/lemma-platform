@@ -78,6 +78,9 @@ class AgentToolset(str, Enum):
     CONNECTORS = "CONNECTORS"
     WAIT = "WAIT"
     MESSAGING = "MESSAGING"
+    # Closed-set judgements through the decisions module: ask, save, try and
+    # answer them. See `agent/tools/decisions/`.
+    DECISIONS = "DECISIONS"
     # Carries no tools: memory is pod files, read and written with the file
     # tools the agent already has. See `memory_is_active`.
     MEMORY = "MEMORY"

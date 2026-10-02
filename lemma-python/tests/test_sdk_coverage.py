@@ -136,6 +136,7 @@ def test_schedule_run_contract_includes_retry_without_fire_aliases() -> None:
         "FILTERED",
         "FAILED",
         "DEAD_LETTERED",
+        "HELD",
     ]
     assert {"user_id", "target_run_id"} <= set(
         schemas["ScheduleRunResponse"]["required"]

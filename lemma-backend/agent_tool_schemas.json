@@ -1,5 +1,40 @@
 [
   {
+    "tool_name": "answer_decision",
+    "toolset": "DECISIONS",
+    "description": "Record an answer to a decision: one of its open questions, or a correction.\n\nUse it when you worked out an open question yourself, or to write down\nwhat the person told you after you asked them with ask_user. The answer\nis recorded as yours, the agent's, and it never becomes an example the\ndecider learns from -- even when you are passing on what a person said.\nThat is deliberate: nothing an agent reads may teach a decider. If the\nperson wants to teach it, they can correct the decision themselves in\nLemma; their correction is what the decider learns from.",
+    "input_schema": {
+      "properties": {
+        "decision_id": {
+          "description": "The `decision_id` that `decide` returned.",
+          "type": "string"
+        },
+        "answers": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Question key -> answer: an option key for `choice`, a list of option keys for `multi_choice`, true or false for `yes_no`, the level's index for `scale` (0 = lowest)."
+        }
+      },
+      "required": [
+        "decision_id",
+        "answers"
+      ],
+      "title": "AnswerDecisionRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "ask_user",
     "toolset": "USER_INTERACTION",
     "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse it for a decision you genuinely cannot infer. Each question carries 2-4\nconcrete options; mark the one you recommend. The run pauses, and answers come\nback in `answers` keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask in prose and end your turn. Only ask when it\nchanges what you do next \u2014 otherwise take the obvious default and proceed.",
@@ -384,6 +419,341 @@
         }
       },
       "title": "CheckMessagesResponse",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "decide",
+    "toolset": "DECISIONS",
+    "description": "Ask a closed-set question -- which of these, yes or no, how much -- about one thing or many rows.\n\nUse it when the same judgement has to be made consistently over many\nthings (sort 300 tickets by urgency, flag which leads are a fit), or\nwhen a judgement should be recorded so the pod can act on it and a\nperson can correct it. Rules answer first, then a fast classifier, then\na language model, and every answer says which one gave it.\n\nDo not use it for anything that needs investigating, other tools or\nwritten text: reading more, extracting fields, summarising and drafting\nare your own work. It never writes text; it only picks from the options\nit was given.\n\nName the judgement one way: `decider` (a saved one, or\n`system:<name>`), `questions` (a one-off) or `definition` (an unsaved\ndraft). Then give it `state` for one thing, or rows from exactly one of\n`items`, `file` (CSV or JSONL) or `table`.\n\nOne state returns its answers, who gave each, and a `decision_id`. Rows\nreturn counts per answer, the rows left open, the rows that failed, and\nthe results: inline when there are few, otherwise a CSV next to the\ninput file (or under /me/decisions/) with each row's columns plus one\ncolumn per question. One call takes a few hundred rows at most; more is\nrefused with the limit, so batch a table with `limit` and `offset`.\n\nA question nothing was sure of is left `open` (a choice with a\n`fallback` takes it, marked as such). If it matters, ask the person with\nask_user and record their answer with answer_decision.",
+    "input_schema": {
+      "$defs": {
+        "RecordFilter": {
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "op": {
+              "default": "eq",
+              "description": "eq, ne, gt, gte, lt, lte, like, ilike, in. Use `in` with a list value for multi-value membership.",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "column"
+          ],
+          "title": "RecordFilter",
+          "type": "object"
+        },
+        "RecordSort": {
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "direction": {
+              "default": "asc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "column"
+          ],
+          "title": "RecordSort",
+          "type": "object"
+        },
+        "TableRows": {
+          "description": "Rows of a pod table, read with your own access: row-level security applies.",
+          "properties": {
+            "table_name": {
+              "type": "string"
+            },
+            "filters": {
+              "description": "Only rows matching every filter.",
+              "items": {
+                "$ref": "#/$defs/RecordFilter"
+              },
+              "type": "array"
+            },
+            "sorts": {
+              "items": {
+                "$ref": "#/$defs/RecordSort"
+              },
+              "type": "array"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Decide at most this many matching rows, starting at `offset`. With `offset`, this is how a large table is worked through in batches. Leave it out to decide every matching row, which is refused when there are more than one call may decide."
+            },
+            "offset": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "table_name"
+          ],
+          "title": "TableRows",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "decider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A saved pod decider's name, or `system:<name>` for one that ships with Lemma. Leave it out to pass `questions` instead."
+        },
+        "questions": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A one-off judgement: question key -> question, e.g. {\"urgency\": {\"type\": \"scale\", \"prompt\": \"How urgent is this ticket?\", \"levels\": [\"low\", \"normal\", \"high\"]}} or {\"qualified\": {\"type\": \"choice\", \"prompt\": \"Is this lead a fit?\", \"options\": {\"yes\": \"Budget and need are clear.\", \"no\": \"Clearly not a fit.\", \"unsure\": \"Not enough to tell.\"}, \"fallback\": \"unsure\"}}. Types: `choice`, `multi_choice`, `yes_no`, `scale` (answered with the level's index, 0 = lowest)."
+        },
+        "guidance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "With `questions`: a sentence or two on what the answers are for and how to judge."
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A full definition that is not saved, in the shape `define_decider` takes: for running a draft you checked with `test_decider`."
+        },
+        "options": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per question, options to add for this call only, as `key: description`, e.g. {\"pod\": {\"sales\": \"The sales pod\", \"ops\": \"The operations pod\"}}: choices known only now. A declared option cannot be redefined."
+        },
+        "state": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One thing to judge: an object (a message, a record, an event) or its JSON string. Any other string is judged as plain text. Only the decider's input fields of it reach an engine."
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "With `state`: a stable id for what it is about, e.g. `ticket:4812`. A decider is asked about a subject once; asking again returns the recorded decision instead of a new one."
+        },
+        "items": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rows given inline, objects or plain strings; at most 50. For more, write them to a CSV or JSONL file and pass `file`, or decide a `table`."
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A pod file of rows: CSV with a header row, or JSONL with one JSON object per line, e.g. `/me/leads.csv`. A relative path resolves against your pod working directory."
+        },
+        "table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableRows"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A pod table's rows."
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The field that identifies a row in the results. Defaults to a table's primary key, and to the row's number otherwise."
+        }
+      },
+      "title": "DecideRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "define_decider",
+    "toolset": "DECISIONS",
+    "description": "Save a decider: a named, versioned judgement the pod can ask again and again.\n\nUse it when the same question will be asked repeatedly -- by you later,\nby a schedule, a workflow or an app -- so it keeps one meaning and\nlearns from the people who correct it. For a one-off, pass `questions`\nto decide instead. Saving an existing name makes a new version;\ndecisions already made keep the version that made them.\n\nTry a definition with test_decider first, above all a change to one in\nuse: rows with answers people gave show what the change gets right and\nwhat it breaks. Returns the saved definition, normalized, and warnings\nfor what it allows but is usually a mistake, such as a choice with no\nfallback or an input view that sends every field to the engines.",
+    "input_schema": {
+      "properties": {
+        "name": {
+          "description": "Lowercase letters, digits, '-' or '_', e.g. `email-triage`. An existing name saves a new version; decisions already made keep the version that made them.",
+          "type": "string"
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "A decider definition, as an object or its JSON string. Only `description` and `questions` are required:\n{\"description\": \"What Kit does with each new support email.\",\n \"guidance\": \"Kit files vendor invoices and answers customers about orders. Pricing exceptions and anything legal go to a person.\",\n \"input\": {\"fields\": [\"from\", \"subject\", \"snippet\"], \"max_chars\": 4000},\n \"questions\": {\"action\": {\"type\": \"choice\", \"prompt\": \"What should Kit do with this email?\",\n   \"options\": {\"act\": \"A customer is waiting, or an invoice needs filing.\",\n     \"digest\": {\"description\": \"Worth knowing, not urgent.\", \"not_for\": \"Anything a customer is waiting on.\"},\n     \"ignore\": \"Newsletters, promotions, automated notices.\"},\n   \"fallback\": \"digest\"}},\n \"rules\": [{\"when\": \"contains(labels, 'CATEGORY_PROMOTIONS')\", \"answer\": {\"action\": \"ignore\"}}]}\nQuestion types: `choice` (one option; `fallback` is the option taken when nothing clearly fits), `multi_choice` (any of the options), `yes_no` (optional `yes`/`no` meanings), `scale` (2-10 `levels`, lowest first, answered with the level's index). Option and question keys are lowercase. An option is `key: description`, or an object with `description`, `not_for` and `examples`. `input.fields` are the only fields of a row an engine sees; list just what the questions need. `rules` answer before any engine: `when` is a JMESPath expression over those fields, or `phrases` are exact matches against the text at `field`."
+        }
+      },
+      "required": [
+        "name",
+        "definition"
+      ],
+      "title": "DefineDeciderRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
       "type": "object"
     }
   },
@@ -3600,6 +3970,249 @@
         }
       },
       "title": "SubmitWorkflowFormResponse",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "test_decider",
+    "toolset": "DECISIONS",
+    "description": "Try a saved decider or a draft definition on sample rows, recording nothing.\n\nUse it before saving a definition, and before replacing one people rely\non. Give rows as `items`, a `file` or a `table`, and name in `expected`\nthe fields that hold answers people gave: those fields are hidden from\nthe decider, and the result reports agreement per question and lists\neach disagreement. Without `expected` it previews how the rows would be\nsorted. Every row is really asked, so it costs what deciding them does;\na few dozen well-chosen rows say as much as hundreds.",
+    "input_schema": {
+      "$defs": {
+        "RecordFilter": {
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "op": {
+              "default": "eq",
+              "description": "eq, ne, gt, gte, lt, lte, like, ilike, in. Use `in` with a list value for multi-value membership.",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "column"
+          ],
+          "title": "RecordFilter",
+          "type": "object"
+        },
+        "RecordSort": {
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "direction": {
+              "default": "asc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "column"
+          ],
+          "title": "RecordSort",
+          "type": "object"
+        },
+        "TableRows": {
+          "description": "Rows of a pod table, read with your own access: row-level security applies.",
+          "properties": {
+            "table_name": {
+              "type": "string"
+            },
+            "filters": {
+              "description": "Only rows matching every filter.",
+              "items": {
+                "$ref": "#/$defs/RecordFilter"
+              },
+              "type": "array"
+            },
+            "sorts": {
+              "items": {
+                "$ref": "#/$defs/RecordSort"
+              },
+              "type": "array"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Decide at most this many matching rows, starting at `offset`. With `offset`, this is how a large table is worked through in batches. Leave it out to decide every matching row, which is refused when there are more than one call may decide."
+            },
+            "offset": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "table_name"
+          ],
+          "title": "TableRows",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "decider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A saved decider to try: a pod decider's name or `system:<name>`. Leave it out to pass a draft `definition`."
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A draft definition to try before saving it, in the shape `define_decider` takes."
+        },
+        "items": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rows given inline, objects or plain strings; at most 50. For more, write them to a CSV or JSONL file and pass `file`, or decide a `table`."
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A pod file of rows: CSV with a header row, or JSONL with one JSON object per line, e.g. `/me/leads.csv`. A relative path resolves against your pod working directory."
+        },
+        "table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableRows"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A pod table's rows."
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The field that identifies a row in the results. Defaults to a table's primary key, and to the row's number otherwise."
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Question key -> the field in each row that holds the answer a person gave, e.g. {\"action\": \"label\"}. Those fields are hidden from the decider, and its answers are compared with them. A row whose field is empty has no expectation."
+        }
+      },
+      "title": "DeciderTestRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
       "type": "object"
     }
   },

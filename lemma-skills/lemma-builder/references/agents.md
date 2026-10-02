@@ -84,11 +84,12 @@ Optional fields: `input_schema` (typed input when other systems invoke the agent
 
 ## Toolsets
 
-The field is `toolsets` (14 values, `agent/domain/value_objects.py` → `AgentToolset`).
-Only six of them are a decision. Set those on the agent; the rest arrive on their own.
+The field is `toolsets` (15 values, `agent/domain/value_objects.py` → `AgentToolset`).
+Only seven of them are a decision. Set those on the agent; the rest arrive on their own.
 
-- **Declared** — `WORKSPACE_CLI`, `WEB_SEARCH`, `SUBAGENTS`, `SPEECH`, `MEMORY`, `BROWSER`.
-  These are the six `toolsets` accepts as a real choice. Grant only what the job needs.
+- **Declared** — `WORKSPACE_CLI`, `WEB_SEARCH`, `SUBAGENTS`, `SPEECH`, `MEMORY`, `BROWSER`,
+  `DECISIONS`. These are the seven `toolsets` accepts as a real choice. Grant only what
+  the job needs.
 - **Always on** — `USER_INTERACTION`, `SKILLS`, `WAIT`, `MESSAGING`, `TODO`.
   Every agent has them; listing them changes nothing.
 - **Derived** — `POD` follows any folder or table grant, `CONNECTORS` follows any
@@ -124,6 +125,7 @@ colleague hearing from an implementation detail of somebody's turn cannot place 
 | `TODO` | **Always on.**  a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
 | `MEMORY` | **Declared.**  durable facts kept between conversations, in ordinary pod files: `/memory` for what the whole pod should know, `/me` for what is true of one person only. `AGENTS.md` in each scope is read into every run automatically, so it must stay a short index of pointers — it is capped, and the overflow is truncated with a marker. It carries **no tools of its own**, but it does not need pairing: turning it on **derives a `folder.write` grant on `/memory`** (write implies read), which in turn derives `POD` — so the agent gets the file tools that make the instruction actionable. Turning it off takes the grant back, and it is re-derived on every write, so a `permissions` replace cannot strip it |
 | `WAIT` | **Always on.**  suspend the current turn and resume it when there is a reason to (`wait_for`): a time, a sandbox process exiting, or a sub-agent run finishing. Capped at 24h. Every wake replays the whole conversation, so one real wait beats a loop of short ones — and it is **not** for waiting on a person, nor on a `message_user` answer |
+| `DECISIONS` | **Declared.**  closed-set judgements — which of these, yes or no, how much — answered by rules, then a fast classifier, then the system model, and recorded where a person can correct them. `decide` asks about one state, or about rows given inline, read from a CSV or JSONL pod file, or read from a pod table under the agent's row-level security; many rows come back as counts plus a results CSV beside the input (or under `/me/decisions/`). `define_decider` saves a named, versioned decider, `test_decider` tries one on rows with known answers and records nothing, and `answer_decision` records the agent's own answer, which never becomes an example the decider learns from. Declare it for an agent that sorts or triages many things the same way. Needs `decider.execute` on the named decider, or on the pod for inline and `system:` deciders, and `decider.create` or `decider.update` to save one |
 | `MESSAGING` | **Always on.**  the way an agent reaches a person *unprompted*: `message_user` contacts a **pod member who is not in this conversation** on whichever surface they last used — or by email, cold, if they have never messaged the bot — with a copy always landing in their Lemma inbox; `list_pod_members` looks people up (and reports each member's `reachable_on`); `check_messages` reads the answers. See the pattern below — it is the one people get wrong |
 
 For pod files and data you grant the folder or table and `POD` follows — typed,

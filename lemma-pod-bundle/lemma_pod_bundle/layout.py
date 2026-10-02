@@ -8,6 +8,10 @@ from typing import Any
 
 from .jsonc import loads_jsonc
 
+# Moves when an importer must read existing content differently, as 2 -> 3 did
+# when account variables began to require their connector. A new optional
+# directory is not that: no importer gates on this number, and each reads only
+# the directories it knows -- an older one skips `deciders/` whatever it says.
 FORMAT_VERSION = 3
 # The bundle's root manifest file (pod metadata, contents scope, variables).
 POD_MANIFEST_FILE = "pod.json"
@@ -24,6 +28,9 @@ JSON_FILE_REF_KEY = "$json_file"
 APP_MANIFEST_ALIAS = "lemma.app.json"
 RESOURCE_DIRS = (
     "tables",
+    # Imported straight after tables: a workflow's DECISION step, a schedule
+    # and an agent's `decider:<name>:execute` grant can all name one.
+    "deciders",
     "functions",
     "agents",
     "workflows",
@@ -36,6 +43,8 @@ EXPORTABLE_RESOURCE_DIRS = frozenset(RESOURCE_DIRS)
 RESOURCE_DIR_ALIASES = {
     "table": "tables",
     "tables": "tables",
+    "decider": "deciders",
+    "deciders": "deciders",
     "function": "functions",
     "functions": "functions",
     "agent": "agents",

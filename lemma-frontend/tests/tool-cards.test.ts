@@ -434,6 +434,55 @@ test("a connector call missing either name is not a card", () => {
     assert.equal(call("run_connector_operation", { auth_config: "gmail" }), null);
 });
 
+/* ── decide, test_decider ──────────────────────────────────────────── */
+
+const decision = (card: ReturnType<typeof call>) => (card && card.kind === "decision" ? card : null);
+
+test("a decision over rows is counted, most common answer first", () => {
+    const card = decision(call(
+        "decide",
+        { decider: "ticket-urgency", file: "/me/tickets.csv" },
+        {
+            success: true,
+            decider: "ticket-urgency",
+            decided: 30,
+            counts: { urgent: { true: 10, false: 20 } },
+            open_rows: { count: 2, rows: [] },
+            results_file: { type: "pod_file", pod_path: "/me/tickets.decided-20261001-142233.csv" },
+        },
+    ));
+    assert.equal(card?.decider, "ticket-urgency");
+    assert.equal(card?.rows, 30);
+    assert.deepEqual(card?.counts, [
+        { question: "urgent", tallies: [{ answer: "false", count: 20 }, { answer: "true", count: 10 }] },
+    ]);
+    assert.equal(card?.open, 2);
+    assert.equal(card?.savedTo, "/me/tickets.decided-20261001-142233.csv");
+});
+
+test("one decision says who answered, and a trial says nothing was kept", () => {
+    const one = decision(call(
+        "decide",
+        { questions: { urgent: { type: "yes_no", prompt: "Urgent?" } }, state: { subject: "hi" } },
+        { success: true, decider: "inline", answers: { urgent: { value: false, by: "rules" } }, open: [] },
+    ));
+    assert.equal(one?.decider, "inline");
+    assert.deepEqual(one?.answers, [{ question: "urgent", value: "false", by: "rules" }]);
+    assert.equal(one?.rows, undefined);
+
+    const trial = decision(call("test_decider", { decider: "triage", items: [] }, { success: false, error: "Give sample rows." }));
+    assert.equal(trial?.trial, true);
+    assert.equal(trial?.failed, true);
+    assert.equal(trial?.error, "Give sample rows.");
+});
+
+test("a decision still being asked is pending, with nothing counted yet", () => {
+    const card = decision(call("decide", { decider: "triage", table: { table_name: "tickets" } }));
+    assert.equal(card?.pending, true);
+    assert.deepEqual(card?.counts, []);
+    assert.equal(card?.open, 0);
+});
+
 /* ── view_image ────────────────────────────────────────────────────── */
 
 const look = (card: ReturnType<typeof call>) => (card && card.kind === "image" ? card : null);

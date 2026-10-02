@@ -2,7 +2,7 @@ import { LoadingRows } from "@/ui/loading";
 import { Surfaces, useSurfaces } from "@/shell/surfaces";
 import {
     AgentIcon, EditIcon, ExternalIcon, ChatIcon, BrowserIcon, CheckCircleIcon, ClockIcon,
-    ConnectorIcon, GlobeIcon, ImageIcon, LibraryIcon, MemoryIcon, QuestionIcon,
+    ConnectorIcon, DecideIcon, GlobeIcon, ImageIcon, LibraryIcon, MemoryIcon, QuestionIcon,
     SparkleIcon, TerminalIcon, ToolIcon, VoiceIcon,
 } from "@/ui/icons";
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
@@ -244,6 +244,7 @@ const TOOLSET_ICONS: Record<ToolsetIcon, typeof TerminalIcon> = {
     ask: QuestionIcon,
     wait: ClockIcon,
     image: ImageIcon,
+    decide: DecideIcon,
     other: ToolIcon,
 };
 

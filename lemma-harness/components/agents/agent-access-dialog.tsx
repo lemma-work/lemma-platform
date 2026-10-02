@@ -15,6 +15,7 @@ import {
     MessageCircle,
     NotebookPen,
     Plug,
+    Scale,
     Search,
     Send,
     Sparkles,
@@ -182,6 +183,12 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         description: 'Call connected apps directly, without a sandbox. Pick which ones under Connectors.',
         icon: Plug,
     },
+    DECISIONS: {
+        label: 'Decisions',
+        description:
+            'Sort many things the same way — which of these, yes or no, how much — and keep a record a person can correct.',
+        icon: Scale,
+    },
 };
 
 /**
@@ -207,6 +214,7 @@ const TOOL_ORDER: string[] = [
     'SUBAGENTS',
     'MEMORY',
     'SPEECH',
+    'DECISIONS',
 ];
 
 const EACH_PERSON_ACCOUNT = '__each_person__';

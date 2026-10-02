@@ -738,8 +738,9 @@ each card saving one operator section:
   falls back to for a pod with no default runtime. locald also names the
   side jobs' models from it: `VISION_MODEL` (the image model, which it adds
   to the vision names, or the default model when that reads images),
-  `CONVERSATION_TITLE_MODEL` (the fast model, else the default) and
-  `HISTORY_SUMMARIZATION_MODEL` (the fast model, when there is one). Test lists
+  `CONVERSATION_TITLE_MODEL` (the fast model, else the default),
+  `HISTORY_SUMMARIZATION_MODEL` and `DECISION_MODEL` (the fast model, when
+  there is one). Test lists
   the provider's models and asks the default one for a one-word answer.
 - **Email** writes the `email` section (`none`, `resend` or `smtp`, a sender
   address, and the SMTP server with its password in the vault). Until it is
@@ -766,10 +767,13 @@ each card saving one operator section:
   proven contact matches that unverified profile number and the chat reaches
   their pod's agent with no email
   ([chat onboarding](../operators/chat-onboarding.md)).
-- **Voice** is the Deepgram key for voice notes, and the voice-call keys
-  (Gemini for the voice, TypeSafe for routing) that the workspace's own server
-  reads: locald keeps those in the frontend's environment, never the
-  backend's, and restarts only the frontend when they change; **Web search** works with no key (DuckDuckGo)
+- **Voice** is the Deepgram key for voice notes, and the two voice-call keys.
+  Gemini is the voice, which the workspace's own server carries: locald keeps
+  that key in the frontend's environment, never the backend's, and restarts
+  the frontend only when it changes. TypeSafe (System One) routes the call
+  through the backend's decisions API, so its key goes to the backend's
+  environment like the other integrations; without it the backend routes
+  with its system model, and calls need only the Gemini key. **Web search** works with no key (DuckDuckGo)
   and switches to Brave Search when a Brave key is stored.
 
 Tests are read-only requests locald makes (`config.test`): with the typed

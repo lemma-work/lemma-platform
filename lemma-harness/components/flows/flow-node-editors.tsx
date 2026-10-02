@@ -1086,6 +1086,17 @@ export function StepDetailsPanel({
                         ) : (
                             (step.branches || []).map((branch, index) => (
                                 <div key={branch.id} className="schema-contract-row space-y-2 px-2 py-2.5">
+                                    {branch.question || branch.fallThrough ? (
+                                        <div className="space-y-1">
+                                            <Label className="text-xs">{branch.label}</Label>
+                                            <p className="text-xs text-[var(--text-tertiary)]">
+                                                {branch.question
+                                                    ? 'Taken on this answer to the step’s question. The question itself is edited in the workflow’s JSON.'
+                                                    : 'Taken when no rule matches and the answer has no branch of its own.'}
+                                            </p>
+                                        </div>
+                                    ) : (
+                                    <>
                                     <div className="space-y-1.5">
                                         <Label className="text-xs">Branch Label</Label>
                                         <Input
@@ -1182,6 +1193,8 @@ export function StepDetailsPanel({
                                             </div>
                                         );
                                     })()}
+                                    </>
+                                    )}
                                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
                                         <div className="flex items-center gap-2">
                                             <span>{branch.steps.length} steps</span>
@@ -1207,21 +1220,23 @@ export function StepDetailsPanel({
                                                 Add step
                                             </Button>
                                         </div>
-                                        <Button
-                                            type="button"
-                                            variant="quiet"
-                                            size="sm"
-                                            className="h-7 text-[var(--state-error)]"
-                                            onClick={() =>
-                                                onUpdateStep((current) => ({
-                                                    ...current,
-                                                    branches: (current.branches || []).filter((_, branchIndex) => branchIndex !== index),
-                                                }))
-                                            }
-                                        >
-                                            <Trash2 className="mr-1 h-3 w-3" />
-                                            Remove
-                                        </Button>
+                                        {!branch.question && (
+                                            <Button
+                                                type="button"
+                                                variant="quiet"
+                                                size="sm"
+                                                className="h-7 text-[var(--state-error)]"
+                                                onClick={() =>
+                                                    onUpdateStep((current) => ({
+                                                        ...current,
+                                                        branches: (current.branches || []).filter((_, branchIndex) => branchIndex !== index),
+                                                    }))
+                                                }
+                                            >
+                                                <Trash2 className="mr-1 h-3 w-3" />
+                                                Remove
+                                            </Button>
+                                        )}
                                     </div>
                                 </div>
                             ))
@@ -1378,7 +1393,7 @@ export function StepCardWorkSummary({
                 {branches.map((branch) => (
                     <li key={branch.id} className="flex items-start gap-2">
                         <span className="mt-2 h-1 w-1 rounded-full bg-[var(--state-warning)]" />
-                        <span>{branch.label}: <span className="font-mono text-xs text-[var(--text-tertiary)]">{branch.condition || 'condition not set'}</span></span>
+                        <span>{branch.label}: <span className="font-mono text-xs text-[var(--text-tertiary)]">{branch.question ? 'answer' : branch.fallThrough ? 'fall-through' : branch.condition || 'condition not set'}</span></span>
                     </li>
                 ))}
             </ul>

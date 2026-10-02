@@ -127,7 +127,14 @@ class ScheduleRunRecoveryService:
     async def _claim_due_rows(
         self, *, limit: int, now: datetime
     ) -> list[Row[tuple[ScheduleRun, Schedule]]]:
-        """Lock the next batch of runs whose outcome nothing has recorded."""
+        """Lock the next batch of runs whose outcome nothing has recorded.
+
+        A triage's `HELD` run never reaches here: it carries a `target_outcome`
+        of its own while it waits, because an event held for a digest or a
+        person was never dispatched, and redelivering it would fire what the
+        triage held back. Neither does an event a digest sent, whose outcome is
+        its digest run's.
+        """
         retry_cutoff = now - ScheduleRunRepository.ABANDON_AFTER
         dispatch_cutoff = now - self.DISPATCH_RECONCILE_AFTER
         reinspect_cutoff = now - timedelta(

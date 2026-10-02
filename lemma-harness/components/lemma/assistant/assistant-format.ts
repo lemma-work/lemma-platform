@@ -99,9 +99,12 @@ export function toolArg(args: ToolCardArgs, key: string): unknown {
 }
 
 const TOOL_DISPLAY_NAME_OVERRIDES: Record<string, string> = {
+  answer_decision: "Answered decision",
   apply_patch: "Applied patch",
   command_execution: "Terminal command",
   create_file: "Created file",
+  decide: "Decided",
+  define_decider: "Saved decider",
   edit_file: "Edited file",
   exec_command: "Terminal command",
   execute_command: "Terminal command",
@@ -128,6 +131,7 @@ const TOOL_DISPLAY_NAME_OVERRIDES: Record<string, string> = {
   tool_search: "Tool search",
   spawn_subagent: "Spawned sub-agent",
   terminate_process: "Stopped process",
+  test_decider: "Tried decider",
   view_image: "Viewed image",
   web_search: "Web search",
   write_stdin: "Terminal input",
@@ -309,6 +313,10 @@ export function formatFriendlyToolStatus(toolName: string, args: ToolCardArgs): 
   if (lowerName === "pod_query" || lowerName === "pod_get_records") return "Reading pod data";
   if (lowerName === "pod_write_record") return "Writing pod data";
   if (lowerName.startsWith("pod_")) return "Working with pod data";
+  if (lowerName === "decide") return "Deciding";
+  if (lowerName === "test_decider") return "Trying a decider";
+  if (lowerName === "define_decider") return "Saving a decider";
+  if (lowerName === "answer_decision") return "Answering a decision";
 
   const pathLabel = pathLabelFromToolArgs(args) || patchFileLabel(args);
   if (lowerName.includes("apply_patch") || lowerName.includes("write") || lowerName.includes("edit")) {

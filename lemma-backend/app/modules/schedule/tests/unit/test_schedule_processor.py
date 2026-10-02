@@ -1,10 +1,11 @@
-from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.schedule.domain.errors import ScheduleFilterUndecidedError
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
+from app.modules.schedule.tests.fakes import FakeScheduleFilter, RecordingPublisher
 from app.modules.usage.domain.errors import UsageLimitExceededError
 
 
@@ -21,60 +22,89 @@ def _schedule(**updates) -> ScheduleEntity:
     return ScheduleEntity(**values)
 
 
+def _processor(
+    schedule_filter: FakeScheduleFilter | None = None,
+) -> tuple[ScheduleProcessor, RecordingPublisher]:
+    publisher = RecordingPublisher()
+    return ScheduleProcessor(
+        schedule_filter or FakeScheduleFilter(), publisher
+    ), publisher
+
+
 @pytest.mark.asyncio
 async def test_processor_rejects_missing_or_inactive_schedule():
-    processor = ScheduleProcessor(
-        filter_service=AsyncMock(), event_publisher=AsyncMock()
-    )
+    processor, publisher = _processor()
 
     with pytest.raises(ValueError, match="schedule is required"):
         await processor.process_event(schedule=None, payload={}, user_id=uuid4())
-    assert (
-        await processor.process_event(
-            schedule=_schedule(is_active=False), payload={}, user_id=uuid4()
-        )
-        is False
+    outcome = await processor.process_event(
+        schedule=_schedule(is_active=False), payload={}, user_id=uuid4()
     )
-    processor.event_publisher.publish_schedule_fired.assert_not_awaited()
+    assert outcome.fired is False
+    assert outcome.verdict is None
+    assert publisher.published == []
 
 
 @pytest.mark.asyncio
-async def test_processor_records_filtered_decision_without_publishing():
-    filter_service = AsyncMock()
-    filter_service.filter_event.return_value = (False, {"reason": "not relevant"})
-    publisher = AsyncMock()
-    processor = ScheduleProcessor(filter_service, publisher)
+async def test_processor_needs_the_event_id_before_it_filters():
+    """The filter's decision is filed under the event; without an id there is
+    nothing to file it under, so nothing is asked."""
+    schedule_filter = FakeScheduleFilter()
+    processor, _ = _processor(schedule_filter)
 
-    result = await processor.process_event(
-        schedule=_schedule(), payload={"id": 1}, user_id=uuid4()
+    with pytest.raises(ValueError, match="source_event_id"):
+        await processor.process_event(
+            schedule=_schedule(), payload={"id": 1}, user_id=uuid4()
+        )
+    assert schedule_filter.calls == []
+
+
+@pytest.mark.asyncio
+async def test_processor_returns_a_skip_with_its_verdict_and_publishes_nothing():
+    schedule_filter = FakeScheduleFilter(proceed=False)
+    processor, publisher = _processor(schedule_filter)
+
+    outcome = await processor.process_event(
+        schedule=_schedule(),
+        payload={"id": 1},
+        user_id=uuid4(),
+        source_event_id="provider:event-1",
     )
 
-    assert result is False
-    publisher.publish_schedule_fired.assert_not_awaited()
+    assert outcome.fired is False
+    assert outcome.filtered is not None
+    assert outcome.filtered.output["should_proceed"] is False
+    assert publisher.published == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failure",
-    [UsageLimitExceededError(), RuntimeError("provider unavailable")],
+    [
+        UsageLimitExceededError(),
+        RuntimeError("provider unavailable"),
+        ScheduleFilterUndecidedError(UUID(int=7)),
+    ],
 )
-async def test_processor_rethrows_filter_failures_for_durable_retry(failure):
-    filter_service = AsyncMock()
-    filter_service.filter_event.side_effect = failure
-    processor = ScheduleProcessor(filter_service, AsyncMock())
+async def test_processor_rethrows_filter_failures_for_the_task_boundary(failure):
+    processor, publisher = _processor(FakeScheduleFilter(error=failure))
 
     with pytest.raises(type(failure)):
         await processor.process_event(
-            schedule=_schedule(), payload={"id": 1}, user_id=uuid4()
+            schedule=_schedule(),
+            payload={"id": 1},
+            user_id=uuid4(),
+            source_event_id="provider:event-1",
         )
+    assert publisher.published == []
 
 
 @pytest.mark.asyncio
 async def test_processor_publishes_filter_output_and_source_identity():
-    filter_service = AsyncMock()
-    filter_service.filter_event.return_value = (True, {"category": "urgent"})
-    publisher = AsyncMock()
-    processor = ScheduleProcessor(filter_service, publisher)
+    decision_id = str(uuid4())
+    output = {"should_proceed": True, "decision_id": decision_id, "category": "urgent"}
+    schedule_filter = FakeScheduleFilter(proceed=True, output=output)
+    processor, publisher = _processor(schedule_filter)
     schedule = _schedule()
 
     # The caller's owner is carried through verbatim: the processor never
@@ -82,21 +112,43 @@ async def test_processor_publishes_filter_output_and_source_identity():
     row_owner = uuid4()
     assert row_owner != schedule.user_id
 
-    assert (
-        await processor.process_event(
-            schedule=schedule,
-            payload={"id": 1},
-            user_id=row_owner,
-            metadata={"provider": "custom"},
-            source_event_id="provider:event-1",
-        )
-        is True
-    )
-    publisher.publish_schedule_fired.assert_awaited_once_with(
+    outcome = await processor.process_event(
         schedule=schedule,
         payload={"id": 1},
         user_id=row_owner,
         metadata={"provider": "custom"},
-        llm_output={"category": "urgent"},
+        source_event_id="provider:event-1",
+        personal=True,
+    )
+
+    assert outcome.fired is True
+    assert outcome.filtered is None
+    [fire] = publisher.published
+    assert fire.payload == {"id": 1}
+    assert fire.user_id == row_owner
+    assert fire.metadata == {"provider": "custom"}
+    assert fire.llm_output == output
+    assert fire.source_event_id == "provider:event-1"
+    # The filter judged the event on its owner's behalf, knowing it is theirs.
+    [call] = schedule_filter.calls
+    assert call.source_event_id == "provider:event-1"
+    assert call.owner_id == row_owner
+    assert call.personal is True
+
+
+@pytest.mark.asyncio
+async def test_processor_without_a_filter_fires_with_no_llm_output():
+    schedule_filter = FakeScheduleFilter()
+    processor, publisher = _processor(schedule_filter)
+
+    outcome = await processor.process_event(
+        schedule=_schedule(filter_instruction=None),
+        payload={"id": 1},
+        user_id=uuid4(),
         source_event_id="provider:event-1",
     )
+
+    assert outcome.fired is True
+    assert outcome.verdict is None
+    assert schedule_filter.calls == []
+    assert publisher.published[0].llm_output is None

@@ -68,6 +68,12 @@ _NAME_TO_MODULE = {
     'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest': 'agent_surface_slack_manifest_response_agent_surface_slack_manifest',
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
+    'Agreement': 'agreement',
+    'Answer': 'answer',
+    'AnswerBody': 'answer_body',
+    'AnswerBodyAnswers': 'answer_body_answers',
+    'AnswerBodyBy': 'answer_body_by',
+    'AnswerDistributionType0': 'answer_distribution_type_0',
     'AnswerSignInRequest': 'answer_sign_in_request',
     'AppBundleUploadRequest': 'app_bundle_upload_request',
     'AppBundleUploadResponse': 'app_bundle_upload_response',
@@ -109,6 +115,8 @@ _NAME_TO_MODULE = {
     'BulkUpdateRecordsRequest': 'bulk_update_records_request',
     'BulkUpdateRecordsRequestRecordsItem': 'bulk_update_records_request_records_item',
     'BundleSourceKind': 'bundle_source_kind',
+    'ChoiceQuestion': 'choice_question',
+    'ChoiceQuestionOptionsType0': 'choice_question_options_type_0',
     'ColumnSchema': 'column_schema',
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
     'ConnectRequestInitiateSchema': 'connect_request_initiate_schema',
@@ -147,6 +155,7 @@ _NAME_TO_MODULE = {
     'CreateAppRequest': 'create_app_request',
     'CreateConversationRequest': 'create_conversation_request',
     'CreateConversationRequestMetadataType0': 'create_conversation_request_metadata_type_0',
+    'CreateDeciderBody': 'create_decider_body',
     'CreateFolderRequest': 'create_folder_request',
     'CreateFunctionRequest': 'create_function_request',
     'CreateOpenAICompatibleRuntimeProfileRequest': 'create_open_ai_compatible_runtime_profile_request',
@@ -171,14 +180,42 @@ _NAME_TO_MODULE = {
     'DatastoreQueryRequest': 'datastore_query_request',
     'DatastoreQueryResponse': 'datastore_query_response',
     'DatastoreQueryResponseItemsItem': 'datastore_query_response_items_item',
+    'DecideBody': 'decide_body',
+    'DecideBodyOptions': 'decide_body_options',
+    'DecideBodyOptionsAdditionalProperty': 'decide_body_options_additional_property',
+    'DecideBodyVisibility': 'decide_body_visibility',
+    'DecideRowsBody': 'decide_rows_body',
+    'DecideRowsBodyOptions': 'decide_rows_body_options',
+    'DecideRowsBodyOptionsAdditionalProperty': 'decide_rows_body_options_additional_property',
+    'DecideRowsBodyVisibility': 'decide_rows_body_visibility',
+    'DeciderDefinition': 'decider_definition',
+    'DeciderDefinitionQuestions': 'decider_definition_questions',
+    'DeciderListResponse': 'decider_list_response',
+    'DeciderResponse': 'decider_response',
+    'DeciderTestBody': 'decider_test_body',
+    'DeciderTestBodyOptions': 'decider_test_body_options',
+    'DeciderTestBodyOptionsAdditionalProperty': 'decider_test_body_options_additional_property',
+    'DeciderTestBodyVisibility': 'decider_test_body_visibility',
+    'DeciderTestResponse': 'decider_test_response',
+    'DeciderTestResponseAgreement': 'decider_test_response_agreement',
+    'DeciderTestResponseAnswersItem': 'decider_test_response_answers_item',
+    'DeciderVersionListResponse': 'decider_version_list_response',
+    'DeciderVersionResponse': 'decider_version_response',
+    'DecisionListResponse': 'decision_list_response',
     'DecisionNode': 'decision_node',
     'DecisionNodeConfig': 'decision_node_config',
     'DecisionNodePositionType0': 'decision_node_position_type_0',
+    'DecisionNodeQuestion': 'decision_node_question',
+    'DecisionNodeQuestionBranches': 'decision_node_question_branches',
+    'DecisionNodeQuestionInputType1': 'decision_node_question_input_type_1',
     'DecisionNodeResponse': 'decision_node_response',
     'DecisionNodeResponsePositionType0': 'decision_node_response_position_type_0',
+    'DecisionResponse': 'decision_response',
+    'DecisionResponseAnswers': 'decision_response_answers',
     'DecisionRule': 'decision_rule',
     'DirectoryTreeNode': 'directory_tree_node',
     'DirectoryTreeResponse': 'directory_tree_response',
+    'DisagreementResponse': 'disagreement_response',
     'DisplaySizeRequest': 'display_size_request',
     'DisplaySizeResponse': 'display_size_response',
     'EmailDeliveryStatusResponse': 'email_delivery_status_response',
@@ -276,12 +313,14 @@ _NAME_TO_MODULE = {
     'ImportStartRequest': 'import_start_request',
     'ImportStatus': 'import_status',
     'ImportStatusResponse': 'import_status_response',
+    'InputView': 'input_view',
     'InstallRequestInitiateSchema': 'install_request_initiate_schema',
     'InstallRequestResponseSchema': 'install_request_response_schema',
     'InstallationBindSchema': 'installation_bind_schema',
     'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
+    'Lane': 'lane',
     'LiteralInputBinding': 'literal_input_binding',
     'LoopNode': 'loop_node',
     'LoopNodeConfig': 'loop_node_config',
@@ -296,6 +335,8 @@ _NAME_TO_MODULE = {
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
+    'MultiChoiceQuestion': 'multi_choice_question',
+    'MultiChoiceQuestionOptionsType0': 'multi_choice_question_options_type_0',
     'MyUsageLimitsResponse': 'my_usage_limits_response',
     'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
     'NavigationOrganizationResponse': 'navigation_organization_response',
@@ -326,6 +367,7 @@ _NAME_TO_MODULE = {
     'OperationExecutionRequestPayload': 'operation_execution_request_payload',
     'OperationExecutionResponse': 'operation_execution_response',
     'OperationSummary': 'operation_summary',
+    'Option': 'option',
     'OrganizationCreateRequest': 'organization_create_request',
     'OrganizationHomeResponse': 'organization_home_response',
     'OrganizationInvitationListResponse': 'organization_invitation_list_response',
@@ -372,6 +414,10 @@ _NAME_TO_MODULE = {
     'PodRoleResourcePermissionResponse': 'pod_role_resource_permission_response',
     'PodRoleResponse': 'pod_role_response',
     'PodUpdateRequest': 'pod_update_request',
+    'Policy': 'policy',
+    'PolicyRequireConfidence': 'policy_require_confidence',
+    'PolicyRequireConfidenceAdditionalProperty': 'policy_require_confidence_additional_property',
+    'PolicyRulesOnly': 'policy_rules_only',
     'PublicFileResponse': 'public_file_response',
     'PublishMode': 'publish_mode',
     'PublishStartRequest': 'publish_start_request',
@@ -393,6 +439,16 @@ _NAME_TO_MODULE = {
     'ResourcePreviewResponse': 'resource_preview_response',
     'ResourceType': 'resource_type',
     'ResourceVisibility': 'resource_visibility',
+    'RowResultResponse': 'row_result_response',
+    'RowResultResponseAnswers': 'row_result_response_answers',
+    'RowsResponse': 'rows_response',
+    'RowsResponseCounts': 'rows_response_counts',
+    'RowsResponseCountsAdditionalProperty': 'rows_response_counts_additional_property',
+    'Rule': 'rule',
+    'RuleAnswer': 'rule_answer',
+    'Rung': 'rung',
+    'RungOutcome': 'rung_outcome',
+    'RungTrace': 'rung_trace',
     'RuntimeModelCapability': 'runtime_model_capability',
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
@@ -401,6 +457,9 @@ _NAME_TO_MODULE = {
     'RuntimeProfileProtocol': 'runtime_profile_protocol',
     'RuntimeProfileScope': 'runtime_profile_scope',
     'RuntimeProfileStatus': 'runtime_profile_status',
+    'SampleRowBody': 'sample_row_body',
+    'SampleRowBodyExpectedType0': 'sample_row_body_expected_type_0',
+    'ScaleQuestion': 'scale_question',
     'ScheduleDetailResponse': 'schedule_detail_response',
     'ScheduleDetailResponseConfig': 'schedule_detail_response_config',
     'ScheduleDetailResponseFilterOutputSchemaType0': 'schedule_detail_response_filter_output_schema_type_0',
@@ -476,6 +535,10 @@ _NAME_TO_MODULE = {
     'TableSummaryResponse': 'table_summary_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
+    'TriageConfig': 'triage_config',
+    'TriageConfigRoutes': 'triage_config_routes',
+    'TriageDigest': 'triage_digest',
+    'TriageRoute': 'triage_route',
     'Update': 'update',
     'UpdateAgentHostRuntimeProfileRequest': 'update_agent_host_runtime_profile_request',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0': 'update_agent_host_runtime_profile_request_config_selections_type_0',
@@ -488,6 +551,7 @@ _NAME_TO_MODULE = {
     'UpdateAppRequest': 'update_app_request',
     'UpdateConversationRequest': 'update_conversation_request',
     'UpdateConversationRequestMetadataType0': 'update_conversation_request_metadata_type_0',
+    'UpdateDeciderBody': 'update_decider_body',
     'UpdateFunctionRequest': 'update_function_request',
     'UpdateMemberRoleRequest': 'update_member_role_request',
     'UpdateOpenAICompatibleRuntimeProfileRequest': 'update_open_ai_compatible_runtime_profile_request',
@@ -561,6 +625,7 @@ _NAME_TO_MODULE = {
     'WorkspaceFileListResponse': 'workspace_file_list_response',
     'WorkspaceStatusResponse': 'workspace_status_response',
     'WorkspaceStatusResponseState': 'workspace_status_response_state',
+    'YesNoQuestion': 'yes_no_question',
 }
 
 if TYPE_CHECKING:
@@ -623,6 +688,12 @@ if TYPE_CHECKING:
     from .agent_surface_slack_manifest_response_agent_surface_slack_manifest import AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
+    from .agreement import Agreement
+    from .answer import Answer
+    from .answer_body import AnswerBody
+    from .answer_body_answers import AnswerBodyAnswers
+    from .answer_body_by import AnswerBodyBy
+    from .answer_distribution_type_0 import AnswerDistributionType0
     from .answer_sign_in_request import AnswerSignInRequest
     from .app_bundle_upload_request import AppBundleUploadRequest
     from .app_bundle_upload_response import AppBundleUploadResponse
@@ -664,6 +735,8 @@ if TYPE_CHECKING:
     from .bulk_update_records_request import BulkUpdateRecordsRequest
     from .bulk_update_records_request_records_item import BulkUpdateRecordsRequestRecordsItem
     from .bundle_source_kind import BundleSourceKind
+    from .choice_question import ChoiceQuestion
+    from .choice_question_options_type_0 import ChoiceQuestionOptionsType0
     from .column_schema import ColumnSchema
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
     from .connect_request_initiate_schema import ConnectRequestInitiateSchema
@@ -702,6 +775,7 @@ if TYPE_CHECKING:
     from .create_app_request import CreateAppRequest
     from .create_conversation_request import CreateConversationRequest
     from .create_conversation_request_metadata_type_0 import CreateConversationRequestMetadataType0
+    from .create_decider_body import CreateDeciderBody
     from .create_folder_request import CreateFolderRequest
     from .create_function_request import CreateFunctionRequest
     from .create_open_ai_compatible_runtime_profile_request import CreateOpenAICompatibleRuntimeProfileRequest
@@ -726,14 +800,42 @@ if TYPE_CHECKING:
     from .datastore_query_request import DatastoreQueryRequest
     from .datastore_query_response import DatastoreQueryResponse
     from .datastore_query_response_items_item import DatastoreQueryResponseItemsItem
+    from .decide_body import DecideBody
+    from .decide_body_options import DecideBodyOptions
+    from .decide_body_options_additional_property import DecideBodyOptionsAdditionalProperty
+    from .decide_body_visibility import DecideBodyVisibility
+    from .decide_rows_body import DecideRowsBody
+    from .decide_rows_body_options import DecideRowsBodyOptions
+    from .decide_rows_body_options_additional_property import DecideRowsBodyOptionsAdditionalProperty
+    from .decide_rows_body_visibility import DecideRowsBodyVisibility
+    from .decider_definition import DeciderDefinition
+    from .decider_definition_questions import DeciderDefinitionQuestions
+    from .decider_list_response import DeciderListResponse
+    from .decider_response import DeciderResponse
+    from .decider_test_body import DeciderTestBody
+    from .decider_test_body_options import DeciderTestBodyOptions
+    from .decider_test_body_options_additional_property import DeciderTestBodyOptionsAdditionalProperty
+    from .decider_test_body_visibility import DeciderTestBodyVisibility
+    from .decider_test_response import DeciderTestResponse
+    from .decider_test_response_agreement import DeciderTestResponseAgreement
+    from .decider_test_response_answers_item import DeciderTestResponseAnswersItem
+    from .decider_version_list_response import DeciderVersionListResponse
+    from .decider_version_response import DeciderVersionResponse
+    from .decision_list_response import DecisionListResponse
     from .decision_node import DecisionNode
     from .decision_node_config import DecisionNodeConfig
     from .decision_node_position_type_0 import DecisionNodePositionType0
+    from .decision_node_question import DecisionNodeQuestion
+    from .decision_node_question_branches import DecisionNodeQuestionBranches
+    from .decision_node_question_input_type_1 import DecisionNodeQuestionInputType1
     from .decision_node_response import DecisionNodeResponse
     from .decision_node_response_position_type_0 import DecisionNodeResponsePositionType0
+    from .decision_response import DecisionResponse
+    from .decision_response_answers import DecisionResponseAnswers
     from .decision_rule import DecisionRule
     from .directory_tree_node import DirectoryTreeNode
     from .directory_tree_response import DirectoryTreeResponse
+    from .disagreement_response import DisagreementResponse
     from .display_size_request import DisplaySizeRequest
     from .display_size_response import DisplaySizeResponse
     from .email_delivery_status_response import EmailDeliveryStatusResponse
@@ -831,12 +933,14 @@ if TYPE_CHECKING:
     from .import_start_request import ImportStartRequest
     from .import_status import ImportStatus
     from .import_status_response import ImportStatusResponse
+    from .input_view import InputView
     from .install_request_initiate_schema import InstallRequestInitiateSchema
     from .install_request_response_schema import InstallRequestResponseSchema
     from .installation_bind_schema import InstallationBindSchema
     from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
+    from .lane import Lane
     from .literal_input_binding import LiteralInputBinding
     from .loop_node import LoopNode
     from .loop_node_config import LoopNodeConfig
@@ -851,6 +955,8 @@ if TYPE_CHECKING:
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
+    from .multi_choice_question import MultiChoiceQuestion
+    from .multi_choice_question_options_type_0 import MultiChoiceQuestionOptionsType0
     from .my_usage_limits_response import MyUsageLimitsResponse
     from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
     from .navigation_organization_response import NavigationOrganizationResponse
@@ -881,6 +987,7 @@ if TYPE_CHECKING:
     from .operation_execution_request_payload import OperationExecutionRequestPayload
     from .operation_execution_response import OperationExecutionResponse
     from .operation_summary import OperationSummary
+    from .option import Option
     from .organization_create_request import OrganizationCreateRequest
     from .organization_home_response import OrganizationHomeResponse
     from .organization_invitation_list_response import OrganizationInvitationListResponse
@@ -927,6 +1034,10 @@ if TYPE_CHECKING:
     from .pod_role_resource_permission_response import PodRoleResourcePermissionResponse
     from .pod_role_response import PodRoleResponse
     from .pod_update_request import PodUpdateRequest
+    from .policy import Policy
+    from .policy_require_confidence import PolicyRequireConfidence
+    from .policy_require_confidence_additional_property import PolicyRequireConfidenceAdditionalProperty
+    from .policy_rules_only import PolicyRulesOnly
     from .public_file_response import PublicFileResponse
     from .publish_mode import PublishMode
     from .publish_start_request import PublishStartRequest
@@ -948,6 +1059,16 @@ if TYPE_CHECKING:
     from .resource_preview_response import ResourcePreviewResponse
     from .resource_type import ResourceType
     from .resource_visibility import ResourceVisibility
+    from .row_result_response import RowResultResponse
+    from .row_result_response_answers import RowResultResponseAnswers
+    from .rows_response import RowsResponse
+    from .rows_response_counts import RowsResponseCounts
+    from .rows_response_counts_additional_property import RowsResponseCountsAdditionalProperty
+    from .rule import Rule
+    from .rule_answer import RuleAnswer
+    from .rung import Rung
+    from .rung_outcome import RungOutcome
+    from .rung_trace import RungTrace
     from .runtime_model_capability import RuntimeModelCapability
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
@@ -956,6 +1077,9 @@ if TYPE_CHECKING:
     from .runtime_profile_protocol import RuntimeProfileProtocol
     from .runtime_profile_scope import RuntimeProfileScope
     from .runtime_profile_status import RuntimeProfileStatus
+    from .sample_row_body import SampleRowBody
+    from .sample_row_body_expected_type_0 import SampleRowBodyExpectedType0
+    from .scale_question import ScaleQuestion
     from .schedule_detail_response import ScheduleDetailResponse
     from .schedule_detail_response_config import ScheduleDetailResponseConfig
     from .schedule_detail_response_filter_output_schema_type_0 import ScheduleDetailResponseFilterOutputSchemaType0
@@ -1031,6 +1155,10 @@ if TYPE_CHECKING:
     from .table_summary_response import TableSummaryResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
+    from .triage_config import TriageConfig
+    from .triage_config_routes import TriageConfigRoutes
+    from .triage_digest import TriageDigest
+    from .triage_route import TriageRoute
     from .update import Update
     from .update_agent_host_runtime_profile_request import UpdateAgentHostRuntimeProfileRequest
     from .update_agent_host_runtime_profile_request_config_selections_type_0 import UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0
@@ -1043,6 +1171,7 @@ if TYPE_CHECKING:
     from .update_app_request import UpdateAppRequest
     from .update_conversation_request import UpdateConversationRequest
     from .update_conversation_request_metadata_type_0 import UpdateConversationRequestMetadataType0
+    from .update_decider_body import UpdateDeciderBody
     from .update_function_request import UpdateFunctionRequest
     from .update_member_role_request import UpdateMemberRoleRequest
     from .update_open_ai_compatible_runtime_profile_request import UpdateOpenAICompatibleRuntimeProfileRequest
@@ -1116,6 +1245,7 @@ if TYPE_CHECKING:
     from .workspace_file_list_response import WorkspaceFileListResponse
     from .workspace_status_response import WorkspaceStatusResponse
     from .workspace_status_response_state import WorkspaceStatusResponseState
+    from .yes_no_question import YesNoQuestion
 
 
 def __getattr__(name: str):
@@ -1191,6 +1321,12 @@ __all__ = [
     'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest',
     'AgentSurfaceStatus',
     'AgentToolset',
+    'Agreement',
+    'Answer',
+    'AnswerBody',
+    'AnswerBodyAnswers',
+    'AnswerBodyBy',
+    'AnswerDistributionType0',
     'AnswerSignInRequest',
     'AppBundleUploadRequest',
     'AppBundleUploadResponse',
@@ -1232,6 +1368,8 @@ __all__ = [
     'BulkUpdateRecordsRequest',
     'BulkUpdateRecordsRequestRecordsItem',
     'BundleSourceKind',
+    'ChoiceQuestion',
+    'ChoiceQuestionOptionsType0',
     'ColumnSchema',
     'ColumnSchemaTypeParamsType0',
     'ConnectRequestInitiateSchema',
@@ -1270,6 +1408,7 @@ __all__ = [
     'CreateAppRequest',
     'CreateConversationRequest',
     'CreateConversationRequestMetadataType0',
+    'CreateDeciderBody',
     'CreateFolderRequest',
     'CreateFunctionRequest',
     'CreateOpenAICompatibleRuntimeProfileRequest',
@@ -1294,14 +1433,42 @@ __all__ = [
     'DatastoreQueryRequest',
     'DatastoreQueryResponse',
     'DatastoreQueryResponseItemsItem',
+    'DecideBody',
+    'DecideBodyOptions',
+    'DecideBodyOptionsAdditionalProperty',
+    'DecideBodyVisibility',
+    'DecideRowsBody',
+    'DecideRowsBodyOptions',
+    'DecideRowsBodyOptionsAdditionalProperty',
+    'DecideRowsBodyVisibility',
+    'DeciderDefinition',
+    'DeciderDefinitionQuestions',
+    'DeciderListResponse',
+    'DeciderResponse',
+    'DeciderTestBody',
+    'DeciderTestBodyOptions',
+    'DeciderTestBodyOptionsAdditionalProperty',
+    'DeciderTestBodyVisibility',
+    'DeciderTestResponse',
+    'DeciderTestResponseAgreement',
+    'DeciderTestResponseAnswersItem',
+    'DeciderVersionListResponse',
+    'DeciderVersionResponse',
+    'DecisionListResponse',
     'DecisionNode',
     'DecisionNodeConfig',
     'DecisionNodePositionType0',
+    'DecisionNodeQuestion',
+    'DecisionNodeQuestionBranches',
+    'DecisionNodeQuestionInputType1',
     'DecisionNodeResponse',
     'DecisionNodeResponsePositionType0',
+    'DecisionResponse',
+    'DecisionResponseAnswers',
     'DecisionRule',
     'DirectoryTreeNode',
     'DirectoryTreeResponse',
+    'DisagreementResponse',
     'DisplaySizeRequest',
     'DisplaySizeResponse',
     'EmailDeliveryStatusResponse',
@@ -1399,12 +1566,14 @@ __all__ = [
     'ImportStartRequest',
     'ImportStatus',
     'ImportStatusResponse',
+    'InputView',
     'InstallRequestInitiateSchema',
     'InstallRequestResponseSchema',
     'InstallationBindSchema',
     'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
+    'Lane',
     'LiteralInputBinding',
     'LoopNode',
     'LoopNodeConfig',
@@ -1419,6 +1588,8 @@ __all__ = [
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
+    'MultiChoiceQuestion',
+    'MultiChoiceQuestionOptionsType0',
     'MyUsageLimitsResponse',
     'MyUsageLimitsResponsePlanTypeType0',
     'NavigationOrganizationResponse',
@@ -1449,6 +1620,7 @@ __all__ = [
     'OperationExecutionRequestPayload',
     'OperationExecutionResponse',
     'OperationSummary',
+    'Option',
     'OrganizationCreateRequest',
     'OrganizationHomeResponse',
     'OrganizationInvitationListResponse',
@@ -1495,6 +1667,10 @@ __all__ = [
     'PodRoleResourcePermissionResponse',
     'PodRoleResponse',
     'PodUpdateRequest',
+    'Policy',
+    'PolicyRequireConfidence',
+    'PolicyRequireConfidenceAdditionalProperty',
+    'PolicyRulesOnly',
     'PublicFileResponse',
     'PublishMode',
     'PublishStartRequest',
@@ -1516,6 +1692,16 @@ __all__ = [
     'ResourcePreviewResponse',
     'ResourceType',
     'ResourceVisibility',
+    'RowResultResponse',
+    'RowResultResponseAnswers',
+    'RowsResponse',
+    'RowsResponseCounts',
+    'RowsResponseCountsAdditionalProperty',
+    'Rule',
+    'RuleAnswer',
+    'Rung',
+    'RungOutcome',
+    'RungTrace',
     'RuntimeModelCapability',
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',
@@ -1524,6 +1710,9 @@ __all__ = [
     'RuntimeProfileProtocol',
     'RuntimeProfileScope',
     'RuntimeProfileStatus',
+    'SampleRowBody',
+    'SampleRowBodyExpectedType0',
+    'ScaleQuestion',
     'ScheduleDetailResponse',
     'ScheduleDetailResponseConfig',
     'ScheduleDetailResponseFilterOutputSchemaType0',
@@ -1599,6 +1788,10 @@ __all__ = [
     'TableSummaryResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
+    'TriageConfig',
+    'TriageConfigRoutes',
+    'TriageDigest',
+    'TriageRoute',
     'Update',
     'UpdateAgentHostRuntimeProfileRequest',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0',
@@ -1611,6 +1804,7 @@ __all__ = [
     'UpdateAppRequest',
     'UpdateConversationRequest',
     'UpdateConversationRequestMetadataType0',
+    'UpdateDeciderBody',
     'UpdateFunctionRequest',
     'UpdateMemberRoleRequest',
     'UpdateOpenAICompatibleRuntimeProfileRequest',
@@ -1684,4 +1878,5 @@ __all__ = [
     'WorkspaceFileListResponse',
     'WorkspaceStatusResponse',
     'WorkspaceStatusResponseState',
+    'YesNoQuestion',
 ]

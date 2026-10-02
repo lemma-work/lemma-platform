@@ -3,12 +3,15 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { ScheduleRunStatus } from './ScheduleRunStatus.js';
+import type { TriageRoute } from './TriageRoute.js';
 export type ScheduleRunResponse = {
     attempts: number;
     completed_at?: (string | null);
     created_at: string;
+    digest_run_id?: (string | null);
     error_code?: (string | null);
     error_type?: (string | null);
+    held_for?: (TriageRoute | null);
     id: string;
     llm_output: Record<string, any>;
     metadata: Record<string, any>;

@@ -16,6 +16,8 @@ _NAME_TO_MODULE = {
     "WebLogins": "web_logins",
     "PodAgents": "agents",
     "PodConversations": "conversations",
+    "PodDeciders": "decisions",
+    "PodDecisions": "decisions",
     "PodQueries": "data",
     "PodRecords": "data",
     "PodTables": "data",
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
     from .web_logins import WebLogins
     from .agents import PodAgents
     from .conversations import PodConversations
+    from .decisions import PodDeciders, PodDecisions
     from .data import PodQueries, PodRecords, PodTables, Table
     from .apps import PodApps
     from .files import PodFiles
@@ -77,15 +80,16 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "AgentHosts",
-    "WebLogins",
     "BoundConnectors",
     "BoundOrg",
+    "BoundOrgRuntime",
     "BoundPods",
     "Orgs",
-    "BoundOrgRuntime",
     "PodAgents",
-    "PodConversations",
     "PodApps",
+    "PodConversations",
+    "PodDeciders",
+    "PodDecisions",
     "PodFiles",
     "PodFunctions",
     "PodGroups",
@@ -95,10 +99,11 @@ __all__ = [
     "PodRecords",
     "PodSchedules",
     "PodSurfaces",
-    "UserSurfaces",
     "PodTables",
     "PodWorkflows",
     "Table",
     "Tools",
     "User",
+    "UserSurfaces",
+    "WebLogins",
 ]

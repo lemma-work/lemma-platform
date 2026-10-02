@@ -2,10 +2,13 @@
 
 use super::*;
 
-pub(crate) fn secret_environment() -> [(&'static str, &'static str); 20] {
+pub(crate) fn secret_environment() -> [(&'static str, &'static str); 21] {
     [
         ("integrations.deepgram_api_key", "DEEPGRAM_API_KEY"),
         ("integrations.brave_search_api_key", "BRAVE_SEARCH_API_KEY"),
+        // System One: a rung of every decision the backend makes, routing a
+        // voice call included. Without it, decisions go to the system model.
+        ("integrations.typesafe_api_key", "TYPESAFE_API_KEY"),
         ("integrations.composio_api_key", "COMPOSIO_API_KEY"),
         (
             "integrations.composio_webhook_secret",
@@ -47,14 +50,12 @@ pub(crate) fn secret_environment() -> [(&'static str, &'static str); 20] {
     ]
 }
 
-/// Secrets the frontend's own server reads, never the backend: live voice
-/// calls run through the workspace server's voice gateway (Gemini Live) and
-/// its call router (TypeSafe), not through the API.
-pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 2] {
-    [
-        ("integrations.gemini_api_key", "GEMINI_API_KEY"),
-        ("integrations.typesafe_api_key", "TYPESAFE_API_KEY"),
-    ]
+/// Secrets the frontend's own server reads, never the backend: the voice of a
+/// live call runs through the workspace server's gateway (Gemini Live), not
+/// through the API. Routing the call does go through the API, so its key
+/// (TypeSafe) is in `secret_environment` instead.
+pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 1] {
+    [("integrations.gemini_api_key", "GEMINI_API_KEY")]
 }
 
 /// The models the backend's side jobs run on, all on the system profile.
@@ -65,8 +66,9 @@ pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 2]
 /// adds the chosen image model there). Anthropic's models all read images.
 /// Titles use the fast model, or the default when there is none, because the
 /// backend makes no LLM titles at all while `CONVERSATION_TITLE_MODEL` is
-/// unset. Summaries fall back to the run's own model by themselves, so they
-/// are named only when a fast model is.
+/// unset. Summaries and decisions fall back to a model of their own accord --
+/// the run's, and the profile default -- so they are named only when a fast
+/// model is.
 pub(crate) fn ai_side_job_environment(ai: &AiProfile) -> Vec<(&'static str, String)> {
     let mut environment = Vec::new();
     if ai.protocol == "unconfigured" || ai.default_model.is_empty() {
@@ -91,7 +93,8 @@ pub(crate) fn ai_side_job_environment(ai: &AiProfile) -> Vec<(&'static str, Stri
         fast.clone().unwrap_or_else(|| ai.default_model.clone()),
     ));
     if let Some(model) = fast {
-        environment.push(("HISTORY_SUMMARIZATION_MODEL", model));
+        environment.push(("HISTORY_SUMMARIZATION_MODEL", model.clone()));
+        environment.push(("DECISION_MODEL", model));
     }
     environment
 }
@@ -178,7 +181,7 @@ pub(crate) fn current_unix_ms() -> io::Result<u64> {
 
 impl OperatorConfigStore {
     /// What the frontend is started with on top of the host pack's
-    /// environment: only the voice-call keys, when stored.
+    /// environment: only the voice key, when stored.
     pub fn frontend_environment(&self) -> io::Result<HashMap<String, String>> {
         let install_id = self
             .config

@@ -9,6 +9,7 @@ from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.browser.pydantic_adapter import browser_toolset
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
+from app.modules.agent.tools.decisions.pydantic_adapter import decisions_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
@@ -49,6 +50,10 @@ POD_DEFAULT_AGENT_TOOLSETS = (
     # scopes loaded into every brief; the reading and writing happen through
     # WORKSPACE_CLI and POD, which are already here.
     AgentToolset.MEMORY,
+    # Deciding many rows the same way, and recording a judgement the pod acts
+    # on. Deferred (see EXTRA_TOOLSETS): the fixed set has to include it for
+    # the assistant to have it at all, and deferral keeps it out of the prefix.
+    AgentToolset.DECISIONS,
 )
 
 _TOOLSET_BY_NAME: dict[AgentToolset, AbstractToolset[ConversationContext]] = {
@@ -64,6 +69,7 @@ _TOOLSET_BY_NAME: dict[AgentToolset, AbstractToolset[ConversationContext]] = {
     AgentToolset.CONNECTORS: connectors_toolset,
     AgentToolset.WAIT: waiting_toolset,
     AgentToolset.MESSAGING: messaging_toolset,
+    AgentToolset.DECISIONS: decisions_toolset,
 }
 
 # Toolsets with no entry in ``_TOOLSET_BY_NAME``, for either of two reasons:
@@ -124,6 +130,11 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # the opposite reason: nobody reaches for `say` by accident, and a prompt
     # that mentions voice is a prompt where finding it costs one call.
     AgentToolset.SPEECH,
+    # Four tools whose descriptions carry a whole definition language, for work
+    # most turns never do. Its fragment still rides in the prefix -- the part that
+    # matters, since what it has to teach is when a judgement belongs to
+    # `decide` rather than to the agent's own reading.
+    AgentToolset.DECISIONS,
 )
 EXTRA_TOOLSET_OBJECTS: tuple[AbstractToolset[ConversationContext], ...] = tuple(
     _TOOLSET_BY_NAME[name] for name in EXTRA_TOOLSETS

@@ -1,5 +1,5 @@
-"""Resume/fail workflow runs on agent and function completion, and reconcile
-waits whose completion events were lost."""
+"""Resume/fail workflow runs on agent and function completion and on answered
+decisions, and reconcile waits whose completion events were lost."""
 
 from __future__ import annotations
 
@@ -10,11 +10,14 @@ from app.core.config import settings
 from app.core.authorization.context import Context
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.infrastructure.db.transaction_locks import connection_released
+from app.modules.workflow.domain.decision_step import DecisionAsk, DecisionOutcome
 from app.modules.workflow.domain.wait import (
     WorkflowRunWaitEntity,
     WorkflowRunWaitType,
 )
 from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.services.decision_step_service import PendingDecision
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -125,6 +128,49 @@ class RunResumeService:
         finally:
             reset_current_context(ctx_token)
 
+    async def pending_decision(self, wait_ref: str) -> PendingDecision | None:
+        """The question an active DECISION wait carries, and whom its run asks as."""
+        wait = await self._engine.wait_repo.find_active_by_external_ref(
+            WorkflowRunWaitType.DECISION, wait_ref
+        )
+        if wait is None:
+            return None
+        run = await self._engine.run_repo.get(wait.run_id)
+        if run is None:
+            return None
+        return PendingDecision(
+            ask=DecisionAsk.model_validate(wait.payload),
+            user_id=run.user_id,
+            pod_id=run.pod_id,
+            decisions=self._engine.decision_adapter,
+        )
+
+    async def resume_for_decision(
+        self, wait_ref: str, outcome: DecisionOutcome
+    ) -> bool:
+        """Resume the run a DECISION wait holds, with the answer as the node's output."""
+        wait = await self._engine.wait_repo.find_active_by_external_ref(
+            WorkflowRunWaitType.DECISION, wait_ref
+        )
+        if wait is None:
+            return False
+        ctx = await self._run_context_for_wait(wait)
+        ctx_token = set_current_context(ctx)
+        try:
+            resumed = await self._engine.resume_internal(
+                WorkflowRunWaitType.DECISION, wait_ref, outcome.as_output(), ctx=ctx
+            )
+        finally:
+            reset_current_context(ctx_token)
+        return resumed is not None
+
+    async def fail_for_decision(self, wait_ref: str, error: str) -> bool:
+        """Fail the run a DECISION wait holds, for a question that was refused."""
+        failed = await self._engine.fail_internal(
+            WorkflowRunWaitType.DECISION, wait_ref, error=error
+        )
+        return failed is not None
+
     async def reconcile_stale_waits(self) -> int:
         """Self-heal runs whose completion/wake events were lost.
 
@@ -143,6 +189,9 @@ class RunResumeService:
         ceiling is deliberately far longer than the machine one; see
         `_expire_overdue_wait`.
 
+        A DECISION wait this old lost its job: the question is queued again.
+        Past the machine ceiling it is expired like any other machine wait.
+
         Returns the number of waits acted on.
         """
         now = datetime.now(timezone.utc)
@@ -154,6 +203,7 @@ class RunResumeService:
                 WorkflowRunWaitType.FUNCTION,
                 WorkflowRunWaitType.TIME,
                 WorkflowRunWaitType.HUMAN,
+                WorkflowRunWaitType.DECISION,
             ],
             created_before=cutoff,
             limit=RECONCILE_BATCH,
@@ -194,6 +244,8 @@ class RunResumeService:
                     )
                 elif wait.wait_type == WorkflowRunWaitType.TIME:
                     handled = await self._fire_time_wait_if_due(wait)
+                elif wait.wait_type == WorkflowRunWaitType.DECISION:
+                    handled = await self._ask_again(wait)
                 else:
                     status = await self._engine.function_adapter.get_run_status(
                         UUID(wait.external_ref)
@@ -345,6 +397,18 @@ class RunResumeService:
             return True
         finally:
             reset_current_context(ctx_token)
+
+    async def _ask_again(self, wait: WorkflowRunWaitEntity) -> bool:
+        """Queue a DECISION wait's question again, for a job that was lost.
+
+        Asking twice is safe: the decision is filed under the step, so a second
+        ask reads the first answer, and a second resume finds no wait.
+        """
+        if wait.external_ref is None:
+            return False
+        async with connection_released(getattr(self._uow, "session", None)):
+            await self._engine.decision_adapter.request(wait.external_ref)
+        return True
 
     async def _fire_time_wait_if_due(self, wait: WorkflowRunWaitEntity) -> bool:
         """Fire a TIME wait whose scheduler wake was lost, once it is past due.

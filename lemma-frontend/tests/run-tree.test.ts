@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildTree, entryOf, idsIn, leadOf, progressOf, readGraph, stateOfTrace, tracesByNode } from "../src/workflow/run-tree.ts";
+import { buildTree, decisionSays, entryOf, idsIn, leadOf, progressOf, readGraph, stateOfTrace, tracesByNode } from "../src/workflow/run-tree.ts";
 import { readSteps } from "../src/workflow/runs.ts";
 
 const node = (id: string, type: string, config: Record<string, unknown> = {}, label: string | null = null) => ({ id, type, label, config });
@@ -96,3 +96,52 @@ test("an unreadable graph is null, not a throw", () => {
     assert.equal(readGraph(null), null);
     assert.deepEqual(buildTree(readGraph({})!), []);
 });
+
+test("a question's branches are arms too, one per target, with the answers that take them", () => {
+    const graph = readGraph({
+        nodes: [
+            node("triage", "DECISION", {
+                rules: [{ condition: "spam", next_node_id: "archive" }],
+                question: {
+                    input: { type: "literal", value: 1 },
+                    decider: "email-triage",
+                    branches: { act: "reply", digest: "later", ignore: "later" },
+                    on_open: "review",
+                },
+            }),
+            node("reply", "AGENT"),
+            node("later", "FUNCTION"),
+            node("review", "FORM"),
+            node("archive", "FUNCTION"),
+            node("done", "END"),
+        ],
+        edges: [edge("reply", "done"), edge("later", "done"), edge("review", "done"), edge("archive", "done")],
+    })!;
+    // Nothing points at the decision; its question's targets count as pointed at.
+    assert.equal(entryOf(graph), "triage");
+    const [decision, done] = buildTree(graph);
+    assert.equal(done?.id, "done");
+    assert.ok(decision.type === "decision");
+    if (decision.type !== "decision") return;
+    assert.deepEqual(decision.arms.map((arm) => [arm.label, arm.condition, idsIn(arm.items)]), [
+        ["Rule 1", "spam", ["archive"]],
+        ["act", null, ["reply"]],
+        ["digest / ignore", null, ["later"]],
+        ["Left open", null, ["review"]],
+    ]);
+});
+
+test("a decision's output is said in a sentence, whichever way it went", () => {
+    assert.equal(decisionSays({ matched_condition: "a > 1" }), "Matched a > 1.");
+    assert.equal(decisionSays({ matched_condition: null }), "No rule matched, so it took the default path.");
+    const asked = { matched_condition: null, decision_id: "d-1", open: [] };
+    assert.equal(decisionSays({ ...asked, choice: "act", answered_by: "system_one" }), "Answered act — by System One.");
+    assert.equal(decisionSays({ ...asked, choice: "act", answered_by: "rules" }), "Answered act — by its rules.");
+    assert.equal(
+        decisionSays({ ...asked, choice: "ignore", answered_by: null, open: ["action"] }),
+        "Nothing could answer, so it took ignore.",
+    );
+    assert.equal(decisionSays({ ...asked, choice: null, answered_by: null, open: ["action"] }), "Nothing could answer.");
+    assert.equal(decisionSays(null), "Decided.");
+});
+

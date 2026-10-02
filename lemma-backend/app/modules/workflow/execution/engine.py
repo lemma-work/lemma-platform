@@ -5,6 +5,7 @@ always commit atomically. Resume paths row-lock the run, so double-resumes
 and stale completion events are conflicts/no-ops by construction.
 """
 
+from functools import partial
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -29,7 +30,6 @@ from app.modules.workflow.domain.run import (
     WorkflowRunStatus,
 )
 from app.modules.workflow.domain.wait import (
-    WaitRequest,
     WorkflowRunWaitEntity,
     WorkflowRunWaitType,
 )
@@ -41,6 +41,7 @@ from app.modules.workflow.execution.form_submission import (
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
 from app.modules.workflow.domain.ports import (
     AgentPort,
+    DecisionPort,
     FunctionPort,
     SchedulePort,
     WorkflowNotificationPort,
@@ -64,9 +65,10 @@ logger = get_logger(__name__)
 class WorkflowEngine:
     """Advances runs. Every collaborator arrives already bound.
 
-    The four adapters have no defaults on purpose: resolving them here made the
-    deepest file in this module choose which agent, function, scheduler and
-    notifier the application runs on. `build_workflow_engine` decides instead.
+    The adapters have no defaults on purpose: resolving them here made the
+    deepest file in this module choose which agent, function, scheduler,
+    notifier and decider the application runs on. `build_workflow_engine`
+    decides instead.
     """
 
     def __init__(
@@ -77,6 +79,7 @@ class WorkflowEngine:
         function_adapter: FunctionPort,
         schedule_adapter: SchedulePort,
         notification_adapter: WorkflowNotificationPort,
+        decision_adapter: DecisionPort,
     ):
         self.uow = uow
         self.flow_repo = SqlAlchemyWorkflowRepository(uow)
@@ -87,6 +90,7 @@ class WorkflowEngine:
         self.function_adapter = function_adapter
         self.schedule_adapter = schedule_adapter
         self.notification_adapter = notification_adapter
+        self.decision_adapter = decision_adapter
 
     def _stepper(self, ctx: Context | None) -> RunStepper:
         return RunStepper(
@@ -547,7 +551,20 @@ class WorkflowEngine:
         ):
             return None
         assert run.current_node_id is not None
-        return await self.wait_repo.create(self._wait_entity(run, result.wait))
+        wait = await self.wait_repo.create(
+            WorkflowRunWaitEntity.for_request(
+                result.wait,
+                run_id=run.id,
+                flow_id=run.flow_id,
+                pod_id=run.pod_id,
+                node_id=run.current_node_id,
+            )
+        )
+        if wait.wait_type is WorkflowRunWaitType.DECISION and wait.external_ref:
+            # Asked after the commit: a job that ran first would find no wait.
+            ask = partial(self.decision_adapter.request, wait.external_ref)
+            self.uow.after_commit(ask)
+        return wait
 
     async def _announce_human_wait(
         self, run: WorkflowRunEntity, wait: WorkflowRunWaitEntity
@@ -576,24 +593,4 @@ class WorkflowEngine:
             flow_name=getattr(flow, "name", None),
             schema=wait.payload.get("input_schema"),
             actor_user_id=run.user_id,
-        )
-
-    def _wait_entity(
-        self, run: WorkflowRunEntity, request: WaitRequest
-    ) -> WorkflowRunWaitEntity:
-        payload = dict(request.payload)
-        if request.scheduled_at is not None:
-            payload.setdefault("scheduled_at", request.scheduled_at.isoformat())
-        return WorkflowRunWaitEntity(
-            run_id=run.id,
-            flow_id=run.flow_id,
-            pod_id=run.pod_id,
-            node_id=run.current_node_id,
-            wait_type=request.wait_type,
-            assigned_pod_member_id=request.assigned_pod_member_id,
-            external_ref=request.external_ref,
-            # Kept in `payload` too: the reconcile sweep still reads it from
-            # there, and older rows have only that copy.
-            scheduled_at=request.scheduled_at,
-            payload=payload,
         )

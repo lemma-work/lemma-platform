@@ -25,7 +25,10 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     NotificationNotFoundError,
 )
-from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
+from app.modules.agent_surfaces.domain.events import (
+    NotificationSettledEvent,
+    closed_events,
+)
 from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
     NotificationOriginKind,
@@ -183,7 +186,9 @@ class NotificationService:
                 "The recipient is not a member of this pod."
             )
 
-        if self.rate_limiter is not None:
+        # Only what is pushed to a channel counts: the limit bounds messages on
+        # a person's phone, and a row that only lands in their inbox sends none.
+        if self.rate_limiter is not None and deliver:
             await self.rate_limiter.check(
                 pod_id=pod_id, recipient_user_id=recipient_user_id
             )
@@ -446,6 +451,7 @@ class NotificationService:
         )
         updated = await self.notifications.update(notification)
         await self._announce_if_settled(updated)
+        self.uow.collect_events(closed_events(notification, owner_confirmed))
         return updated
 
     async def _announce_if_settled(self, notification: NotificationEntity) -> None:
@@ -524,6 +530,7 @@ class NotificationService:
         for notification in notifications:
             notification.cancel()
             await self.notifications.update(notification)
+            self.uow.collect_events(closed_events(notification))
         return len(notifications)
 
     async def expire_past_due(self, *, limit: int = 100) -> int:
@@ -547,6 +554,7 @@ class NotificationService:
             await self._announce_if_settled(
                 await self.notifications.update(notification)
             )
+            self.uow.collect_events(closed_events(notification))
             expired += 1
         return expired
 

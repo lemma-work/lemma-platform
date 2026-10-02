@@ -32,9 +32,7 @@ from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
 from app.modules.schedule.repositories.schedule_repository import (
     ScheduleRepository as ScheduleRepositoryImpl,
 )
-from app.modules.schedule.services.time_schedule_policy import (
-    validated_time_schedule_config,
-)
+from app.modules.schedule.services.triage_policy import validate_create_policies
 from app.modules.schedule.services.schedule_run_service import ScheduleRunService
 from app.modules.schedule.services.schedule_target_policy import (
     agent_execute_ref,
@@ -107,18 +105,6 @@ class ScheduleService:
             target_resolver = SqlAlchemyScheduleTargetResolver(uow)
         self.target_resolver = target_resolver
 
-    async def list_schedule_runs(
-        self,
-        *,
-        pod_id: UUID,
-        schedule_id: UUID,
-        ctx: Context,
-        limit: int,
-    ):
-        return await self.run_service.list_schedule_runs(
-            pod_id=pod_id, schedule_id=schedule_id, ctx=ctx, limit=limit
-        )
-
     async def retry_schedule_run(
         self,
         *,
@@ -153,12 +139,12 @@ class ScheduleService:
         await self._validate_target(schedule_create)
         await self._require_target_execute(schedule_create, ctx=ctx)
         await self._require_datastore_table_update(schedule_create, ctx=ctx)
-        if schedule_create.schedule_type == ScheduleType.TIME:
-            await validated_time_schedule_config(
-                schedule_create.config, session=self.uow.session
-            )
-        elif schedule_create.schedule_type == ScheduleType.WEBHOOK:
-            validate_webhook_source(schedule_create, self.webhook_sources)
+        schedule_create = await validate_create_policies(
+            schedule_create,
+            ctx=ctx,
+            session=self.uow.session,
+            webhook_sources=self.webhook_sources,
+        )
         schedule = ScheduleEntity(**schedule_create.model_dump())
         created = await self.schedule_repository.create(schedule)
 

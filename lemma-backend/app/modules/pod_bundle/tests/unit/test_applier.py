@@ -761,6 +761,45 @@ async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monke
     assert entity.filter_output_schema == {"type": "object"}
 
 
+async def test_a_time_schedule_imports_without_the_filter_it_never_applied(
+    tmp_path, monkeypatch
+):
+    """A TIME schedule took a filter and ignored it, so bundles exported from
+    one can carry it; the API now refuses it. The import keeps the schedule,
+    leaves the filter behind, and says so to whoever imported."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "schedules" / "digest" / "digest.json",
+        {
+            "name": "digest",
+            "schedule_type": "TIME",
+            "workflow_name": "score_flow",
+            "config": {"cron": "0 2 * * *"},
+            "filter_instruction": "only on weekdays",
+            "filter_output_schema": {"type": "object"},
+        },
+    )
+    fake = FakeScheduleOperations().patch(monkeypatch)
+    warnings: list[str] = []
+    applier = BundleApplier(
+        uow=_FakeUow(),
+        ctx=object(),
+        pod_id=_UUID,
+        user_id=_UUID,
+        bundle_root=root,
+        warnings=warnings,
+    )
+
+    await applier.apply_step(_step(StepKind.SCHEDULE, "digest"))
+
+    [entity] = fake.created
+    assert entity.schedule_type.value == "TIME"
+    assert entity.filter_instruction is None
+    assert entity.filter_output_schema is None
+    [warning] = warnings
+    assert "digest" in warning and "filter_instruction" in warning
+
+
 async def test_schedule_apply_round_trips_a_pod_default_target(tmp_path, monkeypatch):
     """An exported Lem schedule has to import back as one.
 

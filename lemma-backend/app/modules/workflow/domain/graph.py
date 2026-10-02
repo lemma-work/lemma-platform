@@ -4,6 +4,7 @@ Validation runs whenever a graph is stored — a flow that saves successfully
 can always be executed without graph-shape surprises at run time.
 """
 
+from collections.abc import Mapping
 from itertools import chain
 from typing import List
 
@@ -16,6 +17,7 @@ from app.modules.workflow.domain.errors import (
 from app.modules.workflow.domain.expressions import ExpressionEngine
 from app.modules.workflow.domain.nodes import (
     DecisionNode,
+    DecisionNodeQuestion,
     ExpressionInputBinding,
     FormNode,
     LoopNode,
@@ -85,15 +87,7 @@ class WorkflowGraphValidator:
         for node in nodes:
             node_edges = outgoing.get(node.id, [])
             if isinstance(node, DecisionNode):
-                for rule in node.config.rules:
-                    if rule.next_node_id not in node_by_id:
-                        issues.append(
-                            f"decision '{node.id}' rule targets missing node "
-                            f"'{rule.next_node_id}'"
-                        )
-                    issues.extend(
-                        cls._expression_issues(node.id, "condition", rule.condition)
-                    )
+                issues.extend(cls._decision_issues(node, node_by_id))
             elif isinstance(node, LoopNode):
                 if node.config.child_node_id not in node_by_id:
                     issues.append(
@@ -161,11 +155,11 @@ class WorkflowGraphValidator:
                         )
 
         # Exactly one entry node: nothing points at it — no incoming edge, no
-        # decision rule, not a loop body.
+        # decision rule or question branch, not a loop body.
         incoming = {edge.target for edge in edges}
         for node in nodes:
             if isinstance(node, DecisionNode):
-                incoming.update(rule.next_node_id for rule in node.config.rules)
+                incoming.update(node.config.targets())
         entry_candidates = [
             node.id
             for node in nodes
@@ -188,6 +182,54 @@ class WorkflowGraphValidator:
         if issues:
             raise GraphValidationError(issues)
         return entry_candidates[0]
+
+    @classmethod
+    def _decision_issues(
+        cls, node: DecisionNode, node_by_id: Mapping[str, WorkflowNode]
+    ) -> list[str]:
+        """Rules, then the question: every target exists, every expression compiles."""
+        config = node.config
+        issues: list[str] = []
+        if not config.rules and config.question is None:
+            issues.append(
+                f"decision '{node.id}' has no rules and no question; give it "
+                "rules to branch on, a question to ask, or both"
+            )
+        for rule in config.rules:
+            if rule.next_node_id not in node_by_id:
+                issues.append(
+                    f"decision '{node.id}' rule targets missing node "
+                    f"'{rule.next_node_id}'"
+                )
+            issues.extend(cls._expression_issues(node.id, "condition", rule.condition))
+        if config.question is not None:
+            issues.extend(cls._question_issues(node.id, config.question, node_by_id))
+        return issues
+
+    @classmethod
+    def _question_issues(
+        cls,
+        node_id: str,
+        question: DecisionNodeQuestion,
+        node_by_id: Mapping[str, WorkflowNode],
+    ) -> list[str]:
+        issues = [
+            f"decision '{node_id}' branch '{option}' targets missing node '{target}'"
+            for option, target in question.branches.items()
+            if target not in node_by_id
+        ]
+        if question.on_open is not None and question.on_open not in node_by_id:
+            issues.append(
+                f"decision '{node_id}' on_open targets missing node '{question.on_open}'"
+            )
+        for key, binding in question.bindings().items():
+            if isinstance(binding, ExpressionInputBinding):
+                issues.extend(
+                    cls._expression_issues(
+                        node_id, f"question input '{key}'", binding.value
+                    )
+                )
+        return issues
 
     @staticmethod
     def _expression_issues(node_id: str, field: str, expression: str) -> list[str]:
@@ -214,7 +256,7 @@ class WorkflowGraphValidator:
             for edge in outgoing.get(node_id, []):
                 stack.append(edge.target)
             if isinstance(node, DecisionNode):
-                stack.extend(rule.next_node_id for rule in node.config.rules)
+                stack.extend(node.config.targets())
             if isinstance(node, LoopNode):
                 stack.append(node.config.child_node_id)
         return reachable

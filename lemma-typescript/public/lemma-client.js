@@ -16942,10 +16942,11 @@ var LemmaClient = (() => {
      * @param podId
      * @param scheduleId
      * @param limit
+     * @param status Only runs in these statuses (repeatable), e.g. `status=HELD` for the events a triage is holding for its digest or for a person.
      * @returns ScheduleRunListResponse Successful Response
      * @throws ApiError
      */
-    static scheduleRunList(podId, scheduleId, limit = 100) {
+    static scheduleRunList(podId, scheduleId, limit = 100, status) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/schedules/{schedule_id}/runs",
@@ -16954,7 +16955,8 @@ var LemmaClient = (() => {
           "schedule_id": scheduleId
         },
         query: {
-          "limit": limit
+          "limit": limit,
+          "status": status
         },
         errors: {
           422: `Validation Error`
@@ -17019,6 +17021,370 @@ var LemmaClient = (() => {
     }
     delete(scheduleId) {
       return this.client.request(() => SchedulesService.scheduleDelete(this.podId(), scheduleId));
+    }
+  };
+
+  // src/openapi_client/services/DecisionsService.ts
+  var DecisionsService = class {
+    /**
+     * List deciders
+     * @param podId
+     * @param limit
+     * @returns DeciderListResponse Successful Response
+     * @throws ApiError
+     */
+    static deciderList(podId, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/deciders",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create a decider
+     * Define a named decider: its questions, guidance, input view, rules and policy. The response lists anything the definition allows but that is usually a mistake.
+     * @param podId
+     * @param requestBody
+     * @returns DeciderResponse Successful Response
+     * @throws ApiError
+     */
+    static deciderCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/deciders",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Test a decider
+     * Decide sample rows with a saved decider or a draft definition, without recording anything. Rows that carry expected answers are compared with what the decider said.
+     * @param podId
+     * @param requestBody
+     * @returns DeciderTestResponse Successful Response
+     * @throws ApiError
+     */
+    static deciderTest(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/deciders/test",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete a decider
+     * Delete a decider, its versions and what it learned. Its decisions stay, naming the decider they were asked of.
+     * @param podId
+     * @param deciderName
+     * @returns void
+     * @throws ApiError
+     */
+    static deciderDelete(podId, deciderName) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/deciders/{decider_name}",
+        path: {
+          "pod_id": podId,
+          "decider_name": deciderName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get a decider
+     * @param podId
+     * @param deciderName
+     * @returns DeciderResponse Successful Response
+     * @throws ApiError
+     */
+    static deciderGet(podId, deciderName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/deciders/{decider_name}",
+        path: {
+          "pod_id": podId,
+          "decider_name": deciderName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Save a new version of a decider
+     * Replace a decider's definition. The old version is kept, and decisions made with it still name it.
+     * @param podId
+     * @param deciderName
+     * @param requestBody
+     * @returns DeciderResponse Successful Response
+     * @throws ApiError
+     */
+    static deciderUpdate(podId, deciderName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/deciders/{decider_name}",
+        path: {
+          "pod_id": podId,
+          "decider_name": deciderName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List a decider's versions
+     * @param podId
+     * @param deciderName
+     * @param limit
+     * @returns DeciderVersionListResponse Successful Response
+     * @throws ApiError
+     */
+    static deciderVersionList(podId, deciderName, limit = 50) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/deciders/{decider_name}/versions",
+        path: {
+          "pod_id": podId,
+          "decider_name": deciderName
+        },
+        query: {
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List decisions
+     * Decisions in this pod, newest first: the ones shared with the pod and your own.
+     * @param podId
+     * @param decider Only this decider's decisions.
+     * @param openOnly Only decisions with a question left open.
+     * @param before Only decisions made before this time.
+     * @param limit
+     * @returns DecisionListResponse Successful Response
+     * @throws ApiError
+     */
+    static decisionList(podId, decider, openOnly = false, before, limit = 50) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/decisions",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "decider": decider,
+          "open_only": openOnly,
+          "before": before,
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Ask a decision
+     * Ask a decider -- a pod decider by name, `system:<name>`, or questions passed inline -- about one state. With a `subject`, a decider is asked once: asking again returns the recorded decision.
+     * @param podId
+     * @param requestBody
+     * @returns DecisionResponse Successful Response
+     * @throws ApiError
+     */
+    static decisionCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/decisions",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Decide many rows
+     * Ask one decider about many rows at once, for sorting a list rather than one event. Rows are decided in parallel within the bulk budget.
+     * @param podId
+     * @param requestBody
+     * @returns RowsResponse Successful Response
+     * @throws ApiError
+     */
+    static decisionRows(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/decisions/rows",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get a decision
+     * @param podId
+     * @param decisionId
+     * @returns DecisionResponse Successful Response
+     * @throws ApiError
+     */
+    static decisionGet(podId, decisionId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/decisions/{decision_id}",
+        path: {
+          "pod_id": podId,
+          "decision_id": decisionId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Answer a decision
+     * Answer questions a decision left open, or correct a machine's answer. A person's answer becomes an example the decider learns from.
+     * @param podId
+     * @param decisionId
+     * @param requestBody
+     * @returns DecisionResponse Successful Response
+     * @throws ApiError
+     */
+    static decisionAnswer(podId, decisionId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/decisions/{decision_id}/answer",
+        path: {
+          "pod_id": podId,
+          "decision_id": decisionId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/decisions.ts
+  var DecisionsNamespace = class {
+    constructor(client, podId) {
+      __publicField(this, "client", client);
+      __publicField(this, "podId", podId);
+    }
+    /** With a `subject`, the decider is asked about it once; asking again returns the record. */
+    decide(request2) {
+      return this.client.request(
+        () => {
+          var _a;
+          return DecisionsService.decisionCreate(this.podId(), {
+            ...request2,
+            visibility: (_a = request2.visibility) != null ? _a : "PERSONAL"
+          });
+        }
+      );
+    }
+    decideRows(request2) {
+      return this.client.request(
+        () => {
+          var _a;
+          return DecisionsService.decisionRows(this.podId(), {
+            ...request2,
+            visibility: (_a = request2.visibility) != null ? _a : "PERSONAL"
+          });
+        }
+      );
+    }
+    /** Newest first: the pod's shared decisions and your own. */
+    list(options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b;
+          return DecisionsService.decisionList(
+            this.podId(),
+            options.decider,
+            (_a = options.openOnly) != null ? _a : false,
+            options.before,
+            (_b = options.limit) != null ? _b : 50
+          );
+        }
+      );
+    }
+    get(decisionId) {
+      return this.client.request(() => DecisionsService.decisionGet(this.podId(), decisionId));
+    }
+    /** Answer an open question or correct a machine's answer; it becomes an example. */
+    answer(decisionId, answers) {
+      return this.client.request(
+        () => (
+          // The literal, not `AnswerBody.by.PERSON`: a value import would bundle
+          // the generated enum object for one string.
+          DecisionsService.decisionAnswer(this.podId(), decisionId, { answers, by: "person" })
+        )
+      );
+    }
+  };
+  var DecidersNamespace = class {
+    constructor(client, podId) {
+      __publicField(this, "client", client);
+      __publicField(this, "podId", podId);
+    }
+    list(limit = 100) {
+      return this.client.request(() => DecisionsService.deciderList(this.podId(), limit));
+    }
+    create(name, definition) {
+      return this.client.request(() => DecisionsService.deciderCreate(this.podId(), { name, definition }));
+    }
+    get(name) {
+      return this.client.request(() => DecisionsService.deciderGet(this.podId(), name));
+    }
+    /** Saves a new version; the old one is kept, and decisions name theirs. */
+    update(name, definition) {
+      return this.client.request(() => DecisionsService.deciderUpdate(this.podId(), name, { definition }));
+    }
+    delete(name) {
+      return this.client.request(() => DecisionsService.deciderDelete(this.podId(), name));
+    }
+    versions(name, limit = 50) {
+      return this.client.request(() => DecisionsService.deciderVersionList(this.podId(), name, limit));
+    }
+    /** Decides sample rows without recording anything, compared with expected answers. */
+    test(request2) {
+      return this.client.request(() => DecisionsService.deciderTest(this.podId(), request2));
     }
   };
 
@@ -18277,6 +18643,9 @@ var LemmaClient = (() => {
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
       __publicField(this, "schedules");
+      /** Closed-set judgements asked about one piece of state; see {@link DecisionsNamespace}. */
+      __publicField(this, "decisions");
+      __publicField(this, "deciders");
       __publicField(this, "datastore");
       /** Alias of {@link datastore}, matching the Python SDK's `pod.queries`. */
       __publicField(this, "queries");
@@ -18335,6 +18704,8 @@ var LemmaClient = (() => {
       this.connectors = new ConnectorsNamespace(this._generated, this._http);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
       this.schedules = new SchedulesNamespace(this._generated, podIdFn);
+      this.decisions = new DecisionsNamespace(this._generated, podIdFn);
+      this.deciders = new DecidersNamespace(this._generated, podIdFn);
       this.datastore = new DatastoreNamespace(
         this._generated,
         podIdFn,

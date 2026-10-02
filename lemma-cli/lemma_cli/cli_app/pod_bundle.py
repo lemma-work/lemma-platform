@@ -139,6 +139,15 @@ from ..cli_core.io import list_items, to_plain
 from ..cli_core.payload import build_request
 from ..cli_core.state import err_console as console
 from .app_bundle import classify_app_source, deploy_app_bundle
+from .decider_bundle import (
+    DeciderRoutes,
+    decider_issues,
+    decider_names_for_grants,
+    export_deciders,
+    import_deciders,
+    loose_decider_files,
+    plan_deciders,
+)
 from .enums import SURFACE_PLATFORMS
 from lemma_pod_bundle.limits import (
     MAX_APP_BYTES,
@@ -1109,6 +1118,16 @@ def export_pod_bundle(
                 f"data-table '{missing}' is not a table in this pod; skipped"
             )
 
+    # Definitions only: what a decider learned is people's data and stays home.
+    decider_count = 0
+    if should_export("deciders"):
+        decider_count = export_deciders(
+            DeciderRoutes(pod_sdk),
+            bundle_root,
+            wanted=should_export_name,
+            warnings=export_warnings,
+        )
+
     functions: list[dict[str, Any]] = []
     if should_export("functions"):
         functions = [
@@ -1310,6 +1329,7 @@ def export_pod_bundle(
         "variables": sorted(variables.keys()),
         "counts": {
             "tables": len(tables),
+            "deciders": decider_count,
             "functions": len(functions),
             "agents": len(agents),
             "workflows": len(workflows),
@@ -1418,6 +1438,7 @@ def _build_import_plan(
 
     for resource_type in (
         "tables",
+        "deciders",
         "functions",
         "agents",
         "workflows",
@@ -1475,6 +1496,8 @@ def _build_import_plan(
                 issues.extend(
                     _validate_function_payload(resource_dir, resource_name, payload)
                 )
+            if resource_type == "deciders":
+                issues.extend(decider_issues(resource_dir, payload))
             if resource_type == "schedules":
                 if not payload.get("name"):
                     payload["name"] = resource_name
@@ -1616,6 +1639,13 @@ def _build_import_plan(
                 )
         else:
             summary["surfaces"].append(f"created:{surface_name}")
+
+    decider_entries, decider_problems = plan_deciders(
+        DeciderRoutes(pod_sdk), _resource_dirs(source_dir, "deciders"), upsert=upsert
+    )
+    summary["deciders"].extend(decider_entries)
+    issues.extend(decider_problems)
+    issues.extend(loose_decider_files(source_dir))
 
     app_dirs = _resource_dirs(source_dir, "apps")
     existing_apps = (
@@ -1863,6 +1893,10 @@ def _validate_grant_references(
         "workflow": ("workflows", lambda: pod_sdk.workflows.list(limit=1000)),
         "schedule": ("schedules", lambda: pod_sdk.schedules.list(limit=1000)),
         "app": ("apps", lambda: pod_sdk.apps.list(limit=1000)),
+        "decider": (
+            "deciders",
+            lambda: decider_names_for_grants(DeciderRoutes(pod_sdk)),
+        ),
     }
     resolved_targets: dict[str, set[str]] = {}
 
@@ -2308,28 +2342,55 @@ def _update_app_with_conflict_retry(
 
 
 def _schedule_create_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: payload[key]
-        for key in SCHEDULE_APPLY_FIELDS
-        if key in payload and payload[key] is not None
-    }
+    return _without_time_filter(
+        payload,
+        {
+            key: payload[key]
+            for key in SCHEDULE_APPLY_FIELDS
+            if key in payload and payload[key] is not None
+        },
+    )
 
 
 def _schedule_update_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: payload[key]
-        for key in (
-            "name",
-            "config",
-            "agent_name",
-            "workflow_name",
-            "filter_instruction",
-            "filter_output_schema",
-            "is_active",
-            "visibility",
+    return _without_time_filter(
+        payload,
+        {
+            key: payload[key]
+            for key in (
+                "name",
+                "config",
+                "agent_name",
+                "workflow_name",
+                "filter_instruction",
+                "filter_output_schema",
+                "is_active",
+                "visibility",
+            )
+            if key in payload
+        },
+    )
+
+
+#: A TIME schedule has no event to filter, and the API refuses a filter on one.
+#: Bundles exported while it was accepted and ignored can still carry one, and
+#: the server-side import drops it the same way.
+_TIME_SCHEDULE_FILTER_FIELDS = ("filter_instruction", "filter_output_schema")
+
+
+def _without_time_filter(
+    payload: dict[str, Any], fields: dict[str, Any]
+) -> dict[str, Any]:
+    if str(payload.get("schedule_type") or "").upper() != "TIME":
+        return fields
+    dropped = [key for key in _TIME_SCHEDULE_FILTER_FIELDS if fields.pop(key, None)]
+    if dropped:
+        console.print(
+            f"[yellow]schedule[/yellow] {payload.get('name')} runs on a timer, "
+            f"which has no event to filter; its {' and '.join(dropped)} was not "
+            "imported"
         )
-        if key in payload
-    }
+    return fields
 
 
 def _create_schedule_from_payload(
@@ -2578,6 +2639,18 @@ def import_pod_bundle(
         source_dir=source_dir,
         var_overrides=variables,
         member_override=pod_member_id,
+    )
+
+    # Before anything that can name a decider: a workflow's DECISION step, a
+    # schedule, an agent's `decider:<name>:execute` grant. The server-side
+    # import applies them at the same point.
+    summary["deciders"].extend(
+        import_deciders(
+            DeciderRoutes(pod_sdk),
+            _resource_dirs(source_dir, "deciders"),
+            prepare=apply_variables,
+            upsert=upsert,
+        )
     )
 
     # Grants reference resources by name, and may point at workflows, apps,

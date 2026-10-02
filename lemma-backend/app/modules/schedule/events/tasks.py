@@ -19,3 +19,15 @@ async def prune_schedule_runs_task() -> None:
     removed = await prune_schedule_runs(async_session_maker)
     if removed:
         logger.info("schedule.runs.pruned", deleted_count=removed)
+
+
+# Every minute: a digest's cadence is at least fifteen, so a minute late is the
+# worst it runs. Every replica's tick is safe -- the claim decides who sends.
+@streaq_cron("* * * * *", name="dispatch_schedule_digests")
+async def dispatch_schedule_digests_task() -> None:
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.schedule.services.digest_dispatcher import dispatch_due_digests
+
+    sent = await dispatch_due_digests(SessionUnitOfWorkFactory(async_session_maker))
+    if sent:
+        logger.info("schedule.digests.dispatched", digest_count=sent)

@@ -21,4 +21,5 @@ export enum ResourceType {
     CONNECTOR_ACCOUNT = 'connector_account',
     WEB_LOGIN = 'web_login',
     CONNECTOR_AUTH_CONFIG = 'connector_auth_config',
+    DECIDER = 'decider',
 }

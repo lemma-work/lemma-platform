@@ -7,7 +7,11 @@ per-resource payload normalization, and archive pack/extract.
 
 from __future__ import annotations
 
-from .apply_fields import SCHEDULE_APPLY_FIELDS, SURFACE_APPLY_FIELDS
+from .apply_fields import (
+    DECIDER_APPLY_FIELDS,
+    SCHEDULE_APPLY_FIELDS,
+    SURFACE_APPLY_FIELDS,
+)
 from .archive import extract_bundle, pack_bundle
 from .diff import TableDiff, diff_table_columns
 from .jsonc import loads_jsonc, strip_jsonc
@@ -32,6 +36,7 @@ from .portability import require_account_variable_metadata
 
 __all__ = [
     "APP_MANIFEST_ALIAS",
+    "DECIDER_APPLY_FIELDS",
     "EXPORTABLE_RESOURCE_DIRS",
     "FILES_MANIFEST",
     "FORMAT_VERSION",

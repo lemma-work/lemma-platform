@@ -77,9 +77,9 @@ model from `pod-model.md`.
   - `<node_id>.<field>` — output of any executed node (form fields, agent output, function result)
   - `start.payload.*`, `start.metadata.*`, `start.llm_output.*` — trigger data, only on triggered runs (manual runs have no `start`)
   - `loop.item`, `loop.index`, `loop.count`, `loop.<item_var>` — current loop iteration, only inside loop bodies
-- **One expression dialect**: everything is **JMESPath** — input mappings, decision conditions, loop `items_path`, assignee expressions.
+- **One expression dialect**: everything is **JMESPath** — input mappings, decision rule conditions, loop `items_path`, assignee expressions. (A DECISION node's *question* is not an expression: it is a closed question a decider answers — see DECISION below.)
 - **Missing paths fail loudly**: a required input mapping that resolves to nothing FAILS the run naming the path (use `"optional": true` or a literal binding for genuinely optional values). Decision conditions treat missing paths as falsy — they probe, mappings demand.
-- **Waits**: FORM waits for a pod member's submission; AGENT waits for an agent conversation; FUNCTION can wait on async runs; WAIT_UNTIL waits on a timer. The run's `active_wait` shows the type, node, assignee, and external reference.
+- **Waits**: FORM waits for a pod member's submission; AGENT waits for an agent conversation; FUNCTION can wait on async runs; WAIT_UNTIL waits on a timer; a DECISION node that asks a question waits (briefly) for its answer. The run's `active_wait` shows the type, node, assignee, and external reference.
 
 Start types: `MANUAL`, `SCHEDULED`, `DATASTORE_EVENT`, `EVENT`. Create schedules (see `schedules-and-triggers.md`) for non-manual starts; keep the graph focused on what happens after `start.payload` arrives.
 
@@ -203,6 +203,8 @@ Use for validation, calculations, reliable writes, external API calls. A FUNCTIO
 
 ### DECISION — branching
 
+A DECISION node picks the next node two ways, in this order: **rules** (JMESPath conditions over the run context — free, instant, blind to meaning) and then, if no rule matched and the node has one, a **question** (a closed judgement a decider answers — "which of these?" about an email, a ticket, a row). It needs rules, a question, or both; a node with neither is refused at save.
+
 Branch conditions live in `config.rules`, **not on edges**. Edge `condition` fields are never evaluated.
 
 ```json
@@ -239,6 +241,57 @@ edge.condition == 'approved'        # edge conditions are not evaluated
 ```
 
 Truthiness: `null`, `false`, `""`, `[]`, `{}` are falsy; everything else (including `` `0` ``) is truthy. Missing paths are falsy. Conditions are compile-checked at graph save, so typos in syntax are caught before any run.
+
+#### Asking a question — classification without an agent run
+
+When the branch depends on *meaning* — is this email a customer waiting, an invoice, or a newsletter? — give the node a `question` instead of an AGENT step to classify. The question is asked of the decisions ladder (the decider's own rules, then System One, then the system model), recorded once, and its answer picks the branch:
+
+```json
+{
+  "id": "triage",
+  "type": "DECISION",
+  "label": "What is this email?",
+  "config": {
+    "rules": [
+      { "condition": "contains(start.payload.labels, 'CATEGORY_PROMOTIONS')", "next_node_id": "archive" }
+    ],
+    "question": {
+      "input": {
+        "from": { "type": "expression", "value": "start.payload.from" },
+        "subject": { "type": "expression", "value": "start.payload.subject" },
+        "snippet": { "type": "expression", "value": "start.payload.snippet" }
+      },
+      "definition": {
+        "description": "What Kit does with each new support email.",
+        "questions": {
+          "action": {
+            "type": "choice",
+            "prompt": "What should Kit do with this email?",
+            "options": {
+              "act": "A customer is waiting, or an invoice needs filing.",
+              "ask": "Needs a person: pricing exceptions, legal, anything personal.",
+              "ignore": "Newsletters, receipts, automated notices."
+            },
+            "fallback": "ask"
+          }
+        }
+      },
+      "branches": { "act": "draft_reply", "ask": "human_review", "ignore": "archive" },
+      "on_open": "human_review"
+    }
+  }
+}
+```
+
+- **`input`** is one binding, or named bindings that become an object — the same typed bindings as `input_mapping`, resolved when the step runs and compile-checked at save. Bind only what the judgement needs: that is all an engine ever sees.
+- **`definition`** asks inline: exactly one `choice` question with at least two options, and its `branches` must name those options (a typo is refused at save). Or name a decider instead with **`decider`**: a pod decider (`"email-triage"`, asked under its own `decider.execute` grant, as the run's owner) or a system one (`"system:<name>"`). Use a pod decider when people should be able to correct answers and teach it; an inline definition learns nothing. A pod decider does not travel in a bundle yet, so a bundled workflow that names one fails its run (`No decider named …`) in a pod that lacks it. With a named decider that asks several questions, set **`question_key`** to the one to branch on.
+- **`branches`** maps an option to the node it goes to. Like rule targets they are not edges; don't add edges to them. An answer with no branch falls through to the default (first) outgoing edge, exactly as an unmatched rule does.
+- **`on_open`** is where a run goes when no rung could commit to an answer. Without it an open question takes its `fallback` option's branch — or falls through.
+- **Output** — always the same keys, so later steps can bind `triage.choice`: `{"matched_condition", "choice", "decision_id", "open", "answered_by"}`. A matched rule fills only `matched_condition`; an asked question fills the rest (`choice` is the option, or the fallback when the question was left open; `open` lists open question keys; `answered_by` is `rules`, `system_one` or `model`, and empty when open). A node with only rules still outputs just `{"matched_condition": ...}`.
+- **Asked once per step.** The decision is filed under `workflow:<run id>:<node id>:<loop index>`, so a retried or resumed step reads the recorded answer instead of asking again; each loop iteration asks its own.
+- **How it runs**: the step suspends on a `DECISION` wait (the run stays `RUNNING`) and a job asks with no database transaction open, then resumes the run down the chosen branch — quick when the decider's rules or System One answer, slower when it climbs to the model. A question the pod may not ask, or a decider that does not exist, fails the run with the reason.
+
+Rules still go first and cost nothing, so keep the cases a condition can decide as rules (`contains(labels, 'SPAM')`) and let the question handle the rest.
 
 ### LOOP — iterate an array
 
@@ -290,7 +343,7 @@ Common paths: `start.payload.<field>` (triggered runs), `<form_node_id>.<field>`
 
 - **Approval gate**: `FUNCTION prepare → FORM approve → DECISION → FUNCTION commit / END`. The classic; humans approve what code prepared.
 - **Agent-assisted review**: `FORM intake → AGENT analyze → FORM reviewer_decision (sees agent output) → FUNCTION save`. The agent does the heavy reading; the human decides.
-- **Escalate on low confidence**: ``AGENT classify → DECISION (classify.confidence >= `0.8`?) → auto path / FORM human_classify``. Humans handle only the uncertain tail.
+- **Classify, then route**: `DECISION` with a `question` (a pod decider or an inline `choice`) `→` one branch per option, with `on_open → FORM human_classify`. Humans handle only what no rung could answer, and there is no agent run just to choose a branch. Keep an AGENT step for work that needs investigation or tools, not for picking one of a few labels.
 - **Exception routing**: `FUNCTION validate → DECISION → FORM fix_data → FUNCTION retry`. Failures become assigned work instead of dead runs.
 - **Timed follow-up**: `FORM decision → WAIT_UNTIL → AGENT draft_follow_up → FORM send_review`.
 - **Batch with human sampling**: schedule starts workflow → `FUNCTION load_batch → LOOP → AGENT process`, decision inside the loop assigns FORMs only for flagged items.
@@ -362,19 +415,19 @@ lemma workflows runs cancel <run-id>          # kill a stuck/unwanted run
 
 Workflow definition commands: `lemma workflows list | get | create | update | update-graph | delete`. Run commands live under `lemma workflows runs <verb>`; `run` (create + auto-submit to the entry form) stays top-level like `agents run` / `functions run`.
 
-Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLED`. What a `WAITING` run is waiting on is `active_wait.wait_type` (`HUMAN`, `AGENT`, `FUNCTION`, `TIME`).
+Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLED`. What a run is waiting on is `active_wait.wait_type` (`HUMAN`, `AGENT`, `FUNCTION`, `TIME`, `DECISION`); only `HUMAN` makes it `WAITING`.
 
 Debugging a run, in order:
 
 1. `runs get` → check `status`, `current_node_id`, `failed_node_id`, `error`. Missing-path failures name the exact expression and input.
 2. Read `step_history` — every executed node with status, output, error, timestamps. This shows exactly which mapping or condition misbehaved.
-3. A run stuck in `WAITING`: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time. Forms are completed via the app/frontend or `runs submit-form --data`.
-4. Wrong branch taken: read the DECISION node's output in `step_history` (`matched_condition` shows which rule fired, `null` means the default edge) and re-check rule conditions against the context — remember literals need backticks (`` == `true` ``, `` > `0` ``).
+3. A run stuck in `WAITING`: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time, `DECISION` the decision's subject (and the question it is asking, in `payload`). Forms are completed via the app/frontend or `runs submit-form --data`.
+4. Wrong branch taken: read the DECISION node's output in `step_history` (`matched_condition` shows which rule fired, `null` means no rule did) and re-check rule conditions against the context — remember literals need backticks (`` == `true` ``, `` > `0` ``). For a question, `choice`, `answered_by` and `open` say what was answered and by which rung; `decision_id` is the recorded decision, which a person can correct so the decider learns.
 
 ## Limits & Gotchas
 
 - Import **replaces the whole graph** — there's no node-level merge. The bundle is the source of truth.
-- Edge `condition` labels are decorative. Routing = DECISION rules + the default edge (the **first-listed** outgoing edge); never let that default edge share a target with a rule, or unmatched inputs get mis-routed silently.
+- Edge `condition` labels are decorative. Routing = DECISION rules, then its question's `branches`/`on_open`, then the default edge (the **first-listed** outgoing edge); never let that default edge share a target with a rule or a branch, or unmatched inputs get mis-routed silently.
 - Non-manual `start` types need a `start.config` (`SCHEDULED`/`DATASTORE_EVENT`/`EVENT`); DATASTORE_EVENT exposes the changed record's id at `start.metadata.record_id`, not `start.payload.*`.
 - `input_mapping` strings are not auto-expressions; always `{"type": "expression"|"literal", "value": ...}`.
 - Node ids `start` and `loop` are reserved.
@@ -386,7 +439,7 @@ Debugging a run, in order:
 
 - Run with a realistic form payload; confirm `COMPLETED` and inspect `step_history` for every expected node.
 - For each FORM: confirm the wait appears in the assignee's `lemma workflows runs waiting` queue, submit as that member, confirm other members get 403.
-- For each DECISION: drive both branches with test payloads; don't infer routing from edge labels.
+- For each DECISION: drive both branches with test payloads; don't infer routing from edge labels. For a question, also drive the open path (`on_open` or the fallback's branch) — a question no rung can answer is the case people forget.
 - For `FUNCTION`/`AGENT` nodes: confirm each callee is granted its tables/files/connectors (no `MISSING_WORKLOAD_RESOURCE_GRANT`), and that RLS reads match the run owner's seat. Run it once as the **lowest-privileged member who will really start it** — that is the seat `DELEGATION_EXCEEDS_INVOKER` shows up in, and never the builder's own.
 - Confirm final table/file state matches the business outcome, not just the run status.
 

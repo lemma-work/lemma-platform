@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import datetime
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, TypeVar, cast
+
+from attrs import define as _attrs_define
+from attrs import field as _attrs_field
+from dateutil.parser import isoparse
+
+from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.decision_response import DecisionResponse
+
+
+T = TypeVar("T", bound="DecisionListResponse")
+
+
+@_attrs_define
+class DecisionListResponse:
+    """
+    Attributes:
+        items (list[DecisionResponse]):
+        next_before (datetime.datetime | None | Unset): Pass as `before` for the next, older page.
+    """
+
+    items: list[DecisionResponse]
+    next_before: datetime.datetime | None | Unset = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        items = []
+        for items_item_data in self.items:
+            items_item = items_item_data.to_dict()
+            items.append(items_item)
+
+        next_before: None | str | Unset
+        if isinstance(self.next_before, Unset):
+            next_before = UNSET
+        elif isinstance(self.next_before, datetime.datetime):
+            next_before = self.next_before.isoformat()
+        else:
+            next_before = self.next_before
+
+        field_dict: dict[str, Any] = {}
+        field_dict.update(self.additional_properties)
+        field_dict.update(
+            {
+                "items": items,
+            }
+        )
+        if next_before is not UNSET:
+            field_dict["next_before"] = next_before
+
+        return field_dict
+
+    @classmethod
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.decision_response import DecisionResponse
+
+        d = dict(src_dict)
+        items = []
+        _items = d.pop("items")
+        for items_item_data in _items:
+            items_item = DecisionResponse.from_dict(items_item_data)
+
+            items.append(items_item)
+
+        def _parse_next_before(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                next_before_type_0 = isoparse(data)
+
+                return next_before_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        next_before = _parse_next_before(d.pop("next_before", UNSET))
+
+        decision_list_response = cls(
+            items=items,
+            next_before=next_before,
+        )
+
+        decision_list_response.additional_properties = d
+        return decision_list_response
+
+    @property
+    def additional_keys(self) -> list[str]:
+        return list(self.additional_properties.keys())
+
+    def __getitem__(self, key: str) -> Any:
+        return self.additional_properties[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.additional_properties[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self.additional_properties[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.additional_properties

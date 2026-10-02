@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from ..models.schedule_detail_response_filter_output_schema_type_0 import (
         ScheduleDetailResponseFilterOutputSchemaType0,
     )
+    from ..models.triage_config import TriageConfig
 
 
 T = TypeVar("T", bound="ScheduleDetailResponse")
@@ -55,6 +56,8 @@ class ScheduleDetailResponse:
         last_fire_status (None | ScheduleFireStatus | Unset):
         last_fired_at (datetime.datetime | None | Unset):
         last_run_id (None | str | Unset):
+        next_digest_at (datetime.datetime | None | Unset):
+        triage (None | TriageConfig | Unset):
         workflow_name (None | str | Unset):
     """
 
@@ -84,6 +87,8 @@ class ScheduleDetailResponse:
     last_fire_status: None | ScheduleFireStatus | Unset = UNSET
     last_fired_at: datetime.datetime | None | Unset = UNSET
     last_run_id: None | str | Unset = UNSET
+    next_digest_at: datetime.datetime | None | Unset = UNSET
+    triage: None | TriageConfig | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -91,6 +96,7 @@ class ScheduleDetailResponse:
         from ..models.schedule_detail_response_filter_output_schema_type_0 import (
             ScheduleDetailResponseFilterOutputSchemaType0,
         )
+        from ..models.triage_config import TriageConfig
 
         account_id: None | str
         if isinstance(self.account_id, UUID):
@@ -199,6 +205,22 @@ class ScheduleDetailResponse:
         else:
             last_run_id = self.last_run_id
 
+        next_digest_at: None | str | Unset
+        if isinstance(self.next_digest_at, Unset):
+            next_digest_at = UNSET
+        elif isinstance(self.next_digest_at, datetime.datetime):
+            next_digest_at = self.next_digest_at.isoformat()
+        else:
+            next_digest_at = self.next_digest_at
+
+        triage: dict[str, Any] | None | Unset
+        if isinstance(self.triage, Unset):
+            triage = UNSET
+        elif isinstance(self.triage, TriageConfig):
+            triage = self.triage.to_dict()
+        else:
+            triage = self.triage
+
         workflow_name: None | str | Unset
         if isinstance(self.workflow_name, Unset):
             workflow_name = UNSET
@@ -245,6 +267,10 @@ class ScheduleDetailResponse:
             field_dict["last_fired_at"] = last_fired_at
         if last_run_id is not UNSET:
             field_dict["last_run_id"] = last_run_id
+        if next_digest_at is not UNSET:
+            field_dict["next_digest_at"] = next_digest_at
+        if triage is not UNSET:
+            field_dict["triage"] = triage
         if workflow_name is not UNSET:
             field_dict["workflow_name"] = workflow_name
 
@@ -258,6 +284,7 @@ class ScheduleDetailResponse:
         from ..models.schedule_detail_response_filter_output_schema_type_0 import (
             ScheduleDetailResponseFilterOutputSchemaType0,
         )
+        from ..models.triage_config import TriageConfig
 
         d = dict(src_dict)
 
@@ -459,6 +486,40 @@ class ScheduleDetailResponse:
 
         last_run_id = _parse_last_run_id(d.pop("last_run_id", UNSET))
 
+        def _parse_next_digest_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                next_digest_at_type_0 = isoparse(data)
+
+                return next_digest_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        next_digest_at = _parse_next_digest_at(d.pop("next_digest_at", UNSET))
+
+        def _parse_triage(data: object) -> None | TriageConfig | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                triage_type_0 = TriageConfig.from_dict(data)
+
+                return triage_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | TriageConfig | Unset, data)
+
+        triage = _parse_triage(d.pop("triage", UNSET))
+
         def _parse_workflow_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -495,6 +556,8 @@ class ScheduleDetailResponse:
             last_fire_status=last_fire_status,
             last_fired_at=last_fired_at,
             last_run_id=last_run_id,
+            next_digest_at=next_digest_at,
+            triage=triage,
             workflow_name=workflow_name,
         )
 

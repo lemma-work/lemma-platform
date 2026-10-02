@@ -27,6 +27,9 @@ _MACHINE_WAIT_TYPES = (
     WorkflowRunWaitType.FUNCTION.value,
     WorkflowRunWaitType.AGENT.value,
     WorkflowRunWaitType.TIME.value,
+    # The decision itself is kept by the decisions module, with its evidence
+    # and who answered; the wait row was only how the run waited for it.
+    WorkflowRunWaitType.DECISION.value,
 )
 
 _TERMINAL_STATUSES = (

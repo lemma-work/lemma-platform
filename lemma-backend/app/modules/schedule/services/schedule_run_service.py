@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef
@@ -16,7 +17,12 @@ from app.modules.schedule.domain.interfaces import (
     DatastoreSchedulePolicy,
     ScheduleRepository,
 )
-from app.modules.schedule.domain.schedule import DatastoreScheduleConfig, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    DatastoreScheduleConfig,
+    ScheduleRunEntity,
+    ScheduleRunStatus,
+    ScheduleType,
+)
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
@@ -36,8 +42,15 @@ class ScheduleRunService:
         self.run_repository = ScheduleRunRepository(uow)
 
     async def list_schedule_runs(
-        self, *, pod_id: UUID, schedule_id: UUID, ctx: Context, limit: int
-    ):
+        self,
+        *,
+        pod_id: UUID,
+        schedule_id: UUID,
+        ctx: Context,
+        limit: int,
+        statuses: Sequence[ScheduleRunStatus] = (),
+    ) -> list[ScheduleRunEntity]:
+        """The schedule's runs, newest first; only those in `statuses` when given."""
         schedule = await self.schedule_repository.get(schedule_id, ctx=ctx)
         if schedule is None or schedule.pod_id != pod_id:
             raise ScheduleNotFoundError()
@@ -48,7 +61,7 @@ class ScheduleRunService:
             schedule=schedule, pod_id=pod_id, ctx=ctx
         )
         return await self.run_repository.list_for_schedule(
-            schedule_id, limit=limit, user_id=run_user_id
+            schedule_id, limit=limit, user_id=run_user_id, statuses=statuses
         )
 
     async def _visible_run_user_id(

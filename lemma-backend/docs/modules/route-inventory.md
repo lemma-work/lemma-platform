@@ -175,6 +175,23 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/update` | `record.bulk_update` | Bulk Update |
 | PUT | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.attach` | Attach Document Markdown |
 
+## decisions
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/deciders/{decider_name}` | `decider.delete` | Delete a decider |
+| GET | `/pods/{pod_id}/deciders` | `decider.list` | List deciders |
+| GET | `/pods/{pod_id}/deciders/{decider_name}` | `decider.get` | Get a decider |
+| GET | `/pods/{pod_id}/deciders/{decider_name}/versions` | `decider.version.list` | List a decider's versions |
+| GET | `/pods/{pod_id}/decisions` | `decision.list` | List decisions |
+| GET | `/pods/{pod_id}/decisions/{decision_id}` | `decision.get` | Get a decision |
+| POST | `/pods/{pod_id}/deciders` | `decider.create` | Create a decider |
+| POST | `/pods/{pod_id}/deciders/test` | `decider.test` | Test a decider |
+| POST | `/pods/{pod_id}/decisions` | `decision.create` | Ask a decision |
+| POST | `/pods/{pod_id}/decisions/rows` | `decision.rows` | Decide many rows |
+| POST | `/pods/{pod_id}/decisions/{decision_id}/answer` | `decision.answer` | Answer a decision |
+| PUT | `/pods/{pod_id}/deciders/{decider_name}` | `decider.update` | Save a new version of a decider |
+
 ## function
 
 | Method | Path | Operation ID | Summary |

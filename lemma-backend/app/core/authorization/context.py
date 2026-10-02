@@ -41,6 +41,7 @@ class ResourceType(str, Enum):
     CONNECTOR_ACCOUNT = "connector_account"
     WEB_LOGIN = "web_login"
     CONNECTOR_AUTH_CONFIG = "connector_auth_config"
+    DECIDER = "decider"
 
 
 class ResourceVisibility(str, Enum):

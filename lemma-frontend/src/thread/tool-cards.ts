@@ -14,7 +14,8 @@
  *
  *  The return shapes are the backend's, in `app/modules/agent/tools/`:
  *  `browser/models.py`, `workspace_cli/models.py`, `web/models.py`,
- *  `connectors/pydantic_adapter.py` and `waiting/models.py`. A local coding
+ *  `connectors/pydantic_adapter.py`, `decisions/results.py` and
+ *  `waiting/models.py`. A local coding
  *  agent's calls arrive through the Agent Host already in the canonical
  *  vocabulary of `docs/architecture/agent-host-events.md` ("Canonical tools"),
  *  which is where the file, search and sub-agent cards read their shapes. */
@@ -27,6 +28,7 @@ export type ToolCard =
     | TerminalRun
     | SourceList
     | ConnectorRun
+    | DecisionRun
     | WaitFor
     | ImageLook
     | FileRead
@@ -290,6 +292,32 @@ export interface ConnectorRun {
     /** What came back, as one line. The result is arbitrary provider JSON, so
      *  it is described rather than printed. */
     summary: string;
+}
+
+/** A `decide` or a `test_decider`: a closed-set question put to one thing or
+ *  to many rows, answered by rules, a classifier or a model
+ *  (`agent/tools/decisions/results.py`). `define_decider` and
+ *  `answer_decision` say all they need on the grey line. */
+export interface DecisionRun {
+    kind: "decision";
+    /** A `test_decider`: every row answered for real, and nothing recorded. */
+    trial: boolean;
+    /** The saved decider asked, or `inline` for questions passed with the call. */
+    decider: string;
+    /** One state's answers, and which rung gave each: `rules`, `system_one`
+     *  or `model`. */
+    answers: { question: string; value: string; by: string }[];
+    /** How many rows were decided. Absent for a single state. */
+    rows?: number;
+    /** Per question, how many rows got each answer, most common first. */
+    counts: { question: string; tallies: { answer: string; count: number }[] }[];
+    /** Rows, or one state's questions, that nothing on the ladder was sure of. */
+    open: number;
+    /** Where a batch too large to return inline was written. */
+    savedTo: string;
+    pending: boolean;
+    failed: boolean;
+    error: string;
 }
 
 /** A `wait_for`: the run put itself down until a length of time passed, a
@@ -724,6 +752,35 @@ function connectorCard(args: unknown, result: unknown, answered: boolean): Conne
         failed: Boolean(error),
         error: message || error,
         summary: error ? "" : describe(resultField(result, "result")),
+    };
+}
+
+function decisionCard(trial: boolean, args: unknown, result: unknown, answered: boolean): DecisionRun {
+    const answers = Object.entries(asRecord(resultField(result, "answers"))).map(([question, answer]) => ({
+        question,
+        value: describe(asRecord(answer).value),
+        by: asString(asRecord(answer).by),
+    }));
+    const counts = Object.entries(asRecord(resultField(result, "counts"))).map(([question, tallies]) => ({
+        question,
+        tallies: Object.entries(asRecord(tallies))
+            .map(([answer, count]) => ({ answer, count: asNumber(count) ?? 0 }))
+            .sort((one, other) => other.count - one.count),
+    }));
+    /* One state lists its open questions; a batch counts its open rows. */
+    const openKeys = resultField(result, "open");
+    const openRows = asNumber(asRecord(resultField(result, "open_rows")).count);
+    return {
+        kind: "decision",
+        trial,
+        decider: asString(asRecord(args).decider) || "inline",
+        answers: answered ? answers : [],
+        rows: answered ? asNumber(resultField(result, trial ? "rows" : "decided")) : undefined,
+        counts: answered ? counts : [],
+        open: answered ? (openRows ?? (Array.isArray(openKeys) ? openKeys.length : 0)) : 0,
+        savedTo: answered ? asString(asRecord(resultField(result, "results_file")).pod_path) : "",
+        pending: !answered,
+        ...failureOf(result, answered),
     };
 }
 
@@ -1300,6 +1357,10 @@ export function parseToolCard({
             return sourcesCard("web_fetch", args, result, answered);
         case "run_connector_operation":
             return connectorCard(args, result, answered);
+        case "decide":
+            return decisionCard(false, args, result, answered);
+        case "test_decider":
+            return decisionCard(true, args, result, answered);
         case "wait_for":
             return waitCard(args, result, answered, atMs);
         case "read_file":

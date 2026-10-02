@@ -19,6 +19,7 @@ TAG_MODULES = {
     "Agent Surfaces (Ingress)": "agent_surfaces",
     "Agent Surfaces (Me)": "agent_surfaces",
     "Apps": "apps",
+    "Decisions": "decisions",
     "Auth": "identity",
     "Connectors": "connectors",
     "Functions": "function",

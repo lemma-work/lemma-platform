@@ -1,9 +1,30 @@
-/** Opt-in live smoke test; synthetic state only, never calls Lemma execution. */
+/** Opt-in live check of call routing; synthetic state only, and it never
+ *  dispatches work or keeps a decision.
+ *
+ *  It asks a running backend's decisions API as the person a token belongs
+ *  to, in a pod that person can use, so the engine that answers is the
+ *  backend's: System One when the backend has TYPESAFE_API_KEY, its system
+ *  model when not. Run from lemma-frontend, with the SDK built:
+ *
+ *    LEMMA_BASE_URL=https://api.example.com LEMMA_TOKEN=<token> LEMMA_POD_ID=<pod> \
+ *      node --experimental-strip-types scripts/check-call-routing.ts
+ *
+ *  CALL_CHECK_CASE=<name> runs one case. CALL_CHECK_DETAILS=1 prints each
+ *  decision's answers, including which engine gave them. */
 import env from "@next/env";
-import { routeWithJev } from "../src/call/jev-router.ts";
-import type { ConversationSnapshot, RouterState } from "../src/call/routing.ts";
+import { LemmaClient } from "lemma-sdk";
+import { routeWithDecisions } from "../src/call/jev-router.ts";
+import type { ConversationSnapshot, RouteAsk, RouterState } from "../src/call/routing.ts";
 env.loadEnvConfig(process.cwd());
-if (!process.env.TYPESAFE_API_KEY) throw new Error("Configure TYPESAFE_API_KEY first");
+const podId = process.env.LEMMA_POD_ID;
+if (!process.env.LEMMA_BASE_URL || !process.env.LEMMA_TOKEN || !podId) throw new Error("Set LEMMA_BASE_URL, LEMMA_TOKEN and LEMMA_POD_ID first");
+// The SDK reads the same three variables.
+const client = new LemmaClient();
+const ask = (name: string): RouteAsk => ({ podId, client: { request: async (method: string, path: string, options?: object) => {
+    const decision = await client.request(method, path, options);
+    if (process.env.CALL_CHECK_DETAILS) console.log(JSON.stringify({ name, answers: (decision as { answers?: unknown }).answers }));
+    return decision;
+} } as RouteAsk["client"] });
 const snapshot = (id: string, title: string, text: string): ConversationSnapshot => ({
     id, title, status: "RUNNING", updatedAt: new Date().toISOString(), fetchedAt: new Date().toISOString(),
     lastRunStatus: "RUNNING", error: null, messages: [{ role: "user", text, at: new Date().toISOString() }], plan: [], resources: [], needsInput: false, openQuestions: [],
@@ -25,12 +46,8 @@ const cases: Array<{ name: string; state: RouterState; action: string; target?: 
 const results = [];
 for (const c of cases.filter(c => !process.env.CALL_CHECK_CASE || c.name === process.env.CALL_CHECK_CASE)) {
     const start = performance.now();
-    const decision = await routeWithJev(c.state, { apiKey: process.env.TYPESAFE_API_KEY, model: process.env.TYPESAFE_MODEL,
-        ...(process.env.CALL_CHECK_DETAILS ? { fetch: async (url: string | URL | Request, init?: RequestInit) => {
-            const response = await fetch(url, init);
-            console.log(JSON.stringify({ name: c.name, answers: (await response.clone().json()).answers }));
-            return response;
-        } } : {}) });
+    // No subject: a synthetic case is asked afresh each run and never recorded.
+    const decision = await routeWithDecisions(c.state, ask(c.name));
     const pass = decision.action === c.action && (c.target === undefined || decision.conversationId === c.target) && (!c.delivery || decision.delivery === c.delivery);
     const row = { name: c.name, pass, ms: Math.round(performance.now() - start), ...decision };
     results.push(row); console.log(JSON.stringify(row));

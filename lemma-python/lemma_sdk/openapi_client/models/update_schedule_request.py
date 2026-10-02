@@ -9,6 +9,7 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.triage_config import TriageConfig
     from ..models.update_schedule_request_config_type_0 import (
         UpdateScheduleRequestConfigType0,
     )
@@ -27,11 +28,21 @@ class UpdateScheduleRequest:
     Attributes:
         agent_name (None | str | Unset):
         config (None | Unset | UpdateScheduleRequestConfigType0):
-        filter_instruction (None | str | Unset):
-        filter_output_schema (None | Unset | UpdateScheduleRequestFilterOutputSchemaType0):
+        filter_instruction (None | str | Unset): WEBHOOK and DATASTORE schedules only: a yes/no condition, in your own
+            words, that each event must meet to fire the schedule. It is asked as a decision (System One when configured,
+            the system model otherwise), and every event it turns down is recorded as a FILTERED run carrying the decision's
+            id. Refused on TIME schedules, which have no event to judge.
+        filter_output_schema (None | Unset | UpdateScheduleRequestFilterOutputSchemaType0): Optional JSON schema of
+            fields to extract from an event the filter let through; the target reads them, with `should_proceed` and
+            `decision_id`, as `llm_output`. Refused on TIME schedules.
         instruction (None | str | Unset):
         is_active (bool | None | Unset):
         name (None | str | Unset):
+        triage (None | TriageConfig | Unset): WEBHOOK and DATASTORE schedules only, instead of a filter: a pod decider
+            asked about each event, and what each option of its choice question does with it -- act (wake the target now),
+            digest (hold it for the next digest, one run for many events), ask (hold it and ask the event's owner, whose
+            answer routes it and teaches the decider) or ignore (record it as skipped). Every declared option must be
+            routed. Send null to remove it.
         visibility (None | str | Unset):
         workflow_name (None | str | Unset):
     """
@@ -45,11 +56,13 @@ class UpdateScheduleRequest:
     instruction: None | str | Unset = UNSET
     is_active: bool | None | Unset = UNSET
     name: None | str | Unset = UNSET
+    triage: None | TriageConfig | Unset = UNSET
     visibility: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.triage_config import TriageConfig
         from ..models.update_schedule_request_config_type_0 import (
             UpdateScheduleRequestConfigType0,
         )
@@ -105,6 +118,14 @@ class UpdateScheduleRequest:
         else:
             name = self.name
 
+        triage: dict[str, Any] | None | Unset
+        if isinstance(self.triage, Unset):
+            triage = UNSET
+        elif isinstance(self.triage, TriageConfig):
+            triage = self.triage.to_dict()
+        else:
+            triage = self.triage
+
         visibility: None | str | Unset
         if isinstance(self.visibility, Unset):
             visibility = UNSET
@@ -134,6 +155,8 @@ class UpdateScheduleRequest:
             field_dict["is_active"] = is_active
         if name is not UNSET:
             field_dict["name"] = name
+        if triage is not UNSET:
+            field_dict["triage"] = triage
         if visibility is not UNSET:
             field_dict["visibility"] = visibility
         if workflow_name is not UNSET:
@@ -143,6 +166,7 @@ class UpdateScheduleRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.triage_config import TriageConfig
         from ..models.update_schedule_request_config_type_0 import (
             UpdateScheduleRequestConfigType0,
         )
@@ -243,6 +267,23 @@ class UpdateScheduleRequest:
 
         name = _parse_name(d.pop("name", UNSET))
 
+        def _parse_triage(data: object) -> None | TriageConfig | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                triage_type_0 = TriageConfig.from_dict(data)
+
+                return triage_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | TriageConfig | Unset, data)
+
+        triage = _parse_triage(d.pop("triage", UNSET))
+
         def _parse_visibility(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -269,6 +310,7 @@ class UpdateScheduleRequest:
             instruction=instruction,
             is_active=is_active,
             name=name,
+            triage=triage,
             visibility=visibility,
             workflow_name=workflow_name,
         )

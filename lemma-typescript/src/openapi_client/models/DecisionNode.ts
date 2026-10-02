@@ -4,8 +4,9 @@
 /* eslint-disable */
 import type { DecisionNodeConfig } from './DecisionNodeConfig.js';
 /**
- * Decision node. Routes to the first rule whose condition is truthy;
- * falls through to the default outgoing edge when no rule matches.
+ * Decision node. Routes to the first rule whose condition is truthy,
+ * then asks its question when it has one; falls through to the default
+ * outgoing edge when neither picks a node.
  */
 export type DecisionNode = {
     config: DecisionNodeConfig;

@@ -17,6 +17,7 @@ from pydantic_ai.capabilities import AbstractCapability
 from app.modules.agent.tools.registry import (
     browser_toolset,
     connectors_toolset,
+    decisions_toolset,
     messaging_toolset,
     speech_toolset,
     subagents_toolset,
@@ -35,6 +36,7 @@ _GROUP_LABELS: dict[int, str] = {
     id(waiting_toolset): "Pausing and resuming later",
     id(browser_toolset): "Driving a real browser",
     id(speech_toolset): "Speaking and transcribing",
+    id(decisions_toolset): "Judging many things the same way",
 }
 
 

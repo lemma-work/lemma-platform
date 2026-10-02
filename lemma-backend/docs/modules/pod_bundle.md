@@ -59,8 +59,27 @@ flowchart LR
 Every non-app apply step opens its own authorization/UoW scope and commits
 before the Redis `DONE` checkpoint. App steps self-scope around a sandbox
 build. A crash between commit and checkpoint replays an idempotent upsert. The
-format handles tables/data, files, functions, agents/grants/toolsets, workflows,
-schedules, apps/source, surfaces/account variables, and pod metadata.
+format handles tables/data, deciders, files, functions, agents/grants/toolsets,
+workflows, schedules, apps/source, surfaces/account variables, and pod metadata.
+
+### Deciders
+
+A pod's deciders travel as `deciders/<name>/<name>.json`, holding the name and
+the current definition (`infrastructure/exporter_deciders.py`). Their examples
+and decisions never do: examples are people's answers about their own data.
+Export reads them through the decisions contract and asks `decider.read` on the
+pod first, because that contract does not authorize; a person without it gets
+a bundle with no deciders and a warning.
+
+The plan puts `DECIDER` steps straight after tables, before anything that can
+name a decider -- a workflow's DECISION step, a schedule, an agent's
+`decider:<name>:execute` grant (`infrastructure/decider_apply.py`). Each is
+CREATE for a new name, UPDATE when the definition differs (the step saves the
+next version; old versions stay), or SKIP when the pod's decider already has
+exactly this definition, so importing an unchanged bundle again is a no-op. A
+definition no pod could save refuses the plan before anything is written. The
+step requires `decider.create` on the pod or `decider.update` on the decider,
+and saves through `define_decider`, which commits in its own unit of work.
 
 ## Security and limits
 

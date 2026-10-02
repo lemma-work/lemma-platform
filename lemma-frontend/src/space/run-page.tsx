@@ -12,7 +12,7 @@ import {
     type RunDetail, type StepRow,
 } from "@/workflow/runs";
 import {
-    buildTree, idsIn, leadOf, progressOf, stateOfTrace, stateOfUnvisited, tracesByNode,
+    buildTree, decisionSays, idsIn, leadOf, progressOf, stateOfTrace, stateOfUnvisited, tracesByNode,
     type Arm, type Graph, type GraphNode, type NodeState, type TreeItem,
 } from "@/workflow/run-tree";
 import { useRun, useWorkflowGraph, useWorkflowList } from "@/workflow/use-run";
@@ -245,6 +245,21 @@ function Standing({ pod, run, graph, bots, onOpenConversation, onChanged }: {
         return (
             <section className="standing">
                 <header><ClockIcon size={16} /><div><b>Waiting for its time — {nodeLabel}</b><p>It picks up again on its own.</p></div></header>
+            </section>
+        );
+    }
+    if (wait?.type === "DECISION") {
+        /* Its external ref is the decision's subject, not a conversation, so
+           the "Open conversation" link below would lead nowhere. */
+        return (
+            <section className="standing" data-tone="going">
+                <header>
+                    <span className="standing__dot" />
+                    <div>
+                        <b>Deciding — {nodeLabel}</b>
+                        <p>It carries on by itself once the question is answered.</p>
+                    </div>
+                </header>
             </section>
         );
     }
@@ -485,13 +500,6 @@ function Body({ node, trace, ctx }: { node: GraphNode; trace: StepRow; ctx: Ctx 
             {node.kind !== "AGENT" && node.kind !== "FORM" && node.kind !== "DECISION" && <DataView value={output} lead={lead} showLead />}
         </div>
     );
-}
-
-function decisionSays(output: unknown): string {
-    const matched = output && typeof output === "object" ? (output as Record<string, unknown>).matched_condition : undefined;
-    if (typeof matched === "string" && matched) return "Matched " + matched + ".";
-    if (matched === null) return "No rule matched, so it took the default path.";
-    return "Decided.";
 }
 
 /** A history row when the workflow's graph could not be read. */

@@ -154,6 +154,12 @@ def test_grant_presets_only_use_permissions_the_backend_accepts():
         },
         "schedule": {"schedule.read", "schedule.update", "schedule.delete"},
         "app": {"app.read", "app.update", "app.publish", "app.delete"},
+        "decider": {
+            "decider.read",
+            "decider.execute",
+            "decider.update",
+            "decider.delete",
+        },
     }
     assert set(PERMISSION_PRESETS) == set(applicable)
     for resource_type, presets in PERMISSION_PRESETS.items():

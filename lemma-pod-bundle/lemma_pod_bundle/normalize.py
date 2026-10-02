@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .apply_fields import DECIDER_APPLY_FIELDS
 from .diff import _is_system_table_column
 from .layout import FORMAT_VERSION, _parse_function_headers
 
@@ -204,6 +205,38 @@ def _normalize_workflow_payload(workflow: dict[str, Any]) -> dict[str, Any]:
     payload.setdefault("nodes", [])
     payload.setdefault("edges", [])
     return payload
+
+
+def _without_nulls(value: object) -> object:
+    """``value`` with every null-valued key dropped, however deep.
+
+    The API writes a decider's unset fields as null and the backend's own store
+    leaves them out. Dropping them makes the two exporters write the same bytes,
+    and lets an importer tell an unchanged definition from a changed one.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _without_nulls(item) for key, item in value.items() if item is not None
+        }
+    if isinstance(value, list):
+        return [_without_nulls(item) for item in value]
+    return value
+
+
+def _normalize_decider_payload(decider: dict[str, Any]) -> dict[str, Any]:
+    """A decider as its name and current definition, and nothing it learned.
+
+    Its examples are people's answers about their own data and its decisions are
+    records of what it saw; neither may leave the pod. Keeping the two keys that
+    travel, rather than stripping the ones that don't, is what keeps that true
+    if either ever joins the response this is built from. The version stays
+    behind too: the importing pod keeps its own history.
+    """
+    return {
+        key: _without_nulls(decider.get(key))
+        for key in sorted(DECIDER_APPLY_FIELDS)
+        if decider.get(key) is not None
+    }
 
 
 def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:

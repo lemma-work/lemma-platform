@@ -116,7 +116,7 @@ impl Daemon {
                             manager.set_backend_environment(daemon.backend_environment()?);
                             manager.restart_backend()?;
                             refresh_connector_catalog(Arc::clone(manager));
-                            // Only a change to the voice-call keys touches the
+                            // Only a change to the voice key touches the
                             // frontend, and only then is it restarted.
                             if manager.set_frontend_environment(
                                 daemon.operator_config.frontend_environment()?,

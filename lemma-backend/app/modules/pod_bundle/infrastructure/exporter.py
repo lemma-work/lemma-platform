@@ -41,13 +41,14 @@ from lemma_pod_bundle.normalize import (
     _normalize_app_payload,
     _normalize_function_payload,
     _normalize_pod_payload,
-    _normalize_schedule_payload,
     _normalize_table_payload,
     _normalize_workflow_payload,
 )
 from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.exporter_deciders import export_deciders
+from app.modules.pod_bundle.infrastructure.exporter_schedules import export_schedules
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
     export_surfaces,
 )
@@ -65,6 +66,7 @@ logger = get_logger(__name__)
 # best-effort); we still create the empty dir for layout parity.
 _EXPORT_RESOURCE_TYPES = (
     "tables",
+    "deciders",
     "functions",
     "agents",
     "workflows",
@@ -212,9 +214,6 @@ class BundleExporter:
             list_app_names,
             require_app,
         )
-        from app.modules.connectors.contracts.provisioning import (
-            resolve_account_connector,
-        )
         from app.modules.datastore.contracts.provisioning import (
             get_table,
             list_table_names,
@@ -224,7 +223,6 @@ class BundleExporter:
             require_function,
         )
         from app.modules.pod.contracts.provisioning import get_pod
-        from app.modules.schedule.contracts.provisioning import list_schedules
         from app.modules.workflow.contracts.provisioning import (
             get_workflow,
             list_workflow_names,
@@ -297,6 +295,12 @@ class BundleExporter:
                         f"table '{missing}' requested for seed data but not found "
                         f"in the pod; skipped"
                     )
+                done += 1
+                await on_progress(done, total)
+
+            # --- deciders (definitions only; what they learned stays home) ----
+            if "deciders" in selected:
+                await export_deciders(root, pod_id=pod_id, ctx=ctx, warnings=warnings)
                 done += 1
                 await on_progress(done, total)
 
@@ -374,34 +378,7 @@ class BundleExporter:
 
             # --- schedules ----------------------------------------------------
             if "schedules" in selected:
-                schedules = await list_schedules(uow, pod_id=pod_id, ctx=ctx)
-                for schedule in sorted(
-                    schedules, key=lambda s: str(s.name or s.id or "")
-                ):
-                    schedule_name = str(schedule.name or schedule.id or "")
-                    dir_ = root / "schedules" / schedule_name
-                    dir_.mkdir(parents=True, exist_ok=True)
-                    raw_schedule = _schedule_response_dict(schedule)
-                    account_id = raw_schedule.get("account_id")
-                    if account_id:
-                        info = await resolve_account_connector(
-                            uow, UUID(str(account_id))
-                        )
-                        if info is None:
-                            from app.modules.pod_bundle.domain.errors import (
-                                BundleInvalidError,
-                            )
-
-                            raise BundleInvalidError(
-                                f"Schedule '{schedule_name}' references account "
-                                f"{account_id}, which no longer exists."
-                            )
-                        raw_schedule["connector_id"], raw_schedule["connector_kind"] = (
-                            info
-                        )
-                    payload = _normalize_schedule_payload(raw_schedule)
-                    payload.setdefault("name", schedule_name)
-                    _write_json(dir_ / f"{schedule_name}.json", payload)
+                await export_schedules(uow, root=root, pod_id=pod_id, ctx=ctx)
                 done += 1
                 await on_progress(done, total)
 
