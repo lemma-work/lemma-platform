@@ -8,7 +8,7 @@
 # The digest is the multi-arch index, so amd64 and arm64 both resolve from it;
 # the tag is kept beside it for a reader, and Dependabot already watches this
 # directory and updates the pair together.
-FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 AS runtime
+FROM ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78 AS runtime
 
 ARG TARGETARCH
 ARG NERDCTL_VERSION=2.3.4
