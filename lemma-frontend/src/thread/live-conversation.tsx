@@ -11,7 +11,7 @@ import { InteractionDock } from "./interaction-dock";
 import type { AnswerWith } from "./interaction-card";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
 import { applyTitle, patchConversationLists, refreshConversationLists } from "./conversation-list";
-import { rememberRequest, Transcript } from "./transcript";
+import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
 import { useChannelReply } from "./use-channel-reply";
@@ -704,7 +704,6 @@ export function LiveConversation({
                 onOpenTable={onOpenTable}
                 onResolve={resolve}
                 onRetry={failure.retryable && !modelMissing ? () => void session.retryFailedRun() : undefined}
-                onRemember={(text) => void send(rememberRequest(text)).catch(() => undefined)}
                 noModel={modelMissing}
                 modelsAction={pointsAtModels(error)}
                 dockedId={waitingOn?.id ?? signingIn?.id}
