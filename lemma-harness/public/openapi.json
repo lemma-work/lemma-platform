@@ -9297,6 +9297,16 @@
             "title": "Platform",
             "type": "string"
           },
+          "public": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupPublicResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "shared_externally": {
             "default": false,
             "description": "A Slack channel shared with another company.",
@@ -9551,6 +9561,37 @@
           "in_pod"
         ],
         "title": "GroupPersonResponse",
+        "type": "object"
+      },
+      "GroupPublicResponse": {
+        "description": "The pod's Public files and tables, the first few of each.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/PublicFileResponse"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "more": {
+            "description": "More is Public than is listed here.",
+            "title": "More",
+            "type": "boolean"
+          },
+          "tables": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "required": [
+          "files",
+          "tables",
+          "more"
+        ],
+        "title": "GroupPublicResponse",
         "type": "object"
       },
       "GroupResponse": {
@@ -13720,6 +13761,31 @@
           }
         },
         "title": "Policy",
+        "type": "object"
+      },
+      "PublicFileResponse": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent for a file in somebody's personal files.",
+            "title": "Path"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PublicFileResponse",
         "type": "object"
       },
       "PublishMode": {

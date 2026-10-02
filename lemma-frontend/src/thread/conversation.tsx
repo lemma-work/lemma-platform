@@ -150,9 +150,6 @@ export function ConversationPane({
                     return true;
                 }}
                 onResolve={resolve}
-                /* Drawn here too, so the control can be looked at; sending is
-                   what the sample cannot do, and it says so the same way. */
-                onRemember={() => setError("This is the sample source — connect a session to send anything.")}
                 dockedId={waitingOn?.id ?? signingIn?.id}
                 onOpenApp={onOpenApp}
                 onOpenFile={onOpenFile}

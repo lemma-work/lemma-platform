@@ -28,6 +28,7 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.contracts.surfaces import account
 from app.modules.agent_surfaces.api.dependencies import get_surface_service
+from app.modules.agent_surfaces.api import group_public as public_api
 from app.modules.agent_surfaces.api.group_access import (
     GroupAccess,
     tell_previous_owner,
@@ -63,6 +64,7 @@ from app.modules.agent_surfaces.services.telegram_group_links import (
 from app.modules.agent_surfaces.services.whatsapp_groups import (
     GroupNotOpened,
     GroupOpenLimitReached,
+    GroupsNotAvailable,
     WhatsAppGroupOpener,
 )
 
@@ -149,6 +151,7 @@ class GroupWaitingResponse(BaseModel):
 class GroupDetailResponse(GroupResponse):
     people: list[GroupPersonResponse]
     waiting: list[GroupWaitingResponse]
+    public: public_api.GroupPublicResponse | None = None
 
 
 class GroupListResponse(BaseModel):
@@ -383,6 +386,10 @@ async def start_group(
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS, detail=str(reached)
             ) from reached
+        except GroupsNotAvailable as refused:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(refused)
+            ) from refused
         except (GroupNotOpened, WhatsAppApiError, *PLATFORM_TRANSPORT_ERRORS) as exc:
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY,
@@ -455,7 +462,9 @@ async def get_group(
         pod_id=pod_id, group_id=group_id, ctx=ctx, uow=uow, viewer_id=user.id
     )
     access = GroupAccess(ctx=ctx, uow=uow, pod_id=pod_id, viewer_id=user.id)
-    return _detail_response(detail, can_manage=await access.manages(detail))
+    response = _detail_response(detail, can_manage=await access.manages(detail))
+    response.public = await public_api.group_public(uow, pod_id=pod_id, ctx=ctx)
+    return response
 
 
 @router.get(

@@ -83,10 +83,11 @@ async def display_resource(
     compose), so most widgets need no skill; load `lemma-widget` for a design of
     your own. React, routing, or real state means an app.
 
-    A WIDGET is a live view, not a picture: it reads pod data through the browser
-    SDK, filters and opens records in place, and can offer the person their next
-    question in the composer. It cannot send one — `ask_user` is for an answer
-    this run needs.
+    A WIDGET is an interactive display, not a picture: it reads pod data through
+    the browser SDK, and its buttons can do anything in Lemma as the person
+    viewing it — write records, run functions and workflows, put a message in
+    the composer, execute connector operations. Its clicks arrive after this run
+    is over, so `ask_user` is for an answer this run needs.
 
     Give a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`
     (`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the
@@ -98,8 +99,8 @@ async def display_resource(
     below the first rather than correcting it — which is the other reason to
     keep the HTML in a file.
 
-    This tool displays. `ask_user` collects choices, `request_approval` collects
-    permission.
+    `ask_user` collects choices this run needs, `request_approval` collects
+    permission for what this run does.
     """
     # Semantic payload validation runs here (not as a raising pydantic validator)
     # so an invalid request comes back as a uniform success:false/error result the

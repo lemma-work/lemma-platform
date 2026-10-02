@@ -32,7 +32,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
     PendingThoughts,
 )
 from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.private_notes import note_label
+from app.modules.agent.domain.private_notes import lemma_label
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.infrastructure.harnesses.channel_context import (
@@ -383,7 +383,7 @@ def user_prompt_text(msg: object) -> str:
 
     platform = metadata.get("surface_platform")
     pieces = [
-        note_label(metadata),
+        lemma_label(metadata),
         _sender_label(metadata, platform),
         body,
         _quoted_message_block(metadata),

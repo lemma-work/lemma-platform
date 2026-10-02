@@ -208,6 +208,7 @@ export type { GroupLinkResponse } from './models/GroupLinkResponse.js';
 export type { GroupListResponse } from './models/GroupListResponse.js';
 export type { GroupOwnerResponse } from './models/GroupOwnerResponse.js';
 export type { GroupPersonResponse } from './models/GroupPersonResponse.js';
+export type { GroupPublicResponse } from './models/GroupPublicResponse.js';
 export type { GroupResponse } from './models/GroupResponse.js';
 export type { GroupStartRequest } from './models/GroupStartRequest.js';
 export type { GroupTimelineResponse } from './models/GroupTimelineResponse.js';
@@ -313,6 +314,7 @@ export type { PodRoleResourcePermissionResponse } from './models/PodRoleResource
 export type { PodRoleResponse } from './models/PodRoleResponse.js';
 export type { PodUpdateRequest } from './models/PodUpdateRequest.js';
 export type { Policy } from './models/Policy.js';
+export type { PublicFileResponse } from './models/PublicFileResponse.js';
 export { PublishMode } from './models/PublishMode.js';
 export type { PublishStartRequest } from './models/PublishStartRequest.js';
 export { PublishStatus } from './models/PublishStatus.js';

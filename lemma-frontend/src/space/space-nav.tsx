@@ -6,6 +6,7 @@ import { source, type Pod, type SpaceView, type Tab } from "@/data";
 import { AppsIcon, FileIcon, FolderIcon, GroupsIcon, PlusIcon, SettingsIcon, TableIcon, WorkflowIcon } from "@/ui/icons";
 import { sayWaiting, waitingTotal } from "@/data/groups";
 import { useGroups } from "./group-queries";
+import { useFeature } from "@/site/analytics/flags";
 
 const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
     { view: "pages", label: "Pages", icon: <FileIcon size={18} /> },
@@ -48,7 +49,8 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
     const yours = unbound(chats.data).filter(chat => chat.kind.toUpperCase() !== "TASK").slice(0, 8);
     /* Questions people outside the space are waiting on you for, in any of
        its groups — the list the Groups page reads, under its key. */
-    const groups = useGroups(pod.id);
+    const groupsOn = useFeature("groups");
+    const groups = useGroups(pod.id, false, groupsOn);
     const waiting = waitingTotal(groups.data ?? []);
 
     return (
@@ -67,13 +69,13 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                 ))}
                 <button className="side__item" title="Workflows" aria-current={activeId === "space:workflows" ? "page" : undefined} onClick={onWorkflows}><WorkflowIcon size={18} /><span>Workflows</span></button>
                 {/* On one group's page this is the section it is in, not the page. */}
-                <button className="side__item" title="Groups" aria-current={activeId === "space:groups" ? "page" : activeId.startsWith("group:") ? "true" : undefined} onClick={() => onPick("space:groups")}>
+                {groupsOn && <button className="side__item" title="Groups" aria-current={activeId === "space:groups" ? "page" : activeId.startsWith("group:") ? "true" : undefined} onClick={() => onPick("space:groups")}>
                     <GroupsIcon size={18} /><span>Groups</span>
                     {waiting > 0 && <>
                         <span className="snav__count" aria-hidden="true">{waiting}</span>
                         <span className="sr-only">, {sayWaiting(waiting)}</span>
                     </>}
-                </button>
+                </button>}
             </div>
 
 

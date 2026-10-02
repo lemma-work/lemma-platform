@@ -218,6 +218,9 @@ class _EmptyExecuteResult:
     def scalars(self):
         return _EmptyScalarResult()
 
+    def scalar_one_or_none(self):
+        return None
+
 
 def _delivering_adapter(platform: str = "SLACK") -> AsyncMock:
     """An adapter mock that runs the real ``deliver`` over stubbed platform verbs.

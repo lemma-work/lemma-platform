@@ -259,6 +259,74 @@ async def test_what_a_client_is_waiting_on_shows_on_the_page_of_whoever_answers(
     )
 
 
+async def _file(
+    client: AsyncClient, pod_id: str, name: str, *, folder: str = "/", visibility: str
+) -> None:
+    response = await client.post(
+        f"/pods/{pod_id}/datastore/files",
+        data={
+            "directory_path": folder,
+            "search_enabled": "false",
+            "visibility": visibility,
+        },
+        files={"data": (name, b"# notes", "text/markdown")},
+    )
+    assert response.status_code == 201, response.text
+
+
+async def _table(client: AsyncClient, pod_id: str, name: str, visibility: str) -> None:
+    response = await client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": name,
+            "primary_key_column": "id",
+            "visibility": visibility,
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "title", "type": "TEXT", "required": True},
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+
+
+async def test_the_page_lists_what_people_outside_can_be_answered_from(
+    authenticated_client: AsyncClient,
+    test_pod,
+    fake_whatsapp,
+    message_store,
+    monkeypatch,
+):
+    """Public is also the Share sheet's "anyone with a Lemma account", so the
+    page says what carries it -- at any depth, and nothing that does not."""
+    _wire_whatsapp(monkeypatch, fake_whatsapp)
+    client, pod_id = authenticated_client, test_pod["id"]
+    surface = await _create_surface(client, pod_id, config={"type": "WHATSAPP"})
+    group = await _start_group(
+        client, pod_id, surface_name=surface["name"], message_store=message_store
+    )
+    folder = await client.post(
+        f"/pods/{pod_id}/datastore/files/folders", json={"path": "/launch"}
+    )
+    assert folder.status_code == 201, folder.text
+    await _file(client, pod_id, "changelog.md", visibility="PUBLIC")
+    await _file(client, pod_id, "brief.md", folder="/launch", visibility="PUBLIC")
+    await _file(client, pod_id, "salaries.md", visibility="POD")
+    await _table(client, pod_id, "price_list", "PUBLIC")
+    await _table(client, pod_id, "customers", "POD")
+
+    detail = await client.get(f"/pods/{pod_id}/groups/{group['id']}")
+
+    assert detail.status_code == 200, detail.text
+    public = detail.json()["public"]
+    assert [entry["path"] for entry in public["files"]] == [
+        "/changelog.md",
+        "/launch/brief.md",
+    ]
+    assert public["tables"] == ["price_list"]
+    assert public["more"] is False
+
+
 async def test_switching_outsiders_off_leaves_the_group_to_its_members(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -326,6 +394,31 @@ async def test_whatsapp_groups_are_started_and_telegram_groups_are_joined(
 
     assert started.status_code == 422, started.text
     assert linked.status_code == 422, linked.text
+
+
+async def test_a_number_meta_keeps_out_of_groups_is_told_so_not_to_retry(
+    authenticated_client: AsyncClient,
+    test_pod,
+    fake_whatsapp,
+    monkeypatch,
+):
+    """Meta refuses an ineligible number outright; asking again changes nothing."""
+    _wire_whatsapp(monkeypatch, fake_whatsapp)
+    fake_whatsapp.groups_not_eligible = True
+    pod_id = test_pod["id"]
+    surface = await _create_surface(
+        authenticated_client, pod_id, config={"type": "WHATSAPP"}
+    )
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/groups",
+        json={"surface_name": surface["name"], "title": "Acme order 1182"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "doesn't let this number start groups" in response.text
+    listed = await authenticated_client.get(f"/pods/{pod_id}/groups")
+    assert listed.json()["items"] == []
 
 
 async def test_a_telegram_group_joins_through_a_one_use_link(

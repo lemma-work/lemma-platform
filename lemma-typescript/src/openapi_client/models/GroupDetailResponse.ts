@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { GroupOwnerResponse } from './GroupOwnerResponse.js';
 import type { GroupPersonResponse } from './GroupPersonResponse.js';
+import type { GroupPublicResponse } from './GroupPublicResponse.js';
 import type { GroupWaitingResponse } from './GroupWaitingResponse.js';
 export type GroupDetailResponse = {
     answers_outsiders: boolean;
@@ -37,6 +38,7 @@ export type GroupDetailResponse = {
      */
     people_outside?: (number | null);
     platform: string;
+    public?: (GroupPublicResponse | null);
     /**
      * A Slack channel shared with another company.
      */

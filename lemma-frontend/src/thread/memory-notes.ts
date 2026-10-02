@@ -139,8 +139,19 @@ export function notedBy(toolName: unknown, args: unknown, result: unknown, metad
     if (returned.success === false || returned.error) return null;
     const asked = args && typeof args === "object" ? (args as { path?: unknown }).path : undefined;
     const path = typeof returned.path === "string" ? returned.path : typeof asked === "string" ? asked : "";
-    if (!path || !isMemoryPath(path) || isIndex(path)) return null;
+    if (!path || !isNotePath(path)) return null;
     return { path, topic: topicOf(path), private: path.startsWith("/me/") };
+}
+
+/** Whether a write is one of the notes the About page lists: a text file
+ *  directly in one of the teammate's own note folders. Anything else the
+ *  agent keeps under `/memory` — a subfolder of working files, a table
+ *  export, another agent's folder — is not a note, and saying "noted this"
+ *  about it reads as memory when it was just work. */
+function isNotePath(path: string): boolean {
+    if (isIndex(path) || !/\.(md|markdown|txt)$/i.test(path)) return false;
+    const folder = path.slice(0, path.lastIndexOf("/"));
+    return MEMORY_FOLDERS.some((one) => one.path === folder);
 }
 
 /** A sample source's listing of `directory`, from a flat list of note paths:

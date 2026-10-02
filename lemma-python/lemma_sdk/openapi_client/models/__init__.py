@@ -297,6 +297,7 @@ _NAME_TO_MODULE = {
     'GroupListResponse': 'group_list_response',
     'GroupOwnerResponse': 'group_owner_response',
     'GroupPersonResponse': 'group_person_response',
+    'GroupPublicResponse': 'group_public_response',
     'GroupResponse': 'group_response',
     'GroupStartRequest': 'group_start_request',
     'GroupTimelineResponse': 'group_timeline_response',
@@ -417,6 +418,7 @@ _NAME_TO_MODULE = {
     'PolicyRequireConfidence': 'policy_require_confidence',
     'PolicyRequireConfidenceAdditionalProperty': 'policy_require_confidence_additional_property',
     'PolicyRulesOnly': 'policy_rules_only',
+    'PublicFileResponse': 'public_file_response',
     'PublishMode': 'publish_mode',
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
@@ -915,6 +917,7 @@ if TYPE_CHECKING:
     from .group_list_response import GroupListResponse
     from .group_owner_response import GroupOwnerResponse
     from .group_person_response import GroupPersonResponse
+    from .group_public_response import GroupPublicResponse
     from .group_response import GroupResponse
     from .group_start_request import GroupStartRequest
     from .group_timeline_response import GroupTimelineResponse
@@ -1035,6 +1038,7 @@ if TYPE_CHECKING:
     from .policy_require_confidence import PolicyRequireConfidence
     from .policy_require_confidence_additional_property import PolicyRequireConfidenceAdditionalProperty
     from .policy_rules_only import PolicyRulesOnly
+    from .public_file_response import PublicFileResponse
     from .publish_mode import PublishMode
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
@@ -1546,6 +1550,7 @@ __all__ = [
     'GroupListResponse',
     'GroupOwnerResponse',
     'GroupPersonResponse',
+    'GroupPublicResponse',
     'GroupResponse',
     'GroupStartRequest',
     'GroupTimelineResponse',
@@ -1666,6 +1671,7 @@ __all__ = [
     'PolicyRequireConfidence',
     'PolicyRequireConfidenceAdditionalProperty',
     'PolicyRulesOnly',
+    'PublicFileResponse',
     'PublishMode',
     'PublishStartRequest',
     'PublishStatus',

@@ -391,14 +391,14 @@ async def send_message(
     # request-scoped PodContextDep: a StreamingResponse keeps request-scoped
     # dependencies (and their pooled connection) alive for the whole SSE stream,
     # which pins one DB connection per in-flight stream. Here the connection is
-    # released the moment add_user_message_and_start_run commits, before streaming.
+    # released the moment send_from_lemma commits, before streaming.
     async def start_run() -> AgentRunStartResult:
         async with pod_context_scope(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
         ) as scope:
             assert_pod_membership(scope.ctx, "use conversations in this pod")
             service = _build_conversation_service(scope.uow)
-            return await service.add_user_message_and_start_run(
+            return await service.send_from_lemma(
                 conversation_id=conversation_id,
                 user_id=user.id,
                 content=data.content,
@@ -446,7 +446,7 @@ async def append_message(
     ) as scope:
         assert_pod_membership(scope.ctx, "use conversations in this pod")
         service = _build_conversation_service(scope.uow)
-        result = await service.add_user_message_and_start_run(
+        result = await service.send_from_lemma(
             conversation_id=conversation_id,
             user_id=user.id,
             content=data.content,
