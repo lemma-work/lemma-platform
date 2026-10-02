@@ -501,6 +501,17 @@ button svg, a svg { flex-shrink:0; }
 .shelf__ask input:focus { outline:none;border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft); }
 .shelf__ask .btn { flex:none;border-radius:999px;display:inline-flex;align-items:center;gap:6px; }
 
+/* The no-commitment way in. Text weight, not a third button: it must not
+   compete with the box above or the roles below, only be findable. */
+.shelf__explore {
+    align-self:flex-start;display:inline-flex;align-items:center;gap:6px;margin-top:-8px;
+    border:0;background:none;padding:4px 2px;font:inherit;font-size:13px;color:var(--ink-2);cursor:pointer;
+    text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:3px;
+}
+.shelf__explore:hover, .shelf__explore:focus-visible { color:var(--ink);text-decoration-color:var(--ink-3); }
+.shelf__explore svg { transition:transform .14s ease; }
+.shelf__explore:hover svg { transform:translateX(2px); }
+
 .shelf__or { display:flex;align-items:center;gap:14px;font-size:11.5px;color:var(--ink-3);margin-top:6px; }
 .shelf__or::before,.shelf__or::after { content:"";flex:1;height:1px;background:var(--line); }
 
@@ -521,8 +532,6 @@ button svg, a svg { flex-shrink:0; }
 .hirecard__brings span { position:relative;padding-left:13px;font-size:12px;color:var(--ink-3);line-height:1.4; }
 .hirecard__brings span::before { content:"";position:absolute;left:2px;top:7px;width:4px;height:4px;border-radius:999px;background:var(--accent);opacity:.65; }
 .hirecard__go { display:inline-flex;align-items:center;gap:5px;margin-top:8px;font-size:12px;color:var(--accent); }
-.hirecard--blank { background:var(--canvas);border-style:dashed; }
-.hirecard--blank .hirecard__brings span::before { background:var(--ink-3); }
 
 /* Taking one on. The hero's action slot, which on a hired teammate holds
    Message, holds the name and the offer here. */
@@ -618,7 +627,7 @@ button svg, a svg { flex-shrink:0; }
 .met__side b { font-size:13.5px;font-weight:500;color:var(--ink);line-height:1.35; }
 .met__side span { font-size:12.5px;color:var(--ink-3);line-height:1.5; }
 
-.met__door { margin-top:8px; }
+.met__door { display:inline-flex;align-items:center;gap:7px;margin-top:4px;min-height:42px;padding-inline:20px;border-radius:999px; }
 
 @media(max-width:767px) {
     .met__pair { grid-template-columns:minmax(0,1fr); }
