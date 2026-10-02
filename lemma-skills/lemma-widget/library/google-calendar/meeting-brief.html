@@ -1,0 +1,80 @@
+<!--
+widget: google-calendar/meeting-brief
+description: What to know before one meeting: who is coming and your history with each, open items, and an agenda you can put on the invite.
+connector: google_calendar
+kind: composio
+operations: GOOGLECALENDAR_PATCH_EVENT
+data: { event_id, calendar_id?, summary, start, end, meet_url?, attendees: [{ name?, email, role?, last_touch? }], open_items?: [string], agenda?: [string], links?: [{ label, url }] }
+version: 1
+-->
+<div id="brief"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "event_id": "5q8m2c0v7h3k1d9j",
+  "calendar_id": "primary",
+  "summary": "Fabrikam renewal review",
+  "start": "2026-10-07T10:00:00+05:30",
+  "end": "2026-10-07T10:45:00+05:30",
+  "meet_url": "https://meet.google.com/abc-defg-hij",
+  "attendees": [
+    { "name": "Lee Duarte", "email": "lee@fabrikam.com", "role": "Head of IT, Fabrikam", "last_touch": "Sent the renewal for signature on 1 Oct" },
+    { "name": "Jo Park", "email": "jo@fabrikam.com", "role": "Finance, Fabrikam", "last_touch": "First meeting" },
+    { "name": "Alex Kim", "email": "alex@northwind.io", "role": "Account lead, Northwind", "last_touch": "Owns the renewal" }
+  ],
+  "open_items": ["PO number still missing", "They asked whether Pro includes SSO", "Seat count: 40 now, 65 by January?"],
+  "agenda": ["Confirm 40 seats and the January step-up", "SSO: what Pro includes", "PO and invoice timing"],
+  "links": [{ "label": "Order form", "url": "https://example.com/order/fabrikam" }]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("brief"), e = lemma.esc;
+  if (!d || !d.summary) { el.innerHTML = '<p class="lw-quiet">No meeting to brief.</p>'; return; }
+  var minutes = Math.round((new Date(d.end) - new Date(d.start)) / 60000);
+  var people = d.attendees || [];
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec">' +
+        '<div class="lw-top">' + lemma.icon("spark") + "<span>Meeting brief</span></div>" +
+        '<h2 class="lw-title">' + e(d.summary) + "</h2>" +
+        '<div class="lw-sub"><span class="lw-bar" style="gap:6px">' + lemma.icon("clock") + lemma.when(d.start) + (isFinite(minutes) ? ' <span class="lw-quiet">· ' + minutes + " min</span>" : "") + "</span>" +
+          (d.meet_url ? '<a class="lw-bar" style="gap:6px" href="' + e(d.meet_url) + '" target="_blank" rel="noopener">' + lemma.icon("video") + "Join</a>" : "") +
+          (d.links || []).map(function (l) { return '<a class="lw-bar" style="gap:6px" href="' + e(l.url) + '" target="_blank" rel="noopener">' + lemma.icon("file") + e(l.label) + "</a>"; }).join("") +
+        "</div>" +
+      "</div>" +
+      '<div class="lw-sec" style="padding-bottom:4px"><span class="lw-label">Who\'s coming</span></div>' +
+      '<div class="lw-rows" style="border-top:0">' + people.map(function (a) {
+        return '<div class="lw-item">' + lemma.avatar(a.name || a.email) + '<span class="lw-two"><span>' + e(a.name || a.email) +
+          (a.role ? ' <span class="lw-quiet">· ' + e(a.role) + "</span>" : "") + "</span>" + (a.last_touch ? "<span>" + e(a.last_touch) + "</span>" : "") + "</span></div>";
+      }).join("") + "</div>" +
+      ((d.open_items || []).length ? '<div class="lw-sec"><span class="lw-label">Still open</span><ul class="lw-bullets">' +
+        d.open_items.map(function (i) { return "<li>" + e(i) + "</li>"; }).join("") + "</ul></div>" : "") +
+      '<div class="lw-sec"><span class="lw-label">Agenda</span>' +
+        '<div class="lw-compose"><textarea id="agenda" rows="3" placeholder="What this meeting is for"></textarea>' +
+          '<div class="lw-bar"><button class="lw-btn" id="more" hidden>' + lemma.icon("spark") + "<span>Prep me further</span></button>" +
+          '<span class="lw-spacer"></span><button class="lw-btn" data-tone="primary" id="send">' + lemma.icon("send") + "<span>Put on the invite</span></button></div>" +
+        "</div></div>" +
+    "</div>";
+
+  var agenda = document.getElementById("agenda");
+  agenda.value = (d.agenda || []).map(function (a, i) { return (i + 1) + ". " + a; }).join("\n");
+  lemma.button("send", {
+    does: "write the agenda into the invite and tell everyone",
+    confirm: function () { return "Replace the invite's description with this agenda and notify " + people.length + (people.length === 1 ? " guest?" : " guests?"); },
+    yes: "Update invite",
+    run: function () {
+      if (!d.event_id) throw new Error("This brief isn't tied to a calendar event.");
+      return lemma.act("google_calendar", "GOOGLECALENDAR_PATCH_EVENT",
+        { calendar_id: d.calendar_id || "primary", event_id: d.event_id, description: agenda.value, send_updates: "all" }, { kind: "composio" });
+    },
+    done: "The agenda is on the invite."
+  });
+  lemma.canCompose().then(function (can) {
+    if (!can) return;
+    var more = document.getElementById("more");
+    more.hidden = false;
+    more.addEventListener("click", function () { lemma.compose("Prep me further for “" + d.summary + "”: what should I push for, and what might they ask?"); });
+  });
+})();
+</script>

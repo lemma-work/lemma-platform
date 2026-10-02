@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from enum import Enum
 from urllib.parse import urlparse
@@ -68,6 +69,14 @@ class DisplayResourceRequest(BaseModel):
             "with type=FILE."
         ),
     )
+    data: JsonValue | None = Field(
+        default=None,
+        description=(
+            "JSON the WIDGET reads as `lemma.data`, for `path` or `content`. "
+            "Pass one email, invite or pull request here to show it in a library "
+            "widget as-is, without copying the widget's file."
+        ),
+    )
     loading_messages: list[str] = Field(
         default_factory=list,
         max_length=4,
@@ -124,7 +133,11 @@ def _reject_browser_extras(request: "DisplayResourceRequest") -> str | None:
         request.filters,
         request.query,
     )
-    if any(value is not None for value in named) or request.loading_messages:
+    if (
+        any(value is not None for value in named)
+        or request.loading_messages
+        or request.data is not None
+    ):
         return "BROWSER resources only accept type."
     return None
 
@@ -143,6 +156,8 @@ def _reject_fields_from_other_types(
             return "public_url and content are only valid for WIDGET resources."
         if request.loading_messages:
             return "loading_messages is only valid for WIDGET resources."
+        if request.data is not None:
+            return "data is only valid for WIDGET resources."
     if request.type != DisplayResourceType.TABLE and (
         request.filters is not None or request.query is not None
     ):
@@ -210,6 +225,34 @@ def _check_widget(request: "DisplayResourceRequest") -> str | None:
         parsed = urlparse(request.public_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             return "WIDGET public_url must be an absolute http or https URL."
+        if request.data is not None:
+            return (
+                "WIDGET data goes with `path` or `content`; a public_url page is "
+                "served by its own host and never sees it."
+            )
+    return _check_widget_data(request.data)
+
+
+#: The serialized ceiling for WIDGET `data`. It is stored in the tool call and
+#: written into the page on every view, so it is one record's worth -- an email
+#: thread, an invite -- and not a table; a widget that needs rows queries them.
+WIDGET_DATA_MAX_BYTES = 64 * 1024
+
+
+def _check_widget_data(data: object) -> str | None:
+    """`data` has to survive JSON, and be small enough to ride in the page."""
+    if data is None:
+        return None
+    try:
+        size = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+    except TypeError, ValueError:
+        return "WIDGET data must be plain JSON: objects, arrays, strings, numbers, booleans and null."
+    if size > WIDGET_DATA_MAX_BYTES:
+        return (
+            f"WIDGET data is {size // 1024} KB; the limit is "
+            f"{WIDGET_DATA_MAX_BYTES // 1024} KB. Pass the one record the widget "
+            "shows, and let the widget query anything larger with lemma.query."
+        )
     return None
 
 

@@ -528,6 +528,16 @@
           "default": null,
           "description": "Inline HTML fragment, for WIDGET: raw markup, body-level tags only, opening with a tag, complete in this one call. Prefer `path` for anything you may want to correct \u2014 an inline fragment is frozen in this call and cannot be edited. An SVG image is a pod file, shown with type=FILE."
         },
+        "data": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "JSON the WIDGET reads as `lemma.data`, for `path` or `content`. Pass one email, invite or pull request here to show it in a library widget as-is, without copying the widget's file."
+        },
         "loading_messages": {
           "description": "Messages shown while a WIDGET renders.",
           "items": {

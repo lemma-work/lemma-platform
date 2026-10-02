@@ -1,0 +1,101 @@
+<!--
+widget: intercom/conversation
+description: One Intercom support conversation with the customer's context and how long they have waited, a reply to send, and close or assign to me.
+connector: intercom
+kind: composio
+operations: INTERCOM_REPLY_TO_CONVERSATION, INTERCOM_CLOSE_CONVERSATION, INTERCOM_ASSIGN_CONVERSATION, INTERCOM_IDENTIFY_AN_ADMIN
+data: { id, subject?, state?, waiting_since?, admin_id?, draft?, contact: { name?, email?, company?, plan? }, messages: [{ author, author_type, date, text }] }
+version: 1
+-->
+<div id="convo"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "id": "215471923810634", "subject": "Can't export invoices to CSV", "state": "open",
+  "waiting_since": "2026-10-02T07:10:00Z",
+  "contact": { "name": "Dana Ito", "email": "dana@tailspin.co", "company": "Tailspin Toys", "plan": "Pro · 18 seats" },
+  "draft": "Hi Dana, thanks for the detail. The export times out above 5,000 rows. Until the fix ships on Monday, filter by month and export each one separately. I'll write back here when it's live.",
+  "messages": [
+    { "author": "Dana Ito", "author_type": "user", "date": "2026-10-02T06:58:00Z", "text": "Export to CSV just spins and never downloads. We need September's invoices for our close." },
+    { "author": "Fin", "author_type": "bot", "date": "2026-10-02T06:59:00Z", "text": "Thanks! A teammate will be with you shortly." },
+    { "author": "Dana Ito", "author_type": "user", "date": "2026-10-02T07:10:00Z", "text": "It's about 6,000 invoices if that matters." }
+  ]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("convo"), e = lemma.esc;
+  if (!d || !d.id) { el.innerHTML = '<p class="lw-quiet">No conversation to show.</p>'; return; }
+  var c = d.contact || {}, open = d.state !== "closed";
+  var waited = d.waiting_since ? Math.max(0, Math.round((Date.now() - new Date(d.waiting_since)) / 60000)) : null;
+  var waitText = waited == null ? "" : waited < 60 ? waited + " min" : waited < 2880 ? Math.round(waited / 60) + " h" : Math.round(waited / 1440) + " days";
+  var bubbles = (d.messages || []).map(function (m) {
+    var side = m.author_type === "bot" ? "bot" : m.author_type === "admin" || m.author_type === "team" ? "us" : "them";
+    return '<div class="lw-msg" data-side="' + side + '">' + lemma.avatar(m.author || (side === "them" ? c.name : "Team"), "s") +
+      '<div><div class="lw-bubble">' + e(m.text || "") + '</div><div class="lw-meta">' + e(m.author || "") + (side === "bot" ? " · bot" : "") + " · " + lemma.when(m.date, { ago: true }) + "</div></div></div>";
+  }).join("");
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec">' +
+        '<div class="lw-top">' + lemma.icon("chat") + "<span>Intercom</span>" + '<span class="lw-spacer"></span>' +
+          (open && waitText ? '<span class="lw-pill" data-kind="' + (waited > 240 ? "bad" : "wait") + '">' + lemma.icon("clock") + "Waiting " + waitText + "</span>" :
+            '<span class="lw-pill" data-kind="' + (open ? "good" : "") + '"><span class="lw-led"></span>' + (open ? "Open" : "Closed") + "</span>") + "</div>" +
+        '<h2 class="lw-title">' + e(d.subject || "Conversation with " + (c.name || c.email || "a customer")) + "</h2>" +
+        '<div class="lw-sub"><span class="lw-bar" style="gap:6px">' + lemma.avatar(c.name || c.email || "?", "s") + e(c.name || c.email || "Unknown") + "</span>" +
+          (c.company ? "<span>" + e(c.company) + "</span>" : "") + (c.plan ? '<span class="lw-pill" data-kind="accent">' + e(c.plan) + "</span>" : "") + "</div>" +
+      "</div>" +
+      '<div class="lw-sec"><div class="lw-chat">' + bubbles + "</div></div>" +
+      '<div class="lw-sec">' +
+        '<div class="lw-compose"><div class="lw-to">' + lemma.icon("reply") + "<span>Reply to " + e(c.name || c.email || "the customer") + "</span></div>" +
+          '<textarea id="reply" rows="3" placeholder="Write a reply"></textarea>' +
+          '<div class="lw-bar"><button class="lw-btn" id="mine">' + lemma.icon("user") + "<span>Assign to me</span></button>" +
+            '<button class="lw-btn" id="close">' + lemma.icon("check") + "<span>Close</span></button><span class=\"lw-spacer\"></span>" +
+            '<button class="lw-btn" data-tone="primary" id="send">' + lemma.icon("send") + '<span>Send</span><span class="lw-kbd">⌘↵</span></button></div>' +
+        "</div>" +
+      "</div>" +
+    "</div>";
+
+  var reply = document.getElementById("reply");
+  reply.value = d.draft || "";
+  reply.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); document.getElementById("send").click(); }
+  });
+  var act = function (op, payload) { return lemma.act("intercom", op, payload, { kind: "composio" }); };
+  // Every reply and close is written as an admin. The connected account is one, so it is asked once, unless the data already says.
+  var admin = null;
+  var me = function () {
+    if (d.admin_id) return Promise.resolve(String(d.admin_id));
+    if (!admin) {
+      admin = act("INTERCOM_IDENTIFY_AN_ADMIN", {}).then(function (r) {
+        var x = (r && r.data) || r || {};
+        var id = x.id || (x.response_data && x.response_data.id) || (x.admin && x.admin.id);
+        if (!id) throw new Error("Couldn't tell which Intercom admin you are.");
+        return String(id);
+      });
+      admin.catch(function () { admin = null; });
+    }
+    return admin;
+  };
+  var who = c.email || c.name || "the customer";
+  lemma.button("send", {
+    does: "send this reply to " + who,
+    confirm: function () { return reply.value.trim() ? "Send to " + who + " from Intercom?" : ""; },
+    yes: "Send now",
+    run: function () {
+      if (!reply.value.trim()) throw new Error("Write the reply first.");
+      return me().then(function (id) { return act("INTERCOM_REPLY_TO_CONVERSATION", { conversation_id: d.id, admin_id: id, message_body: reply.value, message_type: "comment" }); });
+    },
+    done: "Sent to " + who + "."
+  });
+  lemma.button("mine", {
+    does: "assign the conversation to you",
+    run: function () { return me().then(function (id) { return act("INTERCOM_ASSIGN_CONVERSATION", { conversation_id: d.id, admin_id: id, assignee_id: id }); }); },
+    done: "Assigned to you."
+  });
+  lemma.button("close", {
+    does: "close the conversation",
+    run: function () { return me().then(function (id) { return act("INTERCOM_CLOSE_CONVERSATION", { conversation_id: d.id, admin_id: id }); }); },
+    done: "Conversation closed."
+  });
+})();
+</script>

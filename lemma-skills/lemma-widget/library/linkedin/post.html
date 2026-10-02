@@ -1,0 +1,83 @@
+<!--
+widget: linkedin/post
+description: A LinkedIn post shown the way the feed will show it, cut at "see more", that you can edit and publish.
+connector: linkedin
+kind: composio
+operations: LINKEDIN_CREATE_LINKED_IN_POST, LINKEDIN_GET_MY_INFO
+data: { text, author_name?, author_headline?, author_urn?, visibility? }
+version: 1
+-->
+<div id="post"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "author_name": "Sam Rivera",
+  "author_headline": "Founder, Northwind",
+  "visibility": "PUBLIC",
+  "text": "We moved our whole billing close from four days to one afternoon.\n\nNo new tool. We wrote down the twelve steps everyone did from memory, gave them to an agent, and kept the two that need a person.\n\nWhat surprised us: the hard part was never the work. It was knowing what the work was.\n\nIf you run a small team, write your checklist down before you automate anything. That's the whole trick."
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("post"), e = lemma.esc;
+  if (!d || typeof d.text !== "string") { el.innerHTML = '<p class="lw-quiet">No post to show.</p>'; return; }
+  // The feed shows about three lines, ~210 characters, before "…see more". What sits above that line is the post.
+  var FOLD = 210, LIMIT = 3000;
+  var audience = d.visibility === "CONNECTIONS" ? "Connections" : "Anyone";
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec">' +
+        '<div class="lw-top">' + lemma.icon("globe") + '<span>LinkedIn post</span><span class="lw-spacer"></span><span class="lw-pill">' + audience + "</span></div>" +
+      "</div>" +
+      '<div class="lw-sec" style="background:var(--lw-well)">' +
+        '<div class="lw-card" style="box-shadow:0 0 0 1px var(--w-line-2, rgb(32 33 31 / .1))"><div class="lw-sec">' +
+          '<div class="lw-bar" style="gap:10px;flex-wrap:nowrap">' + lemma.avatar(d.author_name || "You", "l") +
+            '<div style="min-width:0"><div>' + e(d.author_name || "You") + "</div>" +
+            '<div class="lw-quiet" style="font-size:12px">' + (d.author_headline ? e(d.author_headline) + " · " : "") + "Now · " + audience + "</div></div></div>" +
+          '<div class="lw-body" id="feed" style="margin-top:12px"></div>' +
+          '<div class="lw-bar lw-quiet" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--w-line, rgb(32 33 31 / .05));gap:18px;font-size:12.5px">' +
+            "<span>Like</span><span>Comment</span><span>Repost</span><span>Send</span></div>" +
+        "</div></div>" +
+      "</div>" +
+      '<div class="lw-sec">' +
+        '<div class="lw-compose"><div class="lw-to">' + lemma.icon("file") + "<span>Edit the post</span></div>" +
+          '<textarea id="text" rows="5"></textarea>' +
+          '<div class="lw-bar"><span class="lw-mono lw-quiet" id="count" style="padding-left:6px"></span><span class="lw-spacer"></span>' +
+            '<button class="lw-btn" data-tone="primary" id="publish">' + lemma.icon("send") + "<span>Publish</span></button></div>" +
+        "</div>" +
+      "</div>" +
+    "</div>";
+
+  var feed = document.getElementById("feed"), text = document.getElementById("text"), count = document.getElementById("count");
+  text.value = d.text;
+  var draw = function () {
+    var t = text.value;
+    feed.innerHTML = t.length > FOLD ? e(t.slice(0, FOLD).replace(/\s+\S*$/, "")) + '<span class="lw-quiet">… see more</span>' : e(t);
+    count.textContent = t.length.toLocaleString() + " / " + LIMIT.toLocaleString();
+    count.style.color = t.length > LIMIT ? "var(--w-bad, #b3261e)" : "";
+  };
+  text.addEventListener("input", draw);
+  draw();
+
+  lemma.button("publish", {
+    does: "publish this post on LinkedIn",
+    confirm: function () { return text.value.trim() ? "Publish to your LinkedIn, visible to " + audience.toLowerCase() + "?" : ""; },
+    yes: "Publish",
+    run: function () {
+      if (!text.value.trim()) throw new Error("The post is empty.");
+      if (text.value.length > LIMIT) throw new Error("LinkedIn posts stop at 3,000 characters.");
+      var author = d.author_urn ? Promise.resolve(d.author_urn) : lemma.act("linkedin", "LINKEDIN_GET_MY_INFO", {}, { kind: "composio" }).then(function (r) {
+        var x = (r && r.data) || r || {};
+        var urn = x.author_id || x.author_urn || ((x.sub || x.id) ? "urn:li:person:" + (x.sub || x.id) : "");
+        if (!/^urn:li:(person|organization):/.test(urn)) throw new Error("Couldn't tell which LinkedIn member you are.");
+        return urn;
+      });
+      return author.then(function (urn) {
+        return lemma.act("linkedin", "LINKEDIN_CREATE_LINKED_IN_POST",
+          { author: urn, commentary: text.value, visibility: d.visibility || "PUBLIC", lifecycleState: "PUBLISHED" }, { kind: "composio" });
+      });
+    },
+    done: "Published on LinkedIn."
+  });
+})();
+</script>

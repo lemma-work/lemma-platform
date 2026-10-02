@@ -1,0 +1,127 @@
+<!--
+widget: github/pr-review
+description: One pull request to review: what it changes, its checks and files, and approve, request changes, comment or merge.
+connector: github
+kind: http
+operations: pulls_create_review, pulls_merge
+data: { owner, repo, number, title, author, url?, base?, head?, head_sha?, draft?, summary?, checks?: [{ name, status }], files?: [{ path, additions, deletions }], reviews?: [{ user, state }] }
+version: 1
+-->
+<div id="pr"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "owner": "northwind", "repo": "billing", "number": 482,
+  "title": "Prorate seat changes mid-cycle",
+  "author": "mira-s", "url": "https://github.com/northwind/billing/pull/482",
+  "base": "main", "head": "mira/proration", "head_sha": "9c1e4b7",
+  "summary": "Adds proration when seats change mid-cycle. The maths is right and well tested. One thing to look at: credit notes now round per line instead of per invoice, which can move totals by a cent.",
+  "checks": [
+    { "name": "test", "status": "success" },
+    { "name": "lint", "status": "success" },
+    { "name": "e2e / billing", "status": "pending" }
+  ],
+  "files": [
+    { "path": "billing/proration.py", "additions": 142, "deletions": 8 },
+    { "path": "billing/invoice.py", "additions": 23, "deletions": 31 },
+    { "path": "tests/test_proration.py", "additions": 210, "deletions": 0 }
+  ],
+  "reviews": [{ "user": "dev-ops-kim", "state": "COMMENTED" }]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("pr"), e = lemma.esc;
+  if (!d || !d.number) { el.innerHTML = '<p class="lw-quiet">No pull request to show.</p>'; return; }
+  var checks = d.checks || [], files = d.files || [];
+  var CHECK = { success: ["good", "check"], failure: ["bad", "x"], pending: ["wait", "clock"] };
+  var count = function (s) { return checks.filter(function (c) { return c.status === s; }).length; };
+  var failing = count("failure"), running = count("pending");
+  var added = files.reduce(function (n, f) { return n + (f.additions || 0); }, 0);
+  var removed = files.reduce(function (n, f) { return n + (f.deletions || 0); }, 0);
+  var meter = function (a, r) {
+    var total = a + r || 1, plus = Math.round((a / total) * 5);
+    return '<span class="lw-meter">' + [0, 1, 2, 3, 4].map(function (i) { return '<i data-k="' + (i < plus ? "+" : "-") + '"></i>'; }).join("") + "</span>";
+  };
+  var state = d.draft ? ["", "Draft"] : ["good", "Open"];
+  var health = failing ? ["bad", "x", failing + " failing"] : running ? ["wait", "clock", running + " running"] : ["good", "check", "All checks passed"];
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec">' +
+        '<div class="lw-top">' + lemma.icon("pr") + "<span>" + e(d.owner + "/" + d.repo) + '</span><span class="lw-mono">#' + d.number + "</span>" +
+          '<span class="lw-spacer"></span><span class="lw-pill" data-kind="' + state[0] + '"><span class="lw-led"></span>' + state[1] + "</span></div>" +
+        '<h2 class="lw-title">' + (d.url ? '<a href="' + e(d.url) + '" target="_blank" rel="noopener">' + e(d.title) + "</a>" : e(d.title)) + "</h2>" +
+        '<div class="lw-sub"><span class="lw-bar" style="gap:6px">' + lemma.avatar(d.author || "?", "s") + e(d.author || "unknown") + "</span>" +
+          (d.head ? '<span class="lw-mono lw-quiet">' + e(d.head) + " → " + e(d.base || "main") + "</span>" : "") +
+          '<span class="lw-mono"><span class="lw-plus">+' + added + '</span> <span class="lw-minus">−' + removed + "</span></span></div>" +
+      "</div>" +
+      (d.summary ? '<div class="lw-sec"><span class="lw-label">What it does</span><div class="lw-body">' + e(d.summary) + "</div></div>" : "") +
+      (checks.length ? '<div class="lw-sec" style="padding-top:12px;padding-bottom:12px"><div class="lw-bar">' + checks.map(function (c) {
+        var k = CHECK[c.status] || CHECK.pending;
+        return '<span class="lw-pill" data-kind="' + k[0] + '">' + lemma.icon(k[1]) + e(c.name) + "</span>";
+      }).join("") + "</div></div>" : "") +
+      (files.length ? '<div class="lw-rows">' + files.map(function (f) {
+        return '<div class="lw-item">' + lemma.icon("file") + '<span class="lw-grow lw-mono">' + e(f.path) + "</span>" +
+          '<span class="lw-end lw-mono"><span class="lw-plus">+' + (f.additions || 0) + '</span> <span class="lw-minus">−' + (f.deletions || 0) + "</span></span>" +
+          meter(f.additions || 0, f.deletions || 0) + "</div>";
+      }).join("") + "</div>" : "") +
+      '<div class="lw-sec">' +
+        '<div class="lw-compose">' +
+          '<textarea id="note" rows="3" placeholder="Leave a review comment"></textarea>' +
+          '<div class="lw-bar"><span class="lw-seg" role="group" aria-label="Review">' +
+            '<button type="button" data-event="COMMENT" aria-pressed="false">Comment</button>' +
+            '<button type="button" data-event="APPROVE" aria-pressed="true">Approve</button>' +
+            '<button type="button" data-event="REQUEST_CHANGES" aria-pressed="false">Request changes</button></span>' +
+            '<span class="lw-spacer"></span><button class="lw-btn" data-tone="primary" id="review">Submit review</button></div>' +
+        "</div>" +
+      "</div>" +
+      '<div class="lw-sec lw-foot">' +
+        '<div class="lw-bar"><span class="lw-pill" data-kind="' + health[0] + '">' + lemma.icon(health[1]) + health[2] + "</span>" +
+          (d.reviews && d.reviews.length ? '<span class="lw-stack">' + d.reviews.map(function (r) { return lemma.avatar(r.user, "s"); }).join("") + "</span>" +
+            '<span class="lw-quiet" style="font-size:12.5px">' + d.reviews.length + (d.reviews.length === 1 ? " review" : " reviews") + "</span>" : "") +
+          '<span class="lw-spacer"></span>' +
+          '<span class="lw-pick"><select id="method" aria-label="Merge method"><option value="squash">Squash and merge</option><option value="merge">Merge commit</option><option value="rebase">Rebase and merge</option></select></span>' +
+          '<button class="lw-btn" data-tone="good" id="merge">' + lemma.icon("merge") + "<span>Merge</span></button></div>" +
+      "</div>" +
+    "</div>";
+
+  var note = document.getElementById("note"), event = "APPROVE";
+  var seg = el.querySelectorAll(".lw-seg > button");
+  seg.forEach(function (b) {
+    b.addEventListener("click", function () {
+      seg.forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+      event = b.dataset.event;
+    });
+  });
+  var where = { owner: d.owner, repo: d.repo, pull_number: d.number };
+  var verb = { APPROVE: "Approve", REQUEST_CHANGES: "Request changes on", COMMENT: "Comment on" };
+  lemma.button("review", {
+    does: "submit your review",
+    confirm: function () { return verb[event] + " #" + d.number + " as you on GitHub?"; },
+    yes: "Submit",
+    run: function () {
+      if (event !== "APPROVE" && !note.value.trim()) throw new Error("Write what you want to say first.");
+      var body = { event: event };
+      if (note.value.trim()) body.body = note.value;
+      return lemma.act("github", "pulls_create_review", Object.assign({ body: body }, where), { kind: "http" });
+    },
+    done: function () { return { APPROVE: "Approved.", REQUEST_CHANGES: "Changes requested.", COMMENT: "Comment posted." }[event]; }
+  });
+  var method = document.getElementById("method");
+  lemma.button("merge", {
+    does: "merge the pull request",
+    tone: failing ? "danger" : "good",
+    confirm: function () {
+      return (failing ? failing + (failing > 1 ? " checks are" : " check is") + " failing. " : running ? running + (running > 1 ? " checks are" : " check is") + " still running. " : "") +
+        method.selectedOptions[0].textContent + " #" + d.number + " into " + (d.base || "main") + "?";
+    },
+    yes: "Merge",
+    run: function () {
+      var body = { merge_method: method.value };
+      if (d.head_sha && d.head_sha.length === 40) body.sha = d.head_sha;
+      return lemma.act("github", "pulls_merge", Object.assign({ body: body }, where), { kind: "http" });
+    },
+    done: "Merged into " + (d.base || "main") + "."
+  });
+})();
+</script>
