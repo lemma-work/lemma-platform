@@ -27,6 +27,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
+    WhatsAppApiError,
     WhatsAppClient,
     groups_api_base,
 )
@@ -213,6 +214,20 @@ def test_groups_go_through_the_version_that_has_them():
     )
     # A test server or proxy names no version, and is left alone.
     assert groups_api_base("http://127.0.0.1:9999/") == "http://127.0.0.1:9999"
+
+
+def test_metas_own_error_code_is_read_off_the_body():
+    """How a number Meta keeps out of groups is told from any other refusal."""
+    refused = WhatsAppApiError(
+        method="groups.create",
+        status_code=400,
+        body_excerpt=(
+            '{"error":{"message":"(#131215) This phone number is not eligible '
+            'to access Groups APIs","code":131215,"type":"OAuthException"}}'
+        ),
+    )
+    assert refused.meta_code == 131215
+    assert WhatsAppApiError(method="groups.create", status_code=502).meta_code is None
 
 
 class _RecordingClient(WhatsAppClient):

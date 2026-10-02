@@ -159,6 +159,9 @@ export function startAnalytics(): Promise<void> {
                 before_send: [dropUnknownEvents, scrubUrls],
             });
             ph = client;
+            // Flags arrive after init, and again after identify reloads them.
+            client.onFeatureFlags(notifyFlagListeners);
+            notifyFlagListeners();
             if (pendingPathname) {
                 capturePageview(pendingPathname);
                 pendingPathname = null;
@@ -245,3 +248,31 @@ export function setAnalyticsIdentity(identity: {
 export function resetAnalyticsIdentity(): void {
     ph?.reset();
 }
+
+/* ── Feature flags ─────────────────────────────────────────────────────
+ * Off unless PostHog says on. Where PostHog never starts — Desktop, a
+ * deployment with no key, a blocked chunk — every flag stays off, unless the
+ * deployment names it in `NEXT_PUBLIC_LEMMA_FEATURES`. */
+
+const flagListeners = new Set<() => void>();
+
+function notifyFlagListeners(): void {
+    for (const listener of flagListeners) listener();
+}
+
+export function subscribeToFlags(listener: () => void): () => void {
+    flagListeners.add(listener);
+    return () => flagListeners.delete(listener);
+}
+
+export function isFeatureOn(flag: FeatureFlag): boolean {
+    if (forcedFeatures().has(flag)) return true;
+    return ph?.isFeatureEnabled(flag) === true;
+}
+
+function forcedFeatures(): Set<string> {
+    return new Set(config.FEATURES.split(",").map((name) => name.trim()).filter(Boolean));
+}
+
+/** Every flag the client reads, by its PostHog key. */
+export type FeatureFlag = "groups";

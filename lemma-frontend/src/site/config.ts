@@ -19,6 +19,10 @@ export const config = {
     get DEPLOYMENT() {
         return siteRuntime().deployment;
     },
+    /** Feature flags this deployment turns on whatever PostHog says. */
+    get FEATURES() {
+        return siteRuntime().features;
+    },
 };
 
 /** A desktop installation, or somebody it is shared with.

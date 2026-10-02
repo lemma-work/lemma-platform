@@ -93,6 +93,7 @@ import { HelpMenu } from "@/tour/help-menu";
 import { tourStops, type Stop } from "@/tour/stops";
 import { guideFor, placeOf } from "@/tour/guides";
 import { PlaceGuide } from "@/tour/place-guide";
+import { useFeature } from "@/site/analytics/flags";
 import { atHome, offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
 import { humanizeName } from "@/schedule/schedules";
 
@@ -144,6 +145,7 @@ const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
+    const groupsOn = useFeature("groups");
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
     const incoming = useSearchParams();
@@ -1816,7 +1818,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     ) : tab.view === "workflows" ? (
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
                                     ) : tab.view === "groups" ? (
-                                        <GroupsPage pod={pod} onOpenGroup={openGroup} onConnect={() => setReaching(true)} />
+                                        groupsOn && <GroupsPage pod={pod} onOpenGroup={openGroup} onConnect={() => setReaching(true)} />
                                     ) : tab.view === "settings" ? (
                                         <SettingsPage
                                             pod={pod}
@@ -1880,7 +1882,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     </div>
                                 </div>
                             ))}
-                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "group"}> => tab.kind === "group").map(tab => (
+                            {groupsOn && allTabs.filter((tab): tab is Extract<Tab, {kind: "group"}> => tab.kind === "group").map(tab => (
                                 <div className="pane group-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <GroupPage
                                         pod={pod}

@@ -63,6 +63,7 @@ from app.modules.agent_surfaces.services.telegram_group_links import (
 from app.modules.agent_surfaces.services.whatsapp_groups import (
     GroupNotOpened,
     GroupOpenLimitReached,
+    GroupsNotAvailable,
     WhatsAppGroupOpener,
 )
 
@@ -383,6 +384,10 @@ async def start_group(
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS, detail=str(reached)
             ) from reached
+        except GroupsNotAvailable as refused:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(refused)
+            ) from refused
         except (GroupNotOpened, WhatsAppApiError, *PLATFORM_TRANSPORT_ERRORS) as exc:
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY,

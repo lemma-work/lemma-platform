@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 )
 from app.modules.agent_surfaces.services.whatsapp_groups import (
     GroupOpenLimitReached,
+    GroupsNotAvailable,
     OpenedGroup,
     WhatsAppGroupOpener,
     may_configure_bot,
@@ -106,6 +107,6 @@ async def _open(
         group = await opener.open(
             surface_id=surface_id, owner_user_id=ctx.deps.user_id, title=title
         )
-    except GroupOpenLimitReached as reached:
-        return OpenWhatsAppGroupResult(success=False, error=str(reached))
+    except (GroupOpenLimitReached, GroupsNotAvailable) as refused:
+        return OpenWhatsAppGroupResult(success=False, error=str(refused))
     return OpenWhatsAppGroupResult(success=True, group=group)

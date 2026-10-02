@@ -93,6 +93,20 @@ class WhatsAppApiError(Exception):
             f"{body_excerpt or 'no body'}"
         )
 
+    @property
+    def meta_code(self) -> int | None:
+        """Meta's own error code (``error.code``), when the body carries one.
+
+        Read from the excerpt, which may be cut short, so the number is found
+        by its key rather than by parsing the whole envelope.
+        """
+        found = _META_CODE.search(self.body_excerpt or "")
+        return int(found.group(1)) if found else None
+
+
+#: ``"code": 131215`` -- the first ``code`` in Meta's envelope is ``error.code``.
+_META_CODE = re.compile(r'"code"\s*:\s*(\d+)')
+
 
 class WhatsAppClient:
     """Thin WhatsApp Cloud API caller.

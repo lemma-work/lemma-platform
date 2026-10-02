@@ -8,6 +8,7 @@ import { groupTitle } from "@/data/surface-groups";
 import { useMe } from "@/session/use-me";
 import { GroupSheets, type GroupSheet } from "@/space/group-sheets";
 import { refreshGroups, useGroups } from "@/space/group-queries";
+import { useFeature } from "@/site/analytics/flags";
 import { SetupActions } from "./surface-setup";
 import { ChannelIcon, channelName } from "./channels";
 import { PlaceLink, goTo, groupHref } from "./place-link";
@@ -109,6 +110,7 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
 }) {
     const [draft, setDraft] = useState(() => surfaceDraft(surface));
     const [dropping, setDropping] = useState(false);
+    const groupsOn = useFeature("groups");
     const cache = useQueryClient();
     const change = (patch: Partial<SurfaceDraft>) => setDraft(current => ({ ...current, ...patch }));
     const agents = useQuery({ queryKey: ["surface-agents", pod.id], queryFn: () => source.listAgents(pod.id) });
@@ -179,7 +181,7 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                     <small>In chats that already exist, for a reminder or a follow-up. Off: it only replies.</small>
                 </span>
             </label>
-            {isGroupPlatform(surface.platform) && (
+            {groupsOn && isGroupPlatform(surface.platform) && (
                 <label className="smanage__check">
                     <input type="checkbox" role="switch" checked={draft.answersOutsiders} onChange={event => change({ answersOutsiders: event.target.checked })} />
                     <span>
@@ -189,7 +191,7 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                 </label>
             )}
         </fieldset>
-        {isGroupPlatform(listed.platform) && <GroupsHere pod={pod} surface={listed} bot={bot} onLeave={onLeave} />}
+        {groupsOn && isGroupPlatform(listed.platform) && <GroupsHere pod={pod} surface={listed} bot={bot} onLeave={onLeave} />}
         {save.isError && <p role="alert">{save.error.message}</p>}
         {drop.isError && <p role="alert">{drop.error instanceof Error ? drop.error.message : "Couldn’t disconnect it."}</p>}
         <div className="smanage__foot">

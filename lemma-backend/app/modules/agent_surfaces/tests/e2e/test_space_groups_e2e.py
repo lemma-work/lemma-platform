@@ -328,6 +328,31 @@ async def test_whatsapp_groups_are_started_and_telegram_groups_are_joined(
     assert linked.status_code == 422, linked.text
 
 
+async def test_a_number_meta_keeps_out_of_groups_is_told_so_not_to_retry(
+    authenticated_client: AsyncClient,
+    test_pod,
+    fake_whatsapp,
+    monkeypatch,
+):
+    """Meta refuses an ineligible number outright; asking again changes nothing."""
+    _wire_whatsapp(monkeypatch, fake_whatsapp)
+    fake_whatsapp.groups_not_eligible = True
+    pod_id = test_pod["id"]
+    surface = await _create_surface(
+        authenticated_client, pod_id, config={"type": "WHATSAPP"}
+    )
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/groups",
+        json={"surface_name": surface["name"], "title": "Acme order 1182"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "doesn't let this number start groups" in response.text
+    listed = await authenticated_client.get(f"/pods/{pod_id}/groups")
+    assert listed.json()["items"] == []
+
+
 async def test_a_telegram_group_joins_through_a_one_use_link(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

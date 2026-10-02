@@ -10,6 +10,7 @@ import { useMe } from "@/session/use-me";
 import { CopyButton } from "@/thread/copy-button";
 import { ChannelIcon } from "./channels";
 import { PlaceLink, groupHref } from "./place-link";
+import { useFeature } from "@/site/analytics/flags";
 
 /** The groups a channel's bot is in, under that channel.
  *
@@ -20,7 +21,11 @@ import { PlaceLink, groupHref } from "./place-link";
  *  is told who can. A group the bot opened (WhatsApp) also carries the link
  *  people join by, to copy and pass on. Its name opens the group's own page,
  *  where everything else about it is. */
-export function SurfaceGroups({ podId, surface, bot, space, members, canChange, onOpenGroup }: {
+export function SurfaceGroups(props: Parameters<typeof GroupsOfSurface>[0]) {
+    return useFeature("groups") ? <GroupsOfSurface {...props} /> : null;
+}
+
+function GroupsOfSurface({ podId, surface, bot, space, members, canChange, onOpenGroup }: {
     podId: string;
     surface: Surface;
     /** The bot's name, as the space calls it. */

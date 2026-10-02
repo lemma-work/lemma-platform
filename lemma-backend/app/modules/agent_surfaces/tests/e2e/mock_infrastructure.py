@@ -969,6 +969,9 @@ class FakeWhatsAppServer:
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._port: int | None = None
+        #: Answer group creation as Meta answers a number it has not opened the
+        #: Groups API to (a test number, say).
+        self.groups_not_eligible = False
 
     async def start(self) -> None:
         app = web.Application()
@@ -1044,6 +1047,18 @@ class FakeWhatsAppServer:
 
     async def _create_group(self, request: web.Request) -> web.Response:
         """Meta answers a creation with a request id only; the group comes later."""
+        if self.groups_not_eligible:
+            return web.json_response(
+                {
+                    "error": {
+                        "message": "(#131215) This phone number is not eligible "
+                        "to access Groups APIs",
+                        "code": 131215,
+                        "type": "OAuthException",
+                    }
+                },
+                status=400,
+            )
         body = await request.json()
         request_id = f"req-{len(self._store.get_all('WHATSAPP_GROUP_CREATE')) + 1}"
         self._store.add(
