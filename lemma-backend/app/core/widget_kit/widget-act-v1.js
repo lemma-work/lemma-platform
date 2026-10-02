@@ -123,7 +123,8 @@
       : { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
   };
   L.initials = function (name) {
-    var parts = String(name || "?").replace(/<.*>/, "").trim().split(/[\s@._-]+/).filter(Boolean);
+    // "Priya Nair <priya@contoso.com>" is initialled from the name before the address.
+    var parts = String(name || "?").split("<")[0].trim().split(/[\s@._-]+/).filter(Boolean);
     return ((parts[0] || "?")[0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
   };
   // A person as a tinted disc: the same name always gets the same hue.
