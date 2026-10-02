@@ -141,6 +141,8 @@ test("an opened group says what its people from outside can be told", () => {
                 { name: "changelog.html", path: "/changelog.html" },
                 { name: "notes.md", path: null },
                 { name: "", path: "/nameless" },
+                null,
+                "junk",
             ],
             tables: ["price_list", "", 7],
             more: true,

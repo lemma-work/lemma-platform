@@ -108,6 +108,7 @@ function readPublicReach(raw: unknown): PublicReach | null {
     const row = raw as Record<string, unknown>;
     return {
         files: rows(row.files).flatMap((entry) => {
+            if (!entry || typeof entry !== "object") return [];
             const file = entry as Record<string, unknown>;
             const name = words(file.name);
             return name ? [{ name, path: words(file.path) }] : [];

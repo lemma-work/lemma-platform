@@ -10,7 +10,8 @@ import type { PublicReach } from "@/data";
  *  strangers. The list is read the way the stranger's run reads the space,
  *  so what it shows is what the bot can reach. */
 export function GroupPublic({ reach, space }: { reach: PublicReach; space: string }) {
-    const empty = reach.files.length === 0 && reach.tables.length === 0;
+    /* `more` with nothing listed is still something Public, not nothing. */
+    const empty = reach.files.length === 0 && reach.tables.length === 0 && !reach.more;
     return (
         <div className="gpublic">
             <p className="gside__label">What they can be told</p>
