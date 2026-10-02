@@ -167,6 +167,18 @@ async def message_user(
             success=False, error="message_user is only available inside a pod."
         )
 
+    if deps.answers_outsider and deps.keeper_asking:
+        # It would reach the member who wrote the message, as though somebody
+        # outside the pod had asked it.
+        return MessageUserResponse(
+            success=False,
+            error=(
+                "The member who looks after this conversation wrote that "
+                "message, and message_user only reaches them. Answer in your "
+                "reply instead."
+            ),
+        )
+
     if deps.answers_outsider:
         # A stranger's run reaches one person, the member who looks after the
         # conversation, whatever `to` says. Nothing is looked up first: a

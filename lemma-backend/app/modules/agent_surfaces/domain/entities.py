@@ -177,6 +177,12 @@ class ParsedInboundSurfaceEvent(BaseModel):
     reply_target: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     raw_payload: dict[str, Any] = Field(default_factory=dict)
+    #: Whether what is sent from this event answers the message it was parsed
+    #: from, and may quote it. An outbound is built from the thread's *last*
+    #: inbound; set False when the run sending it answers a message typed in
+    #: Lemma instead, which the chat never saw -- quoting would point the answer
+    #: at whoever spoke last. Never read off a payload: egress decides it.
+    answers_inbound: bool = True
 
 
 class SurfaceLifecycleKind(StrEnum):

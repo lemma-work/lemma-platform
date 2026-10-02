@@ -56,6 +56,9 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _messages_for_conversation,
     _seed_external_user,
 )
+from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    wait_for_messages,
+)
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     record_model_requests,
@@ -493,6 +496,65 @@ async def test_a_private_note_never_reaches_a_later_strangers_run(
     assert "NOTE-FLOOR-40K" not in carried
     assert "PRIVATE-REPLY" not in carried
     assert "what's your best price?" in carried
+
+
+async def test_what_the_member_types_in_lemma_is_answered_as_theirs(
+    scenario, db_session: AsyncSession, fake_telegram, message_store, monkeypatch
+):
+    """ "Ask him what's up with him", typed by the member who looks after the
+    group, was taken for the stranger's: passed back to that same member with
+    `message_user`, and posted in the group quoting the stranger's last line."""
+    _, _, owner = await _group_with_owner(
+        scenario, db_session, fake_telegram, monkeypatch
+    )
+    first = await _stranger_asks(
+        db_session,
+        text="what all do we have",
+        message_id=110,
+        script=[script_text("STRANGER-ANSWER: what is Public.")],
+    )
+    sent = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
+    assert sent[-1]["reply_parameters"]["message_id"] == 110
+
+    with suppress_agent_run_enqueue():
+        typed = await scenario.owner_client.post(
+            f"/pods/{scenario.pod_id}/conversations/{first.conversation_id}/messages/append",
+            json={"content": "ask him what's up with him"},
+        )
+    assert typed.status_code in (200, 201, 202), typed.text
+    seen = record_model_requests(monkeypatch)
+    await run_scripted_agent_run(
+        db_session,
+        conversation_id=first.conversation_id,
+        user_id=owner,
+        pod_id=UUID(scenario.pod_id),
+        agent_name=first.agent_name,
+        script=[
+            script_tool_call(
+                "message_user",
+                {"to": "owner", "message": "Tom asks what's up with you."},
+                tool_call_id="relay-1",
+            ),
+            script_text("KEEPER-ANSWER: Tom, how are things with you?"),
+        ],
+    )
+
+    results = await _tool_results(
+        scenario.owner_client,
+        pod_id=scenario.pod_id,
+        conversation_id=first.conversation_id,
+    )
+    assert "only reaches them" in results["relay-1"]
+    carried = " ".join(request["text"] for request in seen)
+    assert "Written in Lemma by the member who looks after this" in carried
+    posted = await wait_for_messages(
+        message_store,
+        "TELEGRAM",
+        predicate=lambda message: "KEEPER-ANSWER" in (message.get("text") or ""),
+    )
+    [answer] = [m for m in posted if "KEEPER-ANSWER" in (m.get("text") or "")]
+    assert answer["chat_id"] == str(GROUP_CHAT)
+    assert "reply_parameters" not in answer
 
 
 async def test_a_client_cannot_open_a_conversation_as_the_strangers_thread(

@@ -85,7 +85,7 @@ class _ConversationService:
         self.exc = exc
         self.called = False
 
-    async def add_user_message_and_start_run(self, **kwargs):
+    async def send_from_lemma(self, **kwargs):
         self.called = True
         if self.exc is not None:
             raise self.exc

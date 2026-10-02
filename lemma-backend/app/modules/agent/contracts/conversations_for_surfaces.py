@@ -54,6 +54,7 @@ from app.modules.agent.domain.outsiders import (
     OUTSIDERS,
     answers_outsiders,
 )
+from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     MessageDraft,
@@ -180,6 +181,26 @@ async def surface_conversation(
     """
     entity = await ConversationRepository(uow).get_conversation(conversation_id)
     return None if entity is None else _conversation(entity)
+
+
+async def lemma_message_run_started_at(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> datetime | None:
+    """When the latest run started, if it answers a message typed in Lemma.
+
+    ``None`` when it answers something said on the platform, or there is no run.
+    A run started from Lemma answers a message the group never saw, so what it
+    posts there must not be threaded under whatever somebody in the chat last
+    said -- that is how an answer meant for nobody in particular came out
+    pointing at the last stranger to speak. The time lets the caller tell such a
+    run from one that somebody in the chat has since written into.
+    """
+    run = await ConversationRepository(uow).get_latest_agent_run_for_conversation(
+        conversation_id
+    )
+    if run is None or not answers_lemma_message(run.metadata):
+        return None
+    return run.started_at
 
 
 async def open_surface_conversation(
@@ -491,6 +512,7 @@ __all__ = [
     "SurfaceConversation",
     "append_notification_message",
     "conversation_metadata_value",
+    "lemma_message_run_started_at",
     "open_surface_conversation",
     "pending_approval",
     "pending_sign_in",

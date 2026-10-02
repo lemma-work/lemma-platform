@@ -27,8 +27,10 @@ from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.private_notes import (
     NOTE_IN_DM_KEY,
     PRIVATE_NOTE_KEY,
+    WRITTEN_IN_LEMMA_KEY,
     is_private_note,
     run_metadata_for,
+    written_in_lemma_into,
 )
 from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
@@ -83,6 +85,29 @@ from app.modules.agent.tools.waiting.models import (
 logger = get_logger(__name__)
 
 
+def _stamped(
+    message_metadata: dict[str, object] | None,
+    conversation: Conversation,
+    *,
+    typed_in_lemma: bool,
+) -> dict[str, object] | None:
+    """The caller's metadata, with where it was written decided by the server.
+
+    A client never says it: the mark changes who the model takes the writer to
+    be, so a chat platform's payload or a client's body claiming it is dropped.
+    """
+    if not message_metadata and not typed_in_lemma:
+        return message_metadata
+    stamped = dict(message_metadata or {})
+    stamped.pop(WRITTEN_IN_LEMMA_KEY, None)
+    written_in = (
+        written_in_lemma_into(conversation.metadata) if typed_in_lemma else None
+    )
+    if written_in is not None:
+        stamped[WRITTEN_IN_LEMMA_KEY] = written_in
+    return stamped or message_metadata
+
+
 def _scope_allows(scope: object) -> bool:
     """Whether one usage window still has headroom.
 
@@ -122,12 +147,18 @@ class TurnCoordinator:
         content: str,
         agent_name: str | None,
         message_metadata: dict[str, object] | None,
+        typed_in_lemma: bool = False,
     ) -> AgentRunStartResult:
         """Append the message and return the run that will answer it.
 
         The conversation is already loaded and access-checked by the caller --
-        this is the half that needs the lock.
+        this is the half that needs the lock. ``typed_in_lemma`` is the caller
+        saying a person typed this in Lemma's own composer, rather than a chat
+        platform, a sub-agent or a reply delivery handing it on.
         """
+        message_metadata = _stamped(
+            message_metadata, conversation, typed_in_lemma=typed_in_lemma
+        )
         # Resolve the agent (a read) before taking the conversation lock, so the
         # FOR UPDATE span covers only the active-run check + run/message writes.
         agent = await resolve_agent(
