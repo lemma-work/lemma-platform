@@ -29,11 +29,14 @@ from app.modules.usage.module import module as usage_module
 from app.modules.workflow.module import module as workflow_module
 from app.modules.web_login.module import module as web_login_module
 from app.modules.workspace.module import module as workspace_module
+from app.modules.vault.module import module as vault_module
 from app.core.registry.contract import LemmaModule
 
 # Order mirrors the legacy ``app/app.py`` router includes (grouped by module at
 # each module's first appearance) so the OpenAPI route set is unchanged.
 OSS_MODULES: tuple[LemmaModule, ...] = (
+    # First: its keys load before any module that reads a secret starts.
+    vault_module,
     identity_module,
     pod_module,
     pod_bundle_module,

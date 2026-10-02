@@ -4,6 +4,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from app.core.infrastructure.db.base import Base
 
 
+#: Kept across tests. Every process caches the vault's unwrapped keys by id, so
+#: emptying this table would leave them writing secrets under keys that no
+#: longer exist. Tests that rotate keys reset the vault runtime themselves.
+_PRESERVED_TABLES = frozenset({"vault_keys"})
+
+
 class DatabaseManager:
     def __init__(self, database_url: str):
         # pool_pre_ping: liveness-check a pooled connection on checkout and
@@ -39,7 +45,11 @@ class DatabaseManager:
         empty relation), and CASCADE still empties anything referencing a dirty
         table, so isolation is unchanged.
         """
-        table_names = [table.name for table in reversed(Base.metadata.sorted_tables)]
+        table_names = [
+            table.name
+            for table in reversed(Base.metadata.sorted_tables)
+            if table.name not in _PRESERVED_TABLES
+        ]
         if not table_names:
             return
         async with self.engine.begin() as conn:
