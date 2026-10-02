@@ -7,8 +7,9 @@ metadata says it is a digest. A workflow reads the events as
 
 A digest takes the held events oldest first, as many as fit in its bounds --
 a count, and a size, since the whole digest rides one event -- and the rest
-wait for the next one, which the metadata says. An event too large to quote
-goes in as a stub naming its run, where the whole of it still is.
+go out in another digest at the next sweep, which the metadata says, until
+none are left. An event too large to quote goes in as a stub naming its run,
+where the whole of it still is.
 
 The events of a row on an RLS table belong to that row's owner, and a run
 carries one person's authority, so a digest is sent per owner: one run each.
@@ -26,7 +27,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -52,6 +53,9 @@ DIGEST_MAX_CHARS = 48_000
 DIGEST_EVENT_MAX_CHARS = 16_000
 #: The most digests one sweep sends. The rest are still due on the next one.
 DIGEST_CLAIM_LIMIT = 20
+#: When a digest that left events behind sends the next batch: just after this
+#: sweep, so the next one takes it -- each batch its own occurrence and key.
+DIGEST_CONTINUE_AFTER = timedelta(seconds=1)
 
 
 @dataclass(slots=True)
@@ -106,6 +110,13 @@ async def _dispatch(uow: SqlAlchemyUnitOfWork, due: DueDigest, *, now: datetime)
             uow, repository, due, batch, more_waiting=plan.more_waiting, now=now
         ):
             sent += 1
+    if plan.more_waiting:
+        # Not left for the next occurrence, which may be a day away and never
+        # catch up -- or never come, when the digest was removed and claiming
+        # this one cleared the cursor.
+        await repository.continue_digest(
+            due.schedule.id, at=now + DIGEST_CONTINUE_AFTER
+        )
     return sent
 
 

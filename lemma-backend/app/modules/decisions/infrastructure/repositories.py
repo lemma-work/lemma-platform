@@ -251,8 +251,19 @@ class SqlDecisionStore:
         self._uow_factory = uow_factory
 
     async def find_by_subject(
-        self, *, pod_id: UUID | None, decider_key: str, subject_key: str
+        self,
+        *,
+        pod_id: UUID | None,
+        decider_key: str,
+        subject_key: str,
+        owner_id: UUID | None,
     ) -> DecisionEntity | None:
+        """The decision filed under this subject in `owner_id`'s namespace.
+
+        `owner_id` is the asker for a PERSONAL decision and None for a POD one
+        (`subject_owner`), so a person only ever finds their own private record
+        or the pod's shared one.
+        """
         async with self._uow_factory() as uow:
             row = await uow.session.scalar(
                 select(DecisionModel).where(
@@ -261,6 +272,9 @@ class SqlDecisionStore:
                     else DecisionModel.pod_id == pod_id,
                     DecisionModel.decider_key == decider_key,
                     DecisionModel.subject_key == subject_key,
+                    DecisionModel.subject_owner_id.is_(None)
+                    if owner_id is None
+                    else DecisionModel.subject_owner_id == owner_id,
                 )
             )
             return None if row is None else _decision(row)
@@ -288,6 +302,7 @@ class SqlDecisionStore:
                     decider_name=decision.decider_name,
                     decider_version=decision.decider_version,
                     subject_key=decision.subject_key,
+                    subject_owner_id=decision.subject_owner_id,
                     shape={
                         key: shape.model_dump(mode="json", exclude_none=True)
                         for key, shape in decision.shape.items()
@@ -313,6 +328,7 @@ class SqlDecisionStore:
             pod_id=decision.pod_id,
             decider_key=decision.decider_key,
             subject_key=decision.subject_key,
+            owner_id=decision.subject_owner_id,
         )
         return existing or decision
 
@@ -436,9 +452,23 @@ class SqlExampleStore:
         decider_key: str,
         question_keys: Sequence[str],
         per_question: int,
+        viewer_id: UUID | None,
     ) -> dict[str, list[ExampleView]]:
+        """The newest examples `viewer_id` may read: the pod's, and their own private ones.
+
+        Examples reach an engine's prompt, so a PERSONAL one is a copy of
+        private evidence and is shown only to the person it belongs to.
+        """
         if not question_keys or per_question <= 0:
             return {}
+        readable = (
+            DecisionExampleModel.visibility == "POD"
+            if viewer_id is None
+            else or_(
+                DecisionExampleModel.visibility == "POD",
+                DecisionExampleModel.user_id == viewer_id,
+            )
+        )
         examples: dict[str, list[ExampleView]] = {}
         async with self._uow_factory() as uow:
             for question_key in question_keys:
@@ -450,6 +480,7 @@ class SqlExampleStore:
                         else DecisionExampleModel.pod_id == pod_id,
                         DecisionExampleModel.decider_key == decider_key,
                         DecisionExampleModel.question_key == question_key,
+                        readable,
                     )
                     .order_by(DecisionExampleModel.created_at.desc())
                     .limit(per_question)
@@ -479,6 +510,7 @@ class SqlExampleStore:
                         value=example.value,
                         evidence=example.evidence,
                         source=example.source.value,
+                        visibility=example.visibility,
                         user_id=example.user_id,
                         decision_id=example.decision_id,
                     )

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import json
 
 import httpx
@@ -18,7 +20,10 @@ from app.modules.decisions.infrastructure.model_engine import (
     read_output,
     system_prompt,
 )
-from app.modules.decisions.infrastructure.typesafe_engine import SystemOneEngine
+from app.modules.decisions.infrastructure.typesafe_engine import (
+    SystemOneEngine,
+    build_wire_questions,
+)
 
 QUESTION: TypeAdapter[Question] = TypeAdapter(Question)
 
@@ -165,7 +170,7 @@ def test_model_schema_closes_every_answer_and_offers_unsure() -> None:
     assert properties["action"] == {"type": "string", "enum": ["act", "ignore"]}
     assert properties["urgent"] == {"type": "boolean"}
     assert properties["size"] == {"type": "integer", "minimum": 0, "maximum": 2}
-    assert properties["unsure"]["items"]["enum"] == list(QUESTIONS)
+    assert properties["_unsure"]["items"]["enum"] == list(QUESTIONS)
     assert schema["additionalProperties"] is False
 
 
@@ -185,9 +190,47 @@ def test_model_output_is_checked_value_by_value() -> None:
             "urgent": "yes",
             "tags": ["bug", "nope"],
             "size": 1,
-            "unsure": ["size"],
+            "_unsure": ["size"],
         },
     )
     assert answers["action"].value == "act"
     assert answers["action"].confidence is None
     assert abstained == frozenset({"urgent", "tags", "size"})
+
+
+def test_a_question_named_unsure_keeps_its_own_answer() -> None:
+    """The model's abstention list sits outside the names a question can take."""
+    questions = {
+        "unsure": QUESTION.validate_python({"type": "yes_no", "prompt": "Unsure?"})
+    }
+
+    schema = output_schema(questions)
+    answers, abstained = read_output(questions, {"unsure": True, "_unsure": []})
+
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert properties["unsure"] == {"type": "boolean"}
+    assert schema["required"] == ["unsure", "_unsure"]
+    assert answers["unsure"].value is True
+    assert abstained == frozenset()
+
+
+def test_every_option_and_question_has_its_own_wire_key() -> None:
+    """A multi-choice option and a question cannot be sent to System One as one."""
+    questions = {
+        **QUESTIONS,
+        "tags_bug": QUESTION.validate_python({"type": "yes_no", "prompt": "A bug?"}),
+    }
+
+    wire, wire_map = build_wire_questions(replace(ask(), questions=questions))
+
+    assert set(wire) == {
+        "action",
+        "urgent",
+        "tags__billing",
+        "tags__bug",
+        "tags_bug",
+        "size",
+    }
+    assert wire_map["tags__bug"] == ("tags", "bug")
+    assert wire_map["tags_bug"] == ("tags_bug", None)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
@@ -141,7 +143,7 @@ def test_render_keeps_only_the_view_and_bounds_it() -> None:
         {"subject": "Hi", "body": "x" * 500, "meta": {"from": "a@b.c"}},
         InputView(fields=["subject", "meta.from"], max_chars=200),
     )
-    assert rendered.value == {"subject": "Hi", "meta.from": "a@b.c"}
+    assert rendered.value == {"subject": "Hi", "meta": {"from": "a@b.c"}}
     assert "body" not in rendered.text
     long = render("y" * 300, InputView(max_chars=200))
     assert (
@@ -198,3 +200,62 @@ def test_system_deciders_load_and_keep_approval_asymmetric() -> None:
     assert approval.policy.rules_only == {"decision": ["approve_for_session"]}
     assert approval.policy.require_confidence["decision"]["approve_once"] >= 0.9
     assert not approval.policy.escalate_to_model
+
+
+NESTED = DeciderDefinition.model_validate(
+    {
+        "description": "Is this an invoice?",
+        "input": {"fields": ["email.subject"]},
+        "questions": {"invoice": {"type": "yes_no", "prompt": "Is it an invoice?"}},
+        "rules": [
+            {
+                "phrases": ["invoice"],
+                "field": "email.subject",
+                "answer": {"invoice": True},
+            }
+        ],
+    }
+)
+NESTED_BY_EXPRESSION = DeciderDefinition.model_validate(
+    {
+        **NESTED.model_dump(mode="json", exclude_none=True),
+        "rules": [{"when": "email.subject == 'invoice'", "answer": {"invoice": True}}],
+    }
+)
+
+
+@pytest.mark.parametrize("definition", [NESTED, NESTED_BY_EXPRESSION])
+def test_rules_reach_a_nested_field_the_view_selects(
+    definition: DeciderDefinition,
+) -> None:
+    """The view keeps a field at its path, so a rule naming the path still matches."""
+    state = {"email": {"subject": "invoice", "from": "secret@acme.example"}}
+
+    rendered = render(state, definition.input)
+    answers = answer_by_rules(definition.rules, rendered.value, definition.questions)
+
+    assert rendered.value == {"email": {"subject": "invoice"}}
+    assert answers["invoice"].value is True
+    # A sibling the view did not select stays out of what leaves the module.
+    assert "secret@acme.example" not in rendered.text
+
+
+def test_the_view_never_writes_into_the_state() -> None:
+    state = {"email": {"subject": "invoice", "from": "a@b.c"}, "body": "kept"}
+    before = json.loads(json.dumps(state))
+
+    rendered = render(state, InputView(fields=["email", "email.subject"]))
+
+    assert state == before
+    assert rendered.value == {"email": {"subject": "invoice", "from": "a@b.c"}}
+
+
+def test_a_question_key_holding_a_double_underscore_is_refused() -> None:
+    """`<question>__<option>` is how System One is asked a multi-choice option."""
+    with pytest.raises(ValidationError, match="must not contain '__'"):
+        DeciderDefinition.model_validate(
+            {
+                "description": "Tags",
+                "questions": {"tags__bug": {"type": "yes_no", "prompt": "A bug?"}},
+            }
+        )

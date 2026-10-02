@@ -651,6 +651,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'db.session.pool_utilization_probe_failed': EventSpec('warning', frozenset({'error_type'})),
     'decisions.decisions_service.decided.observed': EventSpec('info', frozenset({'decider_scope', 'rungs', 'status'})),
     'decisions.decisions_service.rows_failed.degraded': EventSpec('error', frozenset({'failed', 'total'})),
+    'decisions.decisions_service.unreadable_record.degraded': EventSpec('warning', frozenset({'decider_key'})),
     'decisions.ladder.rung_failed.degraded': EventSpec('error', frozenset({'rung'})),
     'decisions.limiter.redis_unavailable.degraded': EventSpec('warning', frozenset()),
     'decisions.rules_engine.rule_evaluation_failed.degraded': EventSpec('warning', frozenset({'expression'})),

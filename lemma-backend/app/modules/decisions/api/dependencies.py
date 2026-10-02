@@ -8,7 +8,6 @@ from fastapi import Depends
 
 from uuid import UUID
 
-from app.core.api.dependencies import UoWDep
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.dependencies import (
     pod_from_path,
@@ -38,7 +37,6 @@ DecisionsServiceDep = Annotated[DecisionsService, Depends(get_decisions_service)
 DecidersServiceDep = Annotated[DecidersService, Depends(get_deciders_service)]
 
 DeciderReadDep = require_action(Permissions.DECIDER_READ, pod_from_path)
-DeciderAskDep = require_action(Permissions.DECIDER_EXECUTE, pod_from_path)
 DeciderCreateDep = require_action(Permissions.DECIDER_CREATE, pod_from_path)
 DeciderResourceReadDep = require_resource_action(
     Permissions.DECIDER_READ,
@@ -67,23 +65,24 @@ def asker_from(ctx: Context, visibility: str = "PERSONAL") -> Asker:
     )
 
 
-async def authorize_named_decider(
+async def authorize_asking(
     *,
     ctx: Context,
-    uow: UoWDep,
     deciders: DecidersService,
     pod_id: UUID,
     decider: str | None,
 ) -> None:
-    """A pod decider is asked under its own grant; system and inline need only the pod's."""
+    """Ask a pod decider under its own grant, and inline or system questions under the pod's.
+
+    Checked on what the request names rather than up front on the pod: a
+    workload granted one decider (`decider:<name>:execute`) holds no pod-wide
+    permission, and must be able to ask that decider and nothing else.
+    """
     if decider is None or decider.startswith(SYSTEM_PREFIX):
-        return
-    found = await deciders.get(pod_id=pod_id, name=decider)
-    await ctx.require(
-        Permissions.DECIDER_EXECUTE,
-        ResourceRef(
+        resource = ResourceRef.pod(pod_id)
+    else:
+        found = await deciders.get(pod_id=pod_id, name=decider)
+        resource = ResourceRef(
             resource_type=ResourceType.DECIDER, resource_id=found.id, pod_id=pod_id
-        ),
-    )
-    # Give the request's connection back before any engine is called.
-    await uow.commit()
+        )
+    await ctx.require(Permissions.DECIDER_EXECUTE, resource)

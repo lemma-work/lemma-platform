@@ -9,7 +9,6 @@ from fastapi import APIRouter, Query, Request, Response, status
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import PodContextDep
 from app.modules.decisions.api.dependencies import (
-    DeciderAskDep,
     DeciderCreateDep,
     DeciderReadDep,
     DeciderResourceDeleteDep,
@@ -17,7 +16,7 @@ from app.modules.decisions.api.dependencies import (
     DeciderResourceUpdateDep,
     DecidersServiceDep,
     asker_from,
-    authorize_named_decider,
+    authorize_asking,
 )
 from app.modules.decisions.api.schemas import (
     Agreement,
@@ -108,7 +107,6 @@ async def list_deciders(
         "without recording anything. Rows that carry expected answers are "
         "compared with what the decider said."
     ),
-    dependencies=[DeciderAskDep],
 )
 async def test_decider(
     pod_id: UUID,
@@ -117,9 +115,11 @@ async def test_decider(
     uow: UoWDep,
     deciders: DecidersServiceDep,
 ) -> DeciderTestResponse:
-    await authorize_named_decider(
-        ctx=ctx, uow=uow, deciders=deciders, pod_id=pod_id, decider=body.decider
+    await authorize_asking(
+        ctx=ctx, deciders=deciders, pod_id=pod_id, decider=body.decider
     )
+    # Give the request's connection back before any engine is called.
+    await uow.commit()
     result = await deciders.test(
         decider=body.decider,
         definition=body.definition,

@@ -2,10 +2,12 @@
 
 The person's answer is routed by the options they were shown, which the
 question carries (`TriageAsk`): act fires the held event now, digest keeps it
-held for the next digest, ignore ends it as skipped. Their answer is recorded
-on the decision too, as a person's, which is what teaches the decider. A
-question that expires or is cancelled unanswered ends the event as skipped:
-nothing that waited for a person runs without one.
+held for the next digest, ignore ends it as skipped. The answer is recorded on
+the decision too: as the person's, which teaches the decider, only when they
+gave it themselves or approved it word for word; an answer their agent gave on
+its own is recorded as the agent's and teaches nothing. A question that
+expires or is cancelled unanswered ends the event as skipped: nothing that
+waited for a person runs without one.
 
 At most once, whatever is redelivered: every way out of a held event is a
 compare-and-set on its `held_for`, so a second answer finds nothing to move.
@@ -39,7 +41,8 @@ class ClosedQuestion:
     """How a held event's question closed: what it asked, and who chose what.
 
     `answer` is None when nobody did -- the question expired or was cancelled,
-    which `status` says.
+    which `status` says. `owner_confirmed` is whether the answer is the
+    responder's own say-so rather than their agent's.
     """
 
     pod_id: UUID
@@ -47,10 +50,11 @@ class ClosedQuestion:
     status: str
     answer: str | None = None
     responder_user_id: UUID | None = None
+    owner_confirmed: bool = False
 
 
 class TeachDecision(Protocol):
-    """Record a person's answer on a decision, so it becomes an example."""
+    """Record an answer on a decision: a person's becomes an example."""
 
     async def __call__(
         self,
@@ -60,13 +64,20 @@ class TeachDecision(Protocol):
         question: str,
         answer: str,
         user_id: UUID,
+        by_person: bool,
     ) -> None: ...
 
 
 async def teach_decision(
-    *, decision_id: UUID, pod_id: UUID, question: str, answer: str, user_id: UUID
+    *,
+    decision_id: UUID,
+    pod_id: UUID,
+    question: str,
+    answer: str,
+    user_id: UUID,
+    by_person: bool,
 ) -> None:
-    """`answer` the decision as `user_id`, unless they already have.
+    """`answer` the decision as `user_id` -- or their agent -- unless already done.
 
     The check makes a redelivery a no-op rather than a second example: the
     decisions contract records every answer it is given.
@@ -80,14 +91,15 @@ async def teach_decision(
     decision = await get_decision(
         decision_id=decision_id, pod_id=pod_id, viewer_id=user_id
     )
+    by = Rung.PERSON if by_person else Rung.AGENT
     given = decision.answers.get(question)
-    if given is not None and given.by is Rung.PERSON and given.value == answer:
+    if given is not None and given.by is by and given.value == answer:
         return
     await record(
         decision_id=decision_id,
         pod_id=pod_id,
         answers={question: answer},
-        by=Rung.PERSON,
+        by=by,
         user_id=user_id,
     )
 
@@ -170,7 +182,7 @@ class TriageAnswers:
             **output,
             "answer": answer,
             "route": route.value,
-            "answered_by": "person",
+            "answered_by": "person" if closed.owner_confirmed else "agent",
         }
 
     async def _record_answer(
@@ -189,6 +201,7 @@ class TriageAnswers:
                 question=closed.ask.question,
                 answer=answer,
                 user_id=user_id,
+                by_person=closed.owner_confirmed,
             )
         except DomainError:
             logger.warning(

@@ -10,6 +10,10 @@ cursor, claimed with `FOR UPDATE SKIP LOCKED` the way `next_fire_at` is.
 event in. Both indexes are partial on what is null for every existing row, so
 they start empty.
 
+`schedule_act_admissions` is the events a triage let act within the hour,
+one row per event, written under a lock before the event's fire is published:
+what `act_per_hour` counts. A new table, so nothing waits on it.
+
 Every column is nullable with no default, so each `ADD COLUMN` is a catalog
 change rather than a rewrite. The two index builds read their tables once, in
 this transaction rather than CONCURRENTLY, for the reason 0025 gives: a failure
@@ -62,8 +66,33 @@ def upgrade() -> None:
         postgresql_where=sa.text("held_for IS NOT NULL"),
     )
 
+    op.create_table(
+        "schedule_act_admissions",
+        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column(
+            "schedule_id",
+            sa.Uuid(),
+            sa.ForeignKey("schedules.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("source_event_id", sa.String(length=255), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint(
+            "schedule_id", "source_event_id", name="uq_schedule_act_admissions_event"
+        ),
+    )
+    op.create_index(
+        "ix_schedule_act_admissions_window",
+        "schedule_act_admissions",
+        ["schedule_id", "created_at"],
+    )
+
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_schedule_act_admissions_window", table_name="schedule_act_admissions"
+    )
+    op.drop_table("schedule_act_admissions")
     # The code before this revision has no HELD in either enum and would fail
     # to read a row carrying one. A held event cannot be sent once the triage
     # that holds it is gone, so it ends as skipped.

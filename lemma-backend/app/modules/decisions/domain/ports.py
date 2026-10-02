@@ -82,7 +82,12 @@ class DecisionStore(Protocol):
     """Where decisions are kept. Each call opens and closes its own unit of work."""
 
     async def find_by_subject(
-        self, *, pod_id: UUID | None, decider_key: str, subject_key: str
+        self,
+        *,
+        pod_id: UUID | None,
+        decider_key: str,
+        subject_key: str,
+        owner_id: UUID | None,
     ) -> DecisionEntity | None: ...
 
     async def insert(self, decision: DecisionEntity) -> DecisionEntity: ...
@@ -102,6 +107,7 @@ class ExampleStore(Protocol):
         decider_key: str,
         question_keys: Sequence[str],
         per_question: int,
+        viewer_id: UUID | None,
     ) -> Mapping[str, Sequence[ExampleView]]: ...
 
     async def add(self, examples: Sequence[ExampleEntity]) -> None: ...

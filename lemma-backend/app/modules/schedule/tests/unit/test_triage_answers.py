@@ -169,6 +169,8 @@ def _closed(run: ScheduleRunEntity, answer: str | None, **updates: object):
         "status": "RESPONDED" if answer else "EXPIRED",
         "answer": answer,
         "responder_user_id": run.user_id if answer else None,
+        # Chosen by the person in the app, unless a test says their agent did.
+        "owner_confirmed": answer is not None,
     }
     values.update(updates)
     return ClosedQuestion(**values)  # type: ignore[arg-type]  # assembled per test
@@ -200,6 +202,7 @@ async def test_act_fires_the_held_event_now_and_teaches_the_decider():
     assert taught.question == "action"
     assert taught.decision_id == closed.ask.decision_id
     assert taught.user_id == run.user_id
+    assert taught.by_person is True
     assert held.runs[run.id].status is ScheduleRunStatus.RECEIVED
     [fired] = factory.events
     assert isinstance(fired, ScheduleFired)
@@ -210,6 +213,23 @@ async def test_act_fires_the_held_event_now_and_teaches_the_decider():
     assert fired.llm_output is not None
     assert fired.llm_output["route"] == "act"
     assert fired.llm_output["answered_by"] == "person"
+
+
+async def test_an_answer_the_persons_agent_gave_routes_but_does_not_teach():
+    """Recorded as the agent's: a machine's answer never becomes an example."""
+    schedule = _schedule()
+    run = _held(schedule)
+    teach = FakeTeach()
+    answers, _held_runs, factory = _answers(schedule, run, teach)
+
+    route = await answers.settle(_closed(run, "urgent", owner_confirmed=False))
+
+    assert route is TriageRoute.ACT
+    [taught] = teach.taught
+    assert taught.by_person is False
+    [fired] = factory.events
+    assert fired.llm_output is not None
+    assert fired.llm_output["answered_by"] == "agent"
 
 
 async def test_digest_keeps_it_held_for_the_next_digest():
@@ -318,6 +338,14 @@ def test_a_closed_schedule_question_is_read_back_as_it_was_asked():
     assert closed.status == "RESPONDED"
     assert closed.ask.route_for("urgent") is TriageRoute.ACT
     assert closed.ask.route_for("unsure") is None
+
+
+@pytest.mark.parametrize("owner_confirmed", [True, False])
+def test_a_closed_question_says_whether_the_person_chose(owner_confirmed: bool):
+    closed = closed_question(_closed_event(owner_confirmed=owner_confirmed))
+
+    assert closed is not None
+    assert closed.owner_confirmed is owner_confirmed
 
 
 def test_anything_else_that_closes_is_not_a_schedules_to_settle():

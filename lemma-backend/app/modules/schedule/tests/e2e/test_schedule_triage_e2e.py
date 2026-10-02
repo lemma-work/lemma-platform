@@ -12,6 +12,7 @@ worker. Fires are claimed and started by the worker either way.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -24,6 +25,7 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.handlers.schedule_consumer import handle_llm_filter_task
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
+from app.modules.schedule.services import digest_dispatcher
 from app.modules.schedule.services.digest_dispatcher import dispatch_due_digests
 from app.modules.schedule.services.run_recovery_service import (
     ScheduleRunRecoveryService,
@@ -419,6 +421,81 @@ async def test_past_the_act_ceiling_an_event_goes_to_the_digest(
     assert held["llm_output"]["answer"] == "urgent"
     assert held["llm_output"]["route"] == "digest"
     assert held["llm_output"]["routed_from"] == "act"
+
+
+async def test_a_burst_of_events_takes_only_the_hours_places(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
+):
+    """Events triaged at once cannot all find the hour empty."""
+    _ = worker
+    pod_id, _workflow, schedule = await _webhook_schedule(
+        authenticated_client,
+        db_session,
+        fixed_test_org["id"],
+        {"decider": DECIDER, "routes": ROUTES, "digest": HOURLY, "act_per_hour": 1},
+    )
+
+    await asyncio.gather(*(_deliver(schedule, "urgent", n=n) for n in range(6)))
+
+    runs = await _wait_for_runs(
+        authenticated_client, pod_id, schedule["id"], {"COMPLETED": 1, "HELD": 5}
+    )
+    held = [run for run in runs if run["status"] == "HELD"]
+    assert {run["held_for"] for run in held} == {"digest"}
+    assert {run["llm_output"]["routed_from"] for run in held} == {"act"}
+
+
+async def test_a_removed_digest_sends_everything_it_held_in_batches(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_session: AsyncSession,
+    db_manager,
+    worker,
+    monkeypatch,
+):
+    """More than one digest's worth is sent at the sweeps after, not stranded."""
+    _ = worker
+    monkeypatch.setattr(digest_dispatcher, "DIGEST_MAX_EVENTS", 2)
+    pod_id, workflow, schedule = await _webhook_schedule(
+        authenticated_client,
+        db_session,
+        fixed_test_org["id"],
+        {"decider": DECIDER, "routes": ROUTES, "digest": HOURLY},
+    )
+    for n in range(5):
+        await _deliver(schedule, "later", n=n)
+    cleared = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}", json={"triage": None}
+    )
+    assert cleared.status_code == 200, cleared.text
+    detail = (
+        await authenticated_client.get(f"/pods/{pod_id}/schedules/{schedule['id']}")
+    ).json()
+
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    moment = datetime.fromisoformat(detail["next_digest_at"]) + timedelta(seconds=1)
+    sent = 0
+    for _sweep in range(5):
+        sent += await dispatch_due_digests(factory, now=moment)
+        moment += timedelta(minutes=1)
+
+    assert sent == 3
+    assert (
+        await _runs(authenticated_client, pod_id, schedule["id"], status="HELD") == []
+    )
+    after = (
+        await authenticated_client.get(f"/pods/{pod_id}/schedules/{schedule['id']}")
+    ).json()
+    assert after["next_digest_at"] is None
+    starts = await _completed_workflow_starts(
+        authenticated_client, pod_id, workflow["name"], count=3
+    )
+    assert sorted(
+        event["n"] for start in starts for event in start["payload"]["events"]
+    ) == [0, 1, 2, 3, 4]
 
 
 async def test_a_triage_must_route_every_option_of_a_real_question(

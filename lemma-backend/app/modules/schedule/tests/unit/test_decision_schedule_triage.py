@@ -25,7 +25,7 @@ from app.modules.schedule.infrastructure.adapters.decision_triage import (
     DecisionScheduleTriage,
 )
 from app.modules.schedule.tests.fakes import (
-    FakeActCounter,
+    FakeActAdmission,
     FakeOrganizations,
     FakeTriageDecisions,
 )
@@ -57,12 +57,12 @@ def _schedule(**triage_updates: object) -> ScheduleEntity:
 
 
 def _triage(
-    decisions: FakeTriageDecisions, acted: FakeActCounter | None = None
+    decisions: FakeTriageDecisions, admission: FakeActAdmission | None = None
 ) -> DecisionScheduleTriage:
     return DecisionScheduleTriage(
         decide_named=decisions,
         organization_of=FakeOrganizations(),
-        acted_since=acted or FakeActCounter(),
+        admit_act=admission or FakeActAdmission(),
     )
 
 
@@ -174,22 +174,42 @@ async def test_an_answer_the_routes_do_not_name_is_a_failed_evaluation():
         await _sort(_triage(decisions), _schedule())
 
 
-async def test_below_the_ceiling_act_acts():
-    acted = FakeActCounter(acted=2)
+async def test_below_the_ceiling_act_is_admitted_and_acts():
+    admission = FakeActAdmission(admitted=2)
+    schedule = _schedule(act_per_hour=3)
 
     verdict = await _sort(
-        _triage(FakeTriageDecisions("urgent"), acted), _schedule(act_per_hour=3)
+        _triage(FakeTriageDecisions("urgent"), admission),
+        schedule,
+        source_event_id="provider:event-9",
     )
 
     assert verdict.route is TriageRoute.ACT
     assert "routed_from" not in verdict.output
-    [(schedule_id, _since)] = acted.asked
-    assert schedule_id is not None
+    # The place is taken for this event, before its fire is published.
+    assert admission.asked == [(schedule.id, "provider:event-9", 3)]
+
+
+async def test_a_burst_takes_only_the_places_the_hour_has():
+    """Every event asks for a place; the one past the ceiling is turned away."""
+    admission = FakeActAdmission()
+    schedule = _schedule(act_per_hour=1)
+    triage = _triage(FakeTriageDecisions("urgent"), admission)
+
+    first = await _sort(triage, schedule, source_event_id="provider:event-1")
+    second = await _sort(triage, schedule, source_event_id="provider:event-2")
+    replayed = await _sort(triage, schedule, source_event_id="provider:event-1")
+
+    assert first.route is TriageRoute.ACT
+    assert second.route is TriageRoute.DIGEST
+    # A redelivery of an admitted event is admitted again, not counted twice.
+    assert replayed.route is TriageRoute.ACT
+    assert admission.admitted == 1
 
 
 async def test_at_the_ceiling_act_goes_to_the_digest():
     verdict = await _sort(
-        _triage(FakeTriageDecisions("urgent"), FakeActCounter(acted=3)),
+        _triage(FakeTriageDecisions("urgent"), FakeActAdmission(admitted=3)),
         _schedule(act_per_hour=3),
     )
 
@@ -205,22 +225,22 @@ async def test_at_the_ceiling_without_a_digest_act_goes_to_a_person():
     )
 
     verdict = await _sort(
-        _triage(FakeTriageDecisions("urgent"), FakeActCounter(acted=1)), schedule
+        _triage(FakeTriageDecisions("urgent"), FakeActAdmission(admitted=1)), schedule
     )
 
     assert verdict.route is TriageRoute.ASK
     assert verdict.output["routed_from"] == "act"
 
 
-async def test_no_ceiling_and_no_act_never_counts():
-    acted = FakeActCounter(acted=1_000)
+async def test_no_ceiling_and_no_act_never_takes_a_place():
+    admission = FakeActAdmission(admitted=1_000)
 
     assert (
-        await _sort(_triage(FakeTriageDecisions("urgent"), acted), _schedule())
+        await _sort(_triage(FakeTriageDecisions("urgent"), admission), _schedule())
     ).route is TriageRoute.ACT
     assert (
         await _sort(
-            _triage(FakeTriageDecisions("fyi"), acted), _schedule(act_per_hour=1)
+            _triage(FakeTriageDecisions("fyi"), admission), _schedule(act_per_hour=1)
         )
     ).route is TriageRoute.DIGEST
-    assert acted.asked == []
+    assert admission.asked == []

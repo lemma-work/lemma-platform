@@ -91,7 +91,7 @@ def _asker(caller: Caller) -> Asker:
         user_id=caller.user_id,
         pod_id=caller.pod_id,
         organization_id=caller.organization_id,
-        visibility="POD",
+        visibility="PERSONAL",
     )
 
 

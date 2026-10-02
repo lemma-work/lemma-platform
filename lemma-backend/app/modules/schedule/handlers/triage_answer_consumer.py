@@ -66,6 +66,7 @@ def closed_question(event: NotificationClosedEvent) -> ClosedQuestion | None:
         status=event.status.value,
         answer=event.answer,
         responder_user_id=event.responder_user_id,
+        owner_confirmed=event.owner_confirmed,
     )
 
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
@@ -43,7 +42,7 @@ from app.modules.schedule.domain.triage import (
     verdict_output,
 )
 from app.modules.schedule.infrastructure.adapters.decision_triage import (
-    ActCounter,
+    ActAdmission,
     DecideNamed,
 )
 from app.modules.schedule.infrastructure.adapters.system_model_filter import (
@@ -436,16 +435,28 @@ class FakeTriageDecisions:
         return decision
 
 
-class FakeActCounter:
-    """How many act runs the ledger says a schedule started in the last hour."""
+class FakeActAdmission:
+    """`ActAdmission` over an in-memory window, admitting each event once.
 
-    def __init__(self, acted: int = 0) -> None:
-        self.acted = acted
-        self.asked: list[tuple[UUID, datetime]] = []
+    `admitted` seeds how many places the window already holds.
+    """
 
-    async def __call__(self, schedule_id: UUID, *, since: datetime) -> int:
-        self.asked.append((schedule_id, since))
-        return self.acted
+    def __init__(self, admitted: int = 0) -> None:
+        self.admitted = admitted
+        self.events: set[tuple[UUID, str]] = set()
+        self.asked: list[tuple[UUID, str, int]] = []
+
+    async def __call__(
+        self, schedule_id: UUID, source_event_id: str, *, ceiling: int
+    ) -> bool:
+        self.asked.append((schedule_id, source_event_id, ceiling))
+        if (schedule_id, source_event_id) in self.events:
+            return True
+        if self.admitted >= ceiling:
+            return False
+        self.admitted += 1
+        self.events.add((schedule_id, source_event_id))
+        return True
 
 
 class FakeTriage:
@@ -511,6 +522,7 @@ class Taught:
     question: str
     answer: str
     user_id: UUID
+    by_person: bool
 
 
 class FakeTeach:
@@ -528,10 +540,13 @@ class FakeTeach:
         question: str,
         answer: str,
         user_id: UUID,
+        by_person: bool,
     ) -> None:
         if self.error is not None:
             raise self.error
-        self.taught.append(Taught(decision_id, pod_id, question, answer, user_id))
+        self.taught.append(
+            Taught(decision_id, pod_id, question, answer, user_id, by_person)
+        )
 
 
 def _conforms() -> None:
@@ -542,7 +557,7 @@ def _conforms() -> None:
     _filter: ScheduleEventFilter = FakeScheduleFilter()
     _outcomes: ScheduleFilterOutcomeRecorder = FakeFilterOutcomes()
     _named: DecideNamed = FakeTriageDecisions("act")
-    _acted: ActCounter = FakeActCounter()
+    _acted: ActAdmission = FakeActAdmission()
     _triage: ScheduleEventTriage = FakeTriage(TriageRoute.ACT)
     _questions: TriageQuestions = FakeQuestions()
     _teach: TeachDecision = FakeTeach()

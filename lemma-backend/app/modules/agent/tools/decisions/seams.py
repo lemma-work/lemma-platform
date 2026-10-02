@@ -55,8 +55,10 @@ type CallOptions = Mapping[str, dict[str, Option]]
 class Caller:
     """Who is asking: the person this call works for, in its pod.
 
-    Decisions the tools record are the pod's to see, so the adapter always
-    asks with `POD` visibility.
+    Decisions the tools record are that person's, `PERSONAL` as the API's are
+    by default: the state an agent decides on is whatever it read for them --
+    their mail, their rows -- which the rest of the pod may not be allowed to
+    see, and a decision keeps its state as evidence.
     """
 
     user_id: UUID

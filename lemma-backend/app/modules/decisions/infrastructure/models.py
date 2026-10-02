@@ -61,7 +61,7 @@ class DeciderVersionModel(UUIDCreatedBase):
 
 
 class DecisionModel(UUIDAuditBase):
-    """One decision. Unique per (pod, decider, subject), which is what makes it asked once."""
+    """One decision. Unique per (pod, decider, subject, owner): asked once per namespace."""
 
     __tablename__ = "decisions"
     __table_args__ = (
@@ -70,6 +70,7 @@ class DecisionModel(UUIDAuditBase):
             "pod_id",
             "decider_key",
             "subject_key",
+            "subject_owner_id",
             unique=True,
             postgresql_where=text("subject_key IS NOT NULL"),
             postgresql_nulls_not_distinct=True,
@@ -91,6 +92,9 @@ class DecisionModel(UUIDAuditBase):
     decider_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     decider_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     subject_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #: The asker of a PERSONAL decision, null for a POD one. No foreign key: a
+    #: deleted user's records must not fall into the pod's shared namespace.
+    subject_owner_id: Mapped[UUID | None] = mapped_column(nullable=True)
     shape: Mapped[dict[str, JsonValue]] = mapped_column(JSONB, nullable=False)
     answers: Mapped[dict[str, JsonValue]] = mapped_column(JSONB, nullable=False)
     open: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
@@ -130,6 +134,8 @@ class DecisionExampleModel(UUIDCreatedBase):
     value: Mapped[JsonValue] = mapped_column(JSONB, nullable=False)
     evidence: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: The corrected decision's: a PERSONAL example is shown only to `user_id`.
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False)
     user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

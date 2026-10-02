@@ -220,8 +220,9 @@ Four rules govern decisions:
 
 - **Asked once, never recomputed.** Neither System One nor a model is
   deterministic, so the record is the fact. The idempotency key is (decider,
-  subject); an inline call keys on a hash of its questions in place of the
-  decider. A redelivered webhook, a retry or a redrive reads the recorded
+  subject), and the asker too for a private decision, so a subject never finds
+  another person's record; an inline call keys on a hash of its questions in
+  place of the decider. A redelivered webhook, a retry or a redrive reads the recorded
   decision instead of asking again. The one exception is a decision left open
   because a rung failed or was unavailable at that moment (*interrupted*): the
   moment, not the question, left it open, so asking again asks again and
@@ -1303,13 +1304,27 @@ backfills and any frontend for deciders or triage are not built.
 | Workflow question mode | `workflow/domain/decision_step.py`, `workflow/services/decision_step_service.py` | Rules first, then the question. Asking suspends the run on a `DECISION` wait; a job asks with no session held, then resumes on the answer's branch, `on_open`, or the default edge |
 | Deciders in pod bundles | `pod_bundle/infrastructure/decider_apply.py`, `exporter_deciders.py`; `lemma-cli/lemma_cli/cli_app/decider_bundle.py` | `deciders/<name>/<name>.json` holds `{name, definition}`. Examples, decisions and versions never travel. Applied after tables and before functions, agents and workflows; an unchanged decider is a no-op, a changed one a new version |
 | SDKs | `lemma-python/lemma_sdk/resources/decisions.py`, `lemma-typescript/src/namespaces/decisions.ts` | `pod.decisions`, `pod.deciders`; `client.decisions`, `client.deciders`. Personal by default |
-| Triage on schedules | `schedule/domain/triage.py`, `schedule/services/triage_*.py`, `digest_dispatcher.py`; migration `0045_schedule_triage` | `triage: {decider, question?, routes, digest?, act_per_hour?}` in place of a filter. **act** fires, **ignore** is a `FILTERED` run, **digest** holds a `HELD` run until one digest run carries the held events, **ask** holds and notifies the owner with the options, and the answer records on the decision, teaches it and routes the run. Bundles do not carry `triage` yet |
+| Triage on schedules | `schedule/domain/triage.py`, `schedule/services/triage_*.py`, `digest_dispatcher.py`; migration `0045_schedule_triage` | `triage: {decider, question?, routes, digest?, act_per_hour?}` in place of a filter. **act** fires, **ignore** is a `FILTERED` run, **digest** holds a `HELD` run until a digest run carries it, a bounded batch per sweep until none are left, **ask** holds and notifies the owner with the options, and the answer records on the decision, teaches it when the person chose it, and routes the run. Bundles do not carry `triage` yet |
 
 Departures from the text above, all deliberate:
 
-- **Only a signed-in person teaches** (§2.5, §4.4).
+- **Only a signed-in person teaches** (§2.5, §4.4). A schedule question
+  answered through notifications teaches only when the person chose the answer
+  in the app or approved it word for word; their agent answering on its own is
+  recorded as the agent's.
 - **Interrupted decisions are asked again** (§2.4).
-- **Decisions are personal by default** (§2.4, §3).
+- **Decisions are personal by default** (§2.4, §3), the agent tools' included:
+  an agent decides on whatever it read for its person.
+- **A private correction teaches only its owner** (§2.5). An example keeps the
+  visibility of the decision it corrected, and a PERSONAL one reaches only that
+  person's prompts. Sharing one with the pod would take an explicit promotion,
+  which is not built.
+- **`act_per_hour` admits, not counts.** Each act takes a place in
+  `schedule_act_admissions` under a lock before its fire is published, so a
+  burst cannot pass the ceiling; acts a person chose take none.
+- **Question keys cannot contain `__`**, which separates a multi-choice question
+  from its options on the System One wire, and the model's abstention list is
+  `_unsure`, a name no question can take.
 
 Not yet done:
 

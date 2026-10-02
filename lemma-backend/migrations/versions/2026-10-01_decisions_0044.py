@@ -6,9 +6,15 @@ already serving.
 `deciders` holds a pod decider and a copy of its current definition;
 `decider_versions` every definition ever saved, never edited, because a
 decision names the version that answered it. `decisions` is unique per (pod,
-decider, subject) when a subject is given -- NULLS NOT DISTINCT, so a system
-decision asked outside any pod is asked once too -- which is what makes a
-decision asked once. `decision_examples` is what people said answers were.
+decider, subject, subject owner) when a subject is given -- NULLS NOT DISTINCT,
+so a system decision asked outside any pod is asked once too -- which is what
+makes a decision asked once. The subject owner is the asker of a PERSONAL
+decision and null for a POD one: two people deciding the same subject
+privately each keep their own record, and nobody is handed another's. It has
+no foreign key on purpose, so a deleted user's records keep their place.
+`decision_examples` is what people said answers were, with the visibility of
+the decision they corrected: a PERSONAL one teaches only the person who made
+it.
 
 Revision ID: 0044_decisions
 Revises: 0043_surface_groups
@@ -107,6 +113,7 @@ def upgrade() -> None:
         sa.Column("decider_name", sa.String(length=64), nullable=True),
         sa.Column("decider_version", sa.Integer(), nullable=True),
         sa.Column("subject_key", sa.String(length=512), nullable=True),
+        sa.Column("subject_owner_id", sa.Uuid(), nullable=True),
         sa.Column("shape", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("answers", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("open", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
@@ -126,7 +133,7 @@ def upgrade() -> None:
     op.create_index(
         "uq_decisions_subject",
         "decisions",
-        ["pod_id", "decider_key", "subject_key"],
+        ["pod_id", "decider_key", "subject_key", "subject_owner_id"],
         unique=True,
         postgresql_where=sa.text("subject_key IS NOT NULL"),
         postgresql_nulls_not_distinct=True,
@@ -149,6 +156,7 @@ def upgrade() -> None:
         sa.Column("value", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("evidence", sa.Text(), nullable=False),
         sa.Column("source", sa.String(length=16), nullable=False),
+        sa.Column("visibility", sa.String(length=16), nullable=False),
         sa.Column(
             "user_id",
             sa.Uuid(),

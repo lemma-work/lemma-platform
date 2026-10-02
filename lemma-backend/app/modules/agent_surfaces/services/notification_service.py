@@ -26,8 +26,8 @@ from app.modules.agent_surfaces.domain.errors import (
     NotificationNotFoundError,
 )
 from app.modules.agent_surfaces.domain.events import (
-    NotificationClosedEvent,
     NotificationSettledEvent,
+    closed_events,
 )
 from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
@@ -451,13 +451,8 @@ class NotificationService:
         )
         updated = await self.notifications.update(notification)
         await self._announce_if_settled(updated)
-        self._announce_closed(notification)
+        self.uow.collect_events(closed_events(notification, owner_confirmed))
         return updated
-
-    def _announce_closed(self, notification: NotificationEntity) -> None:
-        """Every way out announces: a held thing nobody is told about stays held."""
-        if notification.announces_close:
-            self.uow.collect_events([NotificationClosedEvent.of(notification)])
 
     async def _announce_if_settled(self, notification: NotificationEntity) -> None:
         """Raise ``NotificationSettledEvent`` once this conversation is owed nothing.
@@ -535,7 +530,7 @@ class NotificationService:
         for notification in notifications:
             notification.cancel()
             await self.notifications.update(notification)
-            self._announce_closed(notification)
+            self.uow.collect_events(closed_events(notification))
         return len(notifications)
 
     async def expire_past_due(self, *, limit: int = 100) -> int:
@@ -559,7 +554,7 @@ class NotificationService:
             await self._announce_if_settled(
                 await self.notifications.update(notification)
             )
-            self._announce_closed(notification)
+            self.uow.collect_events(closed_events(notification))
             expired += 1
         return expired
 

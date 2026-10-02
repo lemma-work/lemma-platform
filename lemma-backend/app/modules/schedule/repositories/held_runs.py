@@ -28,20 +28,13 @@ from app.modules.schedule.domain.schedule import (
     ScheduleRunEntity,
     ScheduleRunStatus,
 )
-from app.modules.schedule.domain.triage import (
-    DIGEST_EVENT_PREFIX,
-    TriageRoute,
-    next_digest_at,
-)
+from app.modules.schedule.domain.triage import TriageRoute, next_digest_at
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 
 _HELD = ScheduleRunStatus.HELD.value
 _DISPATCHED = ScheduleRunStatus.DISPATCHED.value
 _FILTERED = ScheduleRunStatus.FILTERED.value
-#: What an act run is while it counts toward `act_per_hour`: claimed by its
-#: target's module, or already handed to it.
-_ACTING = (ScheduleRunStatus.PROCESSING.value, ScheduleRunStatus.DISPATCHED.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,24 +204,18 @@ class HeldRunRepository:
         )
         return int(result.rowcount or 0)
 
-    async def acted_since(self, schedule_id: UUID, *, since: datetime) -> int:
-        """Act runs the schedule's target has been handed since `since`.
+    async def continue_digest(self, schedule_id: UUID, *, at: datetime) -> None:
+        """Bring the schedule's next digest forward to `at`, arming one if none is due.
 
-        Digests are left out, both the digest runs and the events they sent:
-        `act_per_hour` bounds the runs that started straight away.
+        `LEAST` ignores a null cursor, so a removed digest is armed once more
+        and a cadence's next occurrence is only ever brought nearer.
         """
-        count = await self.session.scalar(
-            select(func.count())
-            .select_from(ScheduleRun)
-            .where(
-                ScheduleRun.schedule_id == schedule_id,
-                ScheduleRun.created_at >= since,
-                ScheduleRun.status.in_(_ACTING),
-                ScheduleRun.digest_run_id.is_(None),
-                ScheduleRun.source_event_id.not_like(f"{DIGEST_EVENT_PREFIX}%"),
-            )
+        await self.session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(next_digest_at=func.least(Schedule.next_digest_at, at))
+            .execution_options(synchronize_session=False)
         )
-        return int(count or 0)
 
 
 async def claim_due_digest(session: AsyncSession, *, now: datetime) -> DueDigest | None:

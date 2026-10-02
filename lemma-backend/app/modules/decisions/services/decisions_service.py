@@ -35,6 +35,7 @@ from app.modules.decisions.domain.decisions import (
     Rung,
     check_against_shape,
     shape_of,
+    subject_owner,
 )
 from app.modules.decisions.domain.errors import (
     DeciderNotFoundError,
@@ -185,11 +186,7 @@ class DecisionsService:
         questions = asked_questions(resolved.definition, request.options)
         existing = None
         if request.subject is not None and request.record:
-            existing = await self._decisions.find_by_subject(
-                pod_id=asker.pod_id,
-                decider_key=resolved.key,
-                subject_key=request.subject,
-            )
+            existing = await self._recorded(resolved, request.subject, asker)
             if existing is not None and not existing.interrupted:
                 return existing
         examples = await self._examples_for(resolved, questions, asker)
@@ -204,7 +201,7 @@ class DecisionsService:
         )
         if not request.record:
             return decision
-        stored = await self._keep(decision, existing)
+        stored = await self._keep(decision, existing, asker)
         logger.info(
             "decisions.decisions_service.decided.observed",
             decider_scope=resolved.scope.value,
@@ -243,11 +240,7 @@ class DecisionsService:
             async with limit:
                 existing = None
                 if record and subject is not None:
-                    existing = await self._decisions.find_by_subject(
-                        pod_id=asker.pod_id,
-                        decider_key=resolved.key,
-                        subject_key=subject,
-                    )
+                    existing = await self._recorded(resolved, subject, asker)
                     if existing is not None and not existing.interrupted:
                         return RowResult(
                             index, row_id, existing.answers, existing.open, existing.id
@@ -256,7 +249,7 @@ class DecisionsService:
                     resolved, questions, row, subject, Lane.BULK, examples, asker
                 )
                 if record:
-                    decision = await self._keep(decision, existing)
+                    decision = await self._keep(decision, existing, asker)
             return RowResult(
                 index,
                 row_id,
@@ -306,8 +299,8 @@ class DecisionsService:
         self, *, decision_id: UUID, pod_id: UUID, viewer_id: UUID
     ) -> DecisionEntity:
         decision = await self._decisions.get(decision_id)
-        if decision is None or not visible_to(
-            decision, pod_id=pod_id, viewer_id=viewer_id
+        if decision is None or not decision.visible_to(
+            pod_id=pod_id, viewer_id=viewer_id
         ):
             raise DecisionNotFoundError()
         return decision
@@ -366,6 +359,7 @@ class DecisionsService:
                         value=value,
                         evidence=decision.evidence,
                         source=ExampleSource.PERSON,
+                        visibility=decision.visibility,
                         user_id=user_id,
                         decision_id=decision.id,
                     )
@@ -374,17 +368,46 @@ class DecisionsService:
             )
         return updated
 
-    async def _keep(
-        self, decision: DecisionEntity, interrupted: DecisionEntity | None
-    ) -> DecisionEntity:
-        """Keep a new decision, or overwrite the interrupted one it replaces."""
-        if interrupted is None:
-            return await self._decisions.insert(decision)
-        return await self._decisions.save_reasked(
-            decision.model_copy(
-                update={"id": interrupted.id, "created_at": interrupted.created_at}
-            )
+    async def _recorded(
+        self, resolved: ResolvedDecider, subject: str, asker: Asker
+    ) -> DecisionEntity | None:
+        """The decision already kept for this subject, if the asker may read it."""
+        found = await self._decisions.find_by_subject(
+            pod_id=asker.pod_id,
+            decider_key=resolved.key,
+            subject_key=subject,
+            owner_id=subject_owner(visibility=asker.visibility, user_id=asker.user_id),
         )
+        return found if _readable_by(found, asker) else None
+
+    async def _keep(
+        self,
+        decision: DecisionEntity,
+        interrupted: DecisionEntity | None,
+        asker: Asker,
+    ) -> DecisionEntity:
+        """Keep a new decision, or overwrite the interrupted one it replaces.
+
+        Losing an insert race returns the winner's record, which is the
+        asker's own or the pod's by the subject namespace. The check after is
+        the boundary should that ever not hold: the asker gets the answer just
+        made, unrecorded, rather than somebody else's evidence.
+        """
+        if interrupted is None:
+            kept = await self._decisions.insert(decision)
+        else:
+            kept = await self._decisions.save_reasked(
+                decision.model_copy(
+                    update={"id": interrupted.id, "created_at": interrupted.created_at}
+                )
+            )
+        if _readable_by(kept, asker):
+            return kept
+        logger.warning(
+            "decisions.decisions_service.unreadable_record.degraded",
+            decider_key=decision.decider_key,
+        )
+        return decision
 
     async def _examples_for(
         self,
@@ -399,6 +422,7 @@ class DecisionsService:
             decider_key=resolved.key,
             question_keys=list(questions),
             per_question=EXAMPLES_PER_QUESTION,
+            viewer_id=asker.user_id,
         )
 
     async def _ask(
@@ -531,10 +555,10 @@ def inline_key(definition: DeciderDefinition) -> str:
     return "inline:" + hashlib.sha256(canonical.encode()).hexdigest()[:32]
 
 
-def visible_to(decision: DecisionEntity, *, pod_id: UUID, viewer_id: UUID) -> bool:
-    if decision.pod_id != pod_id:
-        return False
-    return decision.visibility == "POD" or decision.user_id == viewer_id
+def _readable_by(decision: DecisionEntity | None, asker: Asker) -> bool:
+    return decision is not None and decision.visible_to(
+        pod_id=asker.pod_id, viewer_id=asker.user_id
+    )
 
 
 def count_answers(results: Sequence[RowResult]) -> dict[str, dict[str, int]]:

@@ -234,11 +234,15 @@ decided once. The adapter is `infrastructure/adapters/decision_triage.py`.
 `routed_from` when the act ceiling sent the event elsewhere and `fallback` when
 an open question's fallback answered it.
 
-**The act ceiling.** `act_per_hour` counts the act runs the target was handed in
-the last hour -- `PROCESSING` and `DISPATCHED` runs, digests left out. At the
-ceiling, act becomes digest when the triage has one, and ask when it does not.
-Counted from the ledger, so a burst arriving faster than the target claims its
-runs can pass it by what is in flight.
+**The act ceiling.** `act_per_hour` bounds the events triage sends straight to
+the target in any hour. Each act is admitted before its fire is published: a
+row in `schedule_act_admissions`, counted and written under a transaction-scoped
+advisory lock on the schedule (`repositories/act_admissions.py`), so events
+triaged at once cannot all find the hour empty, and a redelivered event keeps
+the place it had rather than taking another. At the ceiling, act becomes digest
+when the triage has one, and ask when it does not. An act a person chose by
+answering a question takes no place: the ceiling bounds what triage does on
+its own.
 
 **Ask.** The question goes to the run's owner -- the row's owner on an RLS
 table, who alone may see the decision, otherwise the schedule's -- once the
@@ -253,8 +257,11 @@ answered, expired or cancelled -- `agent_surfaces` raises
 `NotificationClosedEvent`, and `handlers/triage_answer_consumer.py` settles the
 run through the inbox (`services/triage_answers.py`):
 
-- The answer is recorded on the decision as the person's (`decisions.answer`,
-  `by=person`), which makes it an example; a redelivery does not record it twice.
+- The answer is recorded on the decision (`decisions.answer`): as the person's,
+  which makes it an example, when the event says they chose it themselves --
+  in the app, or by approving the exact answer (`owner_confirmed`); as their
+  agent's, which teaches nothing, when their agent answered on its own. A
+  redelivery does not record it twice.
 - act re-arms the run as `RECEIVED` with a target run id and stages its
   `schedule.fired`, as a redrive does; the target's module claims it.
 - digest moves it to `held_for: digest` -- or fires it now if the schedule no
@@ -268,8 +275,10 @@ nothing.
 `next_digest_at` is due with `FOR UPDATE SKIP LOCKED`, advances the cursor past
 now (a backlog is one digest), and takes its `held_for: digest` rows oldest
 first with `SKIP LOCKED`: at most 50 events and 48,000 characters, an event
-over 16,000 going in as a stub naming its run, the rest waiting for the next
-digest (`more_waiting`). Per owner -- one, except on an RLS table -- it writes
+over 16,000 going in as a stub naming its run. When events are left
+(`more_waiting`), the cursor is brought forward to just after this sweep, so the
+next sweep sends the next batch -- each its own occurrence and key -- until none
+remain, whether or not the schedule still has a digest. Per owner -- one, except on an RLS table -- it writes
 one digest run (`source_event_id` `digest:{due_at}:{owner}`, `RECEIVED`), marks
 those rows `DISPATCHED` with `digest_run_id` pointing at it, and stages one
 `schedule.fired` whose payload is `{"events": [...], "held": N}` and whose

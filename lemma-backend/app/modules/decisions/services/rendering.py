@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass
 
@@ -39,14 +40,32 @@ def render(state: JsonValue, view: InputView) -> RenderedState:
 
 
 def _select(state: JsonValue, fields: list[str]) -> JsonValue:
+    """The selected fields at the paths they came from, and nothing beside them.
+
+    Nested, not flattened to `"email.subject"`: rules address fields by the
+    same dotted paths and JMESPath walks objects, so a flattened key would be
+    a field no rule can reach. Values are copied, so building the view never
+    writes into the caller's state.
+    """
     if not isinstance(state, dict):
         return state
     selected: dict[str, JsonValue] = {}
     for path in fields:
-        found, value = _lookup(state, path.split("."))
+        parts = path.split(".")
+        found, value = _lookup(state, parts)
         if found:
-            selected[path] = value
+            _place(selected, parts, copy.deepcopy(value))
     return selected
+
+
+def _place(into: dict[str, JsonValue], parts: list[str], value: JsonValue) -> None:
+    for part in parts[:-1]:
+        child = into.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            into[part] = child
+        into = child
+    into[parts[-1]] = value
 
 
 def _lookup(value: JsonValue, parts: list[str]) -> tuple[bool, JsonValue]:

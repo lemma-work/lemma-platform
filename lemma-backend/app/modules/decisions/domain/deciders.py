@@ -160,6 +160,11 @@ class DeciderDefinition(BaseModel):
                     f"question key {key!r} must be lowercase letters, digits or '_', "
                     "starting with a letter"
                 )
+            if "__" in key:
+                # System One asks a multi-choice question one option at a time
+                # under `<question>__<option>`; a key holding `__` could be
+                # mistaken for one of those.
+                raise ValueError(f"question key {key!r} must not contain '__'")
         for index, rule in enumerate(self.rules):
             for key, value in rule.answer.items():
                 question = self.questions.get(key)

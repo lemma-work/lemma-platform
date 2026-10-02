@@ -6,6 +6,8 @@ or a redelivery reads the recorded decision instead of asking again; by the
 same asker, the event's owner, PERSONAL when the event is a row on an RLS
 table. Its answer is routed by the schedule's `routes`, and an `act` past the
 hour's `act_per_hour` goes to the digest, or to a person when there is none.
+An act is admitted -- its place in the hour taken -- before its fire is
+published, so a burst of events cannot all find the hour empty.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ from app.modules.schedule.infrastructure.adapters.system_model_filter import (
     filter_subject,
     json_object,
 )
-from app.modules.schedule.repositories.held_runs import HeldRunRepository
+from app.modules.schedule.repositories.act_admissions import admit_act
 
 #: The window `act_per_hour` is counted over.
 ACT_WINDOW = timedelta(hours=1)
@@ -67,21 +69,32 @@ class DecideNamed(Protocol):
     ) -> DecisionEntity: ...
 
 
-class ActCounter(Protocol):
-    """How many act runs a schedule has started since a moment."""
+class ActAdmission(Protocol):
+    """Whether an event may act now, taking one of the window's `ceiling` places."""
 
-    async def __call__(self, schedule_id: UUID, *, since: datetime) -> int: ...
+    async def __call__(
+        self, schedule_id: UUID, source_event_id: str, *, ceiling: int
+    ) -> bool: ...
 
 
-class LedgerActCounter:
-    """`ActCounter` over the run ledger, one short unit of work per count."""
+class StoredActAdmission:
+    """`ActAdmission` kept in Postgres, one short unit of work per event."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory | None = None) -> None:
         self._uow_factory = uow_factory or SessionUnitOfWorkFactory(async_session_maker)
 
-    async def __call__(self, schedule_id: UUID, *, since: datetime) -> int:
+    async def __call__(
+        self, schedule_id: UUID, source_event_id: str, *, ceiling: int
+    ) -> bool:
         async with self._uow_factory() as uow:
-            return await HeldRunRepository(uow).acted_since(schedule_id, since=since)
+            return await admit_act(
+                uow.session,
+                schedule_id=schedule_id,
+                source_event_id=source_event_id,
+                ceiling=ceiling,
+                window=ACT_WINDOW,
+                now=datetime.now(timezone.utc),
+            )
 
 
 class DecisionScheduleTriage:
@@ -92,13 +105,13 @@ class DecisionScheduleTriage:
         *,
         decide_named: DecideNamed | None = None,
         organization_of: OrganizationLookup | None = None,
-        acted_since: ActCounter | None = None,
+        admit_act: ActAdmission | None = None,
     ) -> None:
         self._decide: DecideNamed = decide_named or decide
         self._organization_of: OrganizationLookup = (
             organization_of or pod_organization_id_detached
         )
-        self._acted_since: ActCounter = acted_since or LedgerActCounter()
+        self._admit_act: ActAdmission = admit_act or StoredActAdmission()
 
     async def triage_event(
         self,
@@ -124,7 +137,9 @@ class DecisionScheduleTriage:
         answer, fallback = answer_of(decision, question, triage)
         route = triage.routes[answer]
         routed_from: TriageRoute | None = None
-        if route is TriageRoute.ACT and await self._at_ceiling(schedule.id, triage):
+        if route is TriageRoute.ACT and not await self._admitted(
+            schedule.id, source_event_id, triage
+        ):
             routed_from, route = route, triage.over_ceiling
         return TriageVerdict(
             route=route,
@@ -178,12 +193,14 @@ class DecisionScheduleTriage:
         except DeciderNotFoundError as exc:
             raise ScheduleTriageDeciderMissingError() from exc
 
-    async def _at_ceiling(self, schedule_id: UUID, triage: TriageConfig) -> bool:
+    async def _admitted(
+        self, schedule_id: UUID, source_event_id: str, triage: TriageConfig
+    ) -> bool:
         if triage.act_per_hour is None:
-            return False
-        since = datetime.now(timezone.utc) - ACT_WINDOW
-        acted = await self._acted_since(schedule_id, since=since)
-        return acted >= triage.act_per_hour
+            return True
+        return await self._admit_act(
+            schedule_id, source_event_id, ceiling=triage.act_per_hour
+        )
 
 
 def answer_of(

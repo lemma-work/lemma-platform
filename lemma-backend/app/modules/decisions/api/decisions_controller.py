@@ -13,11 +13,10 @@ from app.core.authorization.context import ActorType, Context
 from app.core.authorization.dependencies import PodContextDep
 from app.modules.decisions.api.dependencies import (
     DecidersServiceDep,
-    DeciderAskDep,
     DeciderReadDep,
     DecisionsServiceDep,
     asker_from,
-    authorize_named_decider,
+    authorize_asking,
 )
 from app.modules.decisions.api.schemas import (
     AnswerBody,
@@ -54,7 +53,6 @@ def _response(decision: DecisionEntity) -> DecisionResponse:
         "passed inline -- about one state. With a `subject`, a decider is asked "
         "once: asking again returns the recorded decision."
     ),
-    dependencies=[DeciderAskDep],
 )
 async def create_decision(
     pod_id: UUID,
@@ -64,9 +62,11 @@ async def create_decision(
     decisions: DecisionsServiceDep,
     deciders: DecidersServiceDep,
 ) -> DecisionResponse:
-    await authorize_named_decider(
-        ctx=ctx, uow=uow, deciders=deciders, pod_id=pod_id, decider=body.decider
+    await authorize_asking(
+        ctx=ctx, deciders=deciders, pod_id=pod_id, decider=body.decider
     )
+    # Give the request's connection back before any engine is called.
+    await uow.commit()
     decision = await decisions.decide(
         DecideRequest(
             decider=body.decider,
@@ -91,7 +91,6 @@ async def create_decision(
         "Ask one decider about many rows at once, for sorting a list rather "
         "than one event. Rows are decided in parallel within the bulk budget."
     ),
-    dependencies=[DeciderAskDep],
 )
 async def decide_rows(
     pod_id: UUID,
@@ -101,9 +100,11 @@ async def decide_rows(
     decisions: DecisionsServiceDep,
     deciders: DecidersServiceDep,
 ) -> RowsResponse:
-    await authorize_named_decider(
-        ctx=ctx, uow=uow, deciders=deciders, pod_id=pod_id, decider=body.decider
+    await authorize_asking(
+        ctx=ctx, deciders=deciders, pod_id=pod_id, decider=body.decider
     )
+    # Give the request's connection back before any engine is called.
+    await uow.commit()
     result = await decisions.decide_rows(
         decider=body.decider,
         definition=body.definition,
@@ -203,7 +204,6 @@ async def get_decision(
         "Answer questions a decision left open, or correct a machine's answer. "
         "A person's answer becomes an example the decider learns from."
     ),
-    dependencies=[DeciderAskDep],
 )
 async def answer_decision(
     pod_id: UUID,
@@ -211,13 +211,24 @@ async def answer_decision(
     body: AnswerBody,
     ctx: PodContextDep,
     decisions: DecisionsServiceDep,
+    deciders: DecidersServiceDep,
 ) -> DecisionResponse:
+    viewer = _viewer(ctx)
+    # Read first to learn which decider it was asked of: answering is asking's
+    # permission, on the same decider. No engine is called after, so unlike
+    # asking there is no slow work to give the connection back for.
+    asked = await decisions.get(
+        decision_id=decision_id, pod_id=pod_id, viewer_id=viewer
+    )
+    await authorize_asking(
+        ctx=ctx, deciders=deciders, pod_id=pod_id, decider=asked.decider_name
+    )
     decision = await decisions.answer(
         decision_id=decision_id,
         pod_id=pod_id,
         answers=body.answers,
         by=_answerer(ctx, body.by),
-        user_id=_viewer(ctx),
+        user_id=viewer,
     )
     return _response(decision)
 

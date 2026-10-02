@@ -361,16 +361,18 @@ an outcome:
   `decision_id`, `answer` and `route`.
 - **digest** — the event is held (`HELD` run) and sent with the others on the
   digest's cron: **one** run whose `start.payload.events` lists them, oldest first,
-  with `start.payload.held` their count. Bounded per digest; the rest wait for the
-  next one (`start.metadata.more_waiting`). `digest` is required when any option
+  with `start.payload.held` their count. Bounded per digest; the rest follow in
+  another digest a minute later (`start.metadata.more_waiting`). `digest` is required when any option
   routes there, and it is no more frequent than a `TIME` schedule may be.
 - **ask** — the event is held and its owner gets a notification with the options.
   Their choice (in the app, or by telling their agent, which records it with
-  `respond_to_notification` and `data.answer`) routes it -- act, digest or ignore --
-  and teaches the decider. Unanswered when it expires, it is skipped.
+  `respond_to_notification` and `data.answer`) routes it -- act, digest or ignore.
+  It teaches the decider only when it is theirs: chosen in the app, or approved
+  word for word. Unanswered when it expires, it is skipped.
 - **ignore** — a `FILTERED` run carrying the decision.
 
-`act_per_hour` caps act runs: past it, act becomes digest (or ask, with no digest).
+`act_per_hour` caps act runs, events arriving together included: past it, act
+becomes digest (or ask, with no digest).
 Every declared option must be routed, and `question` is needed only when the decider
 asks more than one. An open question uses its `fallback` option's route; with no
 routed fallback it fails like an undecided filter. See what is waiting with `GET

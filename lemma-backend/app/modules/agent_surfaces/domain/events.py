@@ -101,11 +101,17 @@ class NotificationClosedEvent(DomainEvent):
     status: NotificationStatus
     #: Who answered. None when it expired or was cancelled.
     responder_user_id: UUID | None = None
+    #: Whether the answer is the responder's own say-so: chosen by them in the
+    #: app, or approved word for word as their agent drafted it. False for an
+    #: answer their agent gave on its own, which is the agent's, not theirs.
+    owner_confirmed: bool = False
     answer: str | None = None
     action: dict[str, JsonValue] | None = None
 
     @classmethod
-    def of(cls, notification: NotificationEntity) -> NotificationClosedEvent:
+    def of(
+        cls, notification: NotificationEntity, *, owner_confirmed: bool = False
+    ) -> NotificationClosedEvent:
         """How ``notification`` closed, as its asker reads it."""
         answer = (notification.response_data or {}).get("answer")
         return cls(
@@ -119,6 +125,8 @@ class NotificationClosedEvent(DomainEvent):
                 if notification.status is NotificationStatus.RESPONDED
                 else None
             ),
+            owner_confirmed=owner_confirmed
+            and notification.status is NotificationStatus.RESPONDED,
             answer=answer if isinstance(answer, str) else None,
             action=notification.action,
         )
@@ -126,6 +134,19 @@ class NotificationClosedEvent(DomainEvent):
     @classmethod
     def stream_name(cls) -> str:
         return SurfaceEvents.STREAM
+
+
+def closed_events(
+    notification: NotificationEntity, owner_confirmed: bool = False
+) -> list[NotificationClosedEvent]:
+    """What closing ``notification`` announces: its asker's event, if it has one.
+
+    Every way out announces -- an answer, an expiry, a cancellation -- since a
+    held thing nobody is told about stays held.
+    """
+    if not notification.announces_close:
+        return []
+    return [NotificationClosedEvent.of(notification, owner_confirmed=owner_confirmed)]
 
 
 class SurfaceWebhookReceivedEvent(DomainEvent):

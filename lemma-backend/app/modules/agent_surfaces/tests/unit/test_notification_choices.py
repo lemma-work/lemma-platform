@@ -160,6 +160,28 @@ async def test_an_answer_is_announced_with_the_choice_and_who_made_it():
     assert closed.answer == "urgent"
     assert closed.responder_user_id == question.recipient_user_id
     assert closed.action == CHOICES
+    # Nobody said the person chose it: an answer is their agent's by default.
+    assert closed.owner_confirmed is False
+
+
+@pytest.mark.parametrize("owner_confirmed", [True, False])
+async def test_the_announcement_says_whether_the_person_chose_the_answer(
+    owner_confirmed: bool,
+):
+    """Chosen in the app or approved word for word, versus given by their agent."""
+    question = _question()
+    service = _service(question)
+
+    await service.respond(
+        pod_id=question.pod_id,
+        notification_id=question.id,
+        responder_user_id=question.recipient_user_id,
+        summary="urgent",
+        owner_confirmed=owner_confirmed,
+    )
+
+    [closed] = _closed(service)
+    assert closed.owner_confirmed is owner_confirmed
 
 
 async def test_a_second_answer_is_refused_and_announces_nothing_more():

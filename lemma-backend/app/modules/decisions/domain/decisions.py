@@ -162,12 +162,22 @@ _SHAPE_CHECKS = {
 }
 
 
+def subject_owner(*, visibility: str, user_id: UUID | None) -> UUID | None:
+    """Whose subjects a decision is filed among: its asker's when it is PERSONAL.
+
+    A PERSONAL decision is asked once per person and a POD one once per pod,
+    so two people deciding the same subject privately each keep their own
+    record, and asking about a subject never hands back somebody else's.
+    """
+    return user_id if visibility == "PERSONAL" else None
+
+
 class DecisionEntity(Entity):
     """One decision.
 
-    Filed under (`decider_key`, `subject_key`) when a subject is given, which is
-    what makes a decision asked once: a redelivered event, a retry or a redrive
-    reads this row instead of asking again.
+    Filed under (`decider_key`, `subject_key`, `subject_owner_id`) when a
+    subject is given, which is what makes a decision asked once: a redelivered
+    event, a retry or a redrive reads this row instead of asking again.
     """
 
     pod_id: UUID | None = None
@@ -188,6 +198,18 @@ class DecisionEntity(Entity):
     evidence_expires_at: datetime | None = None
     answered_by_user_id: UUID | None = None
     answered_at: datetime | None = None
+
+    @property
+    def subject_owner_id(self) -> UUID | None:
+        return subject_owner(visibility=self.visibility, user_id=self.user_id)
+
+    def visible_to(self, *, pod_id: UUID | None, viewer_id: UUID | None) -> bool:
+        """Whether `viewer_id` may read this decision, its evidence included."""
+        if self.pod_id != pod_id:
+            return False
+        return self.visibility == "POD" or (
+            viewer_id is not None and self.user_id == viewer_id
+        )
 
     @property
     def interrupted(self) -> bool:
@@ -213,7 +235,12 @@ class ExampleSource(StrEnum):
 
 
 class ExampleEntity(Entity):
-    """A labelled state: what a person said a question's answer was."""
+    """A labelled state: what a person said a question's answer was.
+
+    `visibility` is the corrected decision's. A PERSONAL example holds evidence
+    only its `user_id` may read, so it teaches that person's decisions alone;
+    sharing it with the pod would take a choice nobody has made.
+    """
 
     pod_id: UUID | None = None
     decider_key: str
@@ -221,6 +248,7 @@ class ExampleEntity(Entity):
     value: AnswerValue
     evidence: str
     source: ExampleSource = ExampleSource.PERSON
+    visibility: str = "PERSONAL"
     user_id: UUID | None = None
     decision_id: UUID | None = None
 

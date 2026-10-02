@@ -2,7 +2,7 @@
 
 The model answers the same closed questions as System One. It returns an option
 and no distribution, and it passes a question on by choosing the question's
-fallback, or by naming it in `unsure` when the question has none. Nothing here
+fallback, or by naming it in `_unsure` when the question has none. Nothing here
 invents a confidence it did not report.
 """
 
@@ -45,7 +45,9 @@ DECISION_USAGE_LIMITS = UsageLimits(
     total_tokens_limit=26_000,
     count_tokens_before_request=True,
 )
-_UNSURE = "unsure"
+#: Outside the question-key pattern, which starts with a letter, so no
+#: question can share the name and be overwritten in the output schema.
+_UNSURE = "_unsure"
 
 
 def _provider_failures() -> tuple[type[BaseException], ...]:
