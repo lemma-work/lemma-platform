@@ -24,6 +24,43 @@ Use plain text only for a single fact, a short explanation, or narration around 
 widget. If an existing FILE, TABLE, APP, or other pod resource already represents the
 answer, display that resource directly instead of recreating it as a widget.
 
+## Start from the library
+
+When the answer is one real thing someone acts on (an email, an invite, a pull
+request, a support conversation), do not draw it: show a library widget. They
+live at `/skills/lemma-widget/library/<service>/<name>.html`, one per service
+per object, and their buttons act through the viewer's own connected account:
+
+| Service | Widgets |
+| --- | --- |
+| gmail | email-thread |
+| outlook | email-thread |
+| google-calendar | invite, find-a-time, meeting-brief |
+| github | pr-review, issue |
+| linear | issue |
+| slack | thread |
+| intercom | conversation |
+| linkedin | post |
+
+The header comment at the top of each file is its contract: the `data` shape it
+reads, the connector, and every operation its buttons call. Fetch the real
+record, shape it to that `data`, and pass it:
+
+```
+display_resource(type="WIDGET", path="/skills/lemma-widget/library/gmail/email-thread.html",
+                 data={"thread_id": "...", "subject": "...", "messages": [...], "draft": "..."})
+```
+
+A draft reply belongs in `data.draft`; the person edits it and sends. Without
+`data` a widget shows its own sample, marked as one, and its buttons do nothing.
+
+To change one, copy it to `/widgets/<service>/<name>.html` and edit the copy:
+that folder is the pod's own library, so look there first. Keep the header true
+when you edit, and keep the `lw-` classes and `lemma.button` wiring: they are
+what make it look like the rest and ask before anything leaves Lemma. A new
+widget for the library follows the same shape, a `.lw-card` with a header
+section, the object, and its actions.
+
 ## Widget or app?
 
 - **Widget:** one compact inline view; plain HTML/CSS/JS; quick to render in
@@ -302,11 +339,19 @@ const c = await lemma.client();
 await c.records.update("deals", deal.id, { stage: "won" });
 await c.functions.run("send_quote", { input: { deal_id: deal.id } });
 await c.workflows.runs.create("onboard_customer");
-await c.connectors.operations.execute(scope, "send_email", payload);
+await lemma.act("gmail", "send_message", { to, subject, text }, { kind: "http" });
 ```
 
+`lemma.act(connector, operation, payload)` finds the organization's install of
+the connector itself; `kind` names the backend the operation names belong to,
+so a widget written for another one says so instead of failing obscurely.
 Everything runs under the viewer's own permissions and RLS, so a person who
 cannot write a table cannot write it through a widget either.
+
+Wire every button with `lemma.button(el, { run, confirm?, yes?, tone?, done? })`.
+It spins while `run` works, writes the result or error under the button's row,
+and with `confirm` opens a strip that acts only from its own button. Over a
+widget's sample data it runs nothing and says what it would have done.
 
 - **Say what happened, from the result.** Show the saved row, the run's status,
   or the error — in the widget, right where the button was. Disable the button

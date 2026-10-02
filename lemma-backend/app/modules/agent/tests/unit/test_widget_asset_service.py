@@ -88,6 +88,27 @@ async def test_a_file_backed_widget_carries_its_path_and_no_content_yet():
 
 
 @pytest.mark.asyncio
+async def test_the_data_a_widget_was_displayed_with_comes_along():
+    """One library file shows any email; which one is the call's `data`, and it
+    has to survive the file being read late, as the viewer."""
+    data = {"thread_id": "18f2", "subject": "Pilot pricing"}
+    service = _service(
+        [
+            {
+                "type": "WIDGET",
+                "path": "/skills/lemma-widget/library/gmail/email-thread.html",
+                "data": data,
+            }
+        ],
+        _Files(content=b"<div id='mail'></div>"),
+    )
+    artifact = await service.get_widget(CONVERSATION, "tc_1")
+    assert artifact is not None and artifact.data == data
+    resolved = await service.resolve(artifact, Context.__new__(Context))
+    assert resolved.data == data
+
+
+@pytest.mark.asyncio
 async def test_a_call_with_neither_source_is_not_a_widget():
     assert await _service([{"type": "WIDGET"}]).get_widget(CONVERSATION, "tc_1") is None
 

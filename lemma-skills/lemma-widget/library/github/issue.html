@@ -1,0 +1,90 @@
+<!--
+widget: github/issue
+description: One GitHub issue with its status, people and labels, and comment, assign, label, and close or reopen.
+connector: github
+kind: http
+operations: issues_create_comment, issues_update, issues_add_assignees, issues_add_labels
+data: { owner, repo, number, title, state, author?, url?, body?, assignees?: [login], labels?: [name], assignable?: [login], label_options?: [name], comments?: number }
+version: 1
+-->
+<div id="issue"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "owner": "northwind", "repo": "billing", "number": 517,
+  "title": "Credit note totals off by a cent on multi-line invoices",
+  "state": "open", "author": "jo-park", "url": "https://github.com/northwind/billing/issues/517",
+  "body": "On invoices with three or more lines, the credit note total can differ from the invoice by 0.01. Seen on INV-2291 and INV-2307.",
+  "assignees": [], "labels": ["bug", "billing"], "comments": 2,
+  "assignable": ["mira-s", "dev-ops-kim", "sam-r"],
+  "label_options": ["bug", "billing", "p1", "good first issue"]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("issue"), e = lemma.esc;
+  if (!d || !d.number) { el.innerHTML = '<p class="lw-quiet">No issue to show.</p>'; return; }
+  var open = d.state !== "closed";
+  var options = function (items, first) {
+    return '<option value="">' + first + "</option>" + (items || []).map(function (x) { return '<option value="' + e(x) + '">' + e(x) + "</option>"; }).join("");
+  };
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec">' +
+        '<div class="lw-top">' + lemma.icon("issue") + "<span>" + e(d.owner + "/" + d.repo) + '</span><span class="lw-mono">#' + d.number + '</span><span class="lw-spacer"></span>' +
+          '<span class="lw-pill" id="state-pill" data-kind="' + (open ? "good" : "accent") + '"><span class="lw-led"></span>' + (open ? "Open" : "Closed") + "</span></div>" +
+        '<h2 class="lw-title">' + (d.url ? '<a href="' + e(d.url) + '" target="_blank" rel="noopener">' + e(d.title) + "</a>" : e(d.title)) + "</h2>" +
+        '<div class="lw-sub">' + (d.author ? '<span class="lw-bar" style="gap:6px">' + lemma.avatar(d.author, "s") + e(d.author) + "</span>" : "") +
+          (d.comments != null ? '<span class="lw-bar" style="gap:6px">' + lemma.icon("comment") + d.comments + "</span>" : "") +
+          '<span class="lw-bar" style="gap:6px">' + lemma.icon("user") + ((d.assignees || []).length ? e(d.assignees.join(", ")) : "Unassigned") + "</span></div>" +
+        ((d.labels || []).length ? '<div class="lw-bar" style="margin-top:12px">' + d.labels.map(function (l) { return '<span class="lw-pill">' + e(l) + "</span>"; }).join("") + "</div>" : "") +
+      "</div>" +
+      (d.body ? '<div class="lw-sec"><div class="lw-body">' + e(d.body.length > 700 ? d.body.slice(0, 700) + "…" : d.body) + "</div></div>" : "") +
+      '<div class="lw-sec">' +
+        '<div class="lw-compose"><textarea id="note" rows="3" placeholder="Leave a comment"></textarea>' +
+          '<div class="lw-bar">' +
+            ((d.assignable || []).length ? '<span class="lw-pick"><select id="who" aria-label="Assign">' + options(d.assignable, "Assign…") + "</select></span>" : "") +
+            ((d.label_options || []).length ? '<span class="lw-pick"><select id="label" aria-label="Add label">' + options(d.label_options, "Label…") + "</select></span>" : "") +
+            '<span class="lw-spacer"></span><button class="lw-btn" data-tone="soft" id="state">' + (open ? "Close issue" : "Reopen") + "</button>" +
+            '<button class="lw-btn" data-tone="primary" id="comment">Comment</button></div>' +
+        "</div>" +
+      "</div>" +
+    "</div>";
+
+  var where = { owner: d.owner, repo: d.repo, issue_number: d.number };
+  var act = function (op, body) { return lemma.act("github", op, Object.assign({ body: body }, where), { kind: "http" }); };
+  var note = document.getElementById("note");
+  lemma.button("comment", {
+    does: "post the comment",
+    confirm: function () { return note.value.trim() ? "Post this on #" + d.number + " as you?" : ""; },
+    yes: "Post",
+    run: function () { if (!note.value.trim()) throw new Error("Write the comment first."); return act("issues_create_comment", { body: note.value }); },
+    done: "Comment posted."
+  });
+  lemma.button("state", {
+    does: open ? "close the issue" : "reopen the issue",
+    run: function () {
+      return act("issues_update", open ? { state: "closed", state_reason: "completed" } : { state: "open" }).then(function () {
+        var pill = document.getElementById("state-pill");
+        pill.dataset.kind = open ? "accent" : "good";
+        pill.innerHTML = '<span class="lw-led"></span>' + (open ? "Closed" : "Open");
+      });
+    },
+    done: open ? "Closed as done." : "Reopened."
+  });
+  // A choice saves the moment it is made, through a hidden button, so it gets the same busy, result and sample handling.
+  [["who", "issues_add_assignees", "assignees", "Assigned."], ["label", "issues_add_labels", "labels", "Label added."]].forEach(function (s) {
+    var select = document.getElementById(s[0]);
+    if (!select) return;
+    var go = document.createElement("button");
+    go.hidden = true;
+    go.textContent = s[0] === "who" ? "assign" : "add the label";
+    select.parentElement.insertAdjacentElement("afterend", go);
+    lemma.button(go, {
+      does: s[0] === "who" ? "assign the issue" : "add the label",
+      run: function () { var body = {}; body[s[2]] = [select.value]; return act(s[1], body); },
+      done: function () { return s[3].replace(".", " " + select.value + "."); }
+    });
+    select.addEventListener("change", function () { if (select.value) go.click(); });
+  });
+})();
+</script>

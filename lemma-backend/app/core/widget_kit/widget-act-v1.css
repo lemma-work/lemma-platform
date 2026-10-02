@@ -1,0 +1,162 @@
+/* Lemma widget kit v1, the acting half's styles: the object a library widget
+   draws (a message, an invite, a pull request) and the controls that act on it.
+   Built on the page's own --w-* tokens: paper on canvas, depth not outlines, the
+   accent only where you can act, state in state colour, weight never above 500. */
+/* Two steps toward the ink, mixed from the theme's own paper so they separate in
+   light and in dark alike: a well (composer, footer) and a fill (soft buttons,
+   pickers, pills) that always reads on top of it. --w-chrome does not: in dark
+   it lands within a shade of the well and the buttons vanish. */
+:root {
+  --lw-well: color-mix(in oklab, var(--w-ink, #20211f) 4%, var(--w-paper, #fffefa));
+  --lw-fill: color-mix(in oklab, var(--w-ink, #20211f) 9%, var(--w-paper, #fffefa));
+  --lw-fill-2: color-mix(in oklab, var(--w-ink, #20211f) 14%, var(--w-paper, #fffefa));
+}
+.lw-card { position: relative; display: flex; flex-direction: column; background: var(--w-paper, #fffefa); border-radius: var(--w-r-lg, 14px); box-shadow: var(--w-depth, 0 1px 2px rgb(25 23 18 / .03), 0 4px 14px rgb(25 23 18 / .05)); overflow: hidden; font-family: var(--w-ui, system-ui, sans-serif); color: var(--w-ink, #20211f); letter-spacing: -0.003em; }
+.lw-card + .lw-card { margin-top: 12px; }
+.lw-sec { padding: 16px 18px; }
+.lw-foot { background: var(--lw-well); }
+.lw-sec + .lw-sec, .lw-sec + .lw-rows, .lw-rows + .lw-sec { border-top: 1px solid var(--w-line, rgb(32 33 31 / .05)); }
+.lw-sample { margin: 0 0 10px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--w-ink-3, #6a6b62); }
+.lw-sample::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--w-warn, #8a5f0f); }
+
+/* Header: the service, then the thing */
+.lw-top { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--w-ink-3, #6a6b62); }
+.lw-top .lw-ico { width: 14px; height: 14px; }
+.lw-spacer { flex: 1; }
+.lw-title { margin: 6px 0 0; font-size: 17px; line-height: 1.3; font-weight: 500; letter-spacing: -0.012em; color: var(--w-ink, #20211f); text-wrap: balance; }
+.lw-title a { color: inherit; text-decoration: none; }
+.lw-title a:hover { text-decoration: underline; text-decoration-color: var(--w-line-2, rgb(32 33 31 / .1)); text-underline-offset: 3px; }
+.lw-sub { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12.5px; color: var(--w-ink-2, #55564e); }
+.lw-sub a { color: inherit; text-decoration: none; }
+.lw-sub a:hover { color: var(--w-ink, #20211f); }
+.lw-mono { font-family: var(--w-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; font-size: 12px; }
+.lw-quiet { color: var(--w-ink-3, #6a6b62); }
+.lw-label { display: block; margin-bottom: 8px; font-size: 11.5px; letter-spacing: 0.02em; color: var(--w-ink-3, #6a6b62); }
+.lw-body { font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--w-ink, #20211f); }
+
+/* People */
+/* Tinted from the theme's own paper and ink, not from the OS setting: the host
+   can send a dark palette to a page whose system is light, and the reverse. */
+.lw-av { --h: 260; display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 50%; font-size: 11px; font-weight: 500; letter-spacing: 0.02em;
+  color: color-mix(in oklab, hsl(var(--h) 45% 48%) 72%, var(--w-ink, #20211f)); background: color-mix(in oklab, hsl(var(--h) 60% 58%) 17%, var(--w-paper, #fffefa)); }
+.lw-av[data-size="s"] { width: 20px; height: 20px; font-size: 9.5px; }
+.lw-av[data-size="l"] { width: 36px; height: 36px; font-size: 13px; }
+.lw-stack { display: inline-flex; }
+.lw-stack .lw-av { box-shadow: 0 0 0 2px var(--w-paper, #fffefa); }
+.lw-stack .lw-av + .lw-av { margin-left: -6px; }
+
+/* Pills: state wears state colour, on a tint of itself */
+.lw-pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+  color: var(--w-ink-2, #55564e); background: var(--lw-fill); }
+.lw-pill[data-kind="good"] { color: var(--w-ok, #2f7d57); background: color-mix(in srgb, var(--w-ok, #2f7d57) 11%, transparent); }
+.lw-pill[data-kind="bad"] { color: var(--w-bad, #b3261e); background: color-mix(in srgb, var(--w-bad, #b3261e) 10%, transparent); }
+.lw-pill[data-kind="wait"] { color: var(--w-warn, #8a5f0f); background: color-mix(in srgb, var(--w-warn, #8a5f0f) 12%, transparent); }
+.lw-pill[data-kind="accent"] { color: var(--w-accent, #6b4fe0); background: var(--w-accent-soft, rgb(107 79 224 / .09)); }
+.lw-pill .lw-ico { width: 12px; height: 12px; }
+.lw-led { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+
+/* Rows: earlier messages, files, people */
+.lw-rows { display: flex; flex-direction: column; }
+.lw-item { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 18px; font-size: 13px; }
+.lw-item + .lw-item { border-top: 1px solid var(--w-line, rgb(32 33 31 / .05)); }
+.lw-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lw-end { flex: none; white-space: nowrap; font-size: 12px; color: var(--w-ink-3, #6a6b62); }
+button.lw-item { width: 100%; border: 0; background: none; font: inherit; font-size: 13px; color: inherit; text-align: left; cursor: pointer; }
+.lw-item > .lw-ico { color: var(--w-ink-3, #6a6b62); }
+button.lw-item:hover { background: var(--lw-well); }
+
+/* Icons */
+.lw-ico { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Controls */
+.lw-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lw-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer;
+  color: var(--w-ink, #20211f); background: transparent; transition: background-color .12s ease, color .12s ease; }
+.lw-btn:hover:not(:disabled) { background: var(--lw-fill); }
+.lw-btn:focus-visible { outline: 2px solid var(--w-accent-line, rgb(107 79 224 / .26)); outline-offset: 1px; }
+.lw-btn:disabled { opacity: .55; cursor: default; }
+.lw-btn[data-tone="soft"] { background: var(--lw-fill); }
+.lw-btn[data-tone="soft"]:hover:not(:disabled) { background: var(--lw-fill-2); }
+.lw-btn[data-tone="primary"] { color: var(--w-on-accent, #fffefa); background: var(--w-accent, #6b4fe0); box-shadow: var(--w-lit, inset 0 1px 0 rgb(255 255 255 / .3)), 0 1px 2px rgb(25 23 18 / .12); }
+.lw-btn[data-tone="primary"]:hover:not(:disabled) { background: color-mix(in srgb, var(--w-accent, #6b4fe0) 88%, var(--w-ink, #20211f)); }
+.lw-btn[data-tone="good"] { color: var(--w-on-ok, #fffefa); background: var(--w-ok, #2f7d57); box-shadow: var(--w-lit, inset 0 1px 0 rgb(255 255 255 / .3)), 0 1px 2px rgb(25 23 18 / .12); }
+.lw-btn[data-tone="good"]:hover:not(:disabled) { background: color-mix(in srgb, var(--w-ok, #2f7d57) 88%, var(--w-ink, #20211f)); }
+.lw-btn[data-tone="danger"] { color: var(--w-bad, #b3261e); }
+.lw-btn[data-tone="danger"]:hover:not(:disabled) { background: var(--w-bad-soft, #fef2f2); }
+.lw-btn[data-icon] { width: 32px; padding: 0; color: var(--w-ink-2, #55564e); }
+.lw-btn[data-icon]:hover:not(:disabled) { color: var(--w-ink, #20211f); }
+.lw-btn[data-on] { color: var(--w-accent, #6b4fe0); }
+.lw-kbd { font-size: 11px; opacity: .72; font-weight: 400; }
+.lw-btn[data-busy] > * { opacity: 0; }
+.lw-btn[data-busy] { position: relative; }
+.lw-btn[data-busy]::after { content: ""; position: absolute; width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: lw-spin .7s linear infinite; }
+@keyframes lw-spin { to { transform: rotate(360deg); } }
+
+/* Choices */
+.lw-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 9px; background: var(--lw-fill); }
+.lw-seg > button { height: 28px; padding: 0 12px; border: 0; border-radius: 7px; font: inherit; font-size: 12.5px; color: var(--w-ink-2, #55564e); background: none; cursor: pointer; }
+.lw-seg > button[aria-pressed="true"] { color: var(--w-ink, #20211f); background: var(--w-paper, #fffefa); box-shadow: 0 1px 2px rgb(25 23 18 / .08); }
+.lw-pick { position: relative; display: inline-flex; }
+.lw-pick > select { appearance: none; -webkit-appearance: none; height: 32px; padding: 0 28px 0 10px; border: 0; border-radius: 8px; font: inherit; font-size: 12.5px; color: var(--w-ink, #20211f); background: var(--lw-fill); cursor: pointer; }
+.lw-pick::after { content: ""; position: absolute; right: 11px; top: 12px; width: 5px; height: 5px; border-right: 1.5px solid var(--w-ink-3, #6a6b62); border-bottom: 1.5px solid var(--w-ink-3, #6a6b62); transform: rotate(45deg); pointer-events: none; }
+
+/* The composer: one surface, words and send together */
+.lw-compose { display: flex; flex-direction: column; border-radius: 12px; background: var(--lw-well); box-shadow: inset 0 0 0 1px var(--w-line-2, rgb(32 33 31 / .1)); transition: box-shadow .15s ease, background-color .15s ease; }
+.lw-compose:focus-within { background: var(--w-paper, #fffefa); box-shadow: inset 0 0 0 1px var(--w-accent-line, rgb(107 79 224 / .26)), 0 0 0 3px var(--w-accent-soft, rgb(107 79 224 / .09)); }
+.lw-to { display: flex; align-items: center; gap: 6px; padding: 11px 14px 0; font-size: 12px; color: var(--w-ink-3, #6a6b62); }
+.lw-compose textarea { display: block; width: 100%; min-height: 72px; max-height: 260px; padding: 6px 14px 4px; border: 0; outline: 0; resize: none; background: transparent; font: inherit; font-size: 14px; line-height: 1.6; color: var(--w-ink, #20211f); field-sizing: content; }
+.lw-compose textarea::placeholder { color: var(--w-ink-3, #6a6b62); }
+.lw-compose > .lw-bar { padding: 4px 8px 8px 8px; }
+
+/* Asking before anything leaves Lemma, and saying what happened */
+.lw-confirm { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; border-radius: 10px; font-size: 13px; color: var(--w-ink, #20211f); background: var(--w-accent-soft, rgb(107 79 224 / .09)); animation: lw-in .16s ease-out; }
+.lw-confirm[data-tone="danger"] { background: var(--w-bad-soft, #fef2f2); }
+.lw-confirm[data-tone="good"] { background: color-mix(in srgb, var(--w-ok, #2f7d57) 10%, transparent); }
+.lw-compose > .lw-confirm, .lw-compose > .lw-said { margin: 0 8px 8px; }
+.lw-compose > .lw-said { padding-left: 6px; }
+.lw-confirm > span { flex: 1; min-width: 0; }
+.lw-said { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--w-ink-2, #55564e); animation: lw-in .16s ease-out; }
+.lw-said:empty { display: none; }
+.lw-said[data-kind="good"] { color: var(--w-ok, #2f7d57); }
+.lw-said[data-kind="bad"] { color: var(--w-bad, #b3261e); }
+.lw-said .lw-ico { width: 14px; height: 14px; }
+@keyframes lw-in { from { opacity: 0; transform: translateY(-2px); } }
+
+/* Diffs */
+.lw-plus { color: var(--w-ok, #2f7d57); }
+.lw-minus { color: var(--w-bad, #b3261e); }
+.lw-meter { display: inline-flex; gap: 2px; }
+.lw-meter > i { width: 7px; height: 7px; border-radius: 2px; background: var(--lw-fill); }
+.lw-meter > i[data-k="+"] { background: var(--w-ok, #2f7d57); }
+.lw-meter > i[data-k="-"] { background: var(--w-bad, #b3261e); }
+
+/* Time slots: a choice you can see at once, not a list of radio buttons */
+.lw-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.lw-slot { height: 34px; border: 0; border-radius: 8px; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--w-ink, #20211f); background: var(--lw-fill); cursor: pointer; transition: background-color .12s ease, box-shadow .12s ease; }
+.lw-slot:hover { background: var(--lw-fill-2); }
+.lw-slot[aria-pressed="true"] { color: var(--w-accent, #6b4fe0); background: var(--w-accent-soft, rgb(107 79 224 / .09)); box-shadow: inset 0 0 0 1.5px var(--w-accent, #6b4fe0); }
+.lw-day + .lw-day { margin-top: 14px; }
+
+/* A conversation: theirs on the left, ours on the right */
+.lw-chat { display: flex; flex-direction: column; gap: 10px; }
+.lw-msg { display: flex; gap: 8px; align-items: flex-end; max-width: 88%; }
+.lw-msg[data-side="us"] { align-self: flex-end; flex-direction: row-reverse; }
+.lw-bubble { padding: 9px 12px; border-radius: 14px 14px 14px 4px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--lw-fill); }
+.lw-msg[data-side="us"] .lw-bubble { border-radius: 14px 14px 4px 14px; background: var(--w-accent-soft, rgb(107 79 224 / .09)); }
+.lw-msg[data-side="bot"] .lw-bubble { color: var(--w-ink-2, #55564e); }
+.lw-meta { margin-top: 3px; font-size: 11.5px; color: var(--w-ink-3, #6a6b62); }
+.lw-msg[data-side="us"] .lw-meta { text-align: right; }
+
+/* Properties, the way an issue tracker shows them: label, then the value you can change */
+.lw-props { display: grid; grid-template-columns: max-content 1fr; align-items: center; gap: 6px 16px; font-size: 13px; }
+.lw-props > dt { color: var(--w-ink-3, #6a6b62); }
+.lw-props > dd { margin: 0; }
+.lw-props .lw-pick > select { background: transparent; padding-left: 8px; margin-left: -8px; }
+.lw-props .lw-pick > select:hover { background: var(--lw-fill); }
+
+/* Two-line rows: a name, and what is known about them */
+.lw-item > .lw-two { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lw-two > span:last-child:not(:first-child) { font-size: 12.5px; color: var(--w-ink-3, #6a6b62); }
+.lw-bullets { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
+.lw-bullets > li { display: flex; gap: 10px; align-items: baseline; }
+.lw-bullets > li::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; transform: translateY(-1px); background: var(--w-warn, #8a5f0f); }

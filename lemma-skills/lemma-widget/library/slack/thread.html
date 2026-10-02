@@ -1,0 +1,77 @@
+<!--
+widget: slack/thread
+description: One Slack thread, the parent message and its replies, with a reply you can edit and post and a done reaction.
+connector: slack
+kind: http
+operations: chat_post_message, reactions_add
+data: { channel, channel_name?, ts, permalink?, draft?, messages: [{ user_name, ts, text, reactions?: [{ name, count }] }] }
+version: 1
+-->
+<div id="thread"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "channel": "C07A1B2C3D4", "channel_name": "launch", "ts": "1759380120.001200",
+  "permalink": "https://northwind.slack.com/archives/C07A1B2C3D4/p1759380120001200",
+  "draft": "Yes, still the 14th. Release notes go to finance on the 13th, and I'll post the support checklist here tomorrow.",
+  "messages": [
+    { "user_name": "Mira Shah", "ts": "1759380120.001200", "text": "Is the billing release still on for the 14th? Support wants to prep a macro.", "reactions": [{ "name": "eyes", "count": 2 }] },
+    { "user_name": "Jo Park", "ts": "1759380480.002100", "text": "Finance needs the release notes a day early too." },
+    { "user_name": "Dana Ito", "ts": "1759381020.002900", "text": "+1, and can we get the CSV export fix into it?", "reactions": [{ "name": "+1", "count": 3 }] }
+  ]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("thread"), e = lemma.esc;
+  if (!d || !d.messages || !d.messages.length) { el.innerHTML = '<p class="lw-quiet">No thread to show.</p>'; return; }
+  var EMOJI = { eyes: "👀", white_check_mark: "✅", thumbsup: "👍", "+1": "👍", tada: "🎉", raised_hands: "🙌", heart: "❤️", fire: "🔥", pray: "🙏" };
+  var at = function (ts) { return Number(ts) * 1000; };
+  var message = function (m, reply) {
+    var reacts = (m.reactions || []).map(function (r) { return '<span class="lw-pill">' + (EMOJI[r.name] || ":" + e(r.name) + ":") + " " + (r.count || 1) + "</span>"; }).join("");
+    return '<div class="lw-bar" style="align-items:flex-start;flex-wrap:nowrap;gap:10px' + (reply ? ";padding-left:14px;border-left:2px solid var(--w-line-2, rgb(32 33 31 / .1));margin-left:13px" : "") + '">' +
+      lemma.avatar(m.user_name, reply ? "s" : "") + '<div style="min-width:0;flex:1"><div class="lw-bar" style="gap:8px"><span>' + e(m.user_name || "Someone") + "</span>" +
+      '<span class="lw-quiet" style="font-size:12px">' + lemma.when(at(m.ts), { timeOnly: true }) + "</span></div>" +
+      '<div class="lw-body" style="margin-top:2px">' + e(m.text || "") + "</div>" + (reacts ? '<div class="lw-bar" style="margin-top:6px">' + reacts + "</div>" : "") + "</div></div>";
+  };
+  var replies = d.messages.slice(1);
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec" data-say>' +
+        '<div class="lw-top">' + lemma.icon("hash") + "<span>" + (d.channel_name ? e(d.channel_name) : "thread") + "</span><span>·</span><span>" +
+          replies.length + (replies.length === 1 ? " reply" : " replies") + '</span><span class="lw-spacer"></span>' +
+          (d.permalink ? '<a class="lw-quiet" href="' + e(d.permalink) + '" target="_blank" rel="noopener" style="text-decoration:none">Open in Slack</a>' : "") +
+          '<button class="lw-btn" data-icon id="done" title="React with ✅" aria-label="React with a check mark">' + lemma.icon("check") + "</button></div>" +
+        '<div style="margin-top:12px">' + message(d.messages[0], false) + "</div>" +
+      "</div>" +
+      (replies.length ? '<div class="lw-sec" style="display:flex;flex-direction:column;gap:14px">' + replies.map(function (m) { return message(m, true); }).join("") + "</div>" : "") +
+      '<div class="lw-sec">' +
+        '<div class="lw-compose"><div class="lw-to">' + lemma.icon("reply") + "<span>Reply in thread" + (d.channel_name ? " · #" + e(d.channel_name) : "") + "</span></div>" +
+          '<textarea id="reply" rows="2" placeholder="Reply…"></textarea>' +
+          '<div class="lw-bar"><span class="lw-spacer"></span><button class="lw-btn" data-tone="primary" id="send">' + lemma.icon("send") + '<span>Send</span><span class="lw-kbd">⌘↵</span></button></div>' +
+        "</div>" +
+      "</div>" +
+    "</div>";
+
+  var reply = document.getElementById("reply");
+  reply.value = d.draft || "";
+  reply.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); document.getElementById("send").click(); }
+  });
+  lemma.button("send", {
+    does: "post this reply in the thread",
+    confirm: function () { return reply.value.trim() ? "Post in " + (d.channel_name ? "#" + d.channel_name : "the thread") + " for everyone there?" : ""; },
+    yes: "Post",
+    run: function () {
+      if (!reply.value.trim()) throw new Error("Write the reply first.");
+      return lemma.act("slack", "chat_post_message", { body: { channel: d.channel, text: reply.value, thread_ts: d.ts } }, { kind: "http" });
+    },
+    done: "Posted in the thread."
+  });
+  lemma.button("done", {
+    does: "react with a check mark",
+    run: function () { return lemma.act("slack", "reactions_add", { body: { channel: d.channel, name: "white_check_mark", timestamp: d.ts } }, { kind: "http" }); },
+    done: function () { document.getElementById("done").dataset.on = ""; return "Reacted ✅."; }
+  });
+})();
+</script>

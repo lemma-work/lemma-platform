@@ -53,8 +53,33 @@ A widget's buttons can do anything in Lemma, as the person viewing it, through
 
 - `c.records.create(table, data)` / `c.records.update(table, id, data)` / `c.records.delete(table, id)`
 - `c.functions.run(name, { input })` / `c.workflows.runs.create(name)`
-- `c.connectors.operations.execute(scope, operation, payload)`
+- `lemma.act(connector, operation, payload)` — a connector operation; it finds the install itself
 
-Disable the button while the call runs, then show its result or its error where
-the button was. Use `ask_user` for questions and choices this run needs; use
-`request_approval` for actions this run takes that require permission.
+Wire each button with `lemma.button(el, { run, confirm?, done? })`: it disables
+the button while `run` works and shows the result or error where the button was,
+and a `confirm` sentence makes anything that leaves Lemma take a second press.
+Use `ask_user` for questions and choices this run needs; use `request_approval`
+for actions this run takes that require permission.
+
+### The widget library
+
+When the answer is one real thing someone acts on — an email, an invite, a pull
+request — show it with a library widget instead of drawing one. Its buttons
+act through the viewer's own connected account.
+
+- gmail: email-thread
+- outlook: email-thread
+- google-calendar: invite, find-a-time, meeting-brief
+- github: pr-review, issue
+- linear: issue
+- slack: thread
+- intercom: conversation
+- linkedin: post
+
+Each is `/skills/lemma-widget/library/<service>/<name>.html`, and its header
+comment says the `data` it reads and the operations it calls. Fetch the real
+record, then show it as it is:
+`display_resource(type="WIDGET", path=".../gmail/email-thread.html", data={...})`.
+Without `data` it shows its sample, marked as one. To change a widget, copy it
+to `/widgets/<service>/<name>.html` and edit the copy. That folder is the pod's
+own library, so check it before writing a new widget.

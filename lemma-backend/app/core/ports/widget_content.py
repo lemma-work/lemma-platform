@@ -42,6 +42,10 @@ class WidgetArtifact:
     pod_id: UUID
     title: str = ""
     path: str | None = None
+    #: The JSON the widget was displayed with, read in the page as
+    #: ``lemma.data``. ``None`` when the call passed none, and a library widget
+    #: then falls back to its own sample, marked as one.
+    data: object = None
 
 
 class WidgetContentReader(Protocol):

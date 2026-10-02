@@ -98,3 +98,32 @@ def test_the_quick_example_passes_widget_validation():
     root = Path(__file__).resolve().parents[3]
     quick = (root / "lemma-skills/lemma-widget/assets/widget-quick-v1.html").read_text()
     assert validate_widget_html(quick) == []
+
+
+def test_data_is_written_as_inert_json_that_cannot_close_its_element():
+    """`data` is agent-supplied JSON; a `</script>` inside a string must not end
+    the block and start markup of its own."""
+    import json
+
+    data = {"subject": "</script><script>alert(1)</script>", "n": 1}
+    doc = wrap_html_fragment("<div>hi</div>", data=data)
+    block = re.search(
+        r'<script type="application/json" data-lemma-widget-data>(.*?)</script>',
+        doc,
+        re.DOTALL,
+    )
+    assert block is not None
+    assert "<" not in block.group(1)
+    assert json.loads(block.group(1)) == data
+    assert block.start() < doc.index("<div>hi</div>")
+
+
+def test_no_data_block_without_data():
+    doc = wrap_html_fragment("<div>hi</div>")
+    assert '<script type="application/json" data-lemma-widget-data>' not in doc
+
+
+def test_the_page_carries_the_acting_half_of_the_kit():
+    doc = wrap_html_fragment("<div>hi</div>")
+    for name in ("L.act = ", "L.button = ", '"data"', ".lw-card"):
+        assert name in doc
