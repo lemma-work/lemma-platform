@@ -9,6 +9,7 @@ from pydantic import JsonValue
 
 from app.core.domain.events import DomainEvent
 from app.modules.agent_surfaces.domain.notification import (
+    NotificationEntity,
     NotificationOriginKind,
     NotificationStatus,
 )
@@ -102,6 +103,25 @@ class NotificationClosedEvent(DomainEvent):
     responder_user_id: UUID | None = None
     answer: str | None = None
     action: dict[str, JsonValue] | None = None
+
+    @classmethod
+    def of(cls, notification: NotificationEntity) -> NotificationClosedEvent:
+        """How ``notification`` closed, as its asker reads it."""
+        answer = (notification.response_data or {}).get("answer")
+        return cls(
+            pod_id=notification.pod_id,
+            notification_id=notification.id,
+            origin_kind=notification.origin_kind,
+            origin_id=notification.origin_id,
+            status=notification.status,
+            responder_user_id=(
+                notification.recipient_user_id
+                if notification.status is NotificationStatus.RESPONDED
+                else None
+            ),
+            answer=answer if isinstance(answer, str) else None,
+            action=notification.action,
+        )
 
     @classmethod
     def stream_name(cls) -> str:

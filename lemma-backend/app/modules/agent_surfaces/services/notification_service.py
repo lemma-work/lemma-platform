@@ -455,33 +455,9 @@ class NotificationService:
         return updated
 
     def _announce_closed(self, notification: NotificationEntity) -> None:
-        """Raise ``NotificationClosedEvent`` for an asker holding something on it.
-
-        Every way out announces -- an answer, an expiry, a cancellation -- since
-        each settles the held thing differently, and a held thing nobody is
-        told about stays held.
-        """
-        if not notification.announces_close:
-            return
-        answer = (notification.response_data or {}).get("answer")
-        self.uow.collect_events(
-            [
-                NotificationClosedEvent(
-                    pod_id=notification.pod_id,
-                    notification_id=notification.id,
-                    origin_kind=notification.origin_kind,
-                    origin_id=notification.origin_id,
-                    status=notification.status,
-                    responder_user_id=(
-                        notification.recipient_user_id
-                        if notification.status is NotificationStatus.RESPONDED
-                        else None
-                    ),
-                    answer=answer if isinstance(answer, str) else None,
-                    action=notification.action,
-                )
-            ]
-        )
+        """Every way out announces: a held thing nobody is told about stays held."""
+        if notification.announces_close:
+            self.uow.collect_events([NotificationClosedEvent.of(notification)])
 
     async def _announce_if_settled(self, notification: NotificationEntity) -> None:
         """Raise ``NotificationSettledEvent`` once this conversation is owed nothing.

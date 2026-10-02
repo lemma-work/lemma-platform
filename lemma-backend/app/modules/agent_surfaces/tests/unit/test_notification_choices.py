@@ -123,7 +123,13 @@ def _service(notification: NotificationEntity) -> NotificationService:
         external_user_repository=AsyncMock(),
         egress=AsyncMock(),
         pod_membership_port=AsyncMock(),
+        outside_origin_reader=_no_outside_origin,
     )
+
+
+async def _no_outside_origin(_conversation_id):
+    """No conversation here answers people outside the pod."""
+    return
 
 
 def _closed(service: NotificationService) -> list[NotificationClosedEvent]:
@@ -228,6 +234,7 @@ async def test_a_notification_kept_in_the_inbox_only_is_not_rate_limited():
         external_user_repository=AsyncMock(),
         egress=AsyncMock(),
         pod_membership_port=membership,
+        outside_origin_reader=_no_outside_origin,
         rate_limiter=limiter,
     )
 
