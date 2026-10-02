@@ -19,22 +19,22 @@ const PARTS: { slug: string; name: string; line: string; body: string; example: 
     {
         slug: "pages", name: "Pages", line: "Documents you write together.",
         body: "Ask from anywhere in a page and it writes there. Charts come from your tables, table views read the rows fresh, and a comment that mentions it comes back as an edit.",
-        example: "Team plans launch, a brief listing every asset not yet ready.",
+        example: "Feedback report, week 40, with every theme still waiting on a fix.",
     },
     {
         slug: "tables", name: "Tables", line: "The list everyone works from.",
         body: "Real rows with typed columns. Your teammate moves them as the work moves, your people tick them off, and each person can be kept to their own.",
-        example: "Twelve launch assets, each with an owner, a status and a date.",
+        example: "222 reports in nine themes, each with its ticket, its fix and an owner.",
     },
     {
         slug: "workflows", name: "Workflows", line: "Work that changes hands.",
         body: "The stages of a job, written down once. It starts on its own, hands each step to your teammate, to code or to a named person, and asks them where they already chat.",
-        example: "Thursdays at 9 it checks every asset, then waits for Priya’s sign-off.",
+        example: "When a PR merges it drafts the replies, then waits for Dev to say it’s live.",
     },
     {
         slug: "apps", name: "Apps", line: "A screen built for one job.",
         body: "The internal tool you never had time to build, made by asking. It runs on the same tables, as whoever opens it, so each person sees their part.",
-        example: "Launch studio, every asset with its owner and what it still needs.",
+        example: "Feedback loop, every problem from “no fix yet” to closed.",
     },
 ];
 

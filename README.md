@@ -1,44 +1,94 @@
 <div align="center">
 
-<img src="docs/Assets/Banner/lemma-brand-loop.gif" alt="Apps, agents, and data connected through Lemma to WhatsApp, Telegram, Slack, and Microsoft Teams" width="100%">
+<img src="docs/Assets/Film/everywhere.jpg" alt="Lemma: work from everywhere. Permanent teammates. lemma.work, open source." width="100%">
 
-**Shared Apps and Agents.** Your team, your agents, one context layer, scoped to each person.
+# Hire an AI teammate.
+
+**Share it with your people. It learns from all of you and builds itself around how you work.**
+
+Open source · Dots + Spaces + Lovable, for teams
+
+Runs on the Claude Code or Codex subscription you already pay for.
 
 ![License](https://img.shields.io/github/license/lemma-work/lemma-platform)
 ![Release](https://img.shields.io/github/v/release/lemma-work/lemma-platform)
 ![Build](https://img.shields.io/github/actions/workflow/status/lemma-work/lemma-platform/ci.yml)
 
+<a href="https://lemma.work"><img src="https://img.shields.io/badge/Try_it_free-5a3fd4?style=for-the-badge" alt="Try Lemma free"></a>
 <a href="https://github.com/lemma-work/lemma-platform/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-141414?style=for-the-badge&logo=apple&logoColor=white" alt="Download Lemma for macOS"></a>
 
-[Quickstart](#quickstart) · [What shared means](#one-of-it-however-many-of-you) · [Inside a pod](#inside-a-pod) · [Surfaces](#however-the-work-arrives-it-lands-in-the-same-pod) · [Coding agents](#the-agent-you-already-use-builds-the-whole-system) · [Examples](#complete-pods-running) · [Docs](https://lemma.work/docs)
-
-Website → **[lemma.work](https://lemma.work)**
+[What makes it a teammate](#what-makes-it-a-teammate) · [Quickstart](#quickstart) · [For developers](#for-developers-a-multiplayer-self-improving-harness) · [Inside a pod](#inside-a-pod) · [Examples](#complete-pods-running) · [Docs](https://lemma.work/docs)
 
 </div>
 
----
+<br>
 
-## A multiplayer, self-improving harness
+<img src="docs/Assets/Screenshots/space.png" alt="Kit's space in Lemma: someone asks it to make sense of the #feedback channel, and Kit answers with nine themes, which ones have a fix, and which nobody owns." width="100%">
 
-A harness is everything around the model: the tools it can call, the memory it
-reads, the state it writes, the loop it runs in, and the boundary it works
-inside. Coding agents gave you a harness for one person, on one machine, for the
-length of one session.
+<p align="center"><sub>Kit, an AI teammate running a product team's feedback loop.</sub></p>
 
-Lemma is that harness for a team. State is shared and permissioned, so many
-people and many agents work the same records. It keeps running between sessions,
-on schedules, webhooks, and table events. And it compounds: corrections become
-standing instructions, sequences become workflows, judgment becomes an agent
-role. The harness your team uses next month is better than the one you ship
-today, because using it is what improved it.
+## What makes it a teammate
 
-Your coding agent builds it. Describe the job to Claude Code, Codex, Cursor,
-OpenCode, or Antigravity; it writes the whole system as files: the app people
-open, the tables underneath it, the agents, the workflows, and the permissions.
-Then it imports and verifies the result through the same CLI. Your team opens it
-at a URL, or reaches it from Slack, Teams, Telegram, WhatsApp, or email.
+<table>
+  <tr>
+    <td width="45%" valign="top">
+      <h3>Multiplayer</h3>
+      <p>Everyone asks, each sees their part. It answers each person within what their role allows, and checks with the right person before it acts.</p>
+    </td>
+    <td width="55%" valign="top"><img src="docs/Assets/Screenshots/people.png" alt="People with access to Kit: you, Dev who confirms a fix is live, Sam who answers Enterprise accounts, and Alex."></td>
+  </tr>
+  <tr>
+    <td width="45%" valign="top">
+      <h3>Use it from wherever you work</h3>
+      <p>Slack, Teams, WhatsApp, Telegram or email. Same teammate, same permissions, same records, wherever it’s asked.<br><br><img src="docs/Assets/Logos/slack.svg" height="20" alt="Slack"> <img src="docs/Assets/Logos/microsoft-teams.svg" height="20" alt="Microsoft Teams"> <img src="docs/Assets/Logos/WhatsApp.svg" height="20" alt="WhatsApp"> <img src="docs/Assets/Logos/telegram.svg" height="20" alt="Telegram"> &#9993;</p>
+    </td>
+    <td width="55%" valign="top"><img src="docs/Assets/Film/comes-to-you.jpg" alt="The same teammate answering in Slack, on WhatsApp, on Telegram and in Teams, for four different people."></td>
+  </tr>
+  <tr>
+    <td width="45%" valign="top">
+      <h3>Shared and personal memory</h3>
+      <p>It learns from all of you. Shared notes everyone in its space can read, personal ones only you can. Correct it once and it works that way from then on.</p>
+    </td>
+    <td width="55%" valign="top"><img src="docs/Assets/Film/learns.jpg" alt="What Alfred remembers: four shared notes and two personal ones, on spend limits, vendors, month-end and travel, each taught by someone on the team."></td>
+  </tr>
+  <tr>
+    <td width="45%" valign="top">
+      <h3>Apps</h3>
+      <p>Ask in a chat and it builds the screen the work calls for. Your people open it like any internal tool, and it runs on the same records the teammate works in.</p>
+    </td>
+    <td width="55%" valign="top"><img src="docs/Assets/Screenshots/feedback-loop.png" alt="Feedback loop, the app Kit built: a board of feedback themes from no fix yet to closed, a Waiting on you queue, and the team's activity."></td>
+  </tr>
+  <tr>
+    <td width="45%" valign="top">
+      <h3>Pages</h3>
+      <p>The native way to work with AI: docs you write together. Ask from anywhere in a page and it writes right there. Type <code>/visualize</code> and it draws a chart from your tables. Leave a comment that mentions it, and the comment comes back as an edit.</p>
+      <p>Pages hold live table views and widgets, so the numbers in last week's report are this week's numbers.</p>
+    </td>
+    <td width="55%" valign="top"><img src="docs/Assets/Screenshots/page.png" alt="A page Scout wrote, Why trials stall, with a live table of every conversation."></td>
+  </tr>
+  <tr>
+    <td width="45%" valign="top">
+      <h3>Workflows</h3>
+      <p>Work that changes hands, written down once. A workflow starts on its own: on a schedule, when a row changes, or when Slack or GitHub sends something.</p>
+      <p>Each step goes to the teammate, to code, or to a named person, and it waits for that person where they already chat. Nothing important happens without the right yes.</p>
+    </td>
+    <td width="55%" valign="top"><img src="docs/Assets/Screenshots/workflow-run.png" alt="A workflow run waiting on Dev to approve a corrected import file before it carries on."></td>
+  </tr>
+  <tr>
+    <td width="45%" valign="top">
+      <h3>Use the subscription you already have</h3>
+      <p>Connect your computer and your teammate runs on your Claude Code, Codex, Cursor or OpenCode login. No new AI bill. Or use Lemma's hosted models, or any OpenAI- or Anthropic-compatible key, a different one per teammate if you like.</p>
+    </td>
+    <td width="55%" valign="middle"><table><tr><td align="center" width="25%"><img src="docs/Assets/Logos/claude.svg" height="36" alt="Claude Code"><br><sub>Claude Code</sub></td><td align="center" width="25%"><img src="docs/Assets/Logos/codex.svg" height="36" alt="Codex"><br><sub>Codex</sub></td><td align="center" width="25%"><img src="docs/Assets/Logos/cursor.svg" height="36" alt="Cursor"><br><sub>Cursor</sub></td><td align="center" width="25%"><img src="docs/Assets/Logos/opencode-logo-light.svg" height="36" alt="OpenCode"><br><sub>OpenCode</sub></td></tr></table></td>
+  </tr>
+</table>
 
-**Open source. Run it on your laptop, your server, or Lemma Cloud. Use Claude Code or Codex through your existing subscription, Lemma-managed models, or any OpenAI- or Anthropic-compatible provider.**
+### Built for real work
+
+- **Permissions that hold.** Roles per person, access per row, approvals where a person decides. The same rules in the app, in Slack and on WhatsApp.
+- **Open source.** AGPLv3 core, Apache 2.0 SDKs. Run it on your laptop, your server, or Lemma Cloud.
+
+Try Kit’s space yourself, no sign-up: **[lemma.work](https://lemma.work/#try)**.
 
 ## Quickstart
 
@@ -96,21 +146,28 @@ release that allowed 3.11, and installs a CLI several minors behind the server.
 | Agents unavailable, or chat answers with a provider error | No AI provider has validated yet. **Local Control Center → AI Providers**; Ollama or LM Studio if you have no API key. |
 | Something works in the app but not in the CLI, or the other way round | `lemma doctor` — it diagnoses client/server version skew and duplicate installs. |
 
-## One of it, however many of you
+## For developers: a multiplayer, self-improving harness
 
-You share the agent itself, already running. Send someone the link; they open the
-same agent, and their work lands in the same records. There is one of it to fix,
-one of it to improve, and one set of records underneath.
+A harness is everything around the model: the tools it can call, the memory it
+reads, the state it writes, the loop it runs in, and the boundary it works
+inside. Coding agents gave you a harness for one person, on one machine, for the
+length of one session.
 
-Scoped to each person:
+Lemma is that harness for a team. Every teammate's space is a **pod** underneath:
+the tables, files, agents, workflows, permissions and apps described below. State is shared and permissioned, so many
+people and many agents work the same records. It keeps running between sessions,
+on schedules, webhooks, and table events. And it compounds: corrections become
+standing instructions, sequences become workflows, judgment becomes an agent
+role. The harness your team uses next month is better than the one you ship
+today, because using it is what improved it.
 
-| Who | Role | Access |
-|---|---|---|
-| **Priya** | Owner | Approves refunds, any amount |
-| **Marco** | Member | His own jobs; refunds route to Priya |
-| **Classifier** | Agent | Reads tickets; read-only |
+Your coding agent builds it. Describe the job to Claude Code, Codex, Cursor,
+OpenCode, or Antigravity; it writes the whole system as files: the app people
+open, the tables underneath it, the agents, the workflows, and the permissions.
+Then it imports and verifies the result through the same CLI. Your team opens it
+at a URL, or reaches it from Slack, Teams, Telegram, WhatsApp, or email.
 
-Same system, different rights. One version of it, for everyone.
+**Open source. Run it on your laptop, your server, or Lemma Cloud. Use Claude Code or Codex through your existing subscription, Lemma-managed models, or any OpenAI- or Anthropic-compatible provider.**
 
 ## Build it, ship it, and hand it to your team
 
@@ -170,23 +227,6 @@ tables, runs the same workflows, and respects the same permissions.
 Supported today: **Slack, Microsoft Teams, Telegram, WhatsApp, and email**.
 Each one has webhook ingress, identity resolution, and agent-initiated actions.
 Telegram long-polling and Slack Socket Mode connect local setups directly.
-
-<div align="center">
-
-<table>
-  <tr>
-    <td align="center"><strong>Surfaces</strong></td>
-    <td align="center"><img src="docs/Assets/Logos/slack.svg" height="40" alt="Slack"><br><sub>Slack</sub></td>
-    <td align="center"><img src="docs/Assets/Logos/microsoft-teams.svg" height="40" alt="Microsoft Teams"><br><sub>Teams</sub></td>
-    <td align="center"><img src="docs/Assets/Logos/telegram.svg" height="40" alt="Telegram"><br><sub>Telegram</sub></td>
-    <td align="center"><img src="docs/Assets/Logos/WhatsApp.svg" height="40" alt="WhatsApp"><br><sub>WhatsApp</sub></td>
-    <td align="center"><strong style="font-size:28px">&#9993;</strong><br><sub>Email</sub></td>
-  </tr>
-</table>
-
-<em>Wherever your team already works, the pod shows up.</em>
-
-</div>
 
 Every pod agent gets its own address, and anyone can write to it from whatever
 mail client they already use. Reaching a Gmail or Outlook *account* is a
