@@ -688,7 +688,12 @@ durable state, not configuration.
 ## Models
 
 Lemma talks to any OpenAI-compatible or Anthropic-compatible endpoint. There is
-no provider-specific logic beyond those two shapes.
+no provider-specific logic beyond those two shapes, with one exception in model
+discovery: Nebius Token Factory (`*.nebius.com`) is asked for `/models?verbose=true`,
+because only that listing says which of its models read images. Its chat endpoint
+refuses an image for a model it lists as text-only, so that listing is what marks
+a Nebius model as vision-capable; one it lists as text-only can still be ticked by
+hand.
 
 ```dotenv
 LEMMA_DEFAULT_MODEL_TYPE=openai_compat   # openai_compat | anthropic_compat

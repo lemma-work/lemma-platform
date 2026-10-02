@@ -124,6 +124,8 @@ export const AI_PRESETS: AiPreset[] = [
         keyUrl: "https://console.anthropic.com/settings/keys", hint: "Create a key in the Anthropic Console under Settings → API keys." },
     { id: "openrouter", name: "OpenRouter", protocol: "openai_compat", baseUrl: "https://openrouter.ai/api/v1",
         keyUrl: "https://openrouter.ai/settings/keys", hint: "One key for models from many providers. Create one under Keys." },
+    { id: "nebius", name: "Nebius Token Factory", protocol: "openai_compat", baseUrl: "https://api.tokenfactory.nebius.com/v1",
+        keyUrl: "https://tokenfactory.nebius.com/project/api-keys", hint: "Open models hosted by Nebius. Create a key under API keys in Token Factory." },
     { id: "ollama", name: "Ollama", protocol: "openai_compat", baseUrl: LOCAL_SERVERS[0].baseUrl,
         keyUrl: null, hint: "Runs models on this computer. Install Ollama, then pull a model, for example: ollama pull qwen3" },
     { id: "lmstudio", name: "LM Studio", protocol: "openai_compat", baseUrl: LOCAL_SERVERS[1].baseUrl,
