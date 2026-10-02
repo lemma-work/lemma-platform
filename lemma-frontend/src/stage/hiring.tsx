@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Pod } from "@/data";
-import { HIRES, BLANK, blankHire, openersFor, profileFor, type Hire } from "@/data/hires";
+import { HIRES, BLANK, blankHire, dealtName, openersFor, profileFor, type Hire } from "@/data/hires";
+import { possessive } from "@/copy";
 import { ASKS, typedAt } from "./asking";
-import { PlusIcon, ArrowRightIcon, BackIcon, CheckIcon, ChatIcon, KeyIcon, LinkIcon, PeopleIcon } from "@/ui/icons";
+import { ArrowRightIcon, BackIcon, CheckIcon, ChatIcon, KeyIcon, LinkIcon, PeopleIcon } from "@/ui/icons";
 import { characterForSeed, variantForCharacter } from "@/shell/character";
 import { CharacterPuppet } from "@/shell/character-puppet";
 import { formatIdentityIcon, identityVariantSeed } from "@/shell/resource-icon";
@@ -148,9 +149,25 @@ export function HiringView({
         else setStage("candidate");
     }
 
-    async function hire() {
-        if (!picked) return;
-        const clean = name.trim();
+    /* Just exploring: no name to think of and no job to describe. The face is
+       dealt, the name comes with it, and the hire happens on the click —
+       state is set for the reveal, but the hire reads its own arguments
+       because a setter has not landed by the time the next line runs. */
+    function explore() {
+        const somebody = blankHire();
+        const dealt = dealtName(somebody);
+        created.current = null;
+        setPicked(somebody);
+        setName(dealt);
+        setJob("");
+        setError(null);
+        void hire({ hire: somebody, name: dealt, job: "" });
+    }
+
+    async function hire(now?: { hire: Hire; name: string; job: string }) {
+        const chosen = now?.hire ?? picked;
+        if (!chosen) return;
+        const clean = (now?.name ?? name).trim();
         if (!clean) return;
         setDescribing(false);
         setStage("making");
@@ -161,8 +178,8 @@ export function HiringView({
                will contribute its own — a table, a schedule, an app — and they
                belong in this list rather than behind a progress bar with
                nothing underneath it. */
-            const about = picked.id === "blank" ? job.trim() : picked.about;
-            const character = characterForSeed(picked.seed);
+            const about = chosen.id === "blank" ? (now?.job ?? job).trim() : chosen.about;
+            const character = characterForSeed(chosen.seed);
             /* The archetype fixes which character; this pod's own id supplies
                the seed, and the variant landing on that character is what gets
                stored — so the face you picked is the face it keeps. */
@@ -171,7 +188,7 @@ export function HiringView({
                 create: () => source.createPod(orgId, clean, about),
                 onCreated: (fresh) => { created.current = fresh; setDone(["made"]); },
                 variantFor: (podId) => variantForCharacter(podId, character) ?? 0,
-                saveFace: (podId, chosen) => source.setPodIcon(podId, formatIdentityIcon(chosen)),
+                saveFace: (podId, face) => source.setPodIcon(podId, formatIdentityIcon(face)),
             });
             setDone(["made", "face"]);
 
@@ -185,8 +202,12 @@ export function HiringView({
                refetch has to match a key, beat a stale time, and win a race
                with the reveal. The background refetch still runs, to pick up
                anything the server decided that this does not know. */
+            /* With the face it was just given: `createPod` answered before the
+               face was saved, so the pod in hand still has no picture, and the
+               rail drew the id's default face until the refetch landed. */
+            const faced: Pod = variant > 0 ? { ...pod, iconUrl: formatIdentityIcon(variant) } : pod;
             queryClient.setQueryData(["pods", orgId], (old: Pod[] | undefined) =>
-                old ? (old.some((entry) => entry.id === pod.id) ? old : [...old, pod]) : old,
+                old ? (old.some((entry) => entry.id === pod.id) ? old : [...old, faced]) : old,
             );
             void queryClient.refetchQueries({ queryKey: ["pods"] });
             created.current = null;
@@ -194,7 +215,7 @@ export function HiringView({
             setStage("met");
         } catch (problem) {
             setError(problem instanceof Error ? problem.message : "Couldn’t finish setting up this teammate. Check your teammate list before trying again.");
-            if (picked.id === "blank") { setDescribing(true); setStage("shelf"); }
+            if (chosen.id === "blank") { setDescribing(true); setStage("shelf"); }
             else setStage("candidate");
         }
     }
@@ -207,11 +228,15 @@ export function HiringView({
                     {stage === "candidate" ? "All candidates" : "Back to work"}
                 </button>
                 <span className="hiring__where">
-                    {stage === "shelf" ? "Hiring for " + orgName : picked ? picked.name || "Somebody new" : ""}
+                    {stage === "shelf"
+                        ? "Hiring for " + orgName
+                        : picked
+                            ? (stage === "candidate" ? picked.name : name.trim()) || "Somebody new"
+                            : ""}
                 </span>
             </header>
 
-            {(stage === "shelf" || describing) && <Shelf job={job} onJob={setJob} onPick={consider} />}
+            {(stage === "shelf" || describing) && <Shelf job={job} onJob={setJob} onPick={consider} onExplore={explore} />}
 
             {describing && (
                 <NewFace
@@ -303,10 +328,12 @@ function Shelf({
     job,
     onJob,
     onPick,
+    onExplore,
 }: {
     job: string;
     onJob: (value: string) => void;
     onPick: (hire: Hire, suggested?: string) => void;
+    onExplore: () => void;
 }) {
     const input = useRef<HTMLInputElement>(null);
     useEffect(() => { input.current?.focus(); }, []);
@@ -348,20 +375,18 @@ function Shelf({
                     </button>
                 </form>
 
+                {/* The way in that asks for nothing. Somebody who came to look
+                    around should not have to invent a job to get past this
+                    page, and before this the only blank start was the
+                    seventh card, below the fold, behind a name field. */}
+                <button type="button" className="shelf__explore" onClick={onExplore}>
+                    Just exploring? Start with a blank teammate <ArrowRightIcon size={14} />
+                </button>
+
                 <div className="shelf__or">or start with a role</div>
 
                 <div className="shelf__grid">
                     {HIRES.map((hire) => <HireCard key={hire.id} hire={hire} onPick={onPick} />)}
-
-                    <button className="hirecard hirecard--blank" onClick={() => onPick(BLANK)}>
-                        <span className="hirecard__face"><PlusIcon size={24} /></span>
-                        <span className="hirecard__name">Somebody new</span>
-                        <span className="hirecard__role">{BLANK.role}</span>
-                        <span className="hirecard__brings">
-                            <span>Give them a name and a first responsibility</span>
-                        </span>
-                        <span className="hirecard__go">Start your own <ArrowRightIcon size={14} /></span>
-                    </button>
                 </div>
             </div>
         </div>
@@ -549,10 +574,13 @@ function Making({ hire, name, done }: { hire: Hire; name: string; done: string[]
  *  then you are alone with them on an empty thread that says "Nothing said in
  *  here yet" and no more.
  *
- *  So the page keeps the moment and adds the morning. The three things under
- *  the face are the three that make a new teammate real — something to do,
- *  somewhere to be written to, and somebody else who can use them — and each
- *  one is an existing surface rather than a checklist item that ticks itself.
+ *  So the page keeps the moment and adds the morning. The door comes first
+ *  and is the primary: their space is where everything else on this page
+ *  happens anyway, and it was the button most people were looking for while
+ *  it sat last, styled as the fallback. Under it are the three things that
+ *  make a new teammate real — something to do, somewhere to be written to,
+ *  and somebody else who can use them — each an existing surface rather than
+ *  a checklist item that ticks itself.
  *
  *  It is printed in the teammate's own field, the same colour their badge and
  *  their header band will be, which is the first time anyone sees it: the
@@ -587,6 +615,7 @@ function Met({
 }) {
     const [hello, setHello] = useState(1);
     const openers = useMemo(() => openersFor(hire, job), [hire, job]);
+    const exploring = hire.id === "blank" && !job.trim();
     const tone = useMemo(() => pressSlot(identityGenes(podId).tone), [podId]);
     const wave = () => setHello((count) => count + 1);
 
@@ -622,35 +651,38 @@ function Met({
                 </div>
             ) : (
                 <p className="met__line">
-                    {hire.id === "blank"
-                        ? name + " is ready to learn your work. Share the context for their first task."
-                        : name + " is ready. Start with a task, then work together to set up the sources, apps and schedules for the job."}
+                    {exploring
+                        ? name + " starts with no job yet. Tell them about your work and find one together."
+                        : hire.id === "blank"
+                            ? name + " is ready to learn your work. Share the context for their first task."
+                            : name + " is ready. Start with a task, then set up the sources, apps and schedules together."}
                 </p>
             )}
             {!faceSaved && (
                 <p className="met__note">Couldn’t save the face you picked, so {name} kept the one they came with.</p>
             )}
 
+            <button className="btn btn--primary met__door" onClick={() => onOpen()}>
+                Go to {possessive(name)} space <ArrowRightIcon size={15} />
+            </button>
+
             <div className="met__moves">
+                {/* Every hire has openers now — a role brings its own, a
+                    described job is handed back, and exploring gets questions
+                    — so there is no empty variant of this card to draw. */}
                 <section className="met__move">
-                    <h3><ChatIcon size={17} />Say the first thing</h3>
-                    {openers.length > 0 ? (
-                        <>
-                            <p>Each one opens as a draft you can change before sending.</p>
-                            <ul className="met__openers">
-                                {openers.map((line) => (
-                                    <li key={line}>
-                                        <button onClick={() => onOpen({ say: line })}>
-                                            <span>{line}</span>
-                                            <ArrowRightIcon size={15} />
-                                        </button>
-                                    </li>
-                                ))}
-                            </ul>
-                        </>
-                    ) : (
-                        <p>Whatever you were going to hand them first. {name} has no history to catch up on.</p>
-                    )}
+                    <h3><ChatIcon size={17} />{exploring ? "Or ask " + name + " something" : "Or give " + name + " a first task"}</h3>
+                    <p>Opens as a draft in {possessive(name)} space. Nothing sends until you do.</p>
+                    <ul className="met__openers">
+                        {openers.map((line) => (
+                            <li key={line}>
+                                <button onClick={() => onOpen({ say: line })}>
+                                    <span>{line}</span>
+                                    <ArrowRightIcon size={15} />
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
                 </section>
 
                 <div className="met__pair">
@@ -667,14 +699,6 @@ function Met({
                 </div>
             </div>
 
-            {/* The door is still here, and still last. It stops being the
-                primary only when there is something better to press. */}
-            <button
-                className={openers.length > 0 ? "btn met__door" : "btn btn--primary met__door"}
-                onClick={() => onOpen()}
-            >
-                {openers.length > 0 ? "Or just open " + name : "Open " + name}
-            </button>
         </div></div>
     );
 }

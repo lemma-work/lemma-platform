@@ -23,6 +23,16 @@ export function addPreviewMember(podId: string, id: string, role: string): void 
     added.set(podId, [...members, { id, name: candidate.label, initials: id.slice(0, 2).toUpperCase(), kind: "person", role, can: role }]);
 }
 
+/* The faces of teammates hired during the tour. A hire is a copy of Kit
+   with a new name, so it used to keep Kit's picture too — every new hire
+   wore Kit in the rail while the reveal, which draws from the pod's id, drew
+   the face that was dealt. A hire starts with no picture, which is what the
+   live source hands back, and keeps whatever the hiring flow then saves. */
+const faces = new Map<string, string | null>();
+function faceOf(person: { id: string; icon: string }): string | null {
+    return faces.has(person.id) ? faces.get(person.id) ?? null : person.icon;
+}
+
 const voicePath = "/skills/brand-voice/SKILL.md";
 const edits = new Map<string, string>();
 function members(id: string): Member[] {
@@ -49,7 +59,7 @@ function members(id: string): Member[] {
 }
 function persona(id: string) {
     const person = teammateFor(id);
-    return { name: person.name, initials: person.name.slice(0, 2).toUpperCase(), iconUrl: person.icon };
+    return { name: person.name, initials: person.name.slice(0, 2).toUpperCase(), iconUrl: faceOf(person) };
 }
 function guidance(id: string) {
     const person = teammateFor(id);
@@ -161,14 +171,16 @@ export const previewSource: PodSource = {
     async listOrgs() { return [{ id: "acme", name: "Acme" }]; },
     async getPod(podId) { return (await previewSource.listPods("acme")).find(pod => pod.id === podId) ?? null; },
     async listPods(orgId) {
-        return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: person.icon, description: person.role, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
+        return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: faceOf(person), description: person.role, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
     },
     async createPod(orgId, name, description) {
         const id = "sample-" + Date.now();
         const person = { ...teammates[0], id, name, role: description?.trim() || "New teammate", job: description ?? "Define my first responsibility with me.", promise: description ?? "Ready for my first responsibility.", waiting: "Ready to get started", ask: "What should we work on first?", reply: "This is a sample teammate. Give me a first responsibility to explore the setup.", learned: "No team guidance yet.", items: [], app: "Workspace" };
         teammates.push(person);
-        return { id, orgId, name, iconUrl: person.icon, description: person.role, teammate: persona(id), subtitle: person.role, members: members(id), waiting: person.waiting };
+        faces.set(id, null);
+        return { id, orgId, name, iconUrl: faceOf(person), description: person.role, teammate: persona(id), subtitle: person.role, members: members(id), waiting: person.waiting };
     },
+    async setPodIcon(id, iconUrl) { faces.set(id, iconUrl); },
     async renamePod(id, name) { const person = teammates.find(item => item.id === id); if (person) person.name = name; },
     async describePod(id, description) { const person = teammates.find(item => item.id === id); if (person) person.role = description.trim() || person.role; },
     async deletePod(id) { const at = teammates.findIndex(item => item.id === id); if (at >= 0) teammates.splice(at, 1); },
@@ -233,7 +245,7 @@ export const previewSource: PodSource = {
     async getProfile(id) {
         const person = teammateFor(id);
         const profile = await fixtureSource.getProfile(id);
-        return { ...profile, podId: id, name: person.name, iconUrl: person.icon, headline: person.promise, about: person.job + "\n\n" + person.learned, commitments: [], counts: { tables: spaceOf(id)?.tables.length ?? 0, functions: 0, workflows: SAMPLE_WORKFLOWS.filter(flow => flow.pod_id === id).length }, projects: [{ id: person.id, name: person.app, description: person.role, status: "running", tabId: "app:launch" }] };
+        return { ...profile, podId: id, name: person.name, iconUrl: faceOf(person), headline: person.promise, about: person.job + "\n\n" + person.learned, commitments: [], counts: { tables: spaceOf(id)?.tables.length ?? 0, functions: 0, workflows: SAMPLE_WORKFLOWS.filter(flow => flow.pod_id === id).length }, projects: [{ id: person.id, name: person.app, description: person.role, status: "running", tabId: "app:launch" }] };
     },
     async tableColumns(id, name) { return sampleTableIn(id, name)?.columns ?? []; },
     async tableRows(id, name) { return { items: sampleTableIn(id, name)?.rows() ?? [], next: null }; },
