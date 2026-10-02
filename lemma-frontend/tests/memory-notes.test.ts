@@ -63,6 +63,11 @@ test("only a memory write that came back successful is noted", () => {
     assert.equal(notedBy("pod_write_file", { path: "/memory/AGENTS.md" }, { success: true }), null);
     assert.equal(notedBy("pod_write_file", { path: "/pages/plan.md" }, { success: true }), null);
     assert.equal(notedBy("pod_read_file", { path: "/memory/pricing.md" }, { content: "…" }), null);
+    /* Under /memory but not a note: a subfolder of working files, another
+       agent's folder, something that is not text. */
+    assert.equal(notedBy("pod_write_file", { path: "/memory/reports/q3.md" }, { success: true }), null);
+    assert.equal(notedBy("pod_write_file", { path: "/me/agents/researcher/draft.md" }, { success: true }), null);
+    assert.equal(notedBy("pod_write_file", { path: "/memory/leads.csv" }, { success: true }), null);
 });
 
 test("a turn carries each note it wrote once, however many times it saved it", () => {
