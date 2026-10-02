@@ -81,6 +81,8 @@ class AppAssetDocument(BaseModel):
     # the service worker uses one, and only because a worker registered for a
     # scope above its own directory is refused without ``Service-Worker-Allowed``.
     headers: dict[str, str] | None = None
+    # Only some people may read this app, so no shared cache may keep it.
+    private: bool = False
 
 
 def public_app_url(public_slug: str) -> str | None:

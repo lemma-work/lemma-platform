@@ -135,11 +135,34 @@ function optionKind(value: unknown): string {
 /** Some tool names carry their command as one long string. That string is the
  *  single most useful thing on the card, so it is never truncated here — the
  *  card wraps it instead. */
+/** The tool that records a member's answer to a question passed on to them.
+ *  Approving it for a question from outside the pod sends the answer back to
+ *  that stranger, so its card is Lemma's words, not the agent's. */
+const OUTSIDE_ANSWER_TOOL = "respond_to_notification";
+
 export function approvalDetails(toolArgs: unknown, fallbackText?: string): ApprovalDetails {
     const args = asRecord(toolArgs);
     const toolName = asString(args.tool_name);
     const title = asString(args.title);
     const reason = asString(args.reason);
+
+    if (toolName === OUTSIDE_ANSWER_TOOL) {
+        /* The agent drafted this with all of your access, and its title and
+           reason could have been steered by the stranger's question. So the
+           card says what is actually decided -- these exact words go to the
+           person outside the pod who asked -- shows every one of them, and is
+           approved once, never for the session. */
+        const answer = asString(asRecord(args.args).summary);
+        return {
+            title: "Send this answer outside the pod?",
+            request:
+                "Someone outside the pod asked this in a group. Nothing is passed on " +
+                "until you approve, and then only these exact words go back to them.",
+            params: answer ? [{ name: "Answer", value: answer }] : [],
+            toolName,
+            canApproveForSession: false,
+        };
+    }
 
     /* A coding agent's request carries what it would run under the marker the
        backend routes the decision by, since nothing in it is Lemma's to run. */

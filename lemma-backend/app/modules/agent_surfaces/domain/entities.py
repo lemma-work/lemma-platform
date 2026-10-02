@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.errors import (
 from app.modules.agent_surfaces.domain.surface_config import (
     SurfaceChannelRoute,
     SurfaceConfig,
+    SurfaceGroupPolicy,
     SurfaceIdentityPolicy,
     SurfaceSendPolicy,
     SurfaceSlackConfig,
@@ -25,6 +26,7 @@ from app.modules.agent_surfaces.domain.surface_config import (
 __all__ = [
     "SurfaceChannelRoute",
     "SurfaceConfig",
+    "SurfaceGroupPolicy",
     "SurfaceIdentityPolicy",
     "SurfaceSendPolicy",
     "SurfaceSlackConfig",
@@ -126,6 +128,20 @@ def platform_value_for_source(source: str) -> str | None:
     return platform.value if platform else None
 
 
+#: Platforms where being in a group is the authorization to answer there, so
+#: no channel route is configured: a Telegram bot is added by somebody, and a
+#: WhatsApp bot is only ever in groups it created.
+_GROUPS_NEED_NO_ROUTE = frozenset({SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP})
+
+
+def is_slack_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
+    """A Slack conversation between several people and the bot (an ``mpim``)."""
+    return (
+        event.platform is SurfacePlatform.SLACK
+        and event.metadata.get("channel_type") == "mpim"
+    )
+
+
 class ExternalSurfaceUserEntity(Entity):
     platform: str
     tenant_id: str | None = None
@@ -192,6 +208,8 @@ class ParsedSurfaceLifecycleEvent(BaseModel):
     external_channel_id: str | None = None
     # Who caused it: the inviter for JOINED_CHANNEL, the viewer for HOME_OPENED.
     actor_external_user_id: str | None = None
+    # The group's own name, where the event carries it (Telegram's does).
+    channel_title: str | None = None
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -471,8 +489,14 @@ class AgentSurfaceEntity(AggregateRoot):
         # groups have no allow-list — being added to the group is the
         # authorization — so any group is accepted (the @mention gate below, plus
         # the pod-membership check on the sender, still apply).
+        # A Slack group DM is the Telegram case too: somebody started it with
+        # the bot in it, so there is no channel to allow-list and no setup
+        # prompt to answer -- being in it is the authorization. A WhatsApp
+        # group is one the bot created at a member's request, and ingress has
+        # already narrowed it to the surface that created it.
         if (
-            self.surface_type is not SurfacePlatform.TELEGRAM
+            self.surface_type not in _GROUPS_NEED_NO_ROUTE
+            and not is_slack_group_dm(event)
             and not self.matches_channel(event.external_channel_id)
         ):
             return False

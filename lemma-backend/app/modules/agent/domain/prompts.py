@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.modules.agent.domain.outsiders import OUTSIDER_TOOLSETS, answers_outsiders
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.prompt_directories import _directory_sections
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -331,7 +332,10 @@ def build_agent_instruction_parts(
                 surface_platform_guidance,
             )
 
-            fragment = surface_platform_guidance(surface_platform)
+            fragment = surface_platform_guidance(
+                surface_platform,
+                answers_outsider=bool(getattr(ctx, "answers_outsider", False)),
+            )
             if fragment:
                 sections.append(fragment)
 
@@ -455,20 +459,35 @@ def _fragment_toolsets(
     conversation: Conversation,
 ) -> set[AgentToolset]:
     """Toolsets whose guidance fragment should be included for this run."""
+    if answers_outsiders(conversation):
+        # A stranger's run is not told about a sandbox, a browser or a task
+        # list it does not have -- only what `resolve_toolsets` leaves it.
+        configured = (
+            set(FRAGMENT_BY_TOOLSET)
+            if conversation.is_pod_assistant
+            else _configured_toolsets(agent)
+        )
+        return configured & OUTSIDER_TOOLSETS
     if conversation.is_pod_assistant:
         # The pod-default assistant runs the full batteries-included toolset, so it
         # gets every fragment regardless of the (possibly synthetic) agent passed.
         return set(FRAGMENT_BY_TOOLSET)
-    enabled: set[AgentToolset] = set()
-    for name in agent.toolsets:
-        try:
-            enabled.add(AgentToolset(name))
-        except ValueError:  # pragma: no cover - defensive
-            continue
+    enabled = _configured_toolsets(agent)
     # Memory is the one fragment that can be configured and still be useless:
     # it carries no tools, so without WORKSPACE_CLI or POD it would teach an
     # agent to write files it has no way to write. Same predicate the brief's
     # memory section and the in-process capability gate on.
     if AgentToolset.MEMORY in enabled and not memory_is_active(enabled):
         enabled.discard(AgentToolset.MEMORY)
+    return enabled
+
+
+def _configured_toolsets(agent: Agent) -> set[AgentToolset]:
+    """The toolsets an agent is configured with, ignoring names this build lacks."""
+    enabled: set[AgentToolset] = set()
+    for name in agent.toolsets:
+        try:
+            enabled.add(AgentToolset(name))
+        except ValueError:  # pragma: no cover - defensive
+            continue
     return enabled

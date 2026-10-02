@@ -786,7 +786,7 @@ export function ReachSheet({ pod, onClose }: { pod: Pod; onClose: () => void }) 
             subtitle={"Pick a channel and " + pod.name + " answers there, under its own name."}
             onClose={onClose}
         >
-            {managing ? <SurfaceManage pod={pod} surface={managing} onBack={() => setManaging(null)} onSaved={() => { refresh(); setManaging(null); }} /> : focus ? (
+            {managing ? <SurfaceManage pod={pod} surface={managing} onBack={() => setManaging(null)} onSaved={() => { refresh(); setManaging(null); }} onLeave={onClose} /> : focus ? (
                 <Focused
                     entry={focus}
                     pod={pod}

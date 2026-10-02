@@ -1,0 +1,155 @@
+/* Ask the table, beat by beat. Base styles are the opening frame: Remy's
+   deals board, and the table's Ask panel open beside it, empty. Each
+   `.root[data-bN]` rule is what changes from beat N on, in beat order, so
+   the last rules here are the finished picture: the question, and Remy's
+   answer with the query's rows under it, beside the board that holds the
+   same three deals. */
+
+.root {
+    /* One key of the question being typed. */
+    --v-key: 26ms;
+    /* The board's piles: the product's grey ground, in the landing's ink. */
+    --pile: color-mix(in srgb, var(--cream) 62%, var(--paper));
+}
+.root :where(p, figure, pre) { margin: 0 }
+
+/* ── The page bar ───────────────────────────────────────────────────── */
+.head { gap: 6px; padding: 0 10px 0 12px }
+.head b { white-space: nowrap }
+.refresh { display: inline-flex; align-items: center; gap: 5px; height: 24px; margin-left: auto; padding: 0 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-2); background: var(--paper); color: var(--ink) }
+.find { display: grid; place-items: center; width: 24px; height: 24px; color: var(--ink-2) }
+.share { display: inline-flex; align-items: center; height: 24px; padding: 0 12px; border-radius: 99px; background: var(--ink); color: var(--paper) }
+
+/* ── The table, open as a board ─────────────────────────────────────── */
+/* Compact piles, a name and a value to a card, so the fourth, Discovery,
+   runs on behind the panel as it does in the product with Redwing still
+   in view. */
+.page { position: absolute; top: 36px; left: 0; width: 640px; padding: 16px 10px 0 }
+.search { display: flex; align-items: center; gap: 7px; width: 214px; height: 30px; margin-top: 12px; padding: 0 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line); font-size: 12px; color: var(--ink-3) }
+.tools { display: flex; align-items: center; gap: 12px; height: 26px; margin-top: 10px; font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.order { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink) }
+
+.board { display: flex; align-items: flex-start; gap: 4px; margin-top: 14px }
+.pile { flex: 0 0 100px; padding: 5px 4px 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--pile) }
+/* Sentence case where the product sets the stage in capitals: at this
+   pile width "PROCUREMENT" and its count do not fit on one line. */
+.pileHead { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin: 1px 2px 6px; font-size: 12px; line-height: 18px; color: var(--ink-3); white-space: nowrap }
+.count { color: var(--ink-3) }
+
+.cards { display: flex; flex-direction: column; gap: 6px }
+.card { display: flex; flex-direction: column; padding: 7px 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper) }
+.company { font-size: 12.5px; line-height: 17px; color: var(--ink); white-space: nowrap }
+.value { font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; color: var(--ink-3) }
+.add { display: block; padding: 7px 2px 1px; font-size: 12px; color: var(--ink-3) }
+.total { margin-top: 12px }
+
+/* ── The table's conversation, floating over the page ─────────────── */
+.chat { position: absolute; top: 46px; right: 12px; bottom: 12px; z-index: 2; display: flex; flex-direction: column; width: 230px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 24px 60px rgb(20 20 19 / .1), 0 4px 14px rgb(20 20 19 / .05); overflow: hidden }
+.chatHead { display: flex; align-items: center; gap: 9px; padding: 10px 8px 5px 12px }
+.chatHead img { width: 24px; height: 24px }
+.chatTitle { display: flex; flex-direction: column; margin-right: auto; line-height: 1.25 }
+.chatTitle span { font-size: 13.5px; color: var(--ink) }
+.chatTitle small { font-size: 12px; color: var(--ink-3) }
+.min { display: grid; place-items: center; width: 26px; height: 26px; color: var(--ink-3) }
+/* "Open full size" exists once the conversation does: from the question on. */
+.expand { display: none }
+.context { padding: 0 12px 4px }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 6px 0 8px; border-radius: 99px; background: var(--cream); font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.chip span { color: var(--ink) }
+.chip em { font-style: normal; color: var(--ink-3) }
+.chip svg { flex: none }
+.chip > svg:last-child { margin-left: 1px; color: var(--ink-3) }
+
+.thread { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 6px 7px 0 }
+
+/* Your turn: your words on the far side, in a closed bubble. */
+.mine { align-self: flex-end; max-width: 196px; margin-right: 3px; padding: 6px 12px; border-radius: 14px; background: var(--cream); font-size: 12.5px; line-height: 1.4; color: var(--ink); opacity: 0; transform: translateY(8px) }
+
+/* Remy's turn: the name over what the run did, what it said, and the
+   rows it showed. */
+.reply { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin-top: 10px; opacity: 0; transform: translateY(6px) }
+.replyHead { display: flex; align-items: center; gap: 8px; padding-left: 3px }
+.replyHead img { width: 22px; height: 22px; border-radius: 7px }
+.who { font-size: 13px; color: var(--violet) }
+.at { font-family: var(--mono); font-size: 12px; color: var(--ink-3); opacity: 0 }
+.steps { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin-left: 3px; padding: 0 9px 0 4px; border: 1px solid var(--line); border-radius: 99px; background: var(--paper); font-size: 12px; color: var(--ink-2) }
+.state { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--violet-soft); color: var(--violet) }
+.state > * { grid-area: 1 / 1 }
+.pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--violet); animation: pulse var(--v-slow) var(--ease) infinite }
+@keyframes pulse { 50% { opacity: .35 } }
+.tick { opacity: 0 }
+/* Working, then what the run took: one at a time, so the pill is as wide
+   as the words it is showing. */
+.worked { display: none }
+.chev { color: var(--ink-3) }
+.said { padding-left: 3px; font-size: 13px; line-height: 1.5; color: var(--ink); opacity: 0; transform: translateY(4px) }
+
+/* The rows it answered with: the query printed above them, as the chat
+   previews a query. */
+.result { align-self: stretch; margin-top: 2px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); box-shadow: 0 10px 22px -16px rgb(20 20 19 / .4); opacity: 0; transform: translateY(8px) }
+.resultHead { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 9px; border-bottom: 1px solid var(--line) }
+.resultHead span { font-size: 12.5px; color: var(--ink) }
+.resultHead small { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--ink-3) }
+.sql { padding: 5px 5px 6px; border-bottom: 1px solid var(--line); background: var(--cream); font-family: var(--mono); font-size: 12px; line-height: 14px; color: var(--ink-2); white-space: pre-wrap }
+.grid { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 15px; text-align: left }
+/* Headed the way the app heads every grid: the column's own name, in mono. */
+.grid th { padding: 3px 4px; border-bottom: 1px solid var(--line); background: var(--cream); font-family: var(--mono); font-size: 12px; font-weight: 400; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); white-space: nowrap }
+.grid td { padding: 3px 4px; border-bottom: 1px solid var(--line); color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums }
+.grid tr:last-child td { border-bottom: 0 }
+.grid :is(th, td):first-child { padding-left: 6px }
+.grid :is(th, td):last-child { padding-right: 6px }
+
+/* Empty: the two quiet lines just above the box. */
+.quiet { position: absolute; left: 14px; right: 12px; bottom: 10px }
+.quietHead { font-size: 13.5px; color: var(--ink) }
+.quietText { margin-top: 2px; font-size: 12.5px; line-height: 1.45; color: var(--ink-3) }
+
+/* The floating chat's box: the placeholder, or the question being written
+   in it, across the top; attach on the left and voice and send on the
+   right below. */
+.composer { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin: 0 10px 10px; padding: 8px 6px 5px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 1px 3px rgb(20 20 19 / .04); transition: box-shadow var(--v-quick) var(--ease) }
+.attach, .wave, .send { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%; color: var(--ink-3) }
+.attach { margin-right: auto }
+.send { width: 28px; height: 28px }
+.field { flex: 1 0 100%; min-width: 0; display: grid; padding: 0 6px 6px; font-size: 13px; line-height: 18px }
+.placeholder, .typed { grid-area: 1 / 1 }
+.placeholder { color: var(--ink-3); white-space: nowrap }
+.typed { color: var(--ink) }
+/* A word never breaks across lines; its letters arrive one key at a time. */
+.word { display: inline-flex; vertical-align: top }
+.ch { display: inline-block; max-width: 0; overflow: hidden; white-space: pre; transition: max-width var(--v-quick) steps(1, jump-start) }
+/* Shown only while the question is being written. Not by opacity: the
+   kit's blink animates opacity and kept a caret blinking in the empty box. */
+.caret { display: none; margin-left: 0 }
+.send { background: var(--line-2); transition: background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
+
+/* 1 · the question, typed into the composer; send lights up */
+.root[data-b1] .placeholder { opacity: 0; transition: none }
+.root[data-b1] .caret { display: inline-block }
+.root[data-b1] .ch { max-width: 1em; transition-delay: calc(var(--n) * var(--v-key)) }
+.root[data-b1] .send { background: var(--violet); color: var(--paper) }
+/* The box has the focus: the app's accent ring round it. */
+.root[data-b1] .composer { box-shadow: 0 0 0 1px color-mix(in srgb, var(--violet) 45%, var(--paper)), 0 1px 3px rgb(20 20 19 / .04) }
+/* 2 · sent: the box empties at once, the question takes its place in the
+       conversation, and Remy is at work */
+.root[data-b2] .ch { max-width: 0; transition-delay: 0s }
+.root[data-b2] .caret { display: none }
+.root[data-b2] .placeholder { opacity: 1 }
+.root[data-b2] .send { background: var(--line-2); color: var(--ink-3) }
+.root[data-b2] .composer { box-shadow: 0 0 0 1px var(--line-2), 0 1px 3px rgb(20 20 19 / .04) }
+.root[data-b2] .quiet { opacity: 0 }
+.root[data-b2] .expand { display: grid }
+.root[data-b2] .mine { opacity: 1; transform: none }
+.root[data-b2] .reply { opacity: 1; transform: none; transition-delay: var(--v-move) }
+/* 3 · the answer: what the run took, and the total */
+.root[data-b3] .pulse { opacity: 0; animation: none }
+.root[data-b3] .working { display: none }
+.root[data-b3] .worked { display: inline }
+.root[data-b3] .tick, .root[data-b3] .at { opacity: 1 }
+.root[data-b3] .said { opacity: 1; transform: none }
+/* 4 · the rows under it, the SELECT it ran above them */
+.root[data-b4] .result { opacity: 1; transform: none }
+
+/* Reduced motion: the transitions written above outrank the kit's
+   `[data-still]` reset, so they are stopped here, last. */
+.root[data-still] :is(.ch, .caret, .placeholder, .send, .composer, .pulse) { transition: none; animation: none }

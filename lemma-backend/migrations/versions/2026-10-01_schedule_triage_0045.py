@@ -15,16 +15,16 @@ change rather than a rewrite. The two index builds read their tables once, in
 this transaction rather than CONCURRENTLY, for the reason 0025 gives: a failure
 must not leave a half-applied schema.
 
-Revision ID: 0044_schedule_triage
-Revises: 0043_decisions
+Revision ID: 0045_schedule_triage
+Revises: 0044_decisions
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0044_schedule_triage"
-down_revision = "0043_decisions"
+revision = "0045_schedule_triage"
+down_revision = "0044_decisions"
 branch_labels = None
 depends_on = None
 

@@ -1,0 +1,96 @@
+/* How a run begins, beat by beat. Base styles are the opening frame; each
+   `.root[data-bN]` rule is what changes from beat N on, written in beat
+   order so a later beat wins over an earlier one. With reduced motion every
+   beat is on, so the last rules here are the finished picture. */
+
+.root {
+    --v-step: 110ms;
+    /* From the email card's lane, past its condition, to the row below. */
+    --drop: 53px;
+    /* A run has begun: the dot goes green inside a soft ring. */
+    --ran-halo: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, var(--paper));
+}
+
+/* ── Four "How it starts" cards, as a workflow's page draws one ──────── */
+.grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr; gap: 10px; padding: 14px }
+.card { position: relative; display: flex; flex-direction: column; min-width: 0; padding: 12px 13px; border-radius: 12px; background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-2) }
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px }
+.head h2 { margin: 0; font-size: 14px; font-weight: 500; color: var(--ink) }
+.head span { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.card .what { margin: 4px 0 0; font-size: 13.5px; line-height: 1.4; color: var(--ink); text-wrap: balance }
+/* Where the thing that started a run shows up. */
+.slot { position: relative; height: 26px; margin: 10px 0 12px }
+
+/* Whose access a run has: the card's last line, under a dashed rule. */
+.card .runs { display: flex; align-items: flex-start; gap: 6px; margin: auto 0 0; padding-top: 9px; border-top: 1px dashed var(--line-2); font-size: 12px; line-height: 1.45; color: var(--ink-3) }
+.runs .dot { margin-top: 5px; background: rgb(20 20 19 / .2); transition: background-color var(--v-quick) var(--ease), box-shadow var(--v-quick) var(--ease) }
+.runs span { transition: color var(--v-quick) var(--ease) }
+
+/* What sets a run going, arriving from outside the space. On the way back
+   to the opening frame each one fades where it is, then goes back unseen. */
+.carried { position: absolute; top: 1px; left: 0; background: var(--paper); border-color: var(--violet); color: var(--violet-deep); box-shadow: 0 10px 22px -12px rgb(40 30 110 / .55) }
+
+/* Onboarding digest: the schedule's line, once it has fired. */
+.fired { display: inline-flex; align-items: center; gap: 6px; height: 26px; font-size: 12.5px; color: var(--ink); opacity: 0 }
+.fired svg { color: var(--ink-3) }
+.fired em { font-style: normal; color: var(--ink-3) }
+
+/* First import check: Harbor's row, in from the right. */
+.row { opacity: 0; transform: translateX(340px); transition-delay: 0s, var(--v-quick) }
+
+/* The email start: mail comes in from the left to the lane above its
+   condition; what passes goes on to the row below it. */
+.lane { position: relative; height: 26px; margin-top: 8px }
+.refused { opacity: 0; transform: translateX(-340px); transition: opacity var(--v-quick) var(--ease), transform var(--v-move) var(--ease), color var(--v-quick) var(--ease), border-color var(--v-quick) var(--ease), box-shadow var(--v-quick) var(--ease); transition-delay: 0s, var(--v-quick), 0s, 0s, 0s }
+.passing { position: absolute; top: 0; left: 0; opacity: 0; transform: translateX(-340px); transition-delay: 0s, var(--v-quick) }
+.passed { position: relative; top: 1px; transition: transform calc(var(--v-quick) * 1.5) var(--ease); transition-delay: var(--v-quick) }
+.card .filter { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; font-size: 12px; color: var(--ink-3) }
+.filter::after { content: ""; flex: 1; margin-left: 4px; border-top: 1px dashed var(--line-2) }
+.tick { color: var(--ok); opacity: 0 }
+.email .slot { margin-top: 6px }
+
+/* Training reminder: the button someone presses, level with the email
+   card's Harbor row, over a "runs as" line as tall as that card's two. */
+.manual .slot { margin-top: auto }
+.manual .runs { min-height: 45px; margin-top: 0 }
+/* First import check: its one-line "runs as" takes two lines' height, so the
+   dashed rules line up across the top row with the digest's two lines. */
+.imports .runs { min-height: 45px }
+.slot .run { position: absolute; top: -2px; left: 0; gap: 6px; height: 30px; padding: 0 14px; border-radius: 99px; font-size: 12.5px }
+
+/* The pointer: whoever pressed Run now. Out of sight to start. */
+.cursor { position: absolute; top: 0; left: 0; z-index: 5; opacity: 0; transform: translate(652px, 480px); filter: drop-shadow(0 2px 3px rgb(20 20 19 / .28)); transition-delay: 0s, var(--v-quick) }
+.press { display: block; transform-origin: 2px 2px }
+.press path { fill: var(--ink); stroke: var(--paper); stroke-width: 1.3; stroke-linejoin: round }
+@keyframes press { 50% { transform: scale(.84) } }
+@keyframes pressed { 30% { background: var(--ink-2) } }
+
+/* 1 · Monday, 09:00: the digest's schedule fires, and it runs */
+.root[data-b1] .digest .fired { opacity: 1 }
+.root[data-b1] .digest .dot { background: var(--ok); box-shadow: var(--ran-halo); transition-delay: var(--v-move) }
+.root[data-b1] .digest .runs span { color: var(--ink-2); transition-delay: var(--v-move) }
+/* 2 · a row for Harbor's first file lands in imports, and the check runs */
+.root[data-b2] .row { opacity: 1; transform: none; transition-delay: 0s }
+.root[data-b2] .imports .dot { background: var(--ok); box-shadow: var(--ran-halo); transition-delay: var(--v-move) }
+.root[data-b2] .imports .runs span { color: var(--ink-2); transition-delay: var(--v-move) }
+/* 3 · a newsletter stops at the condition and greys; nothing runs */
+.root[data-b3] .refused { opacity: 1; transform: none; color: var(--ink-3); border-color: var(--line-2); box-shadow: none; transition-delay: 0s, 0s, calc(var(--v-move) + var(--v-quick)), calc(var(--v-move) + var(--v-quick)), calc(var(--v-move) + var(--v-quick)) }
+/* 4 · it goes; Harbor's question comes to the condition, passes with a
+       tick, and that one runs */
+.root[data-b4] .refused { opacity: 0; transition-delay: 0s }
+.root[data-b4] .passing { opacity: 1; transform: none; transition-delay: 0s }
+.root[data-b4] .tick { opacity: 1; transition-delay: var(--v-move) }
+.root[data-b4] .passed { transform: translateY(var(--drop)); transition-delay: calc(var(--v-move) + var(--v-quick) / 2) }
+.root[data-b4] .email .dot { background: var(--ok); box-shadow: var(--ran-halo); transition-delay: calc(var(--v-move) + var(--v-quick) * 2) }
+.root[data-b4] .email .runs span { color: var(--ink-2); transition-delay: calc(var(--v-move) + var(--v-quick) * 2) }
+/* 5 · someone presses Run now on Training reminder, and it runs as them */
+.root[data-b5] .cursor { opacity: 1; transform: translate(428px, 370px); transition-delay: 0s }
+.root[data-b5] .press { animation: press var(--v-quick) var(--ease) var(--v-move) both }
+.root[data-b5] .run { animation: pressed var(--v-move) var(--ease) var(--v-move) both }
+.root[data-b5] .manual .dot { background: var(--ok); box-shadow: var(--ran-halo); transition-delay: calc(var(--v-move) + var(--v-quick)) }
+.root[data-b5] .manual .runs span { color: var(--ink-2); transition-delay: calc(var(--v-move) + var(--v-quick)) }
+
+/* Reduced motion: the presses and the dots this module times itself stay
+   still too (the dots' own transition outranks the kit's). */
+.root[data-still] .press, .root[data-still] .run { animation: none }
+.root[data-still] .runs .dot { transition: none }

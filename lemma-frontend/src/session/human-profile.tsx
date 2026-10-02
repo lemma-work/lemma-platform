@@ -15,6 +15,12 @@ import { UserIcon, SettingsIcon } from "@/ui/icons";
  *
  *  It takes the opening as a callback because there is one settings modal and
  *  the shell holds it.
+ *
+ *  Merging the doors cost the word, though. In the rail this is a bare
+ *  initials circle, and nobody looking for connectors or billing reads a face
+ *  as "settings" — so the face carries a gear in its corner, the way a teammate
+ *  face carries its badge, and names itself Settings in the rail's own tip.
+ *  Still one door; now it says what it opens.
  */
 export function HumanProfile({ compact = false, onOpen }: { compact?: boolean; onOpen: () => void }) {
     const sample = source.label === "sample";
@@ -30,8 +36,12 @@ export function HumanProfile({ compact = false, onOpen }: { compact?: boolean; o
         <button
             className="human-profile"
             onClick={onOpen}
-            title={compact ? name + " · Settings" : "Account and settings"}
-            aria-label="Account and settings"
+            /* The rail draws its tip from these rather than a native title,
+               which is slow, unstyled and would double the tip. */
+            data-tip="Settings"
+            data-tip-line={name + " · people, connectors, models, billing"}
+            title={compact ? undefined : "Settings"}
+            aria-label={"Settings — " + name}
             aria-haspopup="dialog"
         >
             <span className="human-avatar">{user.data || sample ? initials : <UserIcon size={24} />}</span>
@@ -39,7 +49,7 @@ export function HumanProfile({ compact = false, onOpen }: { compact?: boolean; o
                 <span>{name}</span>
                 <small>{email ?? (user.isPending ? "Loading account…" : "View account")}</small>
             </span>
-            <SettingsIcon size={17} className="human-profile__chevron" />
+            <span className="human-profile__chevron human-profile__gear" aria-hidden="true"><SettingsIcon size={17} /></span>
         </button>
     );
 }

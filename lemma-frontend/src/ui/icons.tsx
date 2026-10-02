@@ -33,6 +33,8 @@ export {
     Eye as ShowIcon, EyeSlash as HideIcon,
     // The space's home, and the presentation starter on it.
     House as HomeIcon, PresentationChart as SlidesIcon, Play as PlayIcon,
+    // A space's group chats.
+    ChatsCircle as GroupsIcon,
     // An empty Files list's way in, and the help menu's three doors: the
     // tour, the documentation and what changed.
     UploadSimple as UploadIcon, Compass as TourIcon, BookOpenText as DocsIcon,

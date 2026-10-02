@@ -218,11 +218,17 @@ async def reachable_channels(
 
 
 async def check_notifications(
-    *, pod_id: UUID, notification_ids: list[UUID]
+    *,
+    pod_id: UUID,
+    conversation_id: UUID | None,
+    notification_ids: list[UUID],
 ) -> list[dict]:
+    """The status of notifications ``conversation_id`` sent, and their answers."""
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         notifications = await _service(uow).notifications.list_by_ids(
-            pod_id=pod_id, notification_ids=notification_ids
+            pod_id=pod_id,
+            origin_conversation_id=conversation_id,
+            notification_ids=notification_ids,
         )
         return [
             {
@@ -270,6 +276,9 @@ async def open_notifications_for_conversation(conversation_id: UUID) -> list[dic
             "expects_response": n.expects_response,
             "responds_through_action": n.responds_through_action,
             "action": n.action,
+            "from_outside": n.from_outside,
+            "origin_group_title": n.origin_group_title,
+            "asked_by_name": n.asked_by_name,
         }
         for n in notifications
     ]
@@ -304,7 +313,9 @@ async def record_notification_response(
     responder_user_id: UUID,
     summary: str,
     data: dict | None = None,
+    owner_confirmed: bool = False,
 ) -> None:
+    """Record the recipient's answer; see ``NotificationService.respond``."""
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         await _service(uow).respond(
             pod_id=pod_id,
@@ -312,8 +323,34 @@ async def record_notification_response(
             responder_user_id=responder_user_id,
             summary=summary,
             data=data,
+            owner_confirmed=owner_confirmed,
         )
         await uow.commit()
+
+
+async def outside_question(
+    *, pod_id: UUID, notification_id: UUID, recipient_user_id: UUID
+) -> dict[str, str | None] | None:
+    """A question passed on from outside the pod, as its recipient's agent sees it.
+
+    ``None`` when the notification is not one, or is not this person's -- so a
+    caller cannot learn anything about somebody else's asks by id.
+    """
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        notification = await _service(uow).notifications.get(notification_id)
+    if (
+        notification is None
+        or notification.pod_id != pod_id
+        or not notification.from_outside
+        or notification.recipient_user_id != recipient_user_id
+    ):
+        return None
+    return {
+        "notification_id": str(notification.id),
+        "group_title": notification.origin_group_title,
+        "asked_by_name": notification.asked_by_name,
+        "status": notification.status.value,
+    }
 
 
 __all__ = [
@@ -321,6 +358,7 @@ __all__ = [
     "check_notifications",
     "notification_form_action",
     "open_notifications_for_conversation",
+    "outside_question",
     "reachable_channels",
     "record_notification_response",
     "resolve_recipient",

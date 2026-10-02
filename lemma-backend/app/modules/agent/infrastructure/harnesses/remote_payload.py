@@ -24,6 +24,7 @@ from app.modules.workspace.contracts.host_execution import (
     host_reachable_addresses,
 )
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
+from app.modules.agent.domain.outsiders import OutsiderRunRefused
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -174,6 +175,13 @@ async def mcp_payload[DepsT: AgentContext](
     returning 401, which the agent experiences as its tools quietly vanishing.
     Publishing the real expiry lets the dispatcher bound the run by it instead.
     """
+    if getattr(ctx, "answers_outsider", False):
+        # Dispatch keeps such a run in this process (services/outsider_runtime).
+        # Were one to arrive here, the token below would be the member's, given
+        # to a shell a stranger in the group can steer -- so it is refused twice.
+        raise OutsiderRunRefused(
+            "A run answering people outside the space cannot run on Agent Host."
+        )
     workspace_service = workspace_service or WorkspaceSandboxService()
     try:
         workspace_env = await workspace_service.get_env_vars(

@@ -1,5 +1,6 @@
 import type { Surface } from "./types";
 import { isPodDefaultAgent } from "./agent-names";
+import { isGroupPlatform } from "./groups";
 import type { AgentSurfaceResponse, SurfaceUpdateRequest } from "lemma-sdk";
 
 export interface SurfaceDraft {
@@ -10,6 +11,9 @@ export interface SurfaceDraft {
     domains: string;
     emails: string;
     allowSend: boolean;
+    /** The bot answers people outside the space, from what the space made
+     *  Public, in every group it is in. On unless it was switched off. */
+    answersOutsiders: boolean;
 }
 
 export const routesSupported = (platform: string) => ["SLACK", "TEAMS"].includes(platform);
@@ -26,6 +30,7 @@ export function surfaceDraft(surface: AgentSurfaceResponse): SurfaceDraft {
         domains: (surface.config.identity?.allowed_domains ?? []).join(", "),
         emails: (surface.config.identity?.allowed_email_addresses ?? []).join(", "),
         allowSend: surface.config.send_policy?.allow_send ?? false,
+        answersOutsiders: surface.config.groups?.answers_outsiders !== false,
     };
 }
 
@@ -40,6 +45,9 @@ export function surfacePatch(platform: string, draft: SurfaceDraft): SurfaceUpda
             ...(routesSupported(platform) ? { channels: draft.channels } : {}),
             ...(filtersSupported(platform) ? { identity: { allowed_domains: split(draft.domains), allowed_email_addresses: split(draft.emails) } } : {}),
             send_policy: { allow_send: draft.allowSend },
+            /* Only where the bot can be in a group; elsewhere the section is
+               left as it is. */
+            ...(isGroupPlatform(platform) ? { groups: { answers_outsiders: draft.answersOutsiders } } : {}),
         },
     };
 }

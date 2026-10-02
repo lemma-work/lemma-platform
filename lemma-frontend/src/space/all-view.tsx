@@ -16,6 +16,7 @@ import { emptyFor, type EmptyPlace } from "./empty-copy";
 import { SpaceEmpty, type EmptyHandlers } from "./empty-state";
 import { AppIdeas } from "@/stage/apps";
 import { guideTitle } from "@/tour/guides";
+import { readableName } from "@/library/reading";
 
 /** One row, whatever it is: a page, an app, a table or a file. */
 type Row = {
@@ -58,7 +59,7 @@ function Faces({ people }: { people: Member[] }) {
 }
 
 function AccessCell({ access, people, space }: { access: Access; people: Member[]; space: string }) {
-    if (access === "public") return <span className="all__access all__access--public"><GlobeIcon size={15} /> Anyone with the link</span>;
+    if (access === "public") return <span className="all__access all__access--public" title={"People outside " + space + " also get answers from it in its groups"}><GlobeIcon size={15} /> Anyone with the link</span>;
     if (access === "personal") return <span className="all__access"><LockIcon size={15} /> Only you</span>;
     if (access === "restricted") return <span className="all__access"><PeopleIcon size={15} /> Some people</span>;
     const count = people.length;
@@ -71,7 +72,7 @@ function AccessCell({ access, people, space }: { access: Access; people: Member[
     );
 }
 
-const TITLES: Record<SpaceView, string> = { home: "Home", chats: "Chats", all: "All", pages: "Pages", apps: "Apps", tables: "Tables", files: "Files", workflows: "Workflows", settings: "Settings", about: "About" };
+const TITLES: Record<SpaceView, string> = { home: "Home", chats: "Chats", all: "All", pages: "Pages", apps: "Apps", tables: "Tables", files: "Files", workflows: "Workflows", groups: "Groups", settings: "Settings", about: "About" };
 const KIND_NAME: Record<Row["kind"], string> = { page: "Page", app: "App", table: "Table", file: "File", folder: "Folder" };
 
 /** "8h", "2d", "14 Sept": short, the way Space's list says it. */
@@ -222,6 +223,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
             home: [],
             chats: [],
             workflows: [],
+            groups: [],
             settings: [],
             about: [],
         };
@@ -246,7 +248,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
         }
         if (wanted.has("table")) {
             for (const item of tables.data?.items ?? []) {
-                out.push({ key: "table:" + item.name, kind: "table", name: item.name, detail: item.detail, updated: item.updated || null, access: accessOf(item.visibility, item.rls), rls: item.rls, open: () => onOpenTable(item.name) });
+                out.push({ key: "table:" + item.name, kind: "table", name: readableName(item.name), detail: item.detail, updated: item.updated || null, access: accessOf(item.visibility, item.rls), rls: item.rls, open: () => onOpenTable(item.name) });
             }
         }
         const needle = query.trim().toLowerCase();

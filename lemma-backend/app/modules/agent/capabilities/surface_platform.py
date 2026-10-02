@@ -21,11 +21,14 @@ from app.modules.agent.domain.surface_prompts import surface_platform_guidance
 class SurfacePlatformCapability(AbstractCapability[object]):
     """Append per-platform guidance to the cached system-prompt prefix."""
 
-    def __init__(self, platform: str) -> None:
+    def __init__(self, platform: str, *, answers_outsider: bool = False) -> None:
         self._platform = platform
+        self._answers_outsider = answers_outsider
 
     def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
         return "surface_platform"
 
     def get_instructions(self) -> str:
-        return surface_platform_guidance(self._platform)
+        return surface_platform_guidance(
+            self._platform, answers_outsider=self._answers_outsider
+        )

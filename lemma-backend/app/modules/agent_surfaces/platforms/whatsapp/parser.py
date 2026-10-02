@@ -10,6 +10,7 @@ from app.modules.agent_surfaces.platforms.common import (
 from dataclasses import dataclass
 from typing import Any
 
+from app.modules.agent_surfaces.domain.addressing import mentions_number
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -132,6 +133,18 @@ def _undeliverable_notice(msg: dict[str, Any]) -> str:
     )
 
 
+def _replies_to(msg: dict[str, object], business_number: str) -> bool:
+    """Whether the message quotes one the business sent.
+
+    ``context.from`` names who wrote the quoted message; in a one-to-one chat it
+    is the business's display number. Undocumented for groups -- read where it
+    would be, and absent it says nothing.
+    """
+    quoted_from = payload_text(payload_section(msg, "context"), "from")
+    digits = "".join(char for char in business_number if char.isdigit())
+    return bool(digits) and "".join(c for c in quoted_from if c.isdigit()) == digits
+
+
 def _envelope(payload: dict[str, Any]) -> _WhatsAppEnvelope | None:
     """The message inside a webhook delivery, or None when it carries none."""
     entry_list = payload.get("entry") or []
@@ -231,6 +244,15 @@ class WhatsAppMessageParser:
         sender_name = (sender.get("wa_id") or "").replace("+", "") or sender_wa_id
         waba_id = envelope.entry.get("id")
         phone_number_id = payload_section(value, "metadata").get("phone_number_id")
+        group_id = payload_text(msg, "group_id").strip()
+        if group_id:
+            return self._group_message(
+                envelope,
+                payload=payload,
+                group_id=group_id,
+                text=message_text,
+                attachments=attachments,
+            )
 
         return ParsedInboundSurfaceEvent(
             platform=self.platform,
@@ -259,6 +281,70 @@ class WhatsAppMessageParser:
                 "attachments": attachments,
                 # Carried so "the file never arrived" is answerable from the
                 # message row, not only from the agent's guess about it.
+                "undeliverable": _is_undeliverable(msg),
+            },
+            raw_payload=payload,
+        )
+
+    def _group_message(
+        self,
+        envelope: _WhatsAppEnvelope,
+        *,
+        payload: dict[str, object],
+        group_id: str,
+        text: str,
+        attachments: list[dict[str, object]],
+    ) -> ParsedInboundSurfaceEvent:
+        """A message somebody wrote in a group the bot is in.
+
+        The group is the channel and the thread: WhatsApp groups have no
+        threads, and each sender still gets a conversation of their own because
+        links are keyed by sender. The reply goes to the group -- never to the
+        sender's own number, which would answer in private a question asked in
+        front of everyone.
+
+        Whether it is for the bot is read from the text: an ``@`` of the
+        business number, or a reply to the bot's own message. Meta documents
+        neither a mention field nor reply context for groups, so both are read
+        where they would be and cost nothing when absent; being named in words
+        is decided in ingress, where the agent's name is known.
+        """
+        msg = envelope.message
+        value = envelope.value
+        metadata = payload_section(value, "metadata")
+        phone_number_id = metadata.get("phone_number_id")
+        business_number = str(metadata.get("display_phone_number") or "")
+        contacts = value.get("contacts") or []
+        sender = contacts[0] if contacts else {}
+        # With business-scoped user ids a participant may come without a phone
+        # number at all, and `from_user_id` is then the only name for them.
+        sender_phone = payload_text(msg, "from").strip() or None
+        sender_id = sender_phone or payload_text(msg, "from_user_id").strip() or None
+        addressed = mentions_number(text, business_number) or _replies_to(
+            msg, business_number
+        )
+        return ParsedInboundSurfaceEvent(
+            platform=self.platform,
+            conversation_type=ConversationType.EXTERNAL_GROUP,
+            tenant_id=envelope.entry.get("id"),
+            external_channel_id=group_id,
+            external_thread_id=group_id,
+            external_message_id=msg.get("id"),
+            sender_external_user_id=sender_id,
+            sender_phone=sender_phone,
+            sender_display_name=payload_section(sender, "profile").get("name")
+            or sender_id,
+            message_text=text,
+            is_dm=False,
+            mentioned_agent=addressed,
+            should_start_conversation=addressed,
+            reply_target={"phone_number_id": phone_number_id, "group_id": group_id},
+            metadata={
+                "waba_id": envelope.entry.get("id"),
+                "phone_number_id": phone_number_id,
+                "group_id": group_id,
+                "contacts": contacts,
+                "attachments": attachments,
                 "undeliverable": _is_undeliverable(msg),
             },
             raw_payload=payload,

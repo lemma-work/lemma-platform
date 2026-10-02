@@ -30,6 +30,17 @@ from app.modules.agent_surfaces.services.surface_candidates import (
     admitted_surfaces,
     fan_in_candidates,
 )
+from app.modules.agent_surfaces.services.delivery_claims import (
+    hand_back_delivery_claim,
+    take_delivery_claim,
+)
+from app.modules.agent_surfaces.services.created_groups import created_group_surfaces
+from app.modules.agent_surfaces.services.group_ingress import (
+    logged_and_addressed,
+    own_bot_group_message,
+)
+from app.modules.agent_surfaces.services.group_names import spoken_to_by_name
+from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
     arrival_number,
@@ -39,7 +50,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
-    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
@@ -98,32 +108,6 @@ async def release_ingress_claim(
         external_channel_id=context.event.external_channel_id,
         external_thread_id=context.event.external_thread_id,
         external_message_id=context.event.external_message_id,
-    )
-
-
-def _needs_mention_verification(
-    platform: str,
-    parsed: ParsedInboundSurfaceEvent,
-    surfaces: list[AgentSurfaceEntity],
-) -> bool:
-    """Whether a group message might be an @mention of this bot.
-
-    The parser records any @username / text_mention entities but does not set
-    `mentioned_agent` for a generic mention -- a `mention` entity is a plain
-    @username and does not say *which* user was meant. Settling that costs a
-    getMe call, so it is only worth making when the message could plausibly be
-    for us, and it has to happen before `allows_inbound_event` filters the event
-    out.
-    """
-    if platform != SurfacePlatform.TELEGRAM.value:
-        return False
-    if parsed.is_dm or parsed.mentioned_agent or not surfaces:
-        return False
-    metadata = parsed.metadata or {}
-    return bool(
-        metadata.get("mentioned_usernames")
-        or metadata.get("text_mention_user_ids")
-        or "@" in (parsed.message_text or "")
     )
 
 
@@ -200,6 +184,16 @@ class SurfaceInboundMixin:
                 router=self.router,
                 surfaces=self.surface_repository,
             )
+        created = await created_group_surfaces(
+            self.uow,
+            self.surface_repository,
+            platform=platform,
+            parsed=parsed,
+            receiver_surface_ids=receiver_surface_ids,
+        )
+        if created == []:
+            return None  # a group the bot created, but not for any pod here
+        surfaces = created or surfaces
         if not surfaces:
             surfaces = await self.surface_repository.list_active_for_routing(
                 platform,
@@ -208,10 +202,13 @@ class SurfaceInboundMixin:
             )
         if receiver_surface_ids is not None and not surfaces:
             return None
-
-        if _needs_mention_verification(platform, parsed, surfaces):
-            async with connection_released(self.uow.session):  # Telegram API
-                parsed = await self.router.enrich_telegram_mention(parsed, surfaces[0])
+        parsed = await logged_and_addressed(
+            self.uow,
+            router=self.router,
+            surfaces=surfaces,
+            parsed=parsed,
+            platform=platform,
+        )
 
         candidates = await admitted_surfaces(
             surfaces, parsed, links=self.conversation_link_repository
@@ -278,6 +275,11 @@ class SurfaceInboundMixin:
             # runs — an unknown sender gets the signup link, a signed-up
             # non-member gets the pod-access link (see _prepare_surface_context).
             matched_surface = identity_surface
+        if matched_surface is None and not parsed.is_dm:
+            # In none of these pods: answered only where a group welcomes them.
+            matched_surface = await self._outsiders().surface_for(
+                candidates, parsed, sender
+            )
 
         if matched_surface is None:
             return await self._prepare_unrouted_platform_context(
@@ -312,6 +314,15 @@ class SurfaceInboundMixin:
 
         async with connection_released(self.uow.session):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
+        if parsed is not None and not parsed.is_dm:
+            parsed = await own_bot_group_message(
+                self.uow,
+                router=self.router,
+                surface_repository=self.surface_repository,
+                links=self.conversation_link_repository,
+                surface=surface,
+                parsed=parsed,
+            )
         if parsed is None:
             return None
 
@@ -411,8 +422,19 @@ class SurfaceInboundMixin:
         # outgoing replies and loop, re-sending the signup/agent reply forever.
         if self.router.is_self_addressed(surface=surface, parsed=parsed):
             return None
+        # Copied on a thread is not asked (see `email_recipients`), unless a
+        # line speaks to the agent by a name people call it -- which needs the
+        # body, so it is asked here.
+        if (
+            parsed.platform.is_email
+            and not parsed.should_start_conversation
+            and not await spoken_to_by_name(self.uow, surface, parsed.message_text)
+        ):
+            return None
 
-        if claim_delivery and not await self._claim_delivery(surface, parsed):
+        if claim_delivery and not await take_delivery_claim(
+            self.uow, self.event_dedup_store, surface, parsed
+        ):
             return None
 
         # The claim is spent, and everything from here can still fail (sender
@@ -435,51 +457,9 @@ class SurfaceInboundMixin:
             return context
         finally:
             if claim_delivery and not prepared:
-                await self._release_delivery(surface, parsed)
-
-    async def _claim_delivery(
-        self, surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
-    ) -> bool:
-        """Take the delivery claim, or say this message was already taken.
-
-        Claimed only with the message in hand: claiming earlier burns it on an
-        attempt that had no body, so the retry is discarded as a duplicate.
-        Enrichment also changes the ids this keys on. Replay re-runs a message
-        the claim already burned, so it asks for the claim to be skipped; every
-        live delivery still takes it.
-        """
-        # The connection goes back for the claim itself: it is a Redis round
-        # trip, and only reads have happened by here -- the identity upsert and
-        # the conversation link come after, so this release is real rather than
-        # a `safe_to_release` no-op.
-        async with connection_released(self.uow.session):
-            claimed = await self.event_dedup_store.claim_message(
-                surface_installation_id=surface.id,
-                platform=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_message_id=parsed.external_message_id,
-            )
-        if not claimed:
-            logger.debug(
-                "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed",
-                surface_type=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-            )
-        return claimed
-
-    async def _release_delivery(
-        self, surface: AgentSurfaceEntity, parsed: ParsedInboundSurfaceEvent
-    ) -> None:
-        # Redis: the connection goes back where nothing was written.
-        async with connection_released(self.uow.session):
-            await self.event_dedup_store.release_message(
-                surface_installation_id=surface.id,
-                platform=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_message_id=parsed.external_message_id,
-            )
+                await hand_back_delivery_claim(
+                    self.uow, self.event_dedup_store, surface, parsed
+                )
 
     async def _prepare_claimed_surface_context(
         self,
@@ -504,6 +484,22 @@ class SurfaceInboundMixin:
                 parsed=parsed,
                 credentials=credentials,
                 installation_id=surface.account_id or surface.id,
+            )
+        outsiders = self._outsiders()
+        group = await outsiders.group_welcoming(
+            surface=surface, parsed=parsed, sender=resolved_user
+        )
+        if group is not None:
+            route = await self.router.resolve_route(surface=surface, parsed=parsed)
+            if route is None:
+                return None
+            return await outsiders.prepare(
+                surface=surface,
+                parsed=parsed,
+                sender=resolved_user,
+                group=group,
+                route=route,
+                binder=self.binder,
             )
         user_id = resolved_user.internal_user_id
         refusal = await self._sender_refusal(
@@ -541,6 +537,10 @@ class SurfaceInboundMixin:
             conversation_id=link.conversation_id,
             created_conversation_title=created_conversation_title,
         )
+
+    def _outsiders(self) -> OutsiderDoor:
+        """Built per use: it holds nothing but this session and the router's port."""
+        return OutsiderDoor(uow=self.uow, membership=self.router.pod_membership_port)
 
     async def _sender_refusal(
         self,

@@ -99,10 +99,21 @@ export type TurnItem =
      *  the sources behind an answer, a run that is asleep. */
     | { kind: "tool-card"; id: string; toolCallId?: string; card: ToolCard };
 
+/** A person's message. `note` marks one written to the bot alone, whose answer
+ *  stays in Lemma; `from` names who wrote one that came in from a chat
+ *  platform — in a group, not necessarily the person reading. */
+export interface HumanMessage {
+    id: string;
+    text: string;
+    at: string;
+    note?: boolean;
+    from?: string;
+}
+
 export interface Turn {
     id: string;
     day?: string;
-    human?: { id: string; text: string; at: string };
+    human?: HumanMessage;
     /** Reasoning and tool calls, folded behind one line. */
     notes: Note[];
     /** Speech, cards and pauses, in the order they happened. */
@@ -210,6 +221,21 @@ export function argSummary(args: unknown): string {
 
 function textOf(message: RawMessage): string {
     return (message.text ?? message.content ?? "").trim();
+}
+
+/** What a person's message says about itself: a note to the bot alone, and —
+ *  for one that came in from a chat platform — who wrote it. Keys are added
+ *  only when they apply, so a plain message stays `{ id, text, at }`. */
+export function humanMarks(metadata: Record<string, unknown> | null | undefined): Pick<HumanMessage, "note" | "from"> {
+    const meta = metadata ?? {};
+    const marks: Pick<HumanMessage, "note" | "from"> = {};
+    if (meta.private_note === true) marks.note = true;
+    const named = [meta.sender_display_name, meta.sender_phone]
+        .find((value): value is string => typeof value === "string" && value.trim() !== "");
+    const arrived = typeof meta.surface_platform === "string" && meta.surface_platform.trim() !== "";
+    if (named) marks.from = named.trim();
+    else if (arrived) marks.from = "Someone";
+    return marks;
 }
 
 export interface Streaming {
@@ -483,7 +509,12 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
 
         if (message.role === "user") {
             current = open(message);
-            current.human = { id: message.id ?? "u" + turns.length, text, at: clockOf(message.created_at) };
+            current.human = {
+                id: message.id ?? "u" + turns.length,
+                text,
+                at: clockOf(message.created_at),
+                ...humanMarks(message.metadata),
+            };
             continue;
         }
 
@@ -523,13 +554,23 @@ export function openInteraction(turns: Turn[]): Interaction | null {
  *  in. What both share is that the composer has to say the run is stopped —
  *  a paused sign-in looked exactly like an idle conversation, which is how a
  *  blocked run could sit there all afternoon with nobody told. */
-export function openSignIn(turns: Turn[]): SignInAsk | null {
+export function openSignIn(turns: Turn[]): OpenSignIn | null {
     for (let index = turns.length - 1; index >= 0; index -= 1) {
         const items = turns[index].items;
         for (let item = items.length - 1; item >= 0; item -= 1) {
             const entry = items[item];
-            if (entry.kind === "tool-card" && entry.card.kind === "sign-in" && !entry.card.resolved) return entry.card;
+            if (entry.kind === "tool-card" && entry.card.kind === "sign-in" && !entry.card.resolved) {
+                return { id: entry.id, toolCallId: entry.toolCallId, card: entry.card };
+            }
         }
     }
     return null;
+}
+
+/** An open sign-in, with what it takes to answer it and to lift it out of the
+ *  transcript onto the shelf above the composer. */
+export interface OpenSignIn {
+    id: string;
+    toolCallId?: string;
+    card: SignInAsk;
 }

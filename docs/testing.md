@@ -109,6 +109,11 @@ and a number that moved because somebody spent money on a manual run is not.
 
 ### What may run in front of the merge button
 
+The backend shard that owns Apps also installs the frontend's locked Playwright
+dependency and Chromium. Its hosted HTTPS browser tests open private apps
+directly and in a workspace frame -- sign-in, HTML deep links, concurrent first
+visits, blocked cookies -- against real Postgres, Redis and SuperTokens.
+
 A pull request waits for the backend e2e lane, so a test in it spends every
 reviewer's time, every time. There is a budget: **45 seconds per test**,
 enforced per shard by `scripts/e2e_durations.py --check` against

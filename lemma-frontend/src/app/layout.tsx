@@ -20,6 +20,7 @@ import "@/styles/tool-cards.css";
 import "@/styles/document.css";
 import "@/styles/space-tokens.css";
 import "@/styles/space.css";
+import "@/styles/groups.css";
 import "@/styles/empty.css";
 import "@/styles/tour.css";
 import "@/styles/space-mobile.css";

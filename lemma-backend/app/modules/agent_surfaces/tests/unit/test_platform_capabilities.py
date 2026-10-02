@@ -52,11 +52,12 @@ def test_channel_capable_is_the_platforms_whose_history_we_can_read():
     rule -- which is the whole reason the conformance test in
     `test_adapter_contract.py` now checks the claim against the adapter.
 
-    WhatsApp is absent for the same reason it was always absent: no
-    `fetch_thread_context`, so there is no history to promise.
+    WhatsApp has no `fetch_thread_context` and never will -- Meta hands back
+    no group history -- and is here anyway since its bot began creating
+    groups: what was said in a group it created is in the pod's own log.
     """
     channel = {p for p, c in PLATFORM_CAPABILITIES.items() if c.is_channel_capable}
-    assert channel == {"SLACK", "TEAMS", "TELEGRAM"}
+    assert channel == {"SLACK", "TEAMS", "TELEGRAM", "WHATSAPP"}
 
 
 def test_channel_history_is_the_platforms_that_can_fetch_a_window():

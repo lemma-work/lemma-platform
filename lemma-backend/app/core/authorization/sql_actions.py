@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
@@ -101,6 +102,8 @@ def allowed_actions_expr(
         return _anonymous_allowed_actions_expr(
             resource_actions=resource_actions,
             visibility_col=visibility_col,
+            pod_id_col=pod_id_col,
+            pod_id=ctx.pod_id,
         )
 
     if (
@@ -195,14 +198,26 @@ def _anonymous_allowed_actions_expr(
     *,
     resource_actions: Sequence[str],
     visibility_col,
+    pod_id_col=None,
+    pod_id: UUID | None = None,
 ) -> ColumnElement:
+    """Public reads, and only this pod's when the context is pinned to one.
+
+    The same pin `Authorizer._is_public_read` applies row by row, so a listing
+    and a single read cannot disagree about what an outsider's run may see.
+    """
     public_read_actions = [
         action for action in resource_actions if action.endswith(".read")
     ]
     if visibility_col is None or not public_read_actions:
         return _text_array([])
+    is_public = visibility_col == "PUBLIC"
+    if pod_id is not None:
+        if pod_id_col is None:
+            return _text_array([])
+        is_public = and_(is_public, pod_id_col == pod_id)
     return case(
-        (visibility_col == "PUBLIC", _text_array(public_read_actions)),
+        (is_public, _text_array(public_read_actions)),
         else_=_text_array([]),
     )
 

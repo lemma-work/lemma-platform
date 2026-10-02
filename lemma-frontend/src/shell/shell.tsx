@@ -29,6 +29,8 @@ import { WorkflowPage } from "@/space/workflow-page";
 import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
 import { SettingsPage, type SettingsSection as SpaceSettingsSection } from "@/space/settings-page";
 import { WorkflowsPage } from "@/space/workflows-page";
+import { GroupsPage } from "@/space/groups-page";
+import { GroupPage } from "@/space/group-page";
 import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
 import { RunPage } from "@/space/run-page";
@@ -38,7 +40,7 @@ import { TeammatesPage } from "@/space/teammates-page";
 import { owedFrom } from "@/space/teammates";
 import { byAge, gatherAsked } from "@/thread/waiting-on-you";
 import type { SpaceView } from "@/data";
-import { FloatingChat, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
+import { FloatingChat, moveDocThread, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
 import type { FileContent, LibraryItem, Tab } from "@/data";
 import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
@@ -47,6 +49,7 @@ import { isUnauthorized } from "@/session/auth-state";
 import { AI_MATE, NEW_MATE } from "@/copy";
 import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { renamePage } from "@/docpages/rename";
+import { recordMove } from "@/docpages/moves";
 import { moveComments } from "@/docpages/comments/store";
 import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
@@ -91,6 +94,7 @@ import { tourStops, type Stop } from "@/tour/stops";
 import { guideFor, placeOf } from "@/tour/guides";
 import { PlaceGuide } from "@/tour/place-guide";
 import { atHome, offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
+import { humanizeName } from "@/schedule/schedules";
 
 /** How long a tab takes to get out of the way. Matches `tab-out` in the
  *  stylesheet; the wait and the animation have to be one number or the row
@@ -119,6 +123,8 @@ function homeListOf(tab: Tab): string | null {
         case "run":
         case "workflow":
             return "space:workflows";
+        case "group":
+            return "space:groups";
         default:
             return null;
     }
@@ -133,7 +139,7 @@ function readJson<T>(key: string, fallback: T): T {
     }
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
@@ -563,6 +569,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         : activeTab?.kind === "record" ? { kind: "table", name: activeTab.table, label: readableName(activeTab.table) }
         : null;
     const [shareOpen, setShareOpen] = useState(false);
+    /* Share opened to add somebody — a group page's Invite. */
+    const [shareAdding, setShareAdding] = useState(false);
     const [settingsSection, setSettingsSection] = useState<SpaceSettingsSection>("agents");
     const shareSubject: ShareSubject = !chatResource ? { kind: "space" }
         : chatResource.kind === "file" ? { kind: "file", path: chatResource.name, label: chatResource.label }
@@ -704,7 +712,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     );
 
     const openRun = useCallback(
-        (runId: string, label: string) => openTab({ id: "run:" + runId, kind: "run", label: label === "Workflow run" ? label : label + " · run", runId }),
+        (runId: string, label: string) => openTab({ id: "run:" + runId, kind: "run", label: label === "Workflow run" ? label : humanizeName(label) + " · run", runId }),
         [openTab],
     );
     /* A tab rebuilt from an address knows only its id; the page it shows
@@ -721,7 +729,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         [pod],
     );
     const openWorkflow = useCallback(
-        (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: name, name }),
+        (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: humanizeName(name), name }),
+        [openTab],
+    );
+    /* A group opens on its own page, with Groups one step back. */
+    const openGroup = useCallback(
+        (group: { id: string; title: string | null }) => openTab({ id: "group:" + group.id, kind: "group", label: group.title || "Group", groupId: group.id }, "space:groups"),
         [openTab],
     );
 
@@ -771,6 +784,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             moveComments: (a, b) => moveComments(podId, a, b),
         }, from, title);
         if (to === from) return from;
+        /* Before the tab moves, so the chat beside it finds its conversation
+           under the new name. A failure costs the chat, never the rename. */
+        if (source.label === "live") await moveDocThread(podId, from, to).catch(() => undefined);
+        void queryClient.invalidateQueries({ queryKey: ["resource-thread", podId, "file"] });
+        recordMove(podId, from, to);
         const was = queryClient.getQueryData<FileContent>(["file", podId, from]);
         if (was) queryClient.setQueryData<FileContent>(["file", podId, to], { ...was, path: to, name: to.slice(to.lastIndexOf("/") + 1) });
         const oldId = "file:" + from;
@@ -890,7 +908,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
         const known = allTabs.some((tab) => tab.id === wanted);
         const rebuilt = known ? null : tabFromId(wanted);
-        if (rebuilt) openTab(rebuilt);
+        /* A group lives in Groups, whichever page linked to it. */
+        if (rebuilt) openTab(rebuilt, rebuilt.kind === "group" ? "space:groups" : undefined);
         /* Only a tab that will exist: one that never arrives would hold the
            mirror still for good. */
         if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
@@ -1781,6 +1800,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onFile={(path) => openFile(path, "space:about")}
                                             onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); }}
+                                            onDeleted={() => goToTeam(null)}
                                         />
                                     ) : tab.view === "chats" ? (
                                         <ChatsPage
@@ -1795,6 +1815,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         />
                                     ) : tab.view === "workflows" ? (
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
+                                    ) : tab.view === "groups" ? (
+                                        <GroupsPage pod={pod} onOpenGroup={openGroup} onConnect={() => setReaching(true)} />
                                     ) : tab.view === "settings" ? (
                                         <SettingsPage
                                             pod={pod}
@@ -1856,6 +1878,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenRun={openRun} onOpenWorkflow={openWorkflow}
                                             onNamed={(name) => renameTab(tab.id, name + " · run")} />
                                     </div>
+                                </div>
+                            ))}
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "group"}> => tab.kind === "group").map(tab => (
+                                <div className="pane group-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    <GroupPage
+                                        pod={pod}
+                                        groupId={tab.groupId}
+                                        visible={isVisible(tab.id)}
+                                        onNamed={(title) => renameTab(tab.id, title)}
+                                        onOpenGroups={() => pickTab("space:groups")}
+                                        onInvite={() => { setShareAdding(true); setShareOpen(true); }}
+                                    />
                                 </div>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "workflow"}> => tab.kind === "workflow").map(tab => (
@@ -1928,7 +1962,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             </main>
 
             {reaching && pod && <ReachSheet pod={pod} onClose={() => setReaching(false)} />}
-            {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} onClose={() => setShareOpen(false)} />}
+            {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} adding={shareAdding} onClose={() => { setShareOpen(false); setShareAdding(false); }} />}
             {touring && pod && <AppTour stops={stops} onPrepare={prepareStop} onClose={endTour} />}
             {guideOpen && guide && !touring && <PlaceGuide guide={guide} onTry={guide.tryIt ? tryGuide : undefined} onClose={() => setGuideOpen(false)} />}
 

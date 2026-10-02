@@ -77,6 +77,13 @@ function markdownOf(editor: Editor): string {
     return (editor as WithMarkdown).storage.markdown.getMarkdown();
 }
 
+/** The page's title: its opening heading, when it opens with one. */
+function titleOf(editor: Editor): string | null {
+    const first = editor.state.doc.firstChild;
+    if (!first || first.type.name !== "heading" || first.attrs.level !== 1) return null;
+    return first.textContent;
+}
+
 export function DocumentEditor({ podId, path, text }: { podId: string; path: string; text: string }) {
     const cache = useQueryClient();
 
@@ -121,8 +128,19 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
        focus — then the file is renamed to follow it (see `commitTitle`). */
     const inTitle = useRef(false);
     const titleCommit = useRef<(() => void) | null>(null);
+    /* The title as it arrived — on opening, and each time the file is read
+       in from elsewhere. Only a title somebody typed here moves the file.
+       Renaming on every blur moved a doc the moment anybody clicked into it
+       and out again whenever its name and heading disagreed (an agent's
+       `q3-report.md` titled "Q3 Report"), and moved it under the doc's own
+       chat when the agent changed the heading — and the chat, its cards and
+       the agent's next edit all still held the old path. */
+    const titleAsFound = useRef<string | null>(null);
 
     const editor = useEditor({
+        onCreate: ({ editor }) => {
+            titleAsFound.current = titleOf(editor);
+        },
         onSelectionUpdate: ({ editor }) => {
             setPick(asPage ? null : placePick(editor, host.current));
             if (!asPage) return;
@@ -247,9 +265,14 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
 
     /** Write what the editor holds now, without waiting for the pause — for
      *  the moments the file has to be current before someone else reads it. */
+    const savedNow = useRef(saved);
+    savedNow.current = saved;
     const flush = useCallback(async () => {
         if (!editor) return;
         const next = joinFrontmatter(frontNow.current, markdownOf(editor));
+        /* Nothing typed, nothing written: the same rule as `onUpdate`, which
+           keeps a read from re-emitting the file in this editor's dialect. */
+        if (next === savedNow.current) return;
         setDraft(next);
         await persist(next);
     }, [editor, persist]);
@@ -259,14 +282,14 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     const commitTitle = useCallback(async () => {
         const page = toolsRef.current;
         if (!editor || !page?.renamePage || renaming.current || forbidden) return;
-        const first = editor.state.doc.firstChild;
-        if (!first || first.type.name !== "heading" || first.attrs.level !== 1) return;
-        const title = first.textContent;
+        const title = titleOf(editor);
+        if (title === null || title === titleAsFound.current) return;
         if (!wantsRename(target.current, title)) return;
         await flush();
         renaming.current = true;
         try {
             target.current = await page.renamePage(target.current, title);
+            titleAsFound.current = title;
         } catch {
             /* The name stays; the page is still saved where it was. */
         } finally {
@@ -454,12 +477,24 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     /* The file changed somewhere else — the agent rewrote it, or another tab
        did. Taken only when there is nothing of yours to lose; a refetch landing
        on a half-typed paragraph would be the app deleting your work on its own
-       initiative. */
+       initiative.
+
+       Only a new `text` counts as a change from elsewhere. An autosave moves
+       `saved` first and the cached file a tick later, and in that render the
+       old text differs from what was just written: comparing the two read
+       the gap as somebody else's edit and put the old words back over the
+       new ones. Remembering the last text this editor took in, and acting
+       only when that moves, leaves the gap alone. */
+    const takenIn = useRef(text);
     useEffect(() => {
-        if (!editor || text === saved || dirty) return;
+        if (!editor || text === takenIn.current || dirty) return;
+        takenIn.current = text;
+        if (text === saved) return;
         setSaved(text);
         setDraft(text);
         editor.commands.setContent(splitFrontmatter(text).body);
+        /* A heading the agent wrote is not one typed here (see `titleAsFound`). */
+        titleAsFound.current = titleOf(editor);
     }, [dirty, editor, saved, text]);
 
     useEffect(() => {

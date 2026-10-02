@@ -248,7 +248,7 @@ function sayForm(config: Record<string, unknown> | null): { detail: string[]; br
 
     const expression = str(config?.assignee_pod_member_id_expression);
     if (expression) detail.push("Assigned by " + expression);
-    else if (str(config?.assignee_pod_member_id)) detail.push("Assigned to one pod member.");
+    else if (str(config?.assignee_pod_member_id)) detail.push("Assigned to one person here.");
 
     return { detail, branches: [] };
 }

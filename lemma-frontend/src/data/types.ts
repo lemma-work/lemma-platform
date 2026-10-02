@@ -1,4 +1,4 @@
-import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, SurfaceUpdateRequest } from "lemma-sdk";
+import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, GroupUpdateRequest, SurfaceUpdateRequest } from "lemma-sdk";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
@@ -101,6 +101,110 @@ export interface Surface {
     email?: string;
     active: boolean;
     status?: string;
+}
+
+/** A group chat a channel's bot is in, and who in the space answers there
+ *  for the people who are not in it. On Telegram a group appears when a
+ *  member who may configure the bot adds it to one; on WhatsApp, where a bot
+ *  cannot be added, the bot opens the group when a member asks it to, and
+ *  people join by its invite link. Nothing here makes one. */
+export interface SurfaceGroup {
+    id: string;
+    /** TELEGRAM, WHATSAPP, … — for the platform's mark. */
+    platform: string;
+    /** What the platform calls it; null when it gave no title. */
+    title: string | null;
+    /** The platform's id for it — null while a WhatsApp group is still being
+     *  made. Nothing is keyed on it. */
+    externalId: string | null;
+    /** How people join a group the bot opened; null until it has one. */
+    inviteLink: string | null;
+    /** Asked for and not yet confirmed by the platform: no id, no link. */
+    pending: boolean;
+    /** The member whose conversation outsiders' questions land in. Null when
+     *  nobody does — a member who has since left the space answers for
+     *  nobody, and the API names nobody. */
+    owner: { userId: string; name: string | null } | null;
+    /** The group's own switch for people outside the space. */
+    answersOutsiders: boolean;
+    /** And a stranger asking today is answered: the group's switch on, a
+     *  member of the space answering for them, and the bot's switch on. */
+    welcomesOutsiders: boolean;
+    /** The bot's own switch, over every group it is in. Off, nobody outside
+     *  the space is answered in any of them, whatever a group's says. */
+    botAnswersOutsiders: boolean;
+    /** The reader may switch people outside on or off here, or take it on:
+     *  they answer for it, nobody in the space does, or they are an admin of
+     *  the space. Anyone else is refused. */
+    canManage: boolean;
+    updatedAt: string;
+}
+
+/** A group chat any bot in the space is in, as the space's Groups page lists
+ *  it: a WhatsApp group, a Telegram group, a Slack channel. The row a
+ *  channel's own list reads (`SurfaceGroup`), plus what only the space-wide
+ *  list knows — which channel it hangs off, who has spoken there, and what its
+ *  people outside the space are waiting on the reader for. */
+export interface Group extends SurfaceGroup {
+    /** The channel (surface) whose bot is in it — how "start" and "link" and
+     *  the channel settings name it. */
+    surfaceName: string;
+    /** A Slack channel shared with another company. Only there is a Slack
+     *  sender outside the space somebody to answer; inside the company they
+     *  are somebody to invite. */
+    sharedExternally: boolean;
+    /** People seen speaking here, in the space and outside it. Null where
+     *  the space keeps no log of the group (Slack keeps its own history). */
+    peopleInSpace: number | null;
+    peopleOutside: number | null;
+    lastMessageAt: string | null;
+    /** Questions its people outside the space passed on to the reader. */
+    waitingForYou: number;
+}
+
+/** Somebody who has spoken in a group. `userId` is the Lemma account their
+ *  chat account is linked to — null for somebody Lemma cannot tell apart
+ *  from a stranger. */
+export interface GroupPerson {
+    name: string;
+    externalId: string | null;
+    userId: string | null;
+    inSpace: boolean;
+}
+
+/** A question people outside the space asked in a group and the bot could
+ *  not answer from what is Public, passed on to the reader. Answered through
+ *  the notification it arrived as; the bot relays the answer in the group. */
+export interface GroupQuestion {
+    notificationId: string;
+    question: string;
+    askedAt: string;
+}
+
+/** One group, opened: the people seen in it and what is waiting on you. */
+export interface GroupDetail extends Group {
+    people: GroupPerson[];
+    waiting: GroupQuestion[];
+}
+
+/** One thing said in a group, as the space's log kept it. */
+export interface GroupLine {
+    authorName: string | null;
+    authorExternalId: string | null;
+    /** In the space when it was read — the bot's own lines count as in. */
+    inSpace: boolean;
+    fromBot: boolean;
+    /** What was said. Null only where the line is withheld. */
+    text: string | null;
+    /** An answer the bot made with another member's own access: theirs
+     *  alone to read. The reader is told whom it answered, never what it was
+     *  made from. */
+    withheld: boolean;
+    at: string;
+    /** On the bot's lines: whom it answered, and whether that was somebody
+     *  outside the space, answered from what is Public. */
+    answeredName: string | null;
+    answeredFromPublic: boolean;
 }
 
 /** A guided setup in flight: Lemma's manager bot makes you a bot of your own.
@@ -231,12 +335,15 @@ export interface SharedLink {
 
 /** A view of the space's own contents, filtered by kind — and `about`, the
  *  teammate the space belongs to. */
-export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "settings" | "about";
+export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "settings" | "about";
 
 export type Tab =
     | { id: string; kind: "space"; label: string; view: SpaceView }
     /** One workflow run: every step, what it waits on, and where it went. */
     | { id: string; kind: "run"; label: string; runId: string }
+    /** One group chat the space's bot is in: who is in it, what is waiting on
+     *  you there, and what was said. */
+    | { id: string; kind: "group"; label: string; groupId: string }
     | { id: string; kind: "workflow"; label: string; name: string }
     /** One bot's page: who it is and your conversation with it. */
     | { id: string; kind: "bot"; label: string; name: string }
@@ -288,6 +395,9 @@ export interface Message {
     tool_call_id?: string | null;
     sequence?: number;
     created_at?: string;
+    /** Who wrote it on a chat platform (`sender_display_name`), and whether
+     *  it was a note to the bot alone (`private_note`). */
+    metadata?: Record<string, unknown> | null;
 }
 
 /** One entry in a teammate's history. */
@@ -320,6 +430,11 @@ export interface Conversation {
     /** Newest run state, so the thread can say what is happening right now. */
     status: string | null;
     messages: Message[];
+    /** Where it lives besides here — `surface_platform`, `channel_name`,
+     *  `audience` — as the backend recorded it. */
+    metadata?: Record<string, unknown> | null;
+    /** The bot answering it, by uuid; absent for the space's own. */
+    agentId?: string | null;
 }
 
 /* ── profile ───────────────────────────────────────────────────────── */
@@ -446,6 +561,11 @@ export interface PodSource {
     /** Change the one line that says what a teammate is for. The pod's
      *  `description`, which hiring fills with the job it was given. */
     describePod(podId: string, description: string): Promise<void>;
+    /** Delete a teammate. A soft delete on the server: the pod stops being
+     *  listed or reachable, its schedules are disarmed, it leaves every channel
+     *  it answered on, and its email address and pooled number are released.
+     *  Repeating it is safe — a second call reports the same success. */
+    deletePod(podId: string): Promise<void>;
     /** Put a picture somewhere the platform will serve it, and hand back the
      *  URL to store in `icon_url`. */
     uploadIcon(file: File): Promise<string>;
@@ -461,6 +581,33 @@ export interface PodSource {
     surfaceSetup(podId: string, name: string): Promise<SurfaceSetupResponse>;
     surfaceChannels(podId: string, name: string): Promise<AvailableSurfaceChannelsResponse>;
     updateSurface(podId: string, name: string, patch: SurfaceUpdateRequest): Promise<void>;
+    /** The groups a channel's bot is in, most recently active first. */
+    listSurfaceGroups(podId: string, surfaceName: string): Promise<SurfaceGroup[]>;
+    /** Switch people outside the space on or off in one group, or take it
+     *  over. Switching them on where nobody answers makes the caller the one
+     *  who does. Returns the group as saved. */
+    updateSurfaceGroup(podId: string, surfaceName: string, groupId: string, change: GroupUpdateRequest): Promise<SurfaceGroup>;
+    /** Every group any bot in the space is in, across its channels. */
+    listGroups(podId: string): Promise<Group[]>;
+    /** One group, with the people seen in it and what is waiting on the
+     *  reader there. */
+    getGroup(podId: string, groupId: string): Promise<GroupDetail>;
+    /** What was said in a group, oldest first. Empty for a Slack channel,
+     *  whose history is Slack's. */
+    groupTimeline(podId: string, groupId: string): Promise<GroupLine[]>;
+    /** Start a WhatsApp group with the space's bot in it, the caller
+     *  answering for its people outside the space. Comes back `pending`:
+     *  WhatsApp confirms it, with its invite link, moments later. */
+    startGroup(podId: string, start: { surfaceName: string; title: string; answersOutsiders: boolean }): Promise<Group>;
+    /** A one-use, hour-long link that opens Telegram's own choose-a-group
+     *  screen and adds the bot to the group picked. */
+    groupLink(podId: string, surfaceName: string): Promise<{ url: string; expiresAt: string }>;
+    /** The same switch and take-over as `updateSurfaceGroup`, by the group's
+     *  id alone. */
+    updateGroup(podId: string, groupId: string, change: GroupUpdateRequest): Promise<Group>;
+    /** Answer a question a group's people outside the space are waiting on
+     *  you for. The bot passes the answer on in the group. */
+    answerGroupQuestion(podId: string, notificationId: string, answer: string): Promise<void>;
     createSurfaceAccount(orgId: string, entry: Connectable, credentials: Record<string, unknown>): Promise<string>;
     /** The one-click path: a Lemma-run identity answers, with no account of
      *  yours. Returns the surface, which already carries the address. */

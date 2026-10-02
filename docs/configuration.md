@@ -462,17 +462,39 @@ origins, not internal service names. Apps that pods publish are served at
 API_URL=https://api.example.com
 FRONTEND_URL=https://app.example.com
 AUTH_FRONTEND_URL=https://app.example.com
+AUTH_WEBSITE_BASE_PATH=/auth
 APP_BASE_DOMAIN=apps.example.com
 SUPERTOKENS_CORE_URL=http://supertokens:3567
 
 CORS_ORIGINS=["https://app.example.com"]
 CORS_ORIGIN_REGEX=
-# Leave the domain blank for a host-only cookie. Set it only when the UI and API
-# are on different subdomains that must share a session.
+# Keep the API session host-only. Private app assets use their own host cookie.
 SESSION_COOKIE_DOMAIN=
 SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_SAME_SITE=lax
 ```
+
+Apps that are not public open at their hosted HTTPS address only for people
+allowed to read them. The address shows a sign-in page that asks the API for a
+one-minute ticket (with the API session cookie, which every app origin may
+already send), then trades it on the app's own origin for a host-only
+`__Host-lemmaAppAccess` cookie. Both are signed with `SECRET_ENCRYPTION_KEY`;
+neither is stored. The cookie opens that app's pages and files and nothing else,
+and lasts 12 hours before the page quietly fetches a new one.
+
+Each private read rechecks that the session behind the cookie is still live,
+the account in good standing and the app permission unchanged, at most every
+`APP_ACCESS_CACHE_TTL_SECONDS` (default and maximum 60; `0` checks every
+request). That is how late a sign-out, a deactivation or a removed share reaches
+an app's files.
+Private files are `Cache-Control: private, no-cache` with an ETag, so browsers
+revalidate every use and shared caches keep nothing.
+
+This needs only what serving apps already needs: the wildcard app host routed to
+the API, credentialed CORS for the app origins, and a sign-in page that honours
+`redirect_uri`. `AUTH_WEBSITE_BASE_PATH` is appended to an `AUTH_FRONTEND_URL`
+with no path of its own. Private apps are not served this way on plain HTTP
+(the desktop), where only public apps open at the app address.
 
 ## Outside MCP clients
 

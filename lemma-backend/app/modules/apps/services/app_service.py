@@ -14,8 +14,6 @@ from app.core.authorization.context import (
     Context,
     ResourceRef,
     ResourceType,
-    ResourceVisibility,
-    normalize_resource_visibility,
 )
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
@@ -534,42 +532,15 @@ class AppService:
         asset_path: str | None,
         request_etag: str | None = None,
         release_ref: str | None = None,
-    ) -> _AssetReadInputs | AppAssetDocument:
-        """DB phase for serving a public (unauthenticated) app asset by slug.
-
-        ``release_ref`` serves a specific release instead of the live one, for
-        the preview host ``<slug>--r7.<app_base_domain>``. See
-        ``AppAssetResolver.preview_url`` for why it is a host and not a prefix.
-        """
-        app = await self.repository.get_by_public_slug(public_slug)
-        if not app:
-            raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
-        # No session reaches this route -- the ingress serves it to anonymous
-        # browsers by host -- so only an app published to everyone belongs here.
-        # Apps default to PUBLIC (see the note on ``AppModel.visibility``), so
-        # this is the whole of what keeps a POD app off its public host; an
-        # unrecognized stored value is not PUBLIC either. Report it as missing
-        # rather than forbidden: a 403 confirms the slug to a caller who guessed.
-        if (
-            normalize_resource_visibility(app.visibility)
-            is not ResourceVisibility.PUBLIC
-        ):
-            raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
-        release = None
-        public_url = self._asset_resolver.public_url(app)
-        if release_ref is not None:
-            from app.modules.apps.services.app_release_service import resolve_preview
-
-            release, public_url = await resolve_preview(
-                self.repository, self._asset_resolver, app, release_ref
-            )
-        return await self._asset_resolver.resolve(
-            app,
-            raise_not_found_name=public_slug,
+        viewer_app_id: UUID | None = None,
+    ) -> _AssetReadInputs | AppAssetDocument | None:
+        """DB phase for an app host's asset; None when the caller may not see it."""
+        return await self._asset_resolver.resolve_by_public_slug(
+            public_slug,
             asset_path=asset_path,
             request_etag=request_etag,
-            public_url=public_url,
-            release=release,
+            release_ref=release_ref,
+            viewer_app_id=viewer_app_id,
         )
 
     async def resolve_source_archive(

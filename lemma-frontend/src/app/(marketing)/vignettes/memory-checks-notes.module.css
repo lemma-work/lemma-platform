@@ -1,0 +1,74 @@
+/* Before it replies, it checks its notes, beat by beat. Base styles are the
+   opening frame; each `.root[data-bN]` rule is what changes from beat N on,
+   written in beat order so a later beat wins over an earlier one. With
+   reduced motion every beat is on, so the last rules here are the finished
+   picture: the question, the four indexes with two lines lit, the open note
+   and the reply. */
+
+.root { --v-step: 120ms }
+
+.stage { padding: 0 }
+
+/* ── The conversation, left ─────────────────────────────────────────── */
+.chat { position: absolute; top: 0; bottom: 0; left: 0; width: 224px }
+
+/* Your question, sent from the composer up into the conversation. */
+.ask { position: absolute; top: 18px; right: 14px; max-width: 180px; padding: 8px 13px; border-radius: 16px; background: var(--cream); font-size: 13px; line-height: 1.45; color: var(--ink); opacity: 0; transform: translateY(290px) }
+
+.reply { position: absolute; top: 82px; left: 20px; right: 14px; opacity: 0 }
+.who { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink) }
+.who img { width: 22px; height: 22px; border-radius: 6px; background: transparent }
+
+/* The run's one line, as the product draws it: working, then what it cost. */
+.steps { display: inline-grid; margin: 6px 0 0 30px }
+.working, .done { grid-area: 1 / 1; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px 0 4px; border: 1px solid var(--line); border-radius: 99px; background: var(--paper); font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.done { opacity: 0 }
+.done svg:last-child { color: var(--ink-3) }
+.state { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--cream); color: var(--ink); font-style: normal }
+.pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--ink); animation: pulse var(--v-slow) var(--ease) infinite }
+@keyframes pulse { 50% { opacity: .25 } }
+
+/* The answer, word by word, the way a reply streams in. */
+.reply .said { --v-step: 70ms; margin: 8px 0 0 30px; font-size: 13px; line-height: 1.5; color: var(--ink) }
+.said > span { opacity: 0; transition-delay: calc(var(--n) * var(--v-step)) }
+
+.composer { position: absolute; left: 20px; right: 14px; bottom: 14px; display: flex; align-items: center; height: 40px; padding: 0 6px 0 13px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(20 20 19 / .04); font-size: 13px; color: var(--ink-3) }
+.composer i { display: grid; place-items: center; width: 28px; height: 28px; margin-left: auto; border-radius: 50%; background: var(--ink); color: var(--paper) }
+
+/* ── What it reads first, right ─────────────────────────────────────── */
+.tray { position: absolute; top: 0; bottom: 0; left: 224px; right: 0; background: var(--cream); border-left: 1px solid var(--line) }
+.trayHead { position: absolute; top: 14px; left: 18px; font-family: var(--mono); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3) }
+
+/* Four slim index cards. They start stacked behind the first and fan out
+   to their places, narrowest first. The first fades in; the other three
+   turn opaque while still hidden behind it and only then move, so no card
+   is ever half see-through over another's text. */
+.tray .index { position: absolute; left: 18px; right: 18px; padding: 8px 12px; opacity: 0; transform: translateY(calc(-1 * var(--rise)));
+    transition: opacity var(--v-quick) var(--ease) calc(min(var(--n), 1) * var(--v-quick)), transform var(--v-move) var(--ease) calc(min(var(--n), 1) * 2 * var(--v-quick) + max(var(--n) - 1, 0) * var(--v-step)) }
+.indexHead { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: var(--ink) }
+.indexHead em { font-family: var(--mono); font-style: normal; color: var(--ink-3) }
+.indexHead span { margin-left: auto }
+
+.index .line { display: flex; gap: 5px; margin: 4px -6px 0; padding: 3px 6px; border-radius: 6px; font-size: 12px; color: var(--ink); white-space: nowrap }
+.gloss { color: var(--ink-3) }
+.index .lit, .index .lit .gloss { transition: background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease); transition-delay: calc(var(--n) * var(--v-step) * 2) }
+
+/* The note behind the Northstar line, closed until it is opened. */
+.noteWrap { max-height: 0; overflow: hidden; opacity: 0 }
+.noteWrap .note { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 2px; padding: 7px 10px; border-radius: 8px; background: var(--cream); font-size: 12px; line-height: 1.45; color: var(--ink-2) }
+.file { font-family: var(--mono); font-size: 12px; color: var(--ink-3) }
+
+/* 1 · your question, sent; it starts working */
+.root[data-b1] .ask { opacity: 1; transform: none }
+.root[data-b1] .reply { opacity: 1; transition-delay: calc(4 * var(--v-step)) }
+/* 2 · the four indexes fan out, narrowest first */
+.root[data-b2] .index { opacity: 1; transform: none }
+/* 3 · the two lines that bear on the question */
+.root[data-b3] .lit { background: var(--violet-soft); color: var(--violet-deep) }
+.root[data-b3] .lit .gloss { color: var(--violet-deep) }
+/* 4 · the Northstar line opens into its note */
+.root[data-b4] .noteWrap { max-height: 90px; opacity: 1 }
+/* 5 · the reply, as you like it */
+.root[data-b5] .working { opacity: 0 }
+.root[data-b5] .done { opacity: 1 }
+.root[data-b5] .said > span { opacity: 1 }

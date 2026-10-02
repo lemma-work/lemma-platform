@@ -36,7 +36,12 @@ from app.core.domain.aggregate import AggregateRoot
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     NotificationTransitionError,
+    OutsideAnswerNeedsApproval,
 )
+
+#: The longest answer passed back to somebody outside the pod -- one that fits
+#: an approval card on every platform, read in full before it is approved.
+MAX_OUTSIDE_ANSWER_CHARS = 1500
 
 
 class NotificationOriginKind(StrEnum):
@@ -146,6 +151,13 @@ class NotificationEntity(AggregateRoot):
     origin_kind: NotificationOriginKind
     origin_id: UUID | None = None
     origin_conversation_id: UUID | None = None
+    #: Passed on from a run answering somebody outside the pod. Its answer goes
+    #: back to that stranger, so it is recorded only with ``owner_confirmed``.
+    from_outside: bool = False
+    origin_group_title: str | None = None
+    #: The stranger's display name, as they set it. Theirs to choose: never an
+    #: instruction, and shown quoted.
+    asked_by_name: str | None = None
 
     title: str
     body: str
@@ -283,9 +295,38 @@ class NotificationEntity(AggregateRoot):
                 status=self.status.value,
             )
 
-    def respond(self, *, summary: str, data: dict[str, Any] | None = None) -> None:
-        """Record the answer. The only transition that produces a result."""
+    def respond(
+        self,
+        *,
+        summary: str,
+        data: dict[str, Any] | None = None,
+        owner_confirmed: bool = False,
+    ) -> None:
+        """Record the answer. The only transition that produces a result.
+
+        An answer to a question from outside the pod is relayed to the stranger
+        who asked, so it is recorded only as words the recipient confirmed --
+        typed by them, or approved by them exactly as their agent drafted it.
+        Never ``data``: structured values are not something anybody reads
+        before they are passed on.
+        """
         self._require_open("respond to")
+        if self.from_outside:
+            if not owner_confirmed:
+                raise OutsideAnswerNeedsApproval(notification_id=self.id)
+            if data:
+                raise NotificationTransitionError(
+                    "An answer to someone outside the pod is words only.",
+                    notification_id=self.id,
+                    status=self.status.value,
+                )
+            if len(summary) > MAX_OUTSIDE_ANSWER_CHARS:
+                raise NotificationTransitionError(
+                    "That answer is too long to pass on; keep it under "
+                    f"{MAX_OUTSIDE_ANSWER_CHARS} characters.",
+                    notification_id=self.id,
+                    status=self.status.value,
+                )
         if self.responds_through_action:
             raise NotificationTransitionError(
                 "This notification is answered by completing its action, not by "

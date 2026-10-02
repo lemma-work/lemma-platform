@@ -163,6 +163,12 @@ class PlatformCapabilities:
     # same audio is delivered as an ordinary attachment, or as a link where the
     # platform cannot receive one -- see ``PlatformEnvelopeDelivery._deliver_voice``.
     supports_native_voice: bool = False
+    # Is every group this bot is in one it created? True only for WhatsApp,
+    # whose business numbers cannot be added to a group, only create one (see
+    # ``services/whatsapp_groups``). Such a group belongs to the pod that asked
+    # for it, so its messages go to that pod's surface and no other, whichever
+    # pods on the shared number the sender is in.
+    bot_creates_groups: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -289,7 +295,10 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         supports_native_choices=True,
         supports_native_files=True,
         is_email=False,
-        is_channel_capable=False,
+        # In a group it created, answering when addressed (see
+        # ``domain/addressing``).
+        is_channel_capable=True,
+        bot_creates_groups=True,
         markdown_mode="whatsapp",
         formatting_style=_WHATSAPP_FORMATTING,
         soft_char_limit=1500,
@@ -375,6 +384,12 @@ def get_platform_capabilities(platform: str | None) -> PlatformCapabilities | No
     if not platform:
         return None
     return PLATFORM_CAPABILITIES.get(str(platform).upper())
+
+
+def bot_creates_groups_on(platform: str | None) -> bool:
+    """Is every group this platform's bot is in one it created? (WhatsApp)"""
+    capabilities = get_platform_capabilities(platform)
+    return capabilities is not None and capabilities.bot_creates_groups
 
 
 def has_shared_system_bot(platform: str | None) -> bool:

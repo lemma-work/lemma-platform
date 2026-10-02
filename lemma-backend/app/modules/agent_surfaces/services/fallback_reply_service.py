@@ -341,6 +341,18 @@ def has_delivery_credentials(
     return any(value for value in credentials.values())
 
 
+def to_sender_alone(event: ParsedInboundSurfaceEvent) -> ParsedInboundSurfaceEvent:
+    """The event, copying nobody on the reply.
+
+    A refusal, a sign-up nudge, an onboarding step: each is for the person who
+    wrote. On an email thread the reply would otherwise copy everybody else on
+    it -- a client among them -- with "you don't have access to this pod".
+    """
+    if not event.reply_target.get("cc"):
+        return event
+    return event.model_copy(update={"reply_target": {**event.reply_target, "cc": []}})
+
+
 async def deliver_fallback_reply(
     *,
     adapter: SurfacePlatformAdapterPort,
@@ -389,7 +401,7 @@ async def deliver_fallback_reply(
         await reply_text(
             adapter=adapter,
             credentials=credentials,
-            event=context.event,
+            event=to_sender_alone(context.event),
             message=context.reply_message or signup_message(),
             metadata={
                 "agent_display_name": context.agent_display_name,

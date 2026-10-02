@@ -12,6 +12,7 @@ A mixin rather than a helper class because the methods below call into
 
 from __future__ import annotations
 
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -79,10 +80,24 @@ class ResourceHydrationMixin:
         """
         return await self._hydrate_resource(resource)
 
-    async def _is_public_read(self, permission_id: str, resource: ResourceRef) -> bool:
+    async def _is_public_read(
+        self,
+        permission_id: str,
+        resource: ResourceRef,
+        *,
+        pod_id: UUID | None = None,
+    ) -> bool:
+        """Is this a read of something Public -- in ``pod_id``, when one is given?
+
+        ``pod_id`` pins an anonymous context to the pod whose bot is answering
+        (see ``authorization.anonymous``): Public in another pod is not public
+        *here*, and a resource with no pod at all is not this pod's to show.
+        """
         if not permission_id.endswith(".read"):
             return False
         hydrated = await self._hydrate_resource(resource)
+        if pod_id is not None and hydrated.pod_id != pod_id:
+            return False
         return hydrated.visibility == ResourceVisibility.PUBLIC
 
     async def _hydrate_resource(self, resource: ResourceRef) -> ResourceRef:

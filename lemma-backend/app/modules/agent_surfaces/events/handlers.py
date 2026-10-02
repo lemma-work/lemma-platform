@@ -57,6 +57,13 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
     get_surface_event_dedup_store,
 )
+from app.modules.agent_surfaces.infrastructure.adapters.registry import (
+    SurfacePlatformAdapterRegistry,
+)
+from app.modules.agent_surfaces.services.group_updates import apply_group_updates
+from app.modules.agent_surfaces.services.telegram_group_join import (
+    claim_telegram_group_join,
+)
 from app.modules.agent_surfaces.services.surface_inbound import (
     release_ingress_claim,
 )
@@ -265,6 +272,13 @@ async def _process_surface_webhook(
             receiver_surface_ids=event.receiver_surface_ids,
         )
 
+    adapters = SurfacePlatformAdapterRegistry()
+    # The bot added to a Telegram group through a Lemma link: its
+    # `/start <code>` adopts the group and is never a question. Before any
+    # session opens, because spending the code and saying hello are not queries.
+    if await claim_telegram_group_join(uow_factory, ingress_request, adapters=adapters):
+        return
+
     async with uow_factory() as uow:
         handler = build_surface_ingress(uow)
         # Lifecycle events (the bot joined a channel, someone opened the app
@@ -278,6 +292,9 @@ async def _process_surface_webhook(
 
         if await app_events.try_handle_lifecycle(ingress_request):
             return
+        # A group the bot asked WhatsApp to create, confirmed or refused. Never
+        # instead of the message paths: such a body carries no message.
+        await apply_group_updates(uow, ingress_request, adapters=adapters)
 
         from app.modules.agent_surfaces.services.onboarding_inputs import (
             is_onboarding_input,

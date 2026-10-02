@@ -21,6 +21,9 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
 from app.modules.agent_surfaces.platforms.surface_send_tools import (
     build_surface_send_toolset,
 )
+from app.modules.agent_surfaces.platforms.whatsapp.tools import (
+    build_whatsapp_group_toolset,
+)
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
     has_native_credentials,
@@ -32,6 +35,8 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 # `whatsapp_get_current_contact` / `telegram_get_current_chat`, which echoed
 # event metadata the agent already reads off the message and cost schema tokens
 # on every turn. Files flow through auto-ingest and `display_resource`.
+# WhatsApp's one tool, opening a group, is added below and only in a private
+# chat, because it needs the surface and a unit of work rather than credentials.
 _TOOLSET_BUILDERS = {
     "SLACK": build_slack_surface_toolset,
     "TEAMS": build_teams_surface_toolset,
@@ -89,6 +94,13 @@ class SurfacePlatformToolFactory:
         toolsets: list[AbstractToolset[ConversationContext]] = []
         if builder is not None:
             toolsets.append(builder(credentials=credentials))
+        if caps.bot_creates_groups and metadata.get("conversation_kind") == "DM":
+            # Only in a member's own chat: see `platforms/whatsapp/tools`.
+            toolsets.append(
+                build_whatsapp_group_toolset(
+                    uow_factory=self.uow_factory, surface_id=surface.id
+                )
+            )
         # The current-user surface_send_message tool, opt-in per surface and only
         # on chat surfaces (the observer sends an email surface's one reply).
         if allow_send:

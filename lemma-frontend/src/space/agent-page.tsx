@@ -11,6 +11,7 @@ import {
 } from "@/data/agents";
 import { displayAgentName } from "@/data/agent-names";
 import { surfacesForAgent, surfaceStatus } from "@/data/surface-settings";
+import { groupsSupported } from "@/data/surface-groups";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
 import { ConfirmRemove, Editor } from "@/stage/agents-view";
 import { useSchedules } from "@/schedule/queries";
@@ -21,8 +22,10 @@ import { useSurfaces } from "@/shell/surfaces";
 import { ChannelIcon, channelName } from "@/shell/channels";
 import { Modal } from "@/shell/modal";
 import { SurfaceManage } from "@/shell/surface-manage";
+import { SurfaceGroups } from "@/shell/surface-groups";
 import { AgentMark } from "./agent-mark";
 import { ChatIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, EditIcon, LockIcon, WorkflowIcon } from "@/ui/icons";
+import { samples } from "@/data/samples";
 
 /** One agent, as a page of its own.
  *
@@ -132,7 +135,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
                             <aside className="agentpage__rail" aria-label={"About " + detail.label}>
                                 <Instructions detail={detail} />
                                 <Abilities detail={detail} />
-                                <Channels podId={pod.id} detail={detail} surfaces={surfaces.data ?? []} loading={surfaces.isPending} />
+                                <Channels space={pod} detail={detail} surfaces={surfaces.data ?? []} loading={surfaces.isPending} />
                                 <Facts detail={detail} />
                                 <CommentReplies pod={pod} detail={detail} />
                                 <UsedBy pod={pod} detail={detail} onOpenSchedules={onOpenSchedules} onOpenWorkflows={onOpenWorkflows} />
@@ -286,11 +289,17 @@ function sayPermissions(codes: string[]): string {
     return "can " + (verbs.length === 1 ? verbs[0] : verbs.slice(0, -1).join(", ") + " and " + verbs[verbs.length - 1]);
 }
 
-function Channels({ podId, detail, surfaces, loading }: { podId: string; detail: AgentDetail; surfaces: Surface[]; loading: boolean }) {
+function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: AgentDetail; surfaces: Surface[]; loading: boolean }) {
+    const podId = space.id;
     const cache = useQueryClient();
     const [selected, setSelected] = useState<Surface | null>(null);
     const pod = useQuery({ queryKey: ["surface-pod", podId], queryFn: () => source.getPod(podId), enabled: Boolean(selected) });
     const own = surfacesForAgent(surfaces, detail.front ? "pod_default" : detail.name);
+    /* A group's switches take what configuring the bot takes. Read off the
+       bot's own actions rather than `may`, which also says no to editing the
+       main bot's definition — a different question. An empty list is a bot
+       that did not say, and not saying is not a refusal. */
+    const canChange = detail.actions.length > 0 ? detail.actions.includes(AGENT_EDIT) : undefined;
     const saved = () => {
         for (const key of [["surfaces", 2, podId], ["surface-detail", podId], ["surface-setup", podId], ["surface-channels", podId], ["my-surfaces"]]) {
             void cache.invalidateQueries({ queryKey: key });
@@ -305,15 +314,27 @@ function Channels({ podId, detail, surfaces, loading }: { podId: string; detail:
                     <ul className="agentpage__channels">
                         {own.map((surface) => (
                             <li key={surface.id}>
-                                <ChannelIcon platform={surface.platform} size={18} />
-                                <span className="agentpage__channel">
-                                    <b>{channelName(surface.platform)}</b>
-                                    {surface.handle && <small>{surface.handle}</small>}
-                                </span>
-                                <span className="agentpage__status" data-ok={(surface.active && (!surface.status || surface.status === "ACTIVE")) || undefined}>
-                                    {surfaceStatus(surface.status, surface.active)}
-                                </span>
-                                <button className="agentpage__link" onClick={() => setSelected(surface)}>Manage</button>
+                                <div className="agentpage__channelrow">
+                                    <ChannelIcon platform={surface.platform} size={18} />
+                                    <span className="agentpage__channel">
+                                        <b>{channelName(surface.platform)}</b>
+                                        {surface.handle && <small>{surface.handle}</small>}
+                                    </span>
+                                    <span className="agentpage__status" data-ok={(surface.active && (!surface.status || surface.status === "ACTIVE")) || undefined}>
+                                        {surfaceStatus(surface.status, surface.active)}
+                                    </span>
+                                    <button className="agentpage__link" onClick={() => setSelected(surface)}>Manage</button>
+                                </div>
+                                {groupsSupported(surface.platform) && (
+                                    <SurfaceGroups
+                                        podId={podId}
+                                        surface={surface}
+                                        bot={detail.label}
+                                        space={space.name}
+                                        members={space.members}
+                                        canChange={canChange}
+                                    />
+                                )}
                             </li>
                         ))}
                     </ul>
@@ -322,7 +343,7 @@ function Channels({ podId, detail, surfaces, loading }: { podId: string; detail:
                 <Modal title={"Channels for " + detail.label} onClose={() => setSelected(null)}>
                     {pod.isPending && <p role="status">Loading channel settings…</p>}
                     {(pod.isError || (pod.isSuccess && !pod.data)) && <p role="alert">Could not load the channel settings. <button className="btn" onClick={() => void pod.refetch()}>Retry</button></p>}
-                    {pod.data && <SurfaceManage pod={pod.data} surface={selected} onBack={() => setSelected(null)} onSaved={saved} />}
+                    {pod.data && <SurfaceManage pod={pod.data} surface={selected} onBack={() => setSelected(null)} onSaved={saved} onLeave={() => setSelected(null)} />}
                 </Modal>
             )}
         </Rail>
@@ -356,7 +377,7 @@ function UsedBy({ pod, detail, onOpenSchedules, onOpenWorkflows }: {
         staleTime: 5 * 60_000,
         queryFn: async () => {
             if (source.label === "sample") {
-                const { SAMPLE_WORKFLOWS } = await import("@/data/fixtures");
+                const { SAMPLE_WORKFLOWS } = await samples(pod.id);
                 return readWorkflows({ items: SAMPLE_WORKFLOWS });
             }
             return readWorkflows(await lemma(pod.id).workflows.list({ limit: 100 }));

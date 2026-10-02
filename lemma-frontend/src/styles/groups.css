@@ -1,0 +1,1308 @@
+/* A space's groups: the Groups page, one group's page, the sheets that start
+   or add one, and the channel settings that list them.
+
+   Colour only from tokens, weight never past 500. Every phone rule is in
+   space-mobile.css, which loads after this. */
+
+/* ── the sidebar's count of questions waiting on you ─────────────────── */
+.side__item .snav__count {
+    margin-left: auto;
+    flex: none;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Groups stays lit on one group's page: the section, beside the page. */
+.side__item[aria-current="true"] {
+    background: var(--line-2);
+}
+
+/* A link that is a button: the blue of a link, inline in a sentence. */
+.gsheet__inline {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--info);
+    font: inherit;
+    cursor: pointer;
+}
+.gsheet__inline:hover:not(:disabled) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.gsheet__inline:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+.gsheet__inline:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* ── the Groups page ─────────────────────────────────────────────────── */
+.groups {
+    max-width: 960px;
+}
+.groups__head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 22px;
+}
+.groups__title {
+    min-width: 0;
+}
+.groups__title h1 {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+.groups__title p {
+    margin: 6px 0 0;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.groups__fine {
+    max-width: 640px;
+    margin: 22px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.groups__trouble {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 40px 0;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.groups__trouble p {
+    margin: 0;
+}
+
+/* New group, and what it offers. */
+.gnew {
+    position: relative;
+    flex: none;
+}
+.gnew__button {
+    height: 38px;
+    padding: 0 18px;
+}
+.gnew__menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    width: 360px;
+    max-width: calc(100vw - 32px);
+    padding: 6px;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+    animation: space-pop 160ms var(--settle);
+    transform-origin: top right;
+}
+.gnew__item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: 100%;
+    padding: 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+}
+.gnew__item:hover,
+.gnew__item:focus-visible {
+    background: var(--accent-soft);
+    outline: none;
+}
+.gnew__item:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--accent-line);
+}
+.gnew__mark {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+}
+.gnew__item:not([data-ready]) .gnew__mark,
+.gway:not([data-ready]) .gway__mark {
+    opacity: 0.5;
+    filter: grayscale(1);
+}
+.gnew__text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.gnew__title {
+    font-size: 14px;
+    font-weight: 500;
+}
+.gnew__item:not([data-ready]) .gnew__title {
+    color: var(--ink-2);
+}
+.gnew__note {
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--ink-2);
+}
+.gnew__quiet {
+    margin: 0;
+    padding: 10px;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+
+/* What is waiting on you, above the list. */
+.gwaits {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 0 22px;
+    padding: 0;
+    list-style: none;
+}
+.gwait {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 14px 16px;
+    border: 0;
+    border-radius: var(--r-lg);
+    background: var(--wash-a);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+}
+.gwait:hover {
+    background: var(--line-2);
+}
+.gwait:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.gwait__dot,
+.gask__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--info);
+}
+.gwait__text {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+}
+.gwait__who,
+.gwait__go {
+    font-weight: 500;
+}
+.gwait__what {
+    color: var(--ink-2);
+}
+.gwait__go {
+    flex: none;
+    white-space: nowrap;
+}
+
+/* The list: one row a group, the whole row opening it. */
+.glist__cols,
+.grow {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) 230px 90px;
+    align-items: center;
+    gap: 14px;
+}
+.glist__cols {
+    padding: 0 12px 8px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.glist__cols span:last-child {
+    text-align: right;
+}
+.glist__rows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.grow {
+    position: relative;
+    padding: 14px 12px;
+    border-bottom: 1px solid var(--line);
+    transition: background-color 120ms ease;
+}
+.grow:hover {
+    background: var(--wash-b);
+}
+.grow__mark {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+}
+.grow[data-pending] .grow__mark {
+    opacity: 0.6;
+}
+.grow__main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.grow__open {
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+/* The row is the button's to click, everywhere but Take it on. */
+.grow__open::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: var(--r-sm);
+}
+.grow__open:focus-visible {
+    outline: none;
+}
+.grow__open:focus-visible::after {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+.grow__sub {
+    font-size: 13px;
+    color: var(--ink-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.grow__who {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.grow__who[data-quiet] {
+    color: var(--ink-3);
+}
+.grow__take {
+    position: relative;
+    z-index: 1;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.grow__take:hover:not(:disabled) {
+    background: var(--accent-soft);
+}
+.grow__take:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+.grow__take:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.grow__when {
+    font-size: 13px;
+    color: var(--ink-3);
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.grow__problem {
+    grid-column: 2 / -1;
+    font-size: 13px;
+    color: var(--bad);
+}
+
+/* Before there are any: the ways in, and what happens once there. */
+.gfirst {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    max-width: 760px;
+    margin: 0 auto;
+    padding-top: 44px;
+}
+.gfirst__head h1 {
+    margin: 0;
+    font-size: 30px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+.gfirst__head p {
+    max-width: 560px;
+    margin: 8px 0 0;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.gfirst__ways {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.gway {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px;
+    border-radius: var(--r-lg);
+    box-shadow: var(--depth-rest);
+}
+.gway:not([data-ready]) {
+    background: var(--wash-b);
+    box-shadow: none;
+}
+.gway__mark {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+}
+.gway__text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.gway__title {
+    font-size: 15px;
+    font-weight: 500;
+}
+.gway:not([data-ready]) .gway__title {
+    color: var(--ink-2);
+}
+.gway__note {
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+.gway__go {
+    height: 36px;
+}
+.gfirst__how {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin: 0;
+    padding-top: 8px;
+}
+.gfirst__how dt {
+    font-size: 14px;
+    font-weight: 500;
+}
+.gfirst__how dd {
+    margin: 4px 0 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+
+/* ── one group's page ────────────────────────────────────────────────── */
+.group-pane {
+    background: var(--paper);
+}
+/* Two columns that scroll on their own: what was said, and what is true
+   about the group beside it. */
+.gpage {
+    display: flex;
+    height: 100%;
+}
+.gpage__main {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 28px 40px 120px;
+}
+.gpage__head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.gpage__mark {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+}
+.gpage__who {
+    flex: 1;
+    min-width: 0;
+}
+.gpage__who h1 {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+.gpage__who p {
+    margin: 2px 0 0;
+    font-size: 14px;
+    color: var(--ink-2);
+}
+a.gpage__open {
+    flex: none;
+    text-decoration: none;
+}
+.gpage__note {
+    margin: 18px 0 0;
+    padding: 12px 14px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+    font-size: 14px;
+    color: var(--ink-2);
+}
+.gpage__quiet {
+    margin: 0;
+    padding: 40px;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.gpage__gone {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 40px;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.gpage__gone p {
+    margin: 0;
+}
+.gpage__gone-acts {
+    display: flex;
+    gap: 8px;
+}
+
+/* A question waiting on you, with the box to answer it. */
+.gask {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 18px 0 6px;
+    padding: 18px;
+    border-radius: var(--r-lg);
+    background: var(--wash-a);
+}
+.gask__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+.gask__title {
+    font-weight: 500;
+}
+.gask__when {
+    color: var(--ink-2);
+}
+.gask__question {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+.gask__note {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+.gask__form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.gask__form input {
+    flex: 1;
+    min-width: 0;
+    height: 42px;
+    padding: 0 14px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+}
+.gask__form input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.gask__form .pill-button {
+    height: 42px;
+    max-width: 50%;
+}
+.gask__form .pill-button,
+.gsheet__copy {
+    white-space: nowrap;
+}
+.gask__problem,
+.gside__problem,
+.gsheet__problem {
+    margin: 0;
+    font-size: 13px;
+    color: var(--bad);
+}
+
+/* What was said, a day at a time. */
+.gtimeline {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 18px 0 24px;
+}
+.gtimeline__quiet {
+    margin: 0;
+    padding: 24px 0;
+    font-size: 14px;
+    color: var(--ink-2);
+}
+.gtimeline__quiet a {
+    color: var(--info);
+    text-underline-offset: 3px;
+}
+.gday,
+.gday__lines {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+.gday__label {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 400;
+    text-align: center;
+    color: var(--ink-3);
+}
+.gday__lines {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.gline {
+    display: flex;
+    gap: 12px;
+}
+.gline__face {
+    flex: none;
+}
+.gface {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+}
+.gline__body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.gline__head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+}
+.gline__who {
+    font-size: 14px;
+    font-weight: 500;
+}
+.gline__chip {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--wash-a);
+    font-size: 12px;
+    color: var(--ink-2);
+}
+.gline__at {
+    font-size: 12px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+.gline__text {
+    margin: 0;
+    font-size: 14.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.gline__note {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+
+/* Beside it: who is there, who answers the rest, how the bot behaves. */
+.gpage__side {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    width: 320px;
+    overflow-y: auto;
+    padding: 28px 24px 96px;
+    border-left: 1px solid var(--line);
+}
+.gside {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.gside__head {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--ink-3);
+}
+.gside__text,
+.gside__fine {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.gside__fine {
+    font-size: 13px;
+}
+.gpeople {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.gpeople li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.gpeople .gface {
+    width: 28px;
+    height: 28px;
+    font-size: 11px;
+}
+.gpeople__who {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    font-size: 14px;
+}
+.gpeople__who span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gpeople__who small {
+    font-size: 12px;
+    color: var(--ink-2);
+}
+.gpeople__invite {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+.gswitch {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+}
+.gswitch input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 1px 0 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.gswitch input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.gswitch:has(input:disabled) {
+    opacity: 0.6;
+    cursor: default;
+}
+.gswitch__text {
+    display: flex;
+    flex-direction: column;
+    font-size: 14px;
+}
+.gswitch__text small {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+.gowner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--ink-2);
+}
+
+/* ── the sheets that start or add one ────────────────────────────────── */
+.modal__titled {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+.modal__mark {
+    flex: none;
+    display: grid;
+    place-items: center;
+}
+.gsheet {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    font-size: 14px;
+    line-height: 1.45;
+}
+.gsheet__block,
+.gsheet__field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.gsheet__block {
+    gap: 10px;
+}
+.gsheet__label,
+.gsheet__check-title,
+.gsheet__em,
+.gsheet__cases dt {
+    font-weight: 500;
+}
+.gsheet__field input {
+    height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+}
+.gsheet__field input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.gsheet__hint,
+.gsheet__fine {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.gsheet__steps {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 16px 16px 16px 34px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.gsheet__steps li::marker {
+    color: var(--ink-3);
+}
+/* Telegram's steps are where you are: the one in hand dark, those done
+   ticked, the rest waiting. */
+.gsheet__steps--dots {
+    gap: 14px;
+    padding: 0;
+    background: none;
+    list-style: none;
+    counter-reset: step;
+}
+.gsheet__steps--dots li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    color: var(--ink-2);
+    counter-increment: step;
+}
+.gsheet__steps--dots li::before {
+    content: counter(step);
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+}
+.gsheet__steps--dots li[data-at] {
+    color: var(--ink);
+}
+.gsheet__steps--dots li[data-at]::before {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+.gsheet__steps--dots li[data-done]::before {
+    content: "✓";
+    background: var(--accent-soft);
+    color: var(--ok);
+}
+.gsheet__check {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    cursor: pointer;
+}
+.gsheet__check input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+}
+.gsheet__check > span {
+    display: flex;
+    flex-direction: column;
+}
+.gsheet__code {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 6px 6px 6px 14px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.gsheet__code-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+code.gsheet__code-text {
+    padding: 0;
+    background: none;
+    font-family: var(--mono);
+    font-size: 14px;
+}
+.gsheet__copy {
+    height: 36px;
+}
+.gsheet__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.gsheet__acts .ghost-pill {
+    height: 36px;
+    text-decoration: none;
+}
+.gsheet__qr {
+    align-items: flex-start;
+}
+.gsheet__facts,
+.gsheet__cases {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 16px;
+    border-radius: var(--r-md);
+    box-shadow: var(--depth-rest);
+}
+.gsheet__facts div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+.gsheet__facts dt {
+    flex: none;
+    color: var(--ink-2);
+}
+.gsheet__facts dd {
+    margin: 0;
+    text-align: right;
+}
+.gsheet__cases div + div {
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+}
+.gsheet__cases dd {
+    margin: 2px 0 0;
+    color: var(--ink-2);
+}
+.gsheet__big {
+    justify-content: center;
+    width: 100%;
+    height: 52px;
+    font-size: 15px;
+}
+.gsheet__status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+    padding: 14px 16px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.gsheet__status--done > svg {
+    flex: none;
+    color: var(--ok);
+}
+.gsheet__status-text {
+    flex: 1;
+    min-width: 0;
+}
+.gsheet__dots {
+    flex: none;
+    display: flex;
+    gap: 4px;
+}
+.gsheet__dots i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ink);
+    animation: gsheet-dots 1.2s ease-in-out infinite;
+}
+.gsheet__dots i:nth-child(2) {
+    animation-delay: 0.2s;
+}
+.gsheet__dots i:nth-child(3) {
+    animation-delay: 0.4s;
+}
+@keyframes gsheet-dots {
+    0%, 100% { opacity: 0.25; }
+    40% { opacity: 1; }
+}
+.gsheet__foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 4px;
+}
+.gsheet__foot--split {
+    justify-content: space-between;
+}
+.gsheet__foot .pill-button,
+.gsheet__foot .ghost-pill {
+    height: 42px;
+    padding: 0 18px;
+}
+
+/* ── a channel's settings ────────────────────────────────────────────── */
+.smanage {
+    gap: 16px;
+}
+.smanage__back {
+    justify-self: start;
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.smanage__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.smanage__title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.smanage__title h3 {
+    font-size: 19px;
+    font-weight: 500;
+}
+.smanage__title span {
+    font-size: 13px;
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+}
+.smanage__health {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 8px 8px 14px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.smanage__state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+.smanage__state i {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ink-3);
+}
+.smanage__state i[data-tone="good"] {
+    background: var(--ok);
+}
+.smanage__state i[data-tone="waiting"] {
+    background: var(--warn);
+}
+.smanage .smanage__recheck {
+    min-height: 32px;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 13px;
+}
+.smanage__quiet {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.smanage__form {
+    gap: 18px;
+}
+.smanage__check {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    cursor: pointer;
+}
+.smanage__check input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+}
+.smanage__check > span {
+    display: flex;
+    flex-direction: column;
+}
+.smanage__check small,
+.smanage__field small {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+.smanage__label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+}
+.smanage__field select {
+    height: 42px;
+    font-size: 14px;
+}
+.smanage__groups {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.smanage__groups-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.smanage__groups-head h4 {
+    font-size: 14px;
+    font-weight: 500;
+}
+.smanage__all,
+.smanage__group-list a {
+    color: var(--info);
+    text-decoration: none;
+}
+.smanage__all:hover,
+.smanage__group-list a:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.smanage__group-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.smanage__group-list li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+}
+.smanage__group-list a {
+    min-width: 0;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+.smanage__group-list small {
+    flex: none;
+    max-width: 60%;
+    font-size: 13px;
+    color: var(--ink-2);
+    text-align: right;
+}
+.smanage .smanage__add {
+    justify-self: start;
+    margin: 0;
+    font-size: 14px;
+    color: var(--info);
+}
+.smanage__foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+}
+.smanage__foot .pill-button,
+.smanage__foot .ghost-pill {
+    height: 42px;
+    padding: 0 18px;
+}
+.smanage__confirm {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-right: auto;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.smanage__confirm .linkish {
+    margin: 0;
+    font-size: 13px;
+}
+.smanage .smanage__drop {
+    color: var(--bad);
+    box-shadow: inset 0 0 0 1px var(--bad);
+}
+
+/* Bot-page group rows: the name opens the group's page. */
+.sgroup__open {
+    color: inherit;
+    text-decoration: none;
+}
+.sgroup__open:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.sgroup__open:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gnew__menu {
+        animation: none;
+    }
+    .gsheet__dots i {
+        animation: none;
+        opacity: 0.6;
+    }
+}
+
+/* Narrower than a desk: the page's aside goes under what was said, and the
+   whole page scrolls as one. */
+@media (max-width: 1100px) {
+    .gpage {
+        display: block;
+        height: auto;
+    }
+    .gpage__main {
+        overflow: visible;
+        padding-bottom: 24px;
+    }
+    .gpage__side {
+        width: auto;
+        overflow: visible;
+        padding: 24px 40px 120px;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+    }
+}

@@ -9110,6 +9110,7 @@ var LemmaClient = (() => {
     getTestingToken: () => getTestingToken,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
     setTestingToken: () => setTestingToken,
+    startAppAccess: () => startAppAccess,
     subscribeLemmaHostTheme: () => subscribeLemmaHostTheme
   });
 
@@ -15420,6 +15421,156 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Groups
+     * Every group the pod's bots are in, most recently changed first.
+     * @param podId
+     * @returns GroupListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/groups",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Group
+     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
+     *
+     * WhatsApp confirms the group moments later: it comes back ``pending``, and
+     * its invite link appears once confirmed. Telegram and Slack cannot create
+     * groups for a bot; add the bot to one of theirs instead.
+     * @param podId
+     * @param requestBody
+     * @returns GroupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/groups",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Group Link
+     * A one-use link that adds the pod's Telegram bot to a group the caller picks.
+     *
+     * The group is then the caller's to answer for. Which Telegram account is
+     * theirs is still their profile's to say: a link is easily passed on, so the
+     * one that used it is never taken for them. The link works for an hour.
+     * @param podId
+     * @param requestBody
+     * @returns GroupLinkResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupLink(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/groups/links",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Group
+     * One group: who is in it, and what its outsiders are waiting on you for.
+     * @param podId
+     * @param groupId
+     * @returns GroupDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupGet(podId, groupId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/groups/{group_id}",
+        path: {
+          "pod_id": podId,
+          "group_id": groupId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Group
+     * Switch outsiders on or off in one group, or take it over.
+     *
+     * The member who answers for the group may; so may anybody who configures the
+     * bot when nobody in the pod answers for it, and an admin of the pod, whose
+     * change the member is told about.
+     * @param podId
+     * @param groupId
+     * @param requestBody
+     * @returns GroupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupUpdate(podId, groupId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/groups/{group_id}",
+        path: {
+          "pod_id": podId,
+          "group_id": groupId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Group Timeline
+     * What was said in the group, oldest first, as far as the pod kept it.
+     *
+     * Kept for WhatsApp and Telegram groups. A Slack channel's history is
+     * Slack's; it comes back empty here. An answer the bot made with one member's
+     * own access comes back withheld to everybody else: they may not be able to
+     * see what it was made from.
+     * @param podId
+     * @param groupId
+     * @param limit
+     * @returns GroupTimelineResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupTimeline(podId, groupId, limit = 60) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/groups/{group_id}/timeline",
+        path: {
+          "pod_id": podId,
+          "group_id": groupId
+        },
+        query: {
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth
      * prerequisites) — works before any surface of this platform exists.
@@ -15811,6 +15962,50 @@ var LemmaClient = (() => {
     slackManifest(agentName) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackManifest(agentName)
+      );
+    }
+  };
+
+  // src/namespaces/pod-groups.ts
+  var PodGroupsNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    /** Every group the pod's bots are in, most recently changed first. */
+    list(podId) {
+      return this.client.request(() => AgentSurfacesService.agentGroupList(podId));
+    }
+    /** One group, with the people seen in it and what is waiting on the caller. */
+    get(podId, groupId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupGet(podId, groupId)
+      );
+    }
+    /** What was said in the group, oldest first (WhatsApp and Telegram groups). */
+    timeline(podId, groupId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return AgentSurfacesService.agentGroupTimeline(podId, groupId, (_a = options.limit) != null ? _a : 60);
+        }
+      );
+    }
+    /** Start a WhatsApp group with the pod's bot in it. */
+    start(podId, payload) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupStart(podId, payload)
+      );
+    }
+    /** A one-use, hour-long Telegram link that adds the bot to a group. */
+    link(podId, surfaceName) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupLink(podId, { surface_name: surfaceName })
+      );
+    }
+    /** Switch outsiders on or off in one group, or take it over. */
+    update(podId, groupId, payload) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupUpdate(podId, groupId, payload)
       );
     }
   };
@@ -18463,6 +18658,8 @@ var LemmaClient = (() => {
       __publicField(this, "podRoles");
       __publicField(this, "organizations");
       __publicField(this, "podSurfaces");
+      /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
+      __publicField(this, "podGroups");
       /** The caller's own surfaces across all pods (grouped by platform). */
       __publicField(this, "notifications");
       __publicField(this, "userSurfaces");
@@ -18525,6 +18722,7 @@ var LemmaClient = (() => {
       this.podRoles = new PodRolesNamespace(this._generated, podIdFn);
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
+      this.podGroups = new PodGroupsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }
     /** Change the active pod ID for subsequent calls. */
@@ -18574,6 +18772,104 @@ var LemmaClient = (() => {
       return this._http.streamResponse(path, options);
     }
   };
+
+  // src/app-access.ts
+  var import_session3 = __toESM(require_session2(), 1);
+  var COPY = {
+    checking: { title: "Opening this app", message: "Checking that it\u2019s shared with you." },
+    "signed-out": { title: "Sign in to open this app", message: "This app is private. Sign in with the Lemma account it\u2019s shared with, and you\u2019ll come straight back here." },
+    denied: { title: "This app isn\u2019t shared with you", message: "You\u2019re signed in, but this account can\u2019t open it. Ask the person who shared the link to give you access." },
+    unavailable: { title: "We couldn\u2019t check your access", message: "Something went wrong on our side. Try again in a moment." },
+    blocked: { title: "Your browser blocked app access", message: "Allow cookies for this site, then try again." }
+  };
+  function failureKind(error) {
+    if (error instanceof ApiError && error.statusCode === 401) return "signed-out";
+    if (error instanceof ApiError && [403, 404].includes(error.statusCode)) return "denied";
+    return "unavailable";
+  }
+  function signInUrlForApp(authUrl, redirectUri) {
+    const url = new URL(authUrl);
+    if (url.pathname === "/") url.pathname = "/auth";
+    return buildAuthUrl(url.href, { redirectUri });
+  }
+  async function refreshMainSession() {
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("The session service did not answer")), 1e4);
+    });
+    try {
+      return await Promise.race([import_session3.default.attemptRefreshingSession(), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function requestTicket(options) {
+    const http = new HttpClient(options.apiUrl, new AuthManager(options.apiUrl, options.authUrl), { timeoutMs: 1e4, maxRetries: 0 });
+    const send = () => http.request("POST", "/apps/access/tickets?superTokensDoNotDoInterception=true", { headers: { rid: "session" } });
+    try {
+      return await send();
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.statusCode !== 401 || !await refreshMainSession()) throw error;
+      return await send();
+    }
+  }
+  async function redeem(ticket) {
+    const response = await fetch("/_lemma/app-access/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticket }),
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: AbortSignal.timeout(1e4)
+    });
+    if (!response.ok) throw new Error("App access could not be established");
+  }
+  async function startAppAccess(options) {
+    const title = document.getElementById("app-access-title");
+    const status = document.getElementById("app-access-status");
+    const signIn = document.getElementById("app-access-sign-in");
+    const retry = document.getElementById("app-access-retry");
+    const home = document.getElementById("app-access-home");
+    const host = document.getElementById("app-access-host");
+    if (!status || !signIn || !retry) return;
+    if (host) host.textContent = window.location.host;
+    const show = (state) => {
+      document.body.dataset.state = state;
+      if (title) title.textContent = COPY[state].title;
+      status.textContent = COPY[state].message;
+      retry.hidden = state !== "unavailable" && state !== "blocked";
+      signIn.hidden = state !== "signed-out";
+      if (home) {
+        home.hidden = state !== "denied";
+        if (options.homeUrl) home.href = options.homeUrl;
+      }
+      if (state === "signed-out") {
+        signIn.href = signInUrlForApp(options.authUrl, window.location.href);
+        signIn.target = window.parent === window ? "_self" : "_top";
+        signIn.focus();
+      }
+    };
+    retry.onclick = () => {
+      void startAppAccess(options);
+    };
+    show("checking");
+    try {
+      const { ticket } = await requestTicket(options);
+      await redeem(ticket);
+      const verified = await fetch("/", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/octet-stream" }, signal: AbortSignal.timeout(1e4) });
+      if (verified.status === 401) {
+        show("blocked");
+        return;
+      }
+      if (!verified.ok) {
+        show("unavailable");
+        return;
+      }
+      window.location.reload();
+    } catch (error) {
+      show(failureKind(error));
+    }
+  }
 
   // src/browser-theme.ts
   var LEMMA_APP_THEME_MESSAGE_TYPE = "lemma-app-theme";
@@ -18668,6 +18964,7 @@ var LemmaClient = (() => {
   if (typeof globalThis !== "undefined") {
     const scope = globalThis;
     const surface = {
+      startAppAccess,
       LemmaClient,
       AuthManager,
       buildAuthUrl,

@@ -10,8 +10,14 @@ const definitions: [AssetId, string, string, string, Copy, Copy][] = [
     ["storyboard", "Product walkthrough", "Storyboard · 3 frames · 36 seconds", "Dev", { title: "From CSV to your first useful result", body: "Start with your existing file.\nMatch your columns and check a sample.\nFix the flagged rows, then bring everyone across.", cta: "Try it with your own file" }, { title: "Import walkthrough", body: "Upload your file.\nChoose your settings.\nExplore your workspace.", cta: "Get started" }],
     ["story", "Customer story", "Web · Customer proof", "Priya", { title: "A weekly import, without the weekly cleanup.", body: "Harbor’s operations team brings new customer records into Acme every week. Their first file had dates in two different formats.\n\nThe sample check surfaced the affected rows before the import. The team prepared a normalized ten-row sample for validation and kept their original export untouched. Validation is still pending.\n\nThis draft describes a fictional sample account. Customer attribution is awaiting review.", cta: "See how the import works" }, { title: "Harbor’s first import", body: "Harbor is preparing its first customer import. The team is checking date formats before uploading the full file.", cta: "Read the story" }],
 ];
+/** Nine days out, local time: a target written as a literal is a launch
+ *  that quietly slips into the past and makes the sample look abandoned. */
+function nineDaysOut(): string {
+    const day = new Date(Date.now() + 9 * 86_400_000);
+    return day.getFullYear() + "-" + String(day.getMonth() + 1).padStart(2, "0") + "-" + String(day.getDate()).padStart(2, "0");
+}
 export function initialStudio(): Studio {
-    return { date: "2026-09-24", anonymous: false, permission: false, shots: [false, false, false], activity: ["Kit prepared the launch assets for review."], assets: definitions.map(([id, name, format, owner, copy, previous]) => ({ id, name, format, owner, draft: { ...copy }, versions: [{ number: 2, copy: { ...previous }, note: "Previous draft" }, { number: 3, copy: { ...copy }, note: "Kit · Updated from product review" }], review: "Needs review", comments: id === "landing" ? [{ text: "Keep the first import as the main promise. Don’t bring back ‘all-in-one’.", revision: 3, author: "Priya", resolved: false }] : [] })) };
+    return { date: nineDaysOut(), anonymous: false, permission: false, shots: [false, false, false], activity: ["Kit prepared the launch assets for review."], assets: definitions.map(([id, name, format, owner, copy, previous]) => ({ id, name, format, owner, draft: { ...copy }, versions: [{ number: 2, copy: { ...previous }, note: "Previous draft" }, { number: 3, copy: { ...copy }, note: "Kit · Updated from product review" }], review: "Needs review", comments: id === "landing" ? [{ text: "Keep the first import as the main promise. Don’t bring back ‘all-in-one’.", revision: 3, author: "Priya", resolved: false }] : [] })) };
 }
 export function isDirty(asset: Asset) { return JSON.stringify(asset.draft) !== JSON.stringify(asset.versions.at(-1)!.copy); }
 export function blockers(studio: Studio, asset: Asset): string[] {

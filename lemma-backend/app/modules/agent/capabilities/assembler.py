@@ -139,6 +139,7 @@ def _partition_core_extra(
     toolsets: list[AbstractToolset[ConversationContext]],
     *,
     is_pod_default: bool,
+    answers_outsider: bool = False,
 ) -> tuple[
     list[AbstractToolset[ConversationContext]],
     list[AbstractToolset[ConversationContext]],
@@ -149,13 +150,22 @@ def _partition_core_extra(
     every optional toolset in its prompt prefix. User-created agents already
     chose a deliberately scoped toolset, so POD/SUBAGENTS are injected directly
     for them like any other configured toolset.
+
+    Messaging is deferred so the assistant does not reach for "message a
+    colleague" unprompted. On a run answering somebody outside the pod that is
+    the one thing it should reach for: passing a question on to the member who
+    looks after it is its only way past what the pod made Public, and the tool
+    is fenced to that member. So there it stays in view.
     """
     if not is_pod_default:
         return list(toolsets), []
     core: list[AbstractToolset[ConversationContext]] = []
     extra: list[AbstractToolset[ConversationContext]] = []
     for toolset in toolsets:
-        (extra if id(toolset) in _EXTRA_TOOLSET_IDS else core).append(toolset)
+        deferred = id(toolset) in _EXTRA_TOOLSET_IDS and not (
+            answers_outsider and toolset is messaging_toolset
+        )
+        (extra if deferred else core).append(toolset)
     return core, extra
 
 
@@ -278,7 +288,9 @@ async def _build_lemma_harness_tooling(
     protocol: RuntimeProfileProtocol,
 ) -> list[AgentCapability[ConversationContext]]:
     core, extra = _partition_core_extra(
-        full_toolsets, is_pod_default=ctx.is_pod_default_agent
+        full_toolsets,
+        is_pod_default=ctx.is_pod_default_agent,
+        answers_outsider=bool(getattr(ctx, "answers_outsider", False)),
     )
 
     # The todo toolset (if the agent has TODO) already arrives in `full_toolsets`
@@ -308,8 +320,13 @@ async def _build_lemma_harness_tooling(
     # conversation, so it rides in the cached prefix alongside the other
     # instruction-bearing capabilities.
     surface_platform = getattr(ctx, "surface_platform", None)
+    answers_outsider = bool(getattr(ctx, "answers_outsider", False))
     if surface_platform and platform_is_known(surface_platform):
-        capabilities.append(SurfacePlatformCapability(str(surface_platform)))
+        capabilities.append(
+            SurfacePlatformCapability(
+                str(surface_platform), answers_outsider=answers_outsider
+            )
+        )
 
     # Somebody may be waiting on the person this agent is talking to. Their next
     # message is often the answer, and without this the agent has no idea a
@@ -340,7 +357,13 @@ async def _build_lemma_harness_tooling(
     # Last of the instruction-bearing capabilities, because it is the only one
     # that changes the moment somebody answers. Everything above it stays in the
     # cached prefix when it does.
-    open_notifications = await build_open_notifications_capability(ctx.conversation_id)
+    # Never on a stranger's run: an open notification is the owner's question
+    # to answer, and this capability hands the run the tools to answer it.
+    open_notifications = (
+        None
+        if answers_outsider
+        else await build_open_notifications_capability(ctx.conversation_id)
+    )
     if open_notifications is not None:
         capabilities.append(open_notifications)
 

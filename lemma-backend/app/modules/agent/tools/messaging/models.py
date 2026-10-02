@@ -12,6 +12,12 @@ from app.modules.agent.tools.context import BaseToolResponse
 # The inbox line has to fit one row in a list and one subject line in an email.
 MAX_TITLE_LENGTH = 120
 
+#: The most a stranger's run may pass on to the member who looks after it.
+MAX_OUTSIDER_MESSAGE_CHARS = 1000
+
+#: The inbox label and subject of a question passed on from outside the pod.
+OUTSIDE_QUESTION_TITLE = "A question from someone outside the pod"
+
 # You can name at most this many notifications in one status check. A standup is
 # four people; anything reaching for fifty is polling, which is the failure mode
 # the prompt guidance exists to prevent.

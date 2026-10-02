@@ -76,6 +76,12 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     conversation_operations,  # noqa: F401  (autouse fixture)
 )
 
+
+async def _no_outside_origin(_conversation_id):
+    """No conversation here answers people outside the pod."""
+    return
+
+
 pytestmark = pytest.mark.asyncio
 
 _RESET_HOURS = 24
@@ -458,6 +464,7 @@ class World:
             else [SimpleNamespace(external_user_id=_CHAT, tenant_id=None)]
         )
         self.service = NotificationService(
+            outside_origin_reader=_no_outside_origin,
             uow=self.uow,
             notification_repository=self.notifications,
             surface_repository=SimpleNamespace(

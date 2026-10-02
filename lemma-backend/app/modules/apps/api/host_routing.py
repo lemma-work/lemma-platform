@@ -60,6 +60,7 @@ _GLOBAL_PUBLIC_PREFIXES = (
 # an app owns every other path on its origin, and `/users` is a plausible thing
 # for one to ship.
 _APP_API_PREFIX = APP_ORIGIN_API_URL
+_APP_ACCESS_REDEEM = "/app-access/redeem"
 
 
 def split_release_label(label: str) -> tuple[str | None, str | None]:
@@ -140,6 +141,9 @@ def _strip_app_api_prefix(path: str) -> str | None:
     error anyone would notice.
     """
     for prefix in (_APP_API_PREFIX, f"{_APP_PATH_PREFIX}{_APP_API_PREFIX}"):
+        # Redeeming app access is the app host's own door, not an API call.
+        if path == f"{prefix}{_APP_ACCESS_REDEEM}":
+            return None
         if path == prefix:
             return "/"
         if path.startswith(f"{prefix}/"):

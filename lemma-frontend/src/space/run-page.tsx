@@ -23,6 +23,7 @@ import {
     CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, CodeIcon, ExternalIcon,
     RefreshIcon, TreeIcon, UserIcon, WarningIcon, WorkflowIcon,
 } from "@/ui/icons";
+import { humanizeName } from "@/schedule/schedules";
 
 const STARTED: Record<string, string> = {
     MANUAL: "Started by hand",
@@ -113,13 +114,13 @@ export function RunPage({ pod, runId, label, onBack, onOpenConversation, onOpenR
         <div className="runpage">
             <nav className="runpage__crumb">
                 <button onClick={() => (name ? onOpenWorkflow(name) : onBack())}>
-                    <ChevronLeftIcon size={15} /> {name ?? "Back"}
+                    <ChevronLeftIcon size={15} /> {name ? humanizeName(name) : "Back"}
                 </button>
             </nav>
 
             <header className="runpage__head">
                 <h1>
-                    {name ?? label}
+                    {name ? humanizeName(name) : label}
                     <span className="runpage__id">#{runId.slice(0, 8)}</span>
                 </h1>
                 {detail && (

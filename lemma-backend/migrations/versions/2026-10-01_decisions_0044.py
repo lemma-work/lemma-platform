@@ -10,16 +10,16 @@ decider, subject) when a subject is given -- NULLS NOT DISTINCT, so a system
 decision asked outside any pod is asked once too -- which is what makes a
 decision asked once. `decision_examples` is what people said answers were.
 
-Revision ID: 0043_decisions
-Revises: 0042_mcp_access
+Revision ID: 0044_decisions
+Revises: 0043_surface_groups
 """
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0043_decisions"
-down_revision = "0042_mcp_access"
+revision = "0044_decisions"
+down_revision = "0043_surface_groups"
 branch_labels = None
 depends_on = None
 

@@ -234,6 +234,23 @@ class SurfaceSettings(BaseSettings):
             "conversation on inactivity."
         ),
     )
+    surface_outsider_turns_per_person_per_10_minutes: int = Field(
+        default=10,
+        description=(
+            "How many questions one person outside the pod may put to its bot in "
+            "one group within ten minutes before the bot stops answering them "
+            "for the rest of the window. Everyone else in the group, members "
+            "included, is unaffected."
+        ),
+    )
+    surface_outsider_turns_per_group_per_day: int = Field(
+        default=200,
+        description=(
+            "How many questions from people outside the pod one group may put to "
+            "its bot in a day. A ceiling on what a busy or hostile group can "
+            "spend, not a quota a working group should meet."
+        ),
+    )
     surface_allow_unverified_phone_match: bool = Field(
         default=False,
         description=(

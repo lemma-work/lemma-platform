@@ -685,6 +685,9 @@ def _environment(
         # genuinely has to reach the running server (sandbox callbacks, the
         # function gateway) is pointed at the real host separately, below.
         "API_URL": public_api_url(port),
+        # App-host scenarios address this synthetic origin through the real
+        # socket's Host header; browser coverage uses HTTPS and real cookies.
+        "APP_BASE_DOMAIN": "apps.example.test",
         "FRONTEND_URL": f"http://127.0.0.1:{port}",
         "AUTH_FRONTEND_URL": f"http://127.0.0.1:{port}",
         "DATABASE_URL": database_url,

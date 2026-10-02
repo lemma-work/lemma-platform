@@ -76,3 +76,10 @@ test("expanding and returning preserve the source view", () => {
     assert.deepEqual(layoutForTab("file:brief.md", false, "library"), { main: "library", right: "file:brief.md" });
     assert.deepEqual(layoutForTab("library", false, "library"), { main: "library", right: null });
 });
+
+test("a space's groups and one group's page take the stage", () => {
+    for (const tab of ["space:groups", "group:7f3c9a2e"]) {
+        assert.deepEqual(layoutForTab(tab, false, "space:groups"), { main: tab, right: null });
+        assert.deepEqual(layoutForTab(tab, false), { main: tab, right: null });
+    }
+});

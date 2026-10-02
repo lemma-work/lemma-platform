@@ -1,0 +1,118 @@
+/* Saltbox signs, beat by beat. Base styles are the opening frame: Remy's
+   deals board with Saltbox in Procurement, and the table's Ask panel open
+   and empty. Each `.root[data-bN]` rule is what changes from beat N on, in
+   beat order, so the last rules here are the finished picture: Priya's
+   message, Remy's finished reply, and the board read again with Saltbox
+   in Won. */
+
+.root {
+    /* The board's piles: the product's grey ground, in the landing's ink. */
+    --pile: color-mix(in srgb, var(--cream) 62%, var(--paper));
+}
+.root :where(p) { margin: 0 }
+
+/* ── The page bar ───────────────────────────────────────────────────── */
+.head { gap: 6px; padding: 0 10px 0 12px }
+.head b { white-space: nowrap }
+.refresh { display: inline-flex; align-items: center; gap: 5px; height: 24px; margin-left: auto; padding: 0 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--line-2); background: var(--paper); color: var(--ink) }
+.search { display: grid; place-items: center; width: 24px; height: 24px; color: var(--ink-2) }
+.share { display: inline-flex; align-items: center; height: 24px; padding: 0 12px; border-radius: 99px; background: var(--ink); color: var(--paper) }
+
+/* ── The table, open as a board ─────────────────────────────────────── */
+/* The board runs on under the panel, as it does in the product: Discovery,
+   the fourth pile, starts where the panel does and sits behind it. */
+.page { position: absolute; top: 36px; left: 0; width: 640px; padding: 14px 12px 0 }
+.tools { display: flex; align-items: center; gap: 12px; height: 26px; margin-top: 10px; font-size: 12px; color: var(--ink-3); white-space: nowrap }
+.order { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink) }
+
+.board { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px }
+.pile { flex: 0 0 128px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--pile) }
+.pileHead { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin: 1px 1px 6px 2px; font-size: 12px; font-weight: 500; line-height: 18px; text-transform: uppercase; color: var(--ink-3) }
+.count { display: inline-grid; padding: 0 6px; border-radius: 99px; background: var(--paper); text-transform: none }
+.count > span { grid-area: 1 / 1 }
+.now { visibility: hidden }
+
+.cards { display: flex; flex-direction: column; gap: 6px }
+.card { display: flex; flex-direction: column; padding: 6px 9px 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper) }
+.company { font-size: 12.5px; line-height: 17px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.value { font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; color: var(--ink-3) }
+.add { display: block; padding: 7px 2px 1px; font-size: 12px; color: var(--ink-3) }
+
+/* Saltbox: in Procurement until the board reads its rows again, then in
+   Won. Shown and hidden outright, the way a redraw puts it there, so the
+   piles change length in one frame and nothing slides. */
+.leaves { display: flex }
+.arrives { display: none }
+
+/* ── The table's conversation, floating over the page ─────────────── */
+.chat { position: absolute; top: 46px; right: 12px; z-index: 2; display: flex; flex-direction: column; width: 214px; height: 342px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 24px 60px rgb(20 20 19 / .1), 0 4px 14px rgb(20 20 19 / .05); overflow: hidden }
+.chatHead { display: flex; align-items: center; gap: 9px; padding: 11px 8px 7px 12px }
+.chatHead img { width: 24px; height: 24px }
+.chatTitle { display: flex; flex-direction: column; margin-right: auto; line-height: 1.3 }
+.chatTitle span { font-size: 13.5px; color: var(--ink) }
+.chatTitle small { font-size: 12px; color: var(--ink-3) }
+.min { display: grid; place-items: center; width: 26px; height: 26px; color: var(--ink-3) }
+/* "Open full size" exists once the conversation does: from Priya's message on. */
+.expand { display: none }
+.context { padding: 0 12px 4px }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 6px 0 8px; border-radius: 99px; background: var(--cream); font-size: 12px; color: var(--ink-2); white-space: nowrap }
+.chip span { color: var(--ink) }
+.chip em { font-style: normal; color: var(--ink-3) }
+.chip svg { flex: none }
+.chip > svg:last-child { margin-left: 1px; color: var(--ink-3) }
+
+.thread { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px 12px 0 }
+
+/* Priya's own turn: her words on the far side, in a closed bubble. */
+.mine { align-self: flex-end; max-width: 176px; padding: 7px 12px; border-radius: 14px; background: var(--cream); font-size: 12.5px; line-height: 1.45; color: var(--ink); text-wrap: balance; opacity: 0; transform: translateY(6px) }
+
+/* Remy's turn: the name over what the run did and what it said. */
+.reply { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 12px; opacity: 0; transform: translateY(6px) }
+.replyHead { display: flex; align-items: center; gap: 8px }
+.replyHead img { width: 22px; height: 22px; border-radius: 7px }
+.who { font-size: 13px; color: var(--violet) }
+.at { font-family: var(--mono); font-size: 12px; color: var(--ink-3); opacity: 0 }
+.steps { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px 0 4px; border: 1px solid var(--line); border-radius: 99px; background: var(--paper); font-size: 12px; color: var(--ink-2) }
+.state { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--violet-soft); color: var(--violet) }
+.state > * { grid-area: 1 / 1 }
+.pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--violet); animation: pulse var(--v-slow) var(--ease) infinite }
+@keyframes pulse { 50% { opacity: .35 } }
+.tick { opacity: 0 }
+/* "Working" becomes what the run took, as the product swaps the words: no
+   cross-fade, and the live pill is only as wide as "Working". */
+.what { display: inline-flex; white-space: nowrap }
+.worked { display: none }
+.chev { color: var(--ink-3) }
+.said { font-size: 12.5px; line-height: 1.5; color: var(--ink); text-wrap: balance; opacity: 0; transform: translateY(4px) }
+
+/* Empty: the two quiet lines just above the box. */
+.quiet { position: absolute; left: 14px; right: 12px; bottom: 10px }
+.quietHead { font-size: 13.5px; color: var(--ink) }
+.quietText { margin-top: 2px; font-size: 12.5px; line-height: 1.45; color: var(--ink-3) }
+
+/* The floating chat's box: the words across the top, attach on the left and
+   voice and send on the right below them. Send is grey while the box is empty. */
+.composer { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin: 0 10px 10px; padding: 8px 6px 5px; border-radius: 14px; background: var(--paper); box-shadow: 0 0 0 1px var(--line-2), 0 1px 3px rgb(20 20 19 / .04) }
+.words { flex: 1 0 100%; padding: 0 6px 6px; font-size: 13px; line-height: 18px; color: var(--ink-3) }
+.attach, .wave, .send { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%; color: var(--ink-3) }
+.attach { margin-right: auto }
+.send { width: 28px; height: 28px; background: var(--line-2) }
+
+/* 1 · Priya's message; the empty lines give way to it */
+.root[data-b1] .quiet { opacity: 0 }
+.root[data-b1] .mine { opacity: 1; transform: none }
+.root[data-b1] .expand { display: grid }
+/* 2 · Remy at work; the board stays exactly as it was */
+.root[data-b2] .reply { opacity: 1; transform: none }
+/* 3 · the reply done: what the run took, and what Remy says */
+.root[data-b3] .pulse { opacity: 0; animation: none }
+.root[data-b3] .working { display: none }
+.root[data-b3] .worked { display: inline }
+.root[data-b3] .tick, .root[data-b3] .at { opacity: 1 }
+.root[data-b3] .said { opacity: 1; transform: none }
+/* 4 · the board reads its rows again: Saltbox in Won, Procurement 1,
+       Won 3, in one frame */
+.root[data-b4] .leaves { display: none }
+.root[data-b4] .arrives { display: flex }
+.root[data-b4] .was { visibility: hidden }
+.root[data-b4] .now { visibility: visible }

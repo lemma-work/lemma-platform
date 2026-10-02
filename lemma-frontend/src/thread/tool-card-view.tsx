@@ -29,6 +29,7 @@ import { live } from "@/usage/queries";
 import { Modal } from "@/shell/modal";
 import { SignInPane } from "@/computer/sign-in-pane";
 import { requestSignIn } from "@/computer/sign-in-bridge";
+import { openSettings } from "@/desktop/open-settings";
 import { useConversationDirectory, useFileBody } from "@/computer/queries";
 import { clockOf } from "./turns";
 import {
@@ -806,6 +807,14 @@ function ConnectorCard({ run }: { run: ConnectorRun }) {
                     <p className="toolcard__where">{run.operation}</p>
                     {run.account && <p className="toolcard__where">as account {run.account}</p>}
                     {run.error && <p className="toolcard__note" data-tone={run.failed ? "bad" : undefined}>{run.error}</p>}
+                    {/* A failed call is most often an account that needs
+                        connecting again, and Connectors was somewhere nobody
+                        could find from here. */}
+                    {run.failed && (
+                        <button type="button" className="linkish toolcard__where" onClick={() => openSettings("connectors")}>
+                            Check {run.connector} in Connectors
+                        </button>
+                    )}
                     {run.params.length > 0 && (
                         <dl className="toolcard__args">
                             {run.params.map((param) => (
@@ -928,12 +937,56 @@ function signInStatus(ask: SignInAsk): { text: string; tone?: "bad" | "wait" | "
     return { text: "could not ask", tone: "bad" };
 }
 
-function SignInCard({ ask, conversationId, toolCallId }: { ask: SignInAsk; conversationId?: string | null; toolCallId?: string }) {
+export function SignInCard({ ask, conversationId, toolCallId, docked }: {
+    ask: SignInAsk;
+    conversationId?: string | null;
+    toolCallId?: string;
+    /** On the shelf above the composer, as one line: the site, why, and the
+     *  button. The full card was the size of a message and scrolled away
+     *  with the conversation, though the run could not move until it was
+     *  answered. */
+    docked?: boolean;
+}) {
     const status = signInStatus(ask);
     const [signingIn, setSigningIn] = useState(false);
     /* Both ids name the pause, and a card that cannot name it cannot resolve
        it — so it says so rather than offering a control that goes nowhere. */
     const answerable = Boolean(conversationId && toolCallId);
+    const open = () => {
+        if (!requestSignIn({ conversationId: conversationId!, toolCallId: toolCallId!, host: ask.host })) setSigningIn(true);
+    };
+    const pane = signingIn && conversationId && toolCallId && (
+        <Modal
+            title={"Sign in to " + ask.host}
+            subtitle="In the browser on your computer."
+            wide
+            onClose={() => setSigningIn(false)}
+        >
+            {/* Closing is left to the person even once it is answered:
+                the outcome is the only thing that says whether the run
+                is carrying on, and a dialog that vanished the instant
+                it landed would take that sentence with it. */}
+            <SignInPane conversationId={conversationId} toolCallId={toolCallId} />
+        </Modal>
+    );
+
+    if (docked) {
+        return (
+            <section className="signin-bar" aria-label={"Waiting on you to sign in to " + ask.host}>
+                <Site host={ask.host} />
+                <span className="signin-bar__what">
+                    <b>Waiting on you to sign in to {ask.host}</b>
+                    {ask.reason && <span title={ask.reason}>{ask.reason}</span>}
+                </span>
+                {answerable ? (
+                    <button className="btn btn--primary" onClick={open}>Sign in</button>
+                ) : (
+                    <span className="signin-bar__fine">Cannot be opened from here.</span>
+                )}
+                {pane}
+            </section>
+        );
+    }
 
     return (
         <section className="toolcard toolcard--signin" data-waiting={ask.resolved ? undefined : ""}>
@@ -967,9 +1020,7 @@ function SignInCard({ ask, conversationId, toolCallId }: { ask: SignInAsk; conve
                                 <p className="toolcard__fine">
                                     Sign in to {ask.host} in the browser on your computer.
                                 </p>
-                                <button className="btn btn--primary toolcard__go" onClick={() => {
-                                    if (!requestSignIn({ conversationId: conversationId!, toolCallId: toolCallId!, host: ask.host })) setSigningIn(true);
-                                }}>
+                                <button className="btn btn--primary toolcard__go" onClick={open}>
                                     Sign in to {ask.host}
                                 </button>
                             </>
@@ -978,20 +1029,7 @@ function SignInCard({ ask, conversationId, toolCallId }: { ask: SignInAsk; conve
                         ))}
                 </div>
             )}
-            {signingIn && conversationId && toolCallId && (
-                <Modal
-                    title={"Sign in to " + ask.host}
-                    subtitle="In the browser on your computer."
-                    wide
-                    onClose={() => setSigningIn(false)}
-                >
-                    {/* Closing is left to the person even once it is answered:
-                        the outcome is the only thing that says whether the run
-                        is carrying on, and a dialog that vanished the instant
-                        it landed would take that sentence with it. */}
-                    <SignInPane conversationId={conversationId} toolCallId={toolCallId} />
-                </Modal>
-            )}
+            {pane}
         </section>
     );
 }

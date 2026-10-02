@@ -755,7 +755,11 @@ test("an unanswered sign-in is the pause the composer has to name", () => {
         }),
     ]);
 
-    assert.equal(openSignIn(turns)?.host, "billing.example.com");
+    const open = openSignIn(turns);
+    assert.equal(open?.card.host, "billing.example.com");
+    /* What the shelf needs to answer it, and to lift it out of the transcript. */
+    assert.equal(open?.toolCallId, "call_signin");
+    assert.ok(open?.id);
 
     const answered = buildTurns([
         message({ sequence: 1, role: "user", text: "pull the invoices" }),

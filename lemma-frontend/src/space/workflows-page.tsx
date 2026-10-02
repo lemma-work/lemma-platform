@@ -13,6 +13,7 @@ import { ChevronRightIcon, WorkflowIcon } from "@/ui/icons";
 import { emptyFor } from "./empty-copy";
 import { SpaceEmpty } from "./empty-state";
 import { guideTitle } from "@/tour/guides";
+import { humanizeName } from "@/schedule/schedules";
 
 type View = "workflows" | "waiting" | "running" | "recent";
 
@@ -149,7 +150,7 @@ function FlowRow({ flow, runs, schedules, agentNames, onOpen }: {
                 <span className="wfindex__tile"><WorkflowIcon size={18} /></span>
                 <span className="wfindex__body">
                     <span className="wfindex__title">
-                        <b>{flow.name}</b>
+                        <b>{humanizeName(flow.name)}</b>
                         <em title={flow.perPerson ? "Runs separately for each person, as them" : "Runs once, for everyone here"}>{flow.perPerson ? "Each person" : "Admin"}</em>
                         {!flow.active && <em>Paused</em>}
                         {missing.length > 0 && <em data-warn title={"Hands work to " + missing.join(", ") + ", which is not here"}>Needs setup</em>}

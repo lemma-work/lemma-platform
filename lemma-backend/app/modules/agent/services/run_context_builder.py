@@ -25,10 +25,13 @@ from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
 )
+from app.modules.agent.services.outsider_brief import outsider_brief
 from app.modules.agent.services.brief_lines import run_source_of
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
@@ -98,6 +101,7 @@ async def build_run_context(
     # can reuse it instead of reading the same grants again.
     grant_summary = await load_agent_grant_summary(uow_factory, agent=agent)
     run_toolsets, _ = resolve_toolset_names(agent, conversation, grants=grant_summary)
+    for_outsider = answers_outsiders(conversation)
     ctx = ConversationContext(
         user_id=user_id,
         org_id=conversation.organization_id,
@@ -107,9 +111,12 @@ async def build_run_context(
         agent_run_id=agent_run.id,
         workload_type="agent",
         workload_id=agent.id,
-        configured_accounts=await resolve_configured_accounts(
-            agent=agent,
-            user_id=user_id,
+        # The owner's connector accounts are theirs; a stranger's run has no
+        # connector tools to use them with, and must not be handed them anyway.
+        configured_accounts=(
+            {}
+            if for_outsider
+            else await resolve_configured_accounts(agent=agent, user_id=user_id)
         ),
         runtime_profile=runtime_profile_snapshot,
         runtime_credentials=runtime_credentials,
@@ -125,19 +132,28 @@ async def build_run_context(
         is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
         memory_enabled=memory_is_active(run_toolsets),
         grant_summary=grant_summary,
+        answers_outsider=for_outsider,
+        delivers_to_surface=not run_is_private(agent_run.metadata),
         **surface_context,
     )
     try:
-        ctx.context_brief = await AgentContextBriefBuilder(uow_factory).build(
-            agent=agent,
-            conversation=conversation,
-            toolsets=run_toolsets,
-            user_id=user_id,
-            pod_id=conversation.pod_id,
-            # What started *this* run, as against how the conversation began.
-            # A schedule stamps the conversation once and it stays stamped, so
-            # only the run can say whether a person is here on this turn.
-            run_source=run_source_of(agent_run),
+        ctx.context_brief = (
+            await outsider_brief(
+                uow_factory, pod_id=conversation.pod_id, owner_user_id=user_id
+            )
+            if for_outsider
+            else await AgentContextBriefBuilder(uow_factory).build(
+                agent=agent,
+                conversation=conversation,
+                toolsets=run_toolsets,
+                user_id=user_id,
+                pod_id=conversation.pod_id,
+                # What started *this* run, as against how the conversation
+                # began. A schedule stamps the conversation once and it stays
+                # stamped, so only the run can say whether a person is here on
+                # this turn.
+                run_source=run_source_of(agent_run),
+            )
         )
     # The failures a run should survive: a denied grant, a missing file, a
     # database or storage blip. Not a TypeError -- `agent_memory_brief` says a
@@ -188,6 +204,10 @@ async def build_run_context(
         host_runs_native_commands,
     )
 
+    if for_outsider:
+        # No commands run for a stranger, so there is nowhere to run them --
+        # and the owner's Mac is the last place one should land.
+        return ctx
     if resolved_runtime.harness_kind == HarnessKind.LEMMA:
         ctx.host_workspace = await choose_host_workspace(
             conversation=conversation, agent_run=agent_run, user_id=user_id

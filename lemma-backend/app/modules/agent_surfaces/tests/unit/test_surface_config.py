@@ -68,6 +68,16 @@ EXPECTED = [
         "SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS",
         24,
     ),
+    (
+        "surface_outsider_turns_per_person_per_10_minutes",
+        "SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES",
+        10,
+    ),
+    (
+        "surface_outsider_turns_per_group_per_day",
+        "SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY",
+        200,
+    ),
     ("enable_telegram_polling_mode", "ENABLE_TELEGRAM_POLLING_MODE", False),
     (
         "enable_telegram_manager_polling_mode",

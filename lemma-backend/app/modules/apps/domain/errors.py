@@ -25,6 +25,28 @@ class AppNotFoundError(AppDomainError):
         super().__init__(message=message, code="APP_NOT_FOUND", status_code=404)
 
 
+class AppAccessInvalidError(AppDomainError):
+    """An app host was asked for a private app without a usable access cookie."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "App access expired or could not be verified. Try again.",
+            code="APP_ACCESS_INVALID",
+            status_code=401,
+        )
+
+
+class AppAccessUnavailableError(AppDomainError):
+    """The session service could not say whether app access is still allowed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "App access is temporarily unavailable. Try again.",
+            code="APP_ACCESS_UNAVAILABLE",
+            status_code=503,
+        )
+
+
 class AppAssetNotFoundError(AppNotFoundError):
     """A path the app itself does not serve.
 

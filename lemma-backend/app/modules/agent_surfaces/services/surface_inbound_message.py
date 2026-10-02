@@ -120,6 +120,16 @@ def _combined_voice_text(transcripts: list[str]) -> str:
     )
 
 
+def may_answer_a_pause(context: SurfaceChatContext) -> bool:
+    """Whether this message may be read as the answer to a paused run.
+
+    Not when somebody outside the pod sent it: the conversation belongs to the
+    member who answers for the group, so a resolved pause would be recorded as
+    that member's decision.
+    """
+    return not context.answers_outsider
+
+
 async def write_inbound_message(
     context: SurfaceChatContext,
     message_text: str,
@@ -177,7 +187,17 @@ async def write_inbound_message(
         # answer and resume — rather than starting a new message/run. This is
         # how the formatted-text fallback (and any "type your own" reply) gets
         # back into the run as a structured answer.
-        outcome = await maybe_resume_pending_interaction(context, message_text, uow=uow)
+        #
+        # Never for somebody outside the pod. `context.user_id` is then the
+        # member who owns the conversation, and resolving a pause records the
+        # decision as theirs -- a stranger typing "approve" would approve as
+        # the member, with the member's authority. Their runs never pause, so
+        # there is nothing of theirs to answer either.
+        outcome = (
+            await maybe_resume_pending_interaction(context, message_text, uow=uow)
+            if may_answer_a_pause(context)
+            else ResumeOutcome.NOT_A_DECISION
+        )
         if outcome is ResumeOutcome.FAILED:
             # They decided and we could not write it down. Starting a turn
             # here is what turned an "approve" into a cancellation: it

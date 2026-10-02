@@ -7,6 +7,10 @@ from typing import Any
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
+    ParsedSurfaceLifecycleEvent,
+)
+from app.modules.agent_surfaces.platforms.telegram.membership import (
+    joined_group_event,
 )
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.models import (
@@ -102,6 +106,18 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedInboundSurfaceEvent | None:
         return self._parser.parse(payload, headers)
+
+    async def parse_inbound_lifecycle(
+        self, payload: dict[str, object], headers: dict[str, str] | None = None
+    ) -> ParsedSurfaceLifecycleEvent | None:
+        """The bot being added to a group, and who added it.
+
+        Only the arrival: a bot leaving, being promoted, or a private chat's
+        status changing all arrive as ``my_chat_member`` too, and none of them
+        is somebody bringing the bot into a group.
+        """
+        del headers
+        return joined_group_event(payload)
 
     async def fetch_sender_profile(
         self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent

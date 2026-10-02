@@ -42,10 +42,27 @@ and one way in.
 - Every other picture is a real screen from the sample workspace, captured at
   2x by `scripts/capture-landing-shots.mjs` into `public/landing/`. When the
   product changes, run the script; never edit or draw the images.
-- The cast appears in four places only: Kit on the live workspace, the three
-  steps, the open-source picture and the closing line-up.
+- The cast appears in four places on the landing: Kit on the live workspace,
+  the three steps, the open-source picture and the closing line-up. A product
+  page shows only its own teammate's face: on its screen and at its close.
 - Claims stay inside what the code does ("approvals where a person should
   decide", not "approvals on everything").
+
+Each part of a teammate's space has a page of its own under `/product/<part>`:
+pages, tables, workflows, apps, memory and channels (groups joins when it
+ships). The words are in `src/marketing/product-pages.ts`.
+
+- Each page shows a different sample teammate's job (Scout's research,
+  Remy's pipeline, June's imports), so no one name carries the site. The copy
+  says "your teammate" or "it"; names appear only on the screens.
+- Screens and the short loops come from `scripts/capture-product-shots.mjs`
+  against the same sample, whose tables, pages and workflows are in
+  `src/marketing/sample-spaces.ts` and `preview-fixtures.ts`.
+- A part with no screen worth showing yet says its piece in words.
+- A little life, and no more: things rise in once as they arrive, margin
+  notes draw their arrow, loops play only while on screen, and the page's
+  teammate sits on its closing band. Nothing follows the scroll, and reduced
+  motion gets none of it (`lively.tsx`).
 
 Appearance includes Chat text size: Small (14px), Default (15px), and Large
 (17px), with a live preview and a browser-local preference restored before paint.
@@ -137,6 +154,41 @@ leaves every device and stays readable under Archived.
 Memory folders are found by walking down from ones that exist (`/`, then
 `/memory`, then `agents`…; `/me` for private notes). Listing a folder nobody
 created is a 400, not an empty list, so paths are never asked for blind.
+
+## Groups
+
+A space's group chats are a place in it: `/t/{pod}/groups`, and one group at
+`/t/{pod}/group/{id}`. Every WhatsApp group, Telegram group and Slack channel
+any of its bots is in, from `podGroups`.
+
+- A row says the platform, the agent when it is not the space's own, who has
+  spoken there, who answers people outside the space, and when it last moved.
+  Questions waiting on you sit above the list; their count is the sidebar's
+  badge beside Groups.
+- New group offers only what the space can do. A platform its own bot is not
+  connected to is offered as connecting it, never as a dead option. Each
+  platform lets the bot in its own way — WhatsApp's number makes the group
+  and you share the link, Telegram adds it through a one-use link, Slack is
+  `/invite` — and each sheet waits, visibly, for the group to arrive.
+- A group's page answers what is waiting through the notification it came
+  as, and the bot relays the answer. People are In the space, Not in it (a
+  Lemma account; Invite opens Share), or Not recognised — which offers
+  nothing, because linking somebody else's chat account would hand them its
+  owner's access. Slack keeps its own history, so its page links there.
+- Every member reads every group, except what the bot said to one member
+  with that member's own access: the others see whom it answered, never what
+  it said.
+- Only the member who answers for a group's outsiders, or an admin of the
+  space, switches the group or takes it over; anybody else is told who can,
+  in place of the controls. An admin's change is told to that member. A bot
+  also has its own switch, "Answer people outside {space}", in its channel
+  settings; off, it closes every group the bot is in, and a group's page says
+  so and links there.
+- The composer in a conversation that lives on a chat platform starts on
+  Reply in the person's own DM or email thread, and on Note anywhere others
+  read along. The last choice is kept per conversation, in this browser.
+- Only the sample's Marketing has groups; every other sample space opens on
+  the first run.
 
 ## Empty places
 
