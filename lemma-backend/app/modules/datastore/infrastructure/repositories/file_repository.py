@@ -247,6 +247,30 @@ class DatastoreFileRepository(
             for item, allowed in rows
         ], next_cursor
 
+    async def list_readable_anywhere(
+        self, pod_id: UUID, ctx: Context, *, limit: int
+    ) -> Sequence[DatastoreFileEntity]:
+        """Every file and folder in the pod ``ctx`` may read, at any depth, by path.
+
+        The listing above is one directory at a time, because a person walks a
+        tree. This is for asking what a narrow reader can reach at all -- an
+        outsider's run can open a Public file wherever it sits.
+        """
+        actions = _file_actions_expr(ctx)
+        result = await self.session.execute(
+            select(DatastoreFile, actions)
+            .where(
+                DatastoreFile.pod_id == pod_id,
+                allowed_actions_contains(actions, Permissions.FOLDER_READ),
+            )
+            .order_by(DatastoreFile.path)
+            .limit(limit)
+        )
+        return [
+            self._with_allowed_actions(item.to_entity(), allowed)
+            for item, allowed in result.all()
+        ]
+
     async def get_by_path(
         self,
         pod_id: UUID,

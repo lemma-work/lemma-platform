@@ -36,8 +36,10 @@ import { ChannelIcon } from "@/shell/channels";
 import { Modal } from "@/shell/modal";
 import { SurfaceManage } from "@/shell/surface-manage";
 import { useSurfaces } from "@/shell/surfaces";
+import { Prose } from "@/thread/markdown";
 import { ExternalIcon } from "@/ui/icons";
 import { AgentMark } from "./agent-mark";
+import { GroupPublic } from "./group-public";
 import { groupKey, refreshGroups, timelineKey, useGroupChange } from "./group-queries";
 import { TeammateFace } from "./teammate-face";
 
@@ -312,7 +314,11 @@ function Line({ pod, line, people, me, bot, surface }: {
                     )}
                 </div>
                 {withheld ? <span className="gline__note">{withheld}</span>
-                    : line.text && <p className="gline__text">{line.text}</p>}
+                    /* The bot writes markdown, as everywhere it answers; a
+                       person's line is what they typed in the chat, kept as typed. */
+                    : line.text && (line.fromBot
+                        ? <div className="gline__text gline__text--md"><Prose text={line.text} /></div>
+                        : <p className="gline__text">{line.text}</p>)}
                 {note && <span className="gline__note">{note}</span>}
             </div>
         </li>
@@ -414,7 +420,7 @@ function Outsiders({ pod, group, bot, surface }: { pod: Pod; group: GroupDetail;
                             />
                             <span className="gswitch__text">
                                 <span>Answer them</span>
-                                <small>From what is Public: the tables and pages you mark Public.</small>
+                                <small>From what is Public in {pod.name}, listed below.</small>
                             </span>
                         </label>
                     )}
@@ -439,6 +445,7 @@ function Outsiders({ pod, group, bot, surface }: { pod: Pod; group: GroupDetail;
                         </div>
                     )}
                     {(told ?? who) && <p className="gside__fine">{told ?? who}</p>}
+                    {group.publicReach && <GroupPublic reach={group.publicReach} space={pod.name} />}
                     {change.isError && (
                         <p className="gside__problem" role="alert">{isForbidden(change.error) ? refusedChange(pod.name) : "Couldn’t change that. Try again."}</p>
                     )}

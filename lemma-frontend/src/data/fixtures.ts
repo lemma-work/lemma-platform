@@ -1444,6 +1444,13 @@ const SAMPLE_BOTS_CLOSED = new Set<string>(["researcher-whatsapp"]);
    may configure — Priya is told. */
 const SAMPLE_VIEWER_ADMIN = true;
 
+/** What a sample group's people from outside the space can be answered from. */
+const SAMPLE_PUBLIC = {
+    files: [{ name: "pricing.md", path: "/pricing.md" }, { name: "faq.md", path: "/support/faq.md" }],
+    tables: ["price_list"],
+    more: false,
+};
+
 let GROUPS: SampleGroup[] = [
     {
         pod: "marketing",
@@ -2788,7 +2795,7 @@ export const fixtureSource: PodSource = {
     async getGroup(_podId: string, groupId: string) {
         await wait(120);
         const entry = sampleGroup(groupId);
-        const group = readGroupDetail({ ...groupWire(entry), people: entry.people, waiting: entry.waiting });
+        const group = readGroupDetail({ ...groupWire(entry), people: entry.people, waiting: entry.waiting, public: SAMPLE_PUBLIC });
         if (!group) throw new Error("That group is not here any more.");
         return group;
     },

@@ -227,13 +227,14 @@ def reply_parameters(event: ParsedInboundSurfaceEvent) -> dict[str, Any] | None:
     this run is answering -- so in a DM the quote pointed at whatever the person
     happened to say most recently, which is how every reply ended up tagging an
     unrelated message. In a DM it disambiguates nothing anyway: two of us, one
-    thread.
+    thread. Nor when the run answers a message typed in Lemma, which nobody in
+    the group saw (``answers_inbound``).
 
     The id is coerced to an int because that is what the Bot API takes, and
     because a non-numeric one -- a debounced burst's synthetic ``batch:5-6``,
     say -- would fail the entire send rather than just the quoting.
     """
-    if event.is_dm:
+    if event.is_dm or not event.answers_inbound:
         return None
     try:
         message_id = int(event.reply_target.get("message_id") or 0)

@@ -1,4 +1,4 @@
-import type { Group, GroupDetail, GroupLine, GroupPerson, GroupQuestion, Member, Surface } from "./types";
+import type { Group, GroupDetail, GroupLine, GroupPerson, GroupQuestion, Member, PublicReach, Surface } from "./types";
 import { readSurfaceGroup } from "./surface-groups";
 
 /** A space's groups, read and said.
@@ -99,6 +99,21 @@ export function readGroupDetail(raw: unknown): GroupDetail | null {
         ...group,
         people: rows(row.people).map(readPerson).filter(present),
         waiting: rows(row.waiting).map(readQuestion).filter(present),
+        publicReach: readPublicReach(row.public),
+    };
+}
+
+function readPublicReach(raw: unknown): PublicReach | null {
+    if (!raw || typeof raw !== "object") return null;
+    const row = raw as Record<string, unknown>;
+    return {
+        files: rows(row.files).flatMap((entry) => {
+            const file = entry as Record<string, unknown>;
+            const name = words(file.name);
+            return name ? [{ name, path: words(file.path) }] : [];
+        }),
+        tables: rows(row.tables).filter((name): name is string => typeof name === "string" && name !== ""),
+        more: row.more === true,
     };
 }
 

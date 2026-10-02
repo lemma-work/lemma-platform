@@ -45,6 +45,7 @@ class BaseAgentContext(AgentContext):
     external_user_id: str | None = None
     external_message_id: str | None = None
     agent_display_name: str | None = None
+    surface_conversation_kind: str | None = None
     runtime_profile: dict[str, object] | None = None
     runtime_credentials: dict[str, object] = Field(default_factory=dict)
     workspace_id: str = "default"

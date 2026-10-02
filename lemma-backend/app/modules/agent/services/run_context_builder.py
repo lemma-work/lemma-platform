@@ -26,7 +26,7 @@ from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.domain.outsiders import answers_outsiders
-from app.modules.agent.domain.private_notes import run_is_private
+from app.modules.agent.domain.private_notes import keeper_started, run_is_private
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
@@ -134,6 +134,7 @@ async def build_run_context(
         grant_summary=grant_summary,
         answers_outsider=for_outsider,
         delivers_to_surface=not run_is_private(agent_run.metadata),
+        keeper_asking=for_outsider and keeper_started(agent_run.metadata),
         **surface_context,
     )
     try:
