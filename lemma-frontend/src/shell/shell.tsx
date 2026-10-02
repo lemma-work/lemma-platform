@@ -1066,12 +1066,19 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
      *  teammate. `say` takes the same road a widget's compose request takes —
      *  the words go into the box and stay there. `fill` survives the pod
      *  switch because it lives up here and is cleared by whoever consumes it,
-     *  so there is no race with a conversation that has not mounted yet. */
+     *  so there is no race with a conversation that has not mounted yet.
+     *
+     *  It also opens the conversation. A new space lands on its home, whose
+     *  composer is not the one `fill` writes into — so the draft went into a
+     *  hidden box and the person was left looking at an empty one. Written
+     *  against `podId` rather than through `pickTab`, which still points at
+     *  the pod this render thinks is current. */
     const onFirstMove = useCallback((podId: string, move: FirstMove | undefined) => {
         if (!move) return;
         if ("say" in move) {
             asks.current += 1;
             setFill({ text: move.say, id: asks.current, podId });
+            setTabs((previous) => ({ ...previous, [podId]: "conversation" }));
             return;
         }
         if (move.open === "reach") setReaching(true);

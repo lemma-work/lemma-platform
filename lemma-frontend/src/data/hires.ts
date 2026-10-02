@@ -1,4 +1,5 @@
 import type { Profile, Skill } from "./types";
+import { characterForSeed } from "../shell/cast";
 
 /** Who is on the shelf.
  *
@@ -294,9 +295,10 @@ export const HIRES: Hire[] = [
     },
 ];
 
-/** The last card, and not a fallback: a teammate that starts empty is the one
- *  the product's own line is about — "grows into it". Some jobs have no shelf
- *  entry, and the honest answer is somebody new. */
+/** Not a fallback: a teammate that starts empty is the one the product's own
+ *  line is about — "grows into it". Some jobs have no shelf entry, and the
+ *  honest answer is somebody new. It is reached two ways from the shelf — a
+ *  described job, or "just exploring" — and is never a card of its own. */
 export const BLANK: Hire = {
     id: "blank",
     name: "",
@@ -329,16 +331,40 @@ export function blankHire(
     return { ...BLANK, seed: "blank/" + nonce };
 }
 
+/** A name for somebody hired without one: their character's.
+ *
+ *  "Just exploring" hires in one click, so nobody is asked to name a thing
+ *  they have not met. "Untitled" would undercut the reveal it lands on, and a
+ *  list of first names would be a second identity beside the face. The face
+ *  already has a name — the sculpture is Kite, or Bloom — so the name and the
+ *  face are dealt together and cannot disagree. Renaming is on the profile. */
+export function dealtName(hire: Hire): string {
+    const character = characterForSeed(hire.seed);
+    return character[0].toUpperCase() + character.slice(1);
+}
+
+/** The first things somebody says when they hired without a job in mind.
+ *
+ *  Questions to the teammate, not a job invented on the person's behalf: they
+ *  came to look around, so the openers are ways of looking. The middle one is
+ *  a sentence to finish — it opens as a draft, and the week is theirs to
+ *  describe. */
+export const EXPLORING_OPENERS = [
+    "What could you take off my plate?",
+    "Here is what a normal week looks like for me:",
+    "Show me something you could set up for me today.",
+];
+
 /** What to offer as a first message, once the hire is actually made.
  *
  *  A blank teammate has no script and should not be given an invented one —
  *  the app was told the job thirty seconds ago and reciting it back as if it
  *  were advice is a shell game. So it hands the sentence straight back as the
- *  first instruction, which is what the person was going to type anyway, and
- *  offers nothing at all when they did not describe the job. */
+ *  first instruction, which is what the person was going to type anyway. With
+ *  no job described, it offers ways to explore instead of an empty section. */
 export function openersFor(hire: Hire, job: string): string[] {
     if (hire.id !== "blank") return hire.openers;
     const said = job.trim();
-    if (!said) return [];
+    if (!said) return EXPLORING_OPENERS;
     return [said[0].toUpperCase() + said.slice(1) + (/[.!?]$/.test(said) ? "" : ".")];
 }
