@@ -1,10 +1,9 @@
 """Host asset controller -- anonymous public builds and permitted private ones.
 
-Apps are served by host: ``<public_slug>.<app_base_domain>``. The public slug
-always arrives as the ``X-App-Public-Slug`` header, set by
-``AppHostRoutingMiddleware`` from the request Host (or by an ingress that
-resolves it the same way). Requests reach this router at /public/apps either via
-that host rewrite or directly from clients that set the header.
+Apps are served by host: ``<public_slug>.<app_base_domain>``. Requests reach
+this router at /public/apps only through ``AppHostRoutingMiddleware``, which
+derives the app's label from the request Host and hands it over as the
+``X-App-Public-Slug`` header -- after dropping any copy the client sent.
 
 A private app is served on its hosted HTTPS address only to someone holding its
 access cookie and still allowed to read it; anyone else -- and anyone asking for
@@ -92,10 +91,8 @@ def _get_slug(request: Request) -> tuple[str, str | None]:
     """Resolve ``(slug, release_ref)`` from the one header that carries both.
 
     The label is the whole mechanism: ``orders`` serves what is live,
-    ``orders--r7`` previews release 7. Both deployments hand it over the same
-    way -- the cloud nginx ingress resolves the label from the host and forwards
-    it intact, and the local middleware sets it from the host itself -- so
-    previews work on the existing ingress with no config change.
+    ``orders--r7`` previews release 7. The host routing middleware sets it from
+    the Host, so a preview host needs no ingress configuration of its own.
 
     There is deliberately no separate release header. One existed, nothing
     upstream ever set it, and a client could therefore supply its own and pin

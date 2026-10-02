@@ -17,6 +17,11 @@ from app.modules.test_support.e2e_authz import (
 pytestmark = pytest.mark.e2e
 
 
+def host_of(label: str) -> str:
+    """The Host an app is served at; the only thing that names it."""
+    return f"{label}.{settings.app_base_domain}"
+
+
 def build_dist_archive(marker: str) -> bytes:
     buffer = io.BytesIO()
     with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
@@ -85,8 +90,8 @@ async def test_app_assets_support_private_and_public_asset_routes(
     assert upload_res.status_code == status.HTTP_200_OK, upload_res.text
 
     unlisted_public_res = await async_client.get(
-        "/public/apps",
-        headers={"X-App-Public-Slug": public_slug},
+        "/",
+        headers={"host": host_of(public_slug)},
     )
     assert unlisted_public_res.status_code == status.HTTP_200_OK, (
         unlisted_public_res.text
@@ -132,8 +137,8 @@ async def test_app_assets_support_private_and_public_asset_routes(
     assert "immutable" in js_res.headers["cache-control"]
 
     public_res = await async_client.get(
-        "/public/apps",
-        headers={"X-App-Public-Slug": public_slug},
+        "/",
+        headers={"host": host_of(public_slug)},
     )
     assert public_res.status_code == status.HTTP_200_OK, public_res.text
     assert marker in public_res.text
@@ -143,8 +148,8 @@ async def test_app_assets_support_private_and_public_asset_routes(
     assert public_res.headers["etag"] != asset_res.headers["etag"]
 
     public_spa_fallback_res = await async_client.get(
-        "/public/apps/page",
-        headers={"X-App-Public-Slug": public_slug},
+        "/page",
+        headers={"host": host_of(public_slug)},
     )
     assert public_spa_fallback_res.status_code == status.HTTP_200_OK, (
         public_spa_fallback_res.text
@@ -152,8 +157,8 @@ async def test_app_assets_support_private_and_public_asset_routes(
     assert marker in public_spa_fallback_res.text
 
     public_missing_res = await async_client.get(
-        "/public/apps/assets/missing.js",
-        headers={"X-App-Public-Slug": public_slug},
+        "/assets/missing.js",
+        headers={"host": host_of(public_slug)},
     )
     assert public_missing_res.status_code == status.HTTP_404_NOT_FOUND, (
         public_missing_res.text
@@ -164,8 +169,8 @@ async def test_app_assets_support_private_and_public_asset_routes(
     # following a link gets a page that says what happened and offers the
     # workspace, because the file it names does live there.
     linked_file_res = await async_client.get(
-        "/public/apps/library/rust/rustbook-ownership.md",
-        headers={"X-App-Public-Slug": public_slug, "accept": "text/html"},
+        "/library/rust/rustbook-ownership.md",
+        headers={"host": host_of(public_slug), "accept": "text/html"},
     )
     assert linked_file_res.status_code == status.HTTP_404_NOT_FOUND
     assert linked_file_res.headers["content-type"].startswith("text/html")
@@ -176,23 +181,23 @@ async def test_app_assets_support_private_and_public_asset_routes(
     # The same path fetched rather than navigated to keeps the JSON error every
     # existing client already handles.
     fetched_file_res = await async_client.get(
-        "/public/apps/library/rust/rustbook-ownership.md",
-        headers={"X-App-Public-Slug": public_slug, "accept": "application/json"},
+        "/library/rust/rustbook-ownership.md",
+        headers={"host": host_of(public_slug), "accept": "application/json"},
     )
     assert fetched_file_res.status_code == status.HTTP_404_NOT_FOUND
     assert fetched_file_res.json()["code"] == "APP_NOT_FOUND"
 
     # A missing chunk is a broken build, not a document: no workspace offer.
     missing_chunk_res = await async_client.get(
-        "/public/apps/assets/missing.js",
-        headers={"X-App-Public-Slug": public_slug, "accept": "text/html"},
+        "/assets/missing.js",
+        headers={"host": host_of(public_slug), "accept": "text/html"},
     )
     assert missing_chunk_res.status_code == status.HTTP_404_NOT_FOUND
     assert "/files?file=" not in missing_chunk_res.text
 
     public_js_res = await async_client.get(
-        "/public/apps/assets/app.js",
-        headers={"X-App-Public-Slug": public_slug},
+        "/assets/app.js",
+        headers={"host": host_of(public_slug)},
     )
     assert public_js_res.status_code == status.HTTP_200_OK, public_js_res.text
     assert marker in public_js_res.text
@@ -213,9 +218,9 @@ async def test_app_assets_support_private_and_public_asset_routes(
     assert apex_res.status_code != status.HTTP_200_OK or marker not in apex_res.text
 
     public_not_modified_res = await async_client.get(
-        "/public/apps",
+        "/",
         headers={
-            "X-App-Public-Slug": public_slug,
+            "host": host_of(public_slug),
             "If-None-Match": public_res.headers["etag"],
         },
     )
@@ -602,31 +607,27 @@ async def test_release_history_preview_and_rollback(
     assert items[0]["preview_url"] == f"http://{public_slug}--r3.apps.test"
 
     # The live host serves the newest build.
-    live_res = await async_client.get(
-        "/public/apps", headers={"X-App-Public-Slug": public_slug}
-    )
+    live_res = await async_client.get("/", headers={"host": host_of(public_slug)})
     assert live_res.status_code == status.HTTP_200_OK, live_res.text
     assert markers[2] in live_res.text
 
     # A preview host serves an older release without promoting it -- including
     # that release's own assets, which is the whole reason previews are a host.
     preview_res = await async_client.get(
-        "/public/apps", headers={"X-App-Public-Slug": f"{public_slug}--r1"}
+        "/", headers={"host": host_of(f"{public_slug}--r1")}
     )
     assert preview_res.status_code == status.HTTP_200_OK, preview_res.text
     assert markers[0] in preview_res.text
 
     preview_asset_res = await async_client.get(
-        "/public/apps/assets/app.js",
-        headers={"X-App-Public-Slug": f"{public_slug}--r1"},
+        "/assets/app.js",
+        headers={"host": host_of(f"{public_slug}--r1")},
     )
     assert preview_asset_res.status_code == status.HTTP_200_OK, preview_asset_res.text
     assert markers[0] in preview_asset_res.text
 
     # Previewing changed nothing about what is live.
-    still_live_res = await async_client.get(
-        "/public/apps", headers={"X-App-Public-Slug": public_slug}
-    )
+    still_live_res = await async_client.get("/", headers={"host": host_of(public_slug)})
     assert markers[2] in still_live_res.text
 
     promote_res = await authenticated_client.post(
@@ -635,7 +636,7 @@ async def test_release_history_preview_and_rollback(
     assert promote_res.status_code == status.HTTP_200_OK, promote_res.text
 
     rolled_back_res = await async_client.get(
-        "/public/apps", headers={"X-App-Public-Slug": public_slug}
+        "/", headers={"host": host_of(public_slug)}
     )
     assert rolled_back_res.status_code == status.HTTP_200_OK, rolled_back_res.text
     assert markers[0] in rolled_back_res.text
@@ -858,8 +859,8 @@ async def test_a_forged_release_header_cannot_serve_an_old_build_on_the_live_hos
         assert res.status_code == status.HTTP_200_OK, res.text
 
     forged = await authenticated_client.get(
-        "/public/apps",
-        headers={"X-App-Public-Slug": slug, "X-App-Release": "r1"},
+        "/",
+        headers={"host": host_of(slug), "X-App-Release": "r1"},
     )
     assert forged.status_code == status.HTTP_200_OK, forged.text
     assert live in forged.text, "the live build, not the one the header asked for"
@@ -867,10 +868,24 @@ async def test_a_forged_release_header_cannot_serve_an_old_build_on_the_live_hos
 
     # The preview host still works -- the release rides the label, not a header.
     preview = await authenticated_client.get(
-        "/public/apps", headers={"X-App-Public-Slug": f"{slug}--r1"}
+        "/", headers={"host": host_of(f"{slug}--r1")}
     )
     assert preview.status_code == status.HTTP_200_OK, preview.text
     assert old in preview.text
+
+    # The slug header is the middleware's alone, too. Sent by a client it used
+    # to mean "a proxy already routed this": on the app host the request then
+    # skipped the rewrite and reached the API on the app's own origin.
+    on_app_host = await authenticated_client.get(
+        "/users/me", headers={"host": host_of(slug), "X-App-Public-Slug": slug}
+    )
+    assert on_app_host.status_code == status.HTTP_200_OK
+    assert live in on_app_host.text, "the app's own route, not the API's"
+    # ...and off an app host it named an app for the API host to serve.
+    off_app_host = await authenticated_client.get(
+        "/public/apps", headers={"X-App-Public-Slug": slug}
+    )
+    assert off_app_host.status_code == status.HTTP_400_BAD_REQUEST
 
 
 async def test_retrying_an_old_prune_cannot_delete_a_new_upload(

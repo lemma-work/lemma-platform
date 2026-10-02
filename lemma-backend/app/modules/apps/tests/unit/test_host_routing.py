@@ -42,14 +42,8 @@ def test_no_base_domain_disables_routing(monkeypatch):
     assert app_slug_from_host("my-app.apps.lemma.localhost:8711") == (None, None)
 
 
-async def _drive(
-    path, *, host=b"my-app.apps.lemma.localhost:8711", proxied=False, extra_headers=None
-):
-    """Run the middleware for a request and return the downstream scope.
-
-    ``proxied=True`` reproduces the cloud path, where the nginx ingress has
-    already resolved the slug and set the header itself.
-    """
+async def _drive(path, *, host=b"my-app.apps.lemma.localhost:8711", extra_headers=None):
+    """Run the middleware for a request and return the downstream scope."""
     seen = {}
 
     async def downstream(scope, receive, send):
@@ -57,8 +51,6 @@ async def _drive(
 
     middleware = AppHostRoutingMiddleware(downstream)
     headers = [(b"host", host), *(extra_headers or [])]
-    if proxied:
-        headers.append((b"x-app-public-slug", b"my-app"))
     scope = {
         "type": "http",
         "path": path,
@@ -137,32 +129,6 @@ async def test_the_prefix_does_not_swallow_an_apps_own_paths():
 
 
 @pytest.mark.asyncio
-async def test_the_prefix_means_the_same_thing_behind_the_ingress():
-    # The path an ingress actually delivers, not the one it would be convenient
-    # to assert. `nginx.conf` proxies app hosts with
-    # `proxy_pass .../public/apps$request_uri`, and a proxy_pass whose URI
-    # contains a variable is sent verbatim -- so the backend sees the prefix
-    # already nested under the asset endpoint.
-    #
-    # The first version of this test hand-built `/_lemma/users/me` for the
-    # proxied case, which nginx never produces. It passed while every API call
-    # behind that ingress fell through to the asset controller and came back
-    # 200 with the app's own index.html.
-    nested = await _drive("/public/apps/_lemma/users/me", proxied=True)
-    assert nested["path"] == "/users/me"
-
-    # An ingress that rewrites nothing and only sets the header works too.
-    bare = await _drive("/_lemma/users/me", proxied=True)
-    assert bare["path"] == "/users/me"
-
-    # ...while ordinary proxied asset requests stay exactly as they were.
-    asset = await _drive("/assets/app.js", proxied=True)
-    assert asset["path"] == "/assets/app.js"
-    nested_asset = await _drive("/public/apps/assets/app.js", proxied=True)
-    assert nested_asset["path"] == "/public/apps/assets/app.js"
-
-
-@pytest.mark.asyncio
 async def test_the_door_is_shut_unless_the_deployment_opened_it(monkeypatch):
     # The prefix is only handed to apps where the setting is on; the strip has
     # to be gated on the same thing. Ungated, any deployment whose app domain
@@ -237,8 +203,7 @@ async def test_preview_host_pins_the_release_on_every_asset():
     # The release rides the host, not the path, precisely so that a Vite build's
     # absolute `/assets/...` request stays on the previewed release instead of
     # falling back to whatever is live. It travels as part of the slug label --
-    # one mechanism, the same one the cloud ingress already forwards -- so there
-    # is no second header for a client to forge.
+    # one mechanism -- so there is no second header for a client to forge.
     scope = await _drive("/assets/app.js", host=b"my-app--r7.apps.lemma.localhost:8711")
     assert scope["path"] == "/public/apps/assets/app.js"
     assert (b"x-app-public-slug", b"my-app--r7") in scope["headers"]
@@ -258,9 +223,9 @@ async def test_preview_host_pins_the_release_on_every_asset():
 async def test_a_client_supplied_release_header_never_survives(host, path):
     """The security regression.
 
-    Nothing upstream sets this header -- neither nginx config does -- so one
-    arriving from a client was honoured verbatim, and anyone could serve any
-    superseded build from the canonical live host by adding a line to a request.
+    Nothing upstream sets this header, so one arriving from a client was
+    honoured verbatim, and anyone could serve any superseded build from the
+    canonical live host by adding a line to a request.
     """
     scope = await _drive(path, host=host, extra_headers=[(b"x-app-release", b"r1")])
     assert all(key != b"x-app-release" for key, _ in scope["headers"])
@@ -280,29 +245,42 @@ async def test_a_client_supplied_slug_cannot_beat_the_host():
     assert Headers(raw=scope["headers"]).get("x-app-public-slug") == "my-app"
 
 
+@pytest.mark.parametrize(
+    "host,path",
+    [
+        (b"my-app.apps.lemma.localhost:8711", "/_lemma/users/me"),
+        (b"my-app.apps.lemma.localhost:8711", "/users/me"),
+        (b"my-app.apps.lemma.localhost:8711", "/public/apps/assets/app.js"),
+        (b"api.lemma.localhost:8711", "/public/apps/assets/app.js"),
+        (b"api.lemma.localhost:8711", "/users/me"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_a_proxied_request_is_not_rewritten_twice():
-    """In cloud the ingress resolves the label AND rewrites the path, forwarding
-    the original Host. Rewriting again would ask for
-    /public/apps/public/apps/assets/app.js and 404 every app in production."""
+async def test_a_client_supplied_slug_never_survives(monkeypatch, host, path):
+    """Nothing upstream sets this header: every ingress passes Host through.
+
+    It used to mean "a proxy already routed this", so on an app host it skipped
+    the rewrite and reached ordinary API routes on the origin that renders
+    user-authored HTML, and on any other host it chose which app to serve.
+    """
+    monkeypatch.setattr(settings, "app_api_via_app_origin", False)
     scope = await _drive(
-        "/public/apps/assets/app.js",
-        host=b"my-app--r7.apps.lemma.localhost:8711",
-        extra_headers=[(b"x-app-public-slug", b"my-app--r7")],
+        path, host=host, extra_headers=[(b"x-app-public-slug", b"other-app--r1")]
     )
-    assert scope["path"] == "/public/apps/assets/app.js"
-    assert (b"x-app-public-slug", b"my-app--r7") in scope["headers"]
+    slugs = [value for key, value in scope["headers"] if key == b"x-app-public-slug"]
+    if host.startswith(b"api."):
+        assert slugs == []
+        assert scope["path"] == path
+    else:
+        # Rewritten as the app's own path, labelled from the Host alone.
+        assert slugs == [b"my-app"]
+        assert scope["path"] == f"/public/apps{path}"
 
 
 @pytest.mark.asyncio
-async def test_a_non_app_host_keeps_the_proxy_supplied_slug():
-    """This branch IS the cloud ingress contract. Stripping the slug here would
-    take every app down to close a hole that only re-exposes bytes already
-    public at their own preview host."""
-    scope = await _drive(
-        "/public/apps/assets/app.js",
-        host=b"api.lemma.localhost:8711",
-        extra_headers=[(b"x-app-public-slug", b"my-app--r7")],
-    )
-    assert scope["path"] == "/public/apps/assets/app.js"
-    assert (b"x-app-public-slug", b"my-app--r7") in scope["headers"]
+async def test_an_apps_own_public_apps_path_is_still_its_own():
+    """No proxy pre-rewrites the path any more, so `/public/apps/...` on an app
+    host is a file the app ships, served under the asset endpoint like any other."""
+    scope = await _drive("/public/apps/assets/app.js")
+    assert scope["path"] == "/public/apps/public/apps/assets/app.js"
+    assert (b"x-app-public-slug", b"my-app") in scope["headers"]
