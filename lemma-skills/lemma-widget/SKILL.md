@@ -35,8 +35,12 @@ React, ReactDOM, Tailwind, and the agent web-component bundle belong in a Vite
 app — Lemma has full app support for that class of UI. A widget stays lightweight,
 and can be saved as an HTML app later.
 
-Widgets are display surfaces. `ask_user` collects fixed choices; prose collects
-free-form input.
+A widget is an interactive display: whatever you want to show the person in a
+form they can work with. Its buttons can do anything in Lemma — write records,
+run functions and workflows, put something in the conversation, or execute a
+connector operation — as the person viewing it. `ask_user` is still how *this
+run* gets an answer it needs, because a widget's clicks arrive after the run is
+over.
 
 ## Build one
 
@@ -192,12 +196,12 @@ needs around it.
   Expand control, and a self-reported height is clamped to 2400px. Design for
   the fold: put the answer at the top, not below a long table. The frame follows
   the content both ways — a view that narrows itself shrinks the frame with it.
-- A widget **offers** a message; it never sends one. `lemma.compose`
-  puts text in the conversation's composer for the person to send, edit, or
-  ignore — see [Let it answer back](#let-it-answer-back). Everything else the
-  frame might want to say to the host is not part of the contract.
+- A follow-up for the agent goes through `lemma.compose`, which puts text in
+  the conversation's composer for the person to send, edit, or ignore — see
+  [Let it answer back](#let-it-answer-back). Everything else a button does, it
+  does itself through the SDK — see [Act on it](#act-on-it).
 - Use `ask_user` when the run cannot continue without an answer. A widget's
-  offer arrives after the run is over; `ask_user` pauses it.
+  clicks arrive after the run is over; `ask_user` pauses it.
 
 The page is themed and system-aware: the tokens it supplies carry their
 `prefers-color-scheme: dark` values and semantic fallbacks, so a widget written
@@ -285,10 +289,34 @@ at once:
 - **Show the thing itself.** `files.children.markdown` and `.content` render a
   document's own pages inside the widget instead of describing them.
 
-What stays out: anything needing React, routing, or state worth persisting —
-that is an app. And anything destructive. A widget may read, filter and offer;
-a write behind a button in a view somebody clicked without reading is not a
-decision anyone made.
+What stays out: anything needing React, routing, or several screens — that is
+an app.
+
+## Act on it
+
+`await lemma.client()` is the full SDK, signed in as the person viewing the
+widget. A button can do the thing, not just describe it:
+
+```js
+const c = await lemma.client();
+await c.records.update("deals", deal.id, { stage: "won" });
+await c.functions.run("send_quote", { input: { deal_id: deal.id } });
+await c.workflows.runs.create("onboard_customer");
+await c.connectors.operations.execute(scope, "send_email", payload);
+```
+
+Everything runs under the viewer's own permissions and RLS, so a person who
+cannot write a table cannot write it through a widget either.
+
+- **Say what happened, from the result.** Show the saved row, the run's status,
+  or the error — in the widget, right where the button was. Disable the button
+  while the call is in flight so one click is one write.
+- **Name the effect on the button.** "Mark won", "Send to Acme", "Delete 3
+  drafts" — the label is what the person agrees to when they click it. Something
+  that cannot be undone, or that reaches someone outside the pod, says so before
+  it runs: a second click to confirm is enough.
+- **Never claim what did not happen.** "Sent" is written after the send
+  resolved, not when the button was pressed.
 
 ## Let it answer back
 
@@ -440,8 +468,9 @@ your reply.
   fill is written in `on-accent`, and no weight exceeds 500.
 - A chart labels selectively, keeps text in ink rather than the data colour,
   responds to a pointer, and carries its numbers as a table as well.
-- Anything the person can click does something here, or offers something to the
-  composer. Nothing writes, and nothing claims to have sent a message.
+- Anything the person can click does something here — reads, writes, runs — or
+  offers something to the composer. Every action is named on its button, shows
+  its real result or error, and nothing claims a send that did not resolve.
 - Every compose button is behind `lemma.canCompose()`, and its text reads as
   the person's own words.
 

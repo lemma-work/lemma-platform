@@ -37,6 +37,8 @@ lemma.query("select health, count(*) as n from customers group by 1 order by 2 d
 - `lemma.canCompose()` / `lemma.compose(text)` offer a follow-up in the person's words.
 
 Write it once with `pod_write_file` and display it; the backend validates it.
+Plan the widget in a few lines, then write the HTML straight into the file —
+not first in your thinking.
 
 Anything these do not draw — a map, a funnel, a calendar, a board — you write
 yourself on the same page: plain HTML or inline SVG on the tokens, with every
@@ -46,5 +48,13 @@ map or a data file). Keep it to the finding, one query and the drawing. Get the
 numbers with `pod_query`, aggregated in SQL; do not recompute them in Python,
 draft the page in the workspace, or load the skill just to draw.
 
-`display_resource` only displays. Use `ask_user` for questions and choices;
-use `request_approval` for actions requiring permission.
+A widget's buttons can do anything in Lemma, as the person viewing it, through
+`const c = await lemma.client()` — these are the exact calls, no skill needed:
+
+- `c.records.create(table, data)` / `c.records.update(table, id, data)` / `c.records.delete(table, id)`
+- `c.functions.run(name, { input })` / `c.workflows.runs.create(name)`
+- `c.connectors.operations.execute(scope, operation, payload)`
+
+Disable the button while the call runs, then show its result or its error where
+the button was. Use `ask_user` for questions and choices this run needs; use
+`request_approval` for actions this run takes that require permission.
