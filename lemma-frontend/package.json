@@ -24,7 +24,7 @@
     "test:auth-live": "node --test tests/browser/auth-live.test.mjs"
   },
   "dependencies": {
-    "@google/genai": "^2.22.0",
+    "@google/genai": "^2.24.0",
     "@novnc/novnc": "^1.7.0",
     "@phosphor-icons/react": "^2.1.10",
     "@shikijs/rehype": "^4.4.3",
@@ -44,11 +44,11 @@
     "@tiptap/suggestion": "^3.31.3",
     "github-slugger": "^2.0.0",
     "gray-matter": "^4.0.3",
-    "js-yaml": "^4.3.2",
+    "js-yaml": "^5.4.2",
     "lemma-sdk": "file:../lemma-typescript",
-    "next": "^16.3.5",
+    "next": "^16.3.6",
     "next-mdx-remote": "^6.0.0",
-    "posthog-js": "^1.434.12",
+    "posthog-js": "^1.434.15",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
@@ -59,10 +59,10 @@
     "remark-gfm": "^4.0.1",
     "server-only": "^0.0.1",
     "supertokens-web-js": "^0.16.0",
-    "three": "^0.186.0",
+    "three": "^0.186.1",
     "tiptap-markdown": "^0.9.0",
     "unist-util-visit": "^5.1.0",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/hast": "^3.0.5",
@@ -73,12 +73,12 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@types/three": "^0.186.0",
-    "eslint": "^10.10.0",
+    "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^29.1.1",
-    "playwright": "^1.60.0",
+    "playwright": "^1.63.0",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.70.0"
+    "typescript-eslint": "^8.70.1"
   },
   "engines": {
     "node": ">=24 <25"
