@@ -32,6 +32,9 @@ from app.modules.agent_surfaces.domain.notification import NotificationEntity
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
     SurfaceConversationLinkRepository,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.outside_links import (
+    links_to_people_outside,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
 )
@@ -66,9 +69,9 @@ async def outside_origin(
     """
     if conversation_id is None:
         return None
-    links = SurfaceConversationLinkRepository(uow)
-    if not await links.is_outsiders_thread(conversation_id):
+    if not await links_to_people_outside(uow.session, conversation_id):
         return None
+    links = SurfaceConversationLinkRepository(uow)
     link = await links.get_by_conversation_id(conversation_id)
     if link is None or link.external_user_id != OUTSIDERS_LINK_USER:
         # Outsiders' all the same: the run answers strangers, so its question

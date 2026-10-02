@@ -71,3 +71,70 @@ class OutsiderTurnLimiter:
             per_person=per_person,
             per_group=not per_person,
         )
+
+
+class ContactTurnLimiter:
+    """How often contacts may put a bot to work, and how fast it meets new ones.
+
+    The same fixed windows, failing closed, as ``OutsiderTurnLimiter``, for the
+    same reason: a contact going unanswered while Redis is away costs nothing,
+    and their message is still in the chat for a member to answer.
+    """
+
+    def __init__(self, *, redis=None) -> None:
+        self._redis = redis
+
+    async def allow_new_contact(self, *, surface_id: UUID) -> bool:
+        """Count one stranger becoming a contact of this bot today."""
+        limit = surface_settings.surface_new_contacts_per_surface_per_day
+        try:
+            count = await incr_with_ttl(
+                self._redis or get_redis(), f"contact:new:{surface_id}", _DAY
+            )
+        except (RedisError, OSError) as exc:
+            logger.warning(
+                "agent_surfaces.contact_limits.unavailable.degraded",
+                error_type=type(exc).__name__,
+            )
+            return False
+        if count > limit:
+            logger.info(
+                "agent_surfaces.contact_limits.new_contacts_exceeded.observed",
+                surface_id=str(surface_id),
+            )
+            return False
+        return True
+
+    async def allow(self, *, surface_id: UUID, contact_id: UUID) -> bool:
+        """Count this contact's turn and say whether it may run."""
+        client = self._redis or get_redis()
+        person_limit = surface_settings.surface_contact_turns_per_person_per_10_minutes
+        surface_limit = surface_settings.surface_contact_turns_per_surface_per_day
+        try:
+            per_person = await incr_with_ttl(
+                client, f"contact:turns:{surface_id}:{contact_id}", _TEN_MINUTES
+            )
+            if per_person > person_limit:
+                self._refused(surface_id, per_person=True)
+                return False
+            per_surface = await incr_with_ttl(
+                client, f"contact:turns:{surface_id}", _DAY
+            )
+        except (RedisError, OSError) as exc:
+            logger.warning(
+                "agent_surfaces.contact_limits.unavailable.degraded",
+                error_type=type(exc).__name__,
+            )
+            return False
+        if per_surface > surface_limit:
+            self._refused(surface_id, per_person=False)
+            return False
+        return True
+
+    @staticmethod
+    def _refused(surface_id: UUID, *, per_person: bool) -> None:
+        logger.info(
+            "agent_surfaces.contact_limits.exceeded.observed",
+            surface_id=str(surface_id),
+            per_person=per_person,
+        )

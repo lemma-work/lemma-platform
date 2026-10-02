@@ -17,17 +17,34 @@ stranger, and three things about it differ from every other run:
 The fact lives on the conversation, not the run: such a conversation holds only
 outsiders' turns, and every consumer that decides what a run may do -- the
 runner, the MCP bridge, the approval executor -- already reads the conversation.
+
+**A contact is somebody outside the pod too.** A contact's conversation -- a
+private chat with a person the pod knows by a vouched-for handle -- carries the
+``contact`` audience and the contact's id, and ``answers_outsiders`` is true of
+it: every rule above holds for a contact's run exactly as for a stranger's in a
+group. What the contact adds is a name, and a private chat rather than a group.
 """
 
 from __future__ import annotations
+
+from uuid import UUID
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
 
-#: The metadata key, and the one value of it that means "outsiders".
+#: The metadata key, and its values. ``outsiders`` is a group's people from
+#: outside the pod, all in one conversation; ``contact`` is one contact, in a
+#: private chat, named by ``CONTACT_KEY``.
 AUDIENCE_KEY = "audience"
 OUTSIDERS = "outsiders"
+CONTACT = "contact"
+CONTACT_KEY = "contact_id"
+
+_OUTSIDE_AUDIENCES = frozenset({OUTSIDERS, CONTACT})
+
+#: Keys only routing may write, and that no client may drop or forge.
+_PROTECTED_KEYS = (AUDIENCE_KEY, CONTACT_KEY)
 
 #: The toolsets a stranger's run keeps, when its agent has them. A first cut:
 #: inside them, only the tools named in ``tools/outsider_tools`` survive.
@@ -60,12 +77,30 @@ OUTSIDER_TOOLSETS = frozenset(
 OUTSIDE_ANSWER_TOOL = "respond_to_notification"
 
 
+def _metadata(conversation: Conversation | None) -> dict[str, object]:
+    if conversation is None or not isinstance(conversation.metadata, dict):
+        return {}
+    return conversation.metadata
+
+
 def answers_outsiders(conversation: Conversation | None) -> bool:
-    """Whether this conversation's turns come from people outside the pod."""
-    if conversation is None:
-        return False
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    return metadata.get(AUDIENCE_KEY) == OUTSIDERS
+    """Whether this conversation's turns come from people outside the pod.
+
+    True for a group's outsiders and for a contact alike: both are answered as
+    nobody, and nothing that decides what a run may do needs to tell them apart.
+    """
+    return _metadata(conversation).get(AUDIENCE_KEY) in _OUTSIDE_AUDIENCES
+
+
+def conversation_contact_id(conversation: Conversation | None) -> UUID | None:
+    """The contact this conversation is a private chat with, if it is one."""
+    metadata = _metadata(conversation)
+    if metadata.get(AUDIENCE_KEY) != CONTACT:
+        return None
+    try:
+        return UUID(str(metadata.get(CONTACT_KEY)))
+    except ValueError:
+        return None
 
 
 def with_audience_kept(
@@ -80,13 +115,19 @@ def with_audience_kept(
     it, and have the next stranger's turn run with the owner's authority.
     Metadata cleared where there is no audience to keep stays cleared.
     """
-    previous = (existing or {}).get(AUDIENCE_KEY)
-    if incoming is None and previous is None:
+    previous = {
+        key: (existing or {})[key]
+        for key in _PROTECTED_KEYS
+        if (existing or {}).get(key) is not None
+    }
+    if incoming is None and not previous:
         return None
-    kept = dict(incoming or {})
-    kept.pop(AUDIENCE_KEY, None)
-    if previous is not None:
-        kept[AUDIENCE_KEY] = previous
+    kept = {
+        key: value
+        for key, value in (incoming or {}).items()
+        if key not in _PROTECTED_KEYS
+    }
+    kept.update(previous)
     return kept
 
 
@@ -96,9 +137,9 @@ def without_audience(metadata: dict[str, object] | None) -> dict[str, object] | 
     Only routing opens a conversation for people outside the pod
     (``open_surface_conversation``); a conversation a client creates is its own.
     """
-    if not metadata or AUDIENCE_KEY not in metadata:
+    if not metadata or not any(key in metadata for key in _PROTECTED_KEYS):
         return metadata
-    return {key: value for key, value in metadata.items() if key != AUDIENCE_KEY}
+    return {key: value for key, value in metadata.items() if key not in _PROTECTED_KEYS}
 
 
 class OutsiderRunRefused(DomainError):

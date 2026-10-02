@@ -52,6 +52,9 @@ from app.modules.workspace.infrastructure import models as workspace_models  # n
 # Outside MCP clients (mcp_oauth_clients, mcp_oauth_grants, mcp_oauth_tokens)
 from app.modules.mcp_access.infrastructure import models as mcp_access_models  # noqa: F401
 
+# Contacts (contacts, contact_identities)
+from app.modules.contacts.infrastructure import models as contact_models  # noqa: F401
+
 
 # Every import above exists for its side effect: importing a models module is
 # what registers its tables on Base.metadata, which is the whole input to
@@ -76,6 +79,7 @@ REGISTERED_MODEL_MODULES = (
     pod_bundle_models,
     workspace_models,
     mcp_access_models,
+    contact_models,
 )
 
 config = context.config

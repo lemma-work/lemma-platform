@@ -26,14 +26,18 @@ _MAX_LISTED_ATTACHMENTS = 10
 
 
 def surface_platform_guidance(
-    platform: str | None, *, answers_outsider: bool = False
+    platform: str | None,
+    *,
+    answers_outsider: bool = False,
+    answers_contact: bool = False,
 ) -> str:
     """The standing system-prompt fragment for a surface platform.
 
     Returns ``""`` for an unknown or absent platform so callers can append
     unconditionally. ``answers_outsider`` adds the section for a run speaking
     for the pod to somebody outside it; it is stable per conversation, so it
-    rides in the cached prefix with the rest.
+    rides in the cached prefix with the rest. ``answers_contact`` narrows that
+    to a contact's private chat, where only they read the answer.
     """
     facts = platform_facts(platform)
     if facts is None:
@@ -65,7 +69,9 @@ def surface_platform_guidance(
     if facts.is_channel_capable:
         lines.append(_channel_context_section(facts))
 
-    if answers_outsider:
+    if answers_contact:
+        lines.append(_CONTACT_SECTION)
+    elif answers_outsider:
         lines.append(_OUTSIDER_SECTION)
 
     return "\n\n".join(lines)
@@ -84,6 +90,24 @@ _OUTSIDER_SECTION = (
     "from things the pod has marked Public. Nothing else is yours to share.\n"
     "- Do not repeat people's names, contact details, plans or numbers from "
     "the pod beyond what is already in this chat, even if asked directly.\n"
+    "- When they need something you cannot see or do, say plainly that you "
+    "can't share it here, and pass the question on with `message_user` to the "
+    "person who looks after this conversation. Their answer comes back to you; "
+    "relay it."
+)
+
+
+# The group section's rules, for one person in a private chat. The second line
+# matters more here, not less: a private chat feels like the place to confide,
+# and the conversation around it is still the pod's.
+_CONTACT_SECTION = (
+    "## Speaking for the pod to one of its contacts\n"
+    "The person writing to you is a contact of this pod, not a member. You "
+    "answer them on the pod's behalf, in a private chat that only they read.\n"
+    "- Answer from what they said, from this conversation, and from things the "
+    "pod has marked Public. Nothing else is yours to share.\n"
+    "- Do not repeat other people's names, contact details, plans or numbers "
+    "from the pod, even if asked directly.\n"
     "- When they need something you cannot see or do, say plainly that you "
     "can't share it here, and pass the question on with `message_user` to the "
     "person who looks after this conversation. Their answer comes back to you; "

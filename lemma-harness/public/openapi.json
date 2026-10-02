@@ -3863,6 +3863,180 @@
         "title": "ConnectorStatusResponse",
         "type": "object"
       },
+      "ContactAnswer": {
+        "description": "Whom a bot answers in a private chat, beyond the pod's members.",
+        "enum": [
+          "off",
+          "known",
+          "anyone"
+        ],
+        "title": "ContactAnswer",
+        "type": "string"
+      },
+      "ContactIdentityResponse": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/IdentityKind"
+          },
+          "strength": {
+            "$ref": "#/components/schemas/IdentityStrength"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          },
+          "verified_at": {
+            "format": "date-time",
+            "title": "Verified At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value",
+          "strength",
+          "verified_at"
+        ],
+        "title": "ContactIdentityResponse",
+        "type": "object"
+      },
+      "ContactListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContactResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `before` for the next page; absent on the last.",
+            "title": "Next Before"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ContactListResponse",
+        "type": "object"
+      },
+      "ContactResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "identities": {
+            "items": {
+              "$ref": "#/components/schemas/ContactIdentityResponse"
+            },
+            "title": "Identities",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "ContactResponse",
+        "type": "object"
+      },
+      "ContactUpdateRequest": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          }
+        },
+        "title": "ContactUpdateRequest",
+        "type": "object"
+      },
+      "ContactsCapResponse": {
+        "description": "What the organization lets its bots spend answering contacts, a month.",
+        "properties": {
+          "monthly_limit_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "No cap of the organization's own when absent.",
+            "title": "Monthly Limit Usd"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "spent_this_month_usd": {
+            "description": "Spent this calendar month (UTC) answering contacts and people outside the pod in groups, on models Lemma provides.",
+            "title": "Spent This Month Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "organization_id",
+          "spent_this_month_usd"
+        ],
+        "title": "ContactsCapResponse",
+        "type": "object"
+      },
+      "ContactsCapUpdate": {
+        "properties": {
+          "monthly_limit_usd": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null removes the cap. Zero stops bots answering contacts.",
+            "title": "Monthly Limit Usd"
+          }
+        },
+        "title": "ContactsCapUpdate",
+        "type": "object"
+      },
       "ConversationListResponse": {
         "properties": {
           "items": {
@@ -8971,6 +9145,25 @@
         ],
         "title": "IconUploadResponse",
         "type": "object"
+      },
+      "IdentityKind": {
+        "description": "What sort of handle names a contact.",
+        "enum": [
+          "PHONE",
+          "EMAIL",
+          "TELEGRAM"
+        ],
+        "title": "IdentityKind",
+        "type": "string"
+      },
+      "IdentityStrength": {
+        "description": "Who vouched for a handle.\n\n``CHANNEL``: the platform the message came through, in a payload whose\nsignature was checked (WhatsApp, Telegram), or the receiving mail service's\nauthentication verdict (email). ``MEMBER``: a pod member added it by hand,\nwhich says who the member believes it is and nothing about who writes from\nit -- so it never makes a message count as that contact on its own.",
+        "enum": [
+          "CHANNEL",
+          "MEMBER"
+        ],
+        "title": "IdentityStrength",
+        "type": "string"
       },
       "ImportPlanResponse": {
         "properties": {
@@ -14273,6 +14466,9 @@
             "title": "Channels",
             "type": "array"
           },
+          "contacts": {
+            "$ref": "#/components/schemas/SurfaceContactsConfig"
+          },
           "dm_conversation_reset_after_hours": {
             "anyOf": [
               {
@@ -14372,6 +14568,9 @@
             },
             "title": "Channels",
             "type": "array"
+          },
+          "contacts": {
+            "$ref": "#/components/schemas/SurfaceContactsConfig"
           },
           "groups": {
             "$ref": "#/components/schemas/SurfaceGroupsConfig"
@@ -14599,6 +14798,32 @@
           "summary"
         ],
         "title": "SurfaceConnectorSetupGuide",
+        "type": "object"
+      },
+      "SurfaceContactsConfig": {
+        "additionalProperties": false,
+        "description": "Whom the bot answers in private chats beyond the pod's members. Mirrored.",
+        "properties": {
+          "answer": {
+            "$ref": "#/components/schemas/ContactAnswer",
+            "default": "off",
+            "description": "`off`: members only. `known`: members and the pod's existing contacts. `anyone`: a stranger becomes a contact with their first message. Only a bot that is the pod's own (its own token, number or email address) answers contacts."
+          },
+          "looked_after_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member contacts' conversations belong to. Defaults to whoever turns contacts on; must be a member of the pod.",
+            "title": "Looked After By"
+          }
+        },
+        "title": "SurfaceContactsConfig",
         "type": "object"
       },
       "SurfaceCreateRequest": {
@@ -25839,6 +26064,272 @@
         }
       }
     },
+    "/pods/{pod_id}/contacts": {
+      "get": {
+        "description": "The pod's contacts, newest first.",
+        "operationId": "contact.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Contacts",
+        "tags": [
+          "Contacts"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "contact",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/contacts/{contact_id}": {
+      "delete": {
+        "description": "Forget a contact: their handles go with them.",
+        "operationId": "contact.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Contact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Contact",
+        "tags": [
+          "Contacts"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "contact"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "contact",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "get": {
+        "operationId": "contact.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Contact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Contact",
+        "tags": [
+          "Contacts"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "contact",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "patch": {
+        "operationId": "contact.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Contact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Contact",
+        "tags": [
+          "Contacts"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "contact"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "contact",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
     "/pods/{pod_id}/conversations": {
       "get": {
         "description": "List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead. Archived conversations are omitted; pass archived=true for the archive. Pass search to keep only conversations whose title contains it (case-insensitive). Ordered by last_activity_at, most recent first.",
@@ -36608,6 +37099,119 @@
           "resource": "usage.me.summary",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/usage/organizations/{organization_id}/contacts-cap": {
+      "get": {
+        "description": "The organization's cap on what answering contacts may cost a month.",
+        "operationId": "usage.organization.contacts_cap.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactsCapResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Contacts Cap",
+        "tags": [
+          "Usage"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "usage.organization.contacts_cap",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "put": {
+        "description": "Set or remove the cap. Organization owners and editors only.\n\nContacts are never billed, so this is the ceiling on what people outside\nthe organization can cost it. Past it, its bots stop answering them until\nthe month turns.",
+        "operationId": "usage.organization.contacts_cap.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContactsCapUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactsCapResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Contacts Cap",
+        "tags": [
+          "Usage"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "usage.organization.contacts_cap"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "usage.organization.contacts_cap",
+          "result": "entity",
+          "verb": "update"
         }
       }
     },

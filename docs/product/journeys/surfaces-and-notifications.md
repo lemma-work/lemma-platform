@@ -632,6 +632,74 @@ remember where the bot is, who is in there, or what is waiting on them.
 
 **Contracts:** `surface.webhook.handle_platform`
 
+## Contacts
+
+A pod's own bot can answer somebody who is not a member, privately: a customer
+on WhatsApp, a client by email. They are the pod's contacts. They never sign in
+and are never billed, and they are answered for the pod from what it made
+Public, the way a group's people from outside it are.
+
+### PS-SURF-045 — A stranger writing to the pod's own bot is answered as a contact
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`
+> and `agent_surfaces/tests/unit/test_contacts.py`. A scenario needs a forged
+> inbound email or chat from an address no Lemma user has.
+
+- Where a bot that is the pod's own -- its own bot token, its own number, its
+  own email address -- is set to answer anyone, when somebody who is not a
+  member writes to it privately, the system shall make them a contact of the
+  pod and answer them for the pod from what it made Public.
+- Where the bot is set to answer known contacts only, the system shall answer
+  the pod's existing contacts and nobody else.
+- Where the bot is set to answer nobody outside the pod, which is how a bot
+  starts, the system shall answer only members, as before.
+- The system shall never take somebody writing to Lemma's shared bot for a
+  contact of any pod.
+- The system shall answer a contact in a conversation of their own, which
+  belongs to the member who looks after the bot's contacts -- whoever turned
+  contacts on, unless somebody else was named -- and shall pass on what it
+  cannot answer to that member.
+- The system shall answer a contact's email to them alone, copying nobody else
+  on the thread.
+- The system shall treat a contact who writes in a group as one of the group's
+  people from outside the pod, never as a contact: everyone in a group reads the
+  answer.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.surface.update`,
+`contact.list`, `contact.get`
+
+### PS-SURF-046 — Email nobody vouched for is never answered
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`.
+
+- When an email to a bot that answers contacts was not authenticated by the
+  receiving mail service, the system shall not reply to it, shall not make its
+  sender a contact, and shall tell the member who looks after contacts once an
+  hour per sender, with what it said, so they can answer by hand if it is
+  genuine.
+
+**Contracts:** `surface.webhook.handle_platform`
+
+### PS-SURF-047 — Contacts cost the organization, never a member
+**Status:** planned
+
+> Proven at unit level by `usage/tests/unit/test_outside_audience_windows.py`
+> and at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`.
+
+- The system shall charge what answering contacts and a group's people from
+  outside the pod costs to the organization's budget, and never to the
+  allowance of the member who looks after the conversation.
+- The system shall let an organization's owners and editors set, read and clear
+  a monthly cap on that cost, and shall stop answering contacts for the rest of
+  the month once it is reached.
+- The system shall let a pod's admins forget a contact, with every handle they
+  are known by.
+
+**Contracts:** `usage.organization.contacts_cap.get`,
+`usage.organization.contacts_cap.update`, `contact.update`, `contact.delete`
+
 ---
 
 ## Not covered here

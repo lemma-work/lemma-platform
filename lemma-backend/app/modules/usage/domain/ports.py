@@ -92,6 +92,9 @@ class UsageLimitValues:
     excluded_organization_ids: tuple[UUID, ...] = ()
     plan_type: Literal["PERSONAL", "TEAM"] | None = None
     plan_name: str | None = None
+    #: What the organization lets its bots spend answering contacts and group
+    #: outsiders, a month -- the cap an organization admin sets.
+    contacts_monthly_limit_usd: float | None = None
 
 
 class UsageLimitPort(Protocol):

@@ -317,7 +317,9 @@ async def _build_lemma_harness_tooling(
     if surface_platform and platform_is_known(surface_platform):
         capabilities.append(
             SurfacePlatformCapability(
-                str(surface_platform), answers_outsider=answers_outsider
+                str(surface_platform),
+                answers_outsider=answers_outsider,
+                answers_contact=getattr(ctx, "contact_id", None) is not None,
             )
         )
 

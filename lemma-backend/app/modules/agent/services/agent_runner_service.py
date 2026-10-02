@@ -89,7 +89,7 @@ from app.modules.agent.services.run_observer_delivery import (
     notify_run_started,
 )
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
-from app.modules.usage.contracts import UsageReservation
+from app.modules.usage.contracts import UsageReservation, run_source_type
 from app.modules.usage.contracts.execution import (
     usage_context_from_agent_context,
 )
@@ -259,6 +259,7 @@ class AgentRunnerService:
                 organization_id=conversation.organization_id,
                 user_id=user_id,
                 runtime_profile=runtime_profile_snapshot,
+                outside_audience=answers_outsiders(conversation),
             )
             run_with_usage = run.with_runtime_profile(
                 runtime_profile_snapshot
@@ -329,7 +330,10 @@ class AgentRunnerService:
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
-                            source_type="agent_run",
+                            source_type=run_source_type(
+                                answers_outsider=ctx.answers_outsider,
+                                answers_contact=ctx.contact_id is not None,
+                            ),
                             source_id=str(agent_run_id),
                         )
                         async with metering_execution(

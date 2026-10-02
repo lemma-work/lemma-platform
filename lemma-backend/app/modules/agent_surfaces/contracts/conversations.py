@@ -20,6 +20,9 @@ from uuid import UUID
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.outside_links import (
+    links_to_people_outside,
+)
 
 
 async def surface_id_for_conversation(uow, conversation_id: UUID) -> UUID | None:
@@ -38,9 +41,7 @@ async def conversation_answers_outsiders(uow, conversation_id: UUID) -> bool:
     routing wrote. Either one saying so makes the run a stranger's, so a
     conversation that lost its flag still never runs with its owner's authority.
     """
-    return await SurfaceConversationLinkRepository(uow).is_outsiders_thread(
-        conversation_id
-    )
+    return await links_to_people_outside(uow.session, conversation_id)
 
 
 __all__ = ["conversation_answers_outsiders", "surface_id_for_conversation"]

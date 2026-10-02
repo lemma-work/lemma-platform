@@ -166,6 +166,7 @@ class ConversationBinder:
         route: ResolvedSurfaceRoute,
         current_conversation_agent_id: UUID | None = None,
         for_outsiders: bool = False,
+        for_contact: UUID | None = None,
     ) -> tuple[AgentSurfaceConversationLink, str | None]:
         """Return the link, plus the new conversation's title when one was created.
 
@@ -174,6 +175,11 @@ class ConversationBinder:
         outsiders key as the external id, so the conversation is that member's
         and one thread per group. A conversation that is no longer theirs --
         somebody else took the group on -- is left behind for a fresh one.
+
+        ``for_contact`` binds one contact's private chat the same way: the
+        member who looks after the bot's contacts is the user, and a
+        conversation that is no longer theirs, or no longer that contact's, is
+        left behind.
 
         The title is how a caller learns a *fresh* conversation started on this
         turn — which is the only moment worth naming the thread on the platform.
@@ -227,9 +233,9 @@ class ConversationBinder:
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
             if (
-                for_outsiders
+                (for_outsiders or for_contact is not None)
                 and not await self._still_the_outsiders_thread(
-                    link, resolved_user.internal_user_id
+                    link, resolved_user.internal_user_id, contact_id=for_contact
                 )
             ) or await self._starts_new_conversation(
                 surface=surface,
@@ -245,6 +251,7 @@ class ConversationBinder:
                     external_user_id=external_user_id,
                     route=route,
                     for_outsiders=for_outsiders,
+                    for_contact=for_contact,
                 )
                 updated = await self.conversation_link_repository.update_conversation(
                     link_id=link.id,
@@ -281,6 +288,7 @@ class ConversationBinder:
             external_user_id=external_user_id,
             route=route,
             for_outsiders=for_outsiders,
+            for_contact=for_contact,
         )
         created_link = await self.conversation_link_repository.create(
             AgentSurfaceConversationLink(
@@ -380,14 +388,19 @@ class ConversationBinder:
         )
 
     async def _still_the_outsiders_thread(
-        self, link: AgentSurfaceConversationLink, user_id: UUID
+        self,
+        link: AgentSurfaceConversationLink,
+        user_id: UUID,
+        *,
+        contact_id: UUID | None = None,
     ) -> bool:
         """Whether the linked conversation is still ``user_id``'s strangers' thread.
 
         Owned by the member who answers for the group, *and* still marked as
         answering outsiders. A conversation that lost the mark is never handed a
         stranger again: the run would read it, and a stranger's turn must never
-        be one that thinks it is the owner's.
+        be one that thinks it is the owner's. A contact's thread must also still
+        be that contact's: one person's history is never another's.
         """
         conversation = await agent_conversations.surface_conversation(
             self.uow, link.conversation_id
@@ -396,6 +409,7 @@ class ConversationBinder:
             conversation is not None
             and conversation.user_id == user_id
             and conversation.answers_outsiders
+            and conversation.contact_id == contact_id
         )
 
     async def _starts_new_conversation(
@@ -462,6 +476,7 @@ class ConversationBinder:
         external_user_id: str | None,
         route: ResolvedSurfaceRoute,
         for_outsiders: bool = False,
+        for_contact: UUID | None = None,
     ):
         surface_event_metadata = build_surface_event_metadata(
             surface.surface_type.value,
@@ -479,6 +494,7 @@ class ConversationBinder:
                 agent_name=route.agent_name,
                 user_id=user_id,
                 for_outsiders=for_outsiders,
+                for_contact=for_contact,
                 title=self._surface_conversation_title(
                     parsed,
                     fallback=f"{surface.surface_type.value} Conversation",

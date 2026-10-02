@@ -22,6 +22,7 @@ from app.modules.icon.module import module as icon_module
 from app.modules.mcp_access.module import module as mcp_access_module
 from app.modules.identity.module import module as identity_module
 from app.modules.connectors.module import module as connector_module
+from app.modules.contacts.module import module as contacts_module
 from app.modules.pod.module import module as pod_module
 from app.modules.pod_bundle.module import module as pod_bundle_module
 from app.modules.schedule.module import module as schedule_module
@@ -45,6 +46,7 @@ OSS_MODULES: tuple[LemmaModule, ...] = (
     app_module,
     workflow_module,
     agent_surfaces_module,
+    contacts_module,
     icon_module,
     usage_module,
     workspace_module,

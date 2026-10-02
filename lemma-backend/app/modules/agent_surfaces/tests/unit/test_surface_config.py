@@ -78,6 +78,21 @@ EXPECTED = [
         "SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY",
         200,
     ),
+    (
+        "surface_contact_turns_per_person_per_10_minutes",
+        "SURFACE_CONTACT_TURNS_PER_PERSON_PER_10_MINUTES",
+        10,
+    ),
+    (
+        "surface_contact_turns_per_surface_per_day",
+        "SURFACE_CONTACT_TURNS_PER_SURFACE_PER_DAY",
+        1000,
+    ),
+    (
+        "surface_new_contacts_per_surface_per_day",
+        "SURFACE_NEW_CONTACTS_PER_SURFACE_PER_DAY",
+        200,
+    ),
     ("enable_telegram_polling_mode", "ENABLE_TELEGRAM_POLLING_MODE", False),
     (
         "enable_telegram_manager_polling_mode",

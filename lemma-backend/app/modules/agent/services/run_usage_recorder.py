@@ -35,6 +35,7 @@ class RunUsageRecorder:
         organization_id: UUID | None,
         user_id: UUID,
         runtime_profile: dict[str, object | None],
+        outside_audience: bool = False,
     ) -> UsageReservation | None:
         if runtime_profile.get("protocol") in {
             "OPENAI_COMPATIBLE",
@@ -45,6 +46,7 @@ class RunUsageRecorder:
                 organization_id=organization_id,
                 user_id=user_id,
                 profile_scope=str(runtime_profile.get("scope") or "ORGANIZATION"),
+                outside_audience=outside_audience,
             )
             return None
         profile_id = runtime_profile.get("profile_id")

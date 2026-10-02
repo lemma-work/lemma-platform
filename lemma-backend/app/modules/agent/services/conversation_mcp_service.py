@@ -30,7 +30,10 @@ from app.modules.agent.services.surface_context import (
 )
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import (
+    answers_outsiders,
+    conversation_contact_id,
+)
 from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
@@ -404,6 +407,7 @@ class ConversationMCPService:
                 # The same answer the runner gives: a remote harness answering
                 # somebody outside the pod authorizes as nobody too.
                 answers_outsider=answers_outsiders(conversation),
+                contact_id=conversation_contact_id(conversation),
                 # And a run a private note started delivers nothing to the
                 # platform from here either -- `display_resource` included.
                 delivers_to_surface=not run_is_private(

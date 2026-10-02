@@ -2,7 +2,12 @@
 
 from datetime import datetime, timedelta
 
-from app.modules.usage.domain.accounting import BudgetWindow, MeteringIdentity, money
+from app.modules.usage.domain.accounting import (
+    OUTSIDE_AUDIENCE_SOURCES,
+    BudgetWindow,
+    MeteringIdentity,
+    money,
+)
 from app.modules.usage.domain.ports import UsageLimitValues
 
 
@@ -20,6 +25,7 @@ def budget_windows(
         identity.organization_id if limits.user_limit_scope == "organization" else None
     )
     excluded = limits.excluded_organization_ids if user_org is None else ()
+    outside_audience = identity.source_type in OUTSIDE_AUDIENCE_SOURCES
     windows = []
     for org, user, kind, start, end, limit in (
         (
@@ -49,7 +55,11 @@ def budget_windows(
     ):
         if user is None and org is None:
             continue
-        if user is not None and identity.organization_id in excluded:
+        # A run answering somebody outside the organization is the
+        # organization's spend, not the member's who looks after it.
+        if user is not None and (
+            outside_audience or identity.organization_id in excluded
+        ):
             continue
         windows.append(
             BudgetWindow(
@@ -62,4 +72,29 @@ def budget_windows(
                 excluded_organization_ids=excluded if user is not None else (),
             )
         )
+    if outside_audience:
+        windows.extend(_contacts_window(identity, limits, month, next_month))
     return windows
+
+
+def _contacts_window(
+    identity: MeteringIdentity,
+    limits: UsageLimitValues,
+    month: datetime,
+    next_month: datetime,
+) -> list[BudgetWindow]:
+    """The organization's contacts cap, counting only runs for people outside."""
+    if identity.organization_id is None:
+        return []
+    cap = limits.contacts_monthly_limit_usd
+    return [
+        BudgetWindow(
+            organization_id=identity.organization_id,
+            user_id=None,
+            kind="contacts_month",
+            start=month,
+            end=next_month,
+            limit=None if cap is None else money(cap),
+            source_types=OUTSIDE_AUDIENCE_SOURCES,
+        )
+    ]

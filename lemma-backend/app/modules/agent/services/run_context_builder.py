@@ -25,7 +25,10 @@ from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import (
+    answers_outsiders,
+    conversation_contact_id,
+)
 from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.attached_document_brief import (
@@ -102,6 +105,7 @@ async def build_run_context(
     grant_summary = await load_agent_grant_summary(uow_factory, agent=agent)
     run_toolsets, _ = resolve_toolset_names(agent, conversation, grants=grant_summary)
     for_outsider = answers_outsiders(conversation)
+    contact_id = conversation_contact_id(conversation)
     ctx = ConversationContext(
         user_id=user_id,
         org_id=conversation.organization_id,
@@ -133,13 +137,17 @@ async def build_run_context(
         memory_enabled=memory_is_active(run_toolsets),
         grant_summary=grant_summary,
         answers_outsider=for_outsider,
+        contact_id=contact_id,
         delivers_to_surface=not run_is_private(agent_run.metadata),
         **surface_context,
     )
     try:
         ctx.context_brief = (
             await outsider_brief(
-                uow_factory, pod_id=conversation.pod_id, owner_user_id=user_id
+                uow_factory,
+                pod_id=conversation.pod_id,
+                owner_user_id=user_id,
+                contact_id=contact_id,
             )
             if for_outsider
             else await AgentContextBriefBuilder(uow_factory).build(

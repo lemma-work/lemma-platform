@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 from pydantic import BaseModel
 
+from app.modules.usage.domain.accounting import CONTACT_RUN, OUTSIDER_RUN
 from app.modules.usage.domain.entities import UsageReservation
 from app.modules.usage.domain.errors import (
     UsageContextMissingError,
@@ -32,8 +33,23 @@ class AgentRunUsage(BaseModel):
     metadata: dict[str, object] | None = None
 
 
+def run_source_type(*, answers_outsider: bool, answers_contact: bool) -> str:
+    """What an agent run's usage is recorded under.
+
+    A run answering somebody outside the organization is recorded apart, so it
+    spends the organization's budget and its contacts cap rather than the
+    allowance of the member who looks after the conversation.
+    """
+    if answers_contact:
+        return CONTACT_RUN
+    if answers_outsider:
+        return OUTSIDER_RUN
+    return "agent_run"
+
+
 __all__ = [
     "AgentRunUsage",
+    "run_source_type",
     "ModelPricing",
     "UsageContextMissingError",
     "UsageLimitExceededError",

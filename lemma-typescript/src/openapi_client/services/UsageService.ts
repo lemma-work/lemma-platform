@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ContactsCapResponse } from '../models/ContactsCapResponse.js';
+import type { ContactsCapUpdate } from '../models/ContactsCapUpdate.js';
 import type { MyUsageLimitsResponse } from '../models/MyUsageLimitsResponse.js';
 import type { UsageLimitsResponse } from '../models/UsageLimitsResponse.js';
 import type { UsageListResponse } from '../models/UsageListResponse.js';
@@ -140,6 +142,56 @@ export class UsageService {
                 'agent_run_id': agentRunId,
                 'conversation_id': conversationId,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Contacts Cap
+     * The organization's cap on what answering contacts may cost a month.
+     * @param organizationId
+     * @returns ContactsCapResponse Successful Response
+     * @throws ApiError
+     */
+    public static usageOrganizationContactsCapGet(
+        organizationId: string,
+    ): CancelablePromise<ContactsCapResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/usage/organizations/{organization_id}/contacts-cap',
+            path: {
+                'organization_id': organizationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Contacts Cap
+     * Set or remove the cap. Organization owners and editors only.
+     *
+     * Contacts are never billed, so this is the ceiling on what people outside
+     * the organization can cost it. Past it, its bots stop answering them until
+     * the month turns.
+     * @param organizationId
+     * @param requestBody
+     * @returns ContactsCapResponse Successful Response
+     * @throws ApiError
+     */
+    public static usageOrganizationContactsCapUpdate(
+        organizationId: string,
+        requestBody: ContactsCapUpdate,
+    ): CancelablePromise<ContactsCapResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/usage/organizations/{organization_id}/contacts-cap',
+            path: {
+                'organization_id': organizationId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

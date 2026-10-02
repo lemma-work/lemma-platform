@@ -50,9 +50,12 @@ from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.outsiders import (
     AUDIENCE_KEY,
+    CONTACT,
+    CONTACT_KEY,
     OUTSIDE_ANSWER_TOOL,
     OUTSIDERS,
     answers_outsiders,
+    conversation_contact_id,
 )
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -98,6 +101,8 @@ class SurfaceConversation:
     updated_at: datetime
     #: Opened by routing to answer people outside the pod (``domain/outsiders``).
     answers_outsiders: bool = False
+    #: The contact this is a private chat with, when it is one.
+    contact_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +171,7 @@ def _conversation(entity) -> SurfaceConversation:
         title=entity.title,
         updated_at=entity.updated_at,
         answers_outsiders=answers_outsiders(entity),
+        contact_id=conversation_contact_id(entity),
     )
 
 
@@ -192,6 +198,7 @@ async def open_surface_conversation(
     metadata: dict[str, object] | None = None,
     require_execute_grant: bool = True,
     for_outsiders: bool = False,
+    for_contact: UUID | None = None,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
@@ -208,8 +215,18 @@ async def open_surface_conversation(
     The caller sets the authorization context, because it is the caller that
     knows whose it is -- an inbound message runs as the sender, a notification
     as nobody in particular.
+
+    ``for_contact`` opens a contact's private chat: the same rules, for one
+    person the pod knows, named on the conversation so the run can address
+    them.
     """
-    if for_outsiders:
+    if for_contact is not None:
+        metadata = {
+            **(metadata or {}),
+            AUDIENCE_KEY: CONTACT,
+            CONTACT_KEY: str(for_contact),
+        }
+    elif for_outsiders:
         metadata = {**(metadata or {}), AUDIENCE_KEY: OUTSIDERS}
     conversation = await _service(uow).create_conversation(
         pod_id=pod_id,

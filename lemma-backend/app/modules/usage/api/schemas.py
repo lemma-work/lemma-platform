@@ -199,3 +199,26 @@ class MyUsageQueryParams(BaseModel):
     limit: int = Field(default=50, ge=1, le=1000)
     agent_run_id: UUID | None = None
     conversation_id: UUID | None = None
+
+
+class ContactsCapResponse(BaseModel):
+    """What the organization lets its bots spend answering contacts, a month."""
+
+    organization_id: UUID
+    monthly_limit_usd: float | None = Field(
+        default=None, description="No cap of the organization's own when absent."
+    )
+    spent_this_month_usd: float = Field(
+        description=(
+            "Spent this calendar month (UTC) answering contacts and people "
+            "outside the pod in groups, on models Lemma provides."
+        )
+    )
+
+
+class ContactsCapUpdate(BaseModel):
+    monthly_limit_usd: float | None = Field(
+        default=None,
+        ge=0,
+        description="Null removes the cap. Zero stops bots answering contacts.",
+    )

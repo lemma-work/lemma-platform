@@ -19,6 +19,8 @@ from app.modules.identity.contracts.organizations import organization_member_rol
 from app.modules.usage.api.dependencies import UsageServiceDep
 from app.modules.usage.domain.query_types import UsageLimitScope
 from app.modules.usage.api.schemas import (
+    ContactsCapResponse,
+    ContactsCapUpdate,
     UsageLimitScopeResponse,
     UsageLimitsResponse,
     UsageListResponse,
@@ -29,8 +31,12 @@ from app.modules.usage.api.schemas import (
     UsageStatsResponse,
     UsageSummaryResponse,
 )
+from app.modules.usage.domain.accounting import money
 from app.modules.usage.domain.entities import UsageRecord, UsageSummary
 from app.modules.usage.domain.errors import UsageAccessDeniedError
+from app.modules.usage.infrastructure.contacts_cap_repository import (
+    UsageContactsCapRepository,
+)
 
 router = APIRouter(prefix="/usage", tags=["Usage"], redirect_slashes=False)
 
@@ -346,3 +352,64 @@ async def get_my_usage(
         status=params.status,
     )
     return _summary_response(summary)
+
+
+def _this_month(now: datetime) -> tuple[datetime, datetime]:
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return start, (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+
+
+async def _contacts_cap(uow: UoWDep, organization_id: UUID) -> ContactsCapResponse:
+    caps = UsageContactsCapRepository(uow.session)
+    start, end = _this_month(datetime.now(timezone.utc))
+    limit = await caps.monthly_limit(organization_id)
+    return ContactsCapResponse(
+        organization_id=organization_id,
+        monthly_limit_usd=None if limit is None else float(limit),
+        spent_this_month_usd=float(
+            await caps.spend(organization_id, start=start, end=end)
+        ),
+    )
+
+
+@router.get(
+    "/organizations/{organization_id}/contacts-cap",
+    response_model=ContactsCapResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="usage.organization.contacts_cap.get",
+)
+async def get_contacts_cap(
+    request: Request, organization_id: UUID, uow: UoWDep
+) -> ContactsCapResponse:
+    """The organization's cap on what answering contacts may cost a month."""
+    user: UserEntity = request.state.user
+    await _require_usage_org_access(user=user, organization_id=organization_id, uow=uow)
+    return await _contacts_cap(uow, organization_id)
+
+
+@router.put(
+    "/organizations/{organization_id}/contacts-cap",
+    response_model=ContactsCapResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="usage.organization.contacts_cap.update",
+)
+async def update_contacts_cap(
+    request: Request, organization_id: UUID, body: ContactsCapUpdate, uow: UoWDep
+) -> ContactsCapResponse:
+    """Set or remove the cap. Organization owners and editors only.
+
+    Contacts are never billed, so this is the ceiling on what people outside
+    the organization can cost it. Past it, its bots stop answering them until
+    the month turns.
+    """
+    user: UserEntity = request.state.user
+    await _require_usage_org_access(user=user, organization_id=organization_id, uow=uow)
+    await UsageContactsCapRepository(uow.session).set_monthly_limit(
+        organization_id,
+        monthly_limit_usd=(
+            None if body.monthly_limit_usd is None else money(body.monthly_limit_usd)
+        ),
+        updated_by_user_id=user.id,
+    )
+    await uow.commit()
+    return await _contacts_cap(uow, organization_id)

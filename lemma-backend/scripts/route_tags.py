@@ -21,6 +21,7 @@ TAG_MODULES = {
     "Apps": "apps",
     "Auth": "identity",
     "Connectors": "connectors",
+    "Contacts": "contacts",
     "Functions": "function",
     "MCP Access": "mcp_access",
     "Organizations": "identity",

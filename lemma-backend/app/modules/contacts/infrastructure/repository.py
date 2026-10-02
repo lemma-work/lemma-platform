@@ -1,0 +1,188 @@
+"""Reading and writing contacts and their handles."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from uuid import UUID
+
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.contacts.domain.entities import (
+    Contact,
+    ContactIdentity,
+    IdentityKind,
+    IdentityStrength,
+    normalize_handle,
+)
+from app.modules.contacts.infrastructure.models import (
+    ContactIdentityModel,
+    ContactModel,
+)
+
+#: The most contacts one page of a listing returns.
+MAX_PAGE = 200
+
+
+def _identity(row: ContactIdentityModel) -> ContactIdentity:
+    return ContactIdentity(
+        id=row.id,
+        contact_id=row.contact_id,
+        kind=IdentityKind(row.kind),
+        value=row.value,
+        strength=IdentityStrength(row.strength),
+        verified_at=row.verified_at,
+    )
+
+
+def _contact(row: ContactModel, identities: Sequence[ContactIdentityModel]) -> Contact:
+    return Contact(
+        id=row.id,
+        pod_id=row.pod_id,
+        display_name=row.display_name,
+        created_at=row.created_at,
+        identities=tuple(_identity(identity) for identity in identities),
+    )
+
+
+class ContactRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get(self, *, pod_id: UUID, contact_id: UUID) -> Contact | None:
+        row = await self.session.scalar(
+            select(ContactModel).where(
+                ContactModel.id == contact_id, ContactModel.pod_id == pod_id
+            )
+        )
+        if row is None:
+            return None
+        return _contact(row, await self._identities_of([row.id]))
+
+    async def find_by_handle(
+        self, *, pod_id: UUID, kind: IdentityKind, value: str
+    ) -> Contact | None:
+        handle = normalize_handle(kind, value)
+        if not handle:
+            return None
+        contact_id = await self.session.scalar(
+            select(ContactIdentityModel.contact_id).where(
+                ContactIdentityModel.pod_id == pod_id,
+                ContactIdentityModel.kind == kind.value,
+                ContactIdentityModel.value == handle,
+            )
+        )
+        if contact_id is None:
+            return None
+        return await self.get(pod_id=pod_id, contact_id=contact_id)
+
+    async def open(
+        self,
+        *,
+        pod_id: UUID,
+        kind: IdentityKind,
+        value: str,
+        strength: IdentityStrength,
+        display_name: str | None,
+    ) -> Contact:
+        """The contact this handle names in this pod, created if there is none.
+
+        Two first messages from one number arrive together often enough on a
+        chat platform, and both read "no contact". The insert runs in a
+        savepoint, so the loser's unique-constraint failure undoes only its own
+        rows and it reads the winner's contact instead.
+        """
+        handle = normalize_handle(kind, value)
+        if not handle:
+            raise ValueError("A contact needs a handle")
+        existing = await self.find_by_handle(pod_id=pod_id, kind=kind, value=handle)
+        if existing is not None:
+            return existing
+        now = datetime.now(timezone.utc)
+        try:
+            async with self.session.begin_nested():
+                contact = ContactModel(
+                    pod_id=pod_id, display_name=_clean_name(display_name)
+                )
+                self.session.add(contact)
+                await self.session.flush()
+                self.session.add(
+                    ContactIdentityModel(
+                        contact_id=contact.id,
+                        pod_id=pod_id,
+                        kind=kind.value,
+                        value=handle,
+                        strength=strength.value,
+                        verified_at=now,
+                    )
+                )
+                await self.session.flush()
+        except IntegrityError:
+            winner = await self.find_by_handle(pod_id=pod_id, kind=kind, value=handle)
+            if winner is None:
+                raise
+            return winner
+        found = await self.get(pod_id=pod_id, contact_id=contact.id)
+        if found is None:  # pragma: no cover - just written in this transaction
+            raise LookupError("A contact written in this transaction vanished")
+        return found
+
+    async def list(
+        self, *, pod_id: UUID, limit: int = 50, before: datetime | None = None
+    ) -> list[Contact]:
+        """The pod's contacts, newest first, a page at a time."""
+        query = select(ContactModel).where(ContactModel.pod_id == pod_id)
+        if before is not None:
+            query = query.where(ContactModel.created_at < before)
+        rows = list(
+            await self.session.scalars(
+                query.order_by(ContactModel.created_at.desc()).limit(
+                    max(1, min(limit, MAX_PAGE))
+                )
+            )
+        )
+        identities: dict[UUID, list[ContactIdentityModel]] = {
+            row.id: [] for row in rows
+        }
+        for identity in await self._identities_of(list(identities)):
+            identities[identity.contact_id].append(identity)
+        return [_contact(row, identities[row.id]) for row in rows]
+
+    async def rename(
+        self, *, pod_id: UUID, contact_id: UUID, display_name: str | None
+    ) -> bool:
+        result = await self.session.execute(
+            update(ContactModel)
+            .where(ContactModel.id == contact_id, ContactModel.pod_id == pod_id)
+            .values(display_name=_clean_name(display_name))
+        )
+        return bool(result.rowcount)
+
+    async def delete(self, *, pod_id: UUID, contact_id: UUID) -> bool:
+        result = await self.session.execute(
+            delete(ContactModel).where(
+                ContactModel.id == contact_id, ContactModel.pod_id == pod_id
+            )
+        )
+        return bool(result.rowcount)
+
+    async def _identities_of(
+        self, contact_ids: list[UUID]
+    ) -> list[ContactIdentityModel]:
+        """The handles of these contacts, oldest first, in one read."""
+        if not contact_ids:
+            return []
+        return list(
+            await self.session.scalars(
+                select(ContactIdentityModel)
+                .where(ContactIdentityModel.contact_id.in_(contact_ids))
+                .order_by(ContactIdentityModel.created_at)
+            )
+        )
+
+
+def _clean_name(display_name: str | None) -> str | None:
+    cleaned = (display_name or "").strip()
+    return cleaned[:255] or None

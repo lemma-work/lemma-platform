@@ -88,6 +88,10 @@ class AgentContext(BaseModel):
     # not whoever asked. Resolved once from the conversation by every builder of
     # this context, so no tool has to read the conversation to find out.
     answers_outsider: bool = False
+    # Set when the person outside the pod is a contact (see
+    # `domain/outsiders`): one person the pod knows, in a private chat. Always
+    # alongside `answers_outsider`, never instead of it.
+    contact_id: UUID | None = None
     # False for a run started by a private note (see `domain/private_notes`):
     # its answer stays in Lemma instead of going to the chat platform the
     # conversation also lives on. Read by the surface's run observer.

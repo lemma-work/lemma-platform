@@ -251,6 +251,29 @@ class SurfaceSettings(BaseSettings):
             "spend, not a quota a working group should meet."
         ),
     )
+    surface_contact_turns_per_person_per_10_minutes: int = Field(
+        default=10,
+        description=(
+            "How many messages one contact may put to a bot within ten minutes "
+            "before it stops answering them for the rest of the window."
+        ),
+    )
+    surface_contact_turns_per_surface_per_day: int = Field(
+        default=1000,
+        description=(
+            "How many messages from contacts one bot answers in a day. A ceiling "
+            "on what a flood can spend; the organization's contacts cap is the "
+            "ceiling on money."
+        ),
+    )
+    surface_new_contacts_per_surface_per_day: int = Field(
+        default=200,
+        description=(
+            "How many strangers one bot set to answer anyone may turn into "
+            "contacts in a day. Past it, new senders go unanswered until the "
+            "next day; contacts it already knows are unaffected."
+        ),
+    )
     surface_allow_unverified_phone_match: bool = Field(
         default=False,
         description=(

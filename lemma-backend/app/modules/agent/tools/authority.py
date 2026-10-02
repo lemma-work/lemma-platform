@@ -51,7 +51,13 @@ async def tool_authorization_context(
             session=uow.session,
             pod_id=deps.pod_id,
             organization_id=deps.org_id,
-            actor_id=f"outsider:{deps.conversation_id}",
+            # A contact is named in the audit trail; a group's outsiders are
+            # one conversation and named by it.
+            actor_id=(
+                f"contact:{deps.contact_id}"
+                if deps.contact_id is not None
+                else f"outsider:{deps.conversation_id}"
+            ),
         )
     authorization = create_authorization_data_service(uow)
     approved = deps.approved_execution

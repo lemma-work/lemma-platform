@@ -129,6 +129,13 @@ _NAME_TO_MODULE = {
     'ConnectorResponseSchema': 'connector_response_schema',
     'ConnectorSkillResponse': 'connector_skill_response',
     'ConnectorStatusResponse': 'connector_status_response',
+    'ContactAnswer': 'contact_answer',
+    'ContactIdentityResponse': 'contact_identity_response',
+    'ContactListResponse': 'contact_list_response',
+    'ContactResponse': 'contact_response',
+    'ContactUpdateRequest': 'contact_update_request',
+    'ContactsCapResponse': 'contacts_cap_response',
+    'ContactsCapUpdate': 'contacts_cap_update',
     'ConversationListResponse': 'conversation_list_response',
     'ConversationResponse': 'conversation_response',
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
@@ -271,6 +278,8 @@ _NAME_TO_MODULE = {
     'HomePodResponse': 'home_pod_response',
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
+    'IdentityKind': 'identity_kind',
+    'IdentityStrength': 'identity_strength',
     'ImportPlanResponse': 'import_plan_response',
     'ImportStartRequest': 'import_start_request',
     'ImportStatus': 'import_status',
@@ -443,6 +452,7 @@ _NAME_TO_MODULE = {
     'SurfaceConnectionOwner': 'surface_connection_owner',
     'SurfaceConnectionStatus': 'surface_connection_status',
     'SurfaceConnectorSetupGuide': 'surface_connector_setup_guide',
+    'SurfaceContactsConfig': 'surface_contacts_config',
     'SurfaceCreateRequest': 'surface_create_request',
     'SurfaceCredentialMode': 'surface_credential_mode',
     'SurfaceGroupsConfig': 'surface_groups_config',
@@ -682,6 +692,13 @@ if TYPE_CHECKING:
     from .connector_response_schema import ConnectorResponseSchema
     from .connector_skill_response import ConnectorSkillResponse
     from .connector_status_response import ConnectorStatusResponse
+    from .contact_answer import ContactAnswer
+    from .contact_identity_response import ContactIdentityResponse
+    from .contact_list_response import ContactListResponse
+    from .contact_response import ContactResponse
+    from .contact_update_request import ContactUpdateRequest
+    from .contacts_cap_response import ContactsCapResponse
+    from .contacts_cap_update import ContactsCapUpdate
     from .conversation_list_response import ConversationListResponse
     from .conversation_response import ConversationResponse
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
@@ -824,6 +841,8 @@ if TYPE_CHECKING:
     from .home_pod_response import HomePodResponse
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
+    from .identity_kind import IdentityKind
+    from .identity_strength import IdentityStrength
     from .import_plan_response import ImportPlanResponse
     from .import_start_request import ImportStartRequest
     from .import_status import ImportStatus
@@ -996,6 +1015,7 @@ if TYPE_CHECKING:
     from .surface_connection_owner import SurfaceConnectionOwner
     from .surface_connection_status import SurfaceConnectionStatus
     from .surface_connector_setup_guide import SurfaceConnectorSetupGuide
+    from .surface_contacts_config import SurfaceContactsConfig
     from .surface_create_request import SurfaceCreateRequest
     from .surface_credential_mode import SurfaceCredentialMode
     from .surface_groups_config import SurfaceGroupsConfig
@@ -1248,6 +1268,13 @@ __all__ = [
     'ConnectorResponseSchema',
     'ConnectorSkillResponse',
     'ConnectorStatusResponse',
+    'ContactAnswer',
+    'ContactIdentityResponse',
+    'ContactListResponse',
+    'ContactResponse',
+    'ContactUpdateRequest',
+    'ContactsCapResponse',
+    'ContactsCapUpdate',
     'ConversationListResponse',
     'ConversationResponse',
     'ConversationResponseMetadataType0',
@@ -1390,6 +1417,8 @@ __all__ = [
     'HomePodResponse',
     'IconUploadRequest',
     'IconUploadResponse',
+    'IdentityKind',
+    'IdentityStrength',
     'ImportPlanResponse',
     'ImportStartRequest',
     'ImportStatus',
@@ -1562,6 +1591,7 @@ __all__ = [
     'SurfaceConnectionOwner',
     'SurfaceConnectionStatus',
     'SurfaceConnectorSetupGuide',
+    'SurfaceContactsConfig',
     'SurfaceCreateRequest',
     'SurfaceCredentialMode',
     'SurfaceGroupsConfig',

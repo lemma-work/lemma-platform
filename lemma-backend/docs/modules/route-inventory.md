@@ -135,6 +135,15 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | `connector.operation.details.batch` | Get Connector Operation Details In Batch |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute` | `connector.operation.execute` | Execute Connector Operation |
 
+## contacts
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/contacts/{contact_id}` | `contact.delete` | Delete Contact |
+| GET | `/pods/{pod_id}/contacts` | `contact.list` | List Contacts |
+| GET | `/pods/{pod_id}/contacts/{contact_id}` | `contact.get` | Get Contact |
+| PATCH | `/pods/{pod_id}/contacts/{contact_id}` | `contact.update` | Update Contact |
+
 ## datastore
 
 | Method | Path | Operation ID | Summary |
@@ -310,11 +319,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/usage/me/limits` | `usage.me.limits.get` | My Limits |
 | GET | `/usage/me/stats` | `usage.me.stats.get` | My Stats |
 | GET | `/usage/me/summary` | `usage.me.summary.get` | My Summary |
+| GET | `/usage/organizations/{organization_id}/contacts-cap` | `usage.organization.contacts_cap.get` | Get Contacts Cap |
 | GET | `/usage/organizations/{organization_id}/events` | `usage.organization.events.list` | List Usage Events |
 | GET | `/usage/organizations/{organization_id}/limits` | `usage.organization.limits.get` | Get Usage Limits |
 | GET | `/usage/organizations/{organization_id}/me` | `usage.organization.me.summary.get` | Get My Usage |
 | GET | `/usage/organizations/{organization_id}/stats` | `usage.organization.stats.get` | Get Usage Stats |
 | GET | `/usage/organizations/{organization_id}/summary` | `usage.organization.summary.get` | Get Organization Usage Summary |
+| PUT | `/usage/organizations/{organization_id}/contacts-cap` | `usage.organization.contacts_cap.update` | Update Contacts Cap |
 
 ## web_login
 

@@ -215,3 +215,23 @@ class UsageLimitCounter(UUIDAuditBase):
             postgresql_nulls_not_distinct=True,
         ),
     )
+
+
+class UsageContactsCap(UUIDAuditBase):
+    """What an organization lets its bots spend answering contacts, a month.
+
+    Set by an organization admin; absent means no cap of the organization's
+    own. Contacts are never billed, so this is the only ceiling on what people
+    outside the organization can cost it, apart from the turn rate limits.
+    """
+
+    __tablename__ = "usage_contacts_caps"
+    __table_args__ = (
+        Index("uq_usage_contacts_cap_org", "organization_id", unique=True),
+    )
+
+    organization_id: Mapped[UUID] = mapped_column(nullable=False)
+    monthly_limit_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(24, 9), nullable=True
+    )
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(nullable=True)
