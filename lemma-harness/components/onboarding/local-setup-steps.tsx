@@ -179,6 +179,7 @@ const presets = (computer: string): Preset[] => [
     { id: "openai", title: "OpenAI", hint: "API key", protocol: "openai_compat", baseUrl: "https://api.openai.com/v1", needsKey: true },
     { id: "anthropic", title: "Anthropic", hint: "API key", protocol: "anthropic_compat", baseUrl: "https://api.anthropic.com", needsKey: true },
     { id: "openrouter", title: "OpenRouter", hint: "API key", protocol: "openai_compat", baseUrl: "https://openrouter.ai/api/v1", needsKey: true },
+    { id: "nebius", title: "Nebius Token Factory", hint: "API key", protocol: "openai_compat", baseUrl: "https://api.tokenfactory.nebius.com/v1", needsKey: true },
 ];
 
 /**

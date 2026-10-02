@@ -75,6 +75,7 @@ const PRESETS: { id: string; protocol: "openai" | "anthropic"; name: string; bas
     { id: "deepseek", protocol: "openai", name: "DeepSeek", baseUrl: "https://api.deepseek.com" },
     { id: "xai", protocol: "openai", name: "xAI", baseUrl: "https://api.x.ai/v1" },
     { id: "together", protocol: "openai", name: "Together", baseUrl: "https://api.together.xyz/v1" },
+    { id: "nebius", protocol: "openai", name: "Nebius Token Factory", baseUrl: "https://api.tokenfactory.nebius.com/v1" },
     { id: "mistral", protocol: "openai", name: "Mistral", baseUrl: "https://api.mistral.ai/v1" },
 ];
 

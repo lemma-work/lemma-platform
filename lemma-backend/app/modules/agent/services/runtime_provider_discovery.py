@@ -37,9 +37,10 @@ class DiscoveredModel:
 
     ``supports_vision`` is best-effort: it is ``True`` only when the provider
     advertises image input for the model (OpenRouter-style
-    ``architecture.input_modalities``). Most OpenAI-compatible ``/models``
-    payloads carry no modality data, so this stays ``False`` and vision must be
-    declared via configuration instead.
+    ``architecture.input_modalities`` or ``architecture.modality``, which Nebius
+    Token Factory also uses). Most OpenAI-compatible ``/models`` payloads carry
+    no modality data, so this stays ``False`` and vision must be declared via
+    configuration instead.
     """
 
     name: str
@@ -195,7 +196,27 @@ def _openai_listing_request(
     request_headers = dict(headers)
     if api_key:
         request_headers.setdefault("Authorization", f"Bearer {api_key}")
-    return _ListingRequest(url=_join_url(base_url, "models"), headers=request_headers)
+    return _ListingRequest(url=_openai_models_url(base_url), headers=request_headers)
+
+
+#: Providers whose ``/models`` says what a model reads only when asked to.
+#: Nebius Token Factory lists bare ids by default; ``verbose=true`` adds the
+#: OpenRouter-style ``architecture.modality`` (``text+image->text``) that
+#: `_payload_advertises_image_input` reads. Its chat endpoint holds to that
+#: field: a model it lists as ``text->text`` answers an image with a 400, so
+#: without it every Nebius model would be text-only until somebody ticked one.
+_VERBOSE_LISTING_DOMAINS = ("nebius.com",)
+
+
+def _openai_models_url(base_url: str) -> str:
+    url = _join_url(base_url, "models")
+    host = (urlparse(url).hostname or "").lower()
+    if any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in _VERBOSE_LISTING_DOMAINS
+    ):
+        return f"{url}?verbose=true"
+    return url
 
 
 async def _discover_anthropic_compatible_models(
@@ -444,6 +465,11 @@ def _parse_openai_compatible_models(payload: object) -> list[DiscoveredModel]:
         supports_vision = False
         context_window: int | None = None
         if isinstance(item, dict):
+            if not _payload_answers_in_text(item):
+                # An embedding or image-generation model, listed beside the
+                # chat ones by providers that serve both. Offered as a chat
+                # model it saves, and then fails every run.
+                continue
             model_name = item.get("id") or item.get("name")
             supports_vision = _payload_advertises_image_input(item)
             context_window = _payload_context_window(item)
@@ -507,18 +533,58 @@ def _payload_advertises_image_input(item: dict) -> bool:
     entry. Honors OpenRouter-style ``architecture.input_modalities`` /
     ``architecture.modality``; absent that metadata (the standard OpenAI schema),
     returns ``False`` so vision falls back to explicit configuration.
+
+    Only the input side of ``modality`` counts: ``text->image`` is a model that
+    draws pictures, not one that reads them.
     """
     architecture = item.get("architecture")
     if not isinstance(architecture, dict):
         return False
-    modalities = architecture.get("input_modalities")
-    if isinstance(modalities, list) and any(
-        isinstance(modality, str) and modality.strip().lower() == "image"
-        for modality in modalities
-    ):
+    if "image" in _listed_modalities(architecture.get("input_modalities")):
         return True
-    modality = architecture.get("modality")
-    return isinstance(modality, str) and "image" in modality.lower()
+    inputs, _ = _modality_sides(architecture.get("modality"))
+    return "image" in inputs
+
+
+def _payload_answers_in_text(item: dict) -> bool:
+    """Whether a ``/models`` entry can be a chat model: it answers in text.
+
+    ``True`` unless the provider says otherwise -- the standard OpenAI schema
+    says nothing, and silence is not a reason to hide a model. Said by
+    OpenRouter-style ``architecture.output_modalities`` or the output side of
+    ``architecture.modality`` (``text->embedding``).
+    """
+    architecture = item.get("architecture")
+    if not isinstance(architecture, dict):
+        return True
+    outputs = _listed_modalities(architecture.get("output_modalities"))
+    if not outputs:
+        _, outputs = _modality_sides(architecture.get("modality"))
+    return not outputs or "text" in outputs
+
+
+def _listed_modalities(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {
+        modality.strip().lower() for modality in value if isinstance(modality, str)
+    }
+
+
+def _modality_sides(value: object) -> tuple[set[str], set[str]]:
+    """``"text+image->text"`` as ``({"text", "image"}, {"text"})``.
+
+    Empty sides for anything not in that form, so a provider that spells it
+    some other way reads as having said nothing.
+    """
+    if not isinstance(value, str) or "->" not in value:
+        return set(), set()
+    inputs, outputs = value.lower().split("->", 1)
+
+    def side(text: str) -> set[str]:
+        return {part.strip() for part in text.split("+") if part.strip()}
+
+    return side(inputs), side(outputs)
 
 
 def _join_url(base_url: str, path: str) -> str:
