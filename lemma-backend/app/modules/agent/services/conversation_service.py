@@ -406,6 +406,7 @@ class ConversationService:
         agent_name: str | None = None,
         message_metadata: dict[str, object] | None = None,
         require_execute_grant: bool = True,
+        typed_in_lemma: bool = False,
     ) -> AgentRunStartResult:
         # Once, here, so creating the conversation and checking it against the
         # expected agent read the same answer.
@@ -446,6 +447,32 @@ class ConversationService:
             content=content,
             agent_name=agent_name,
             message_metadata=message_metadata,
+            typed_in_lemma=typed_in_lemma,
+        )
+
+    async def send_from_lemma(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        content: str,
+        pod_id: UUID,
+        message_metadata: dict[str, object] | None = None,
+    ) -> AgentRunStartResult:
+        """A message a person typed in Lemma's own composer.
+
+        The only caller that may say so. Typed into a group's conversation it
+        is marked as written in Lemma (``domain/private_notes``), which changes
+        who the model takes the writer to be -- so a chat platform's line, a
+        sub-agent's or a reply delivery's must never arrive this way.
+        """
+        return await self.add_user_message_and_start_run(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            content=content,
+            pod_id=pod_id,
+            message_metadata=message_metadata,
+            typed_in_lemma=True,
         )
 
     async def _get_or_create_conversation_for_message(

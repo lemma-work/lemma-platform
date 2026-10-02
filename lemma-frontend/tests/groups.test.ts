@@ -133,6 +133,34 @@ test("an opened group carries its people and what is waiting, and nothing it can
     assert.equal(readGroupDetail({}), null);
 });
 
+test("an opened group says what its people from outside can be told", () => {
+    const detail = readGroupDetail({
+        id: "g1", platform: "TELEGRAM",
+        public: {
+            files: [
+                { name: "changelog.html", path: "/changelog.html" },
+                { name: "notes.md", path: null },
+                { name: "", path: "/nameless" },
+                null,
+                "junk",
+            ],
+            tables: ["price_list", "", 7],
+            more: true,
+        },
+    });
+    assert.deepEqual(detail?.publicReach, {
+        files: [
+            { name: "changelog.html", path: "/changelog.html" },
+            // Somebody's personal file: no path that means anything to anyone else.
+            { name: "notes.md", path: null },
+        ],
+        tables: ["price_list"],
+        more: true,
+    });
+    // An older backend says nothing, and the page says nothing in its place.
+    assert.equal(readGroupDetail({ id: "g1", platform: "TELEGRAM" })?.publicReach, null);
+});
+
 test("what was said reads oldest first, the bot's own lines counted in the space", () => {
     const lines = readTimeline({ items: [
         { text: "later", at: "2026-10-01T10:00:00Z", in_pod: false, from_bot: false },

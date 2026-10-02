@@ -699,6 +699,18 @@ a.gpage__open {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+/* The bot's markdown at the line's own size, not the reading size a reply
+   gets, and without the pre-wrap that keeps a person's line breaks. */
+.gline__text--md {
+    white-space: normal;
+}
+.gline__text--md .md {
+    font-size: inherit;
+    line-height: inherit;
+}
+.gline__text--md .md p {
+    margin: 0 0 8px;
+}
 .gline__note {
     font-size: 12px;
     color: var(--ink-3);
@@ -735,6 +747,42 @@ a.gpage__open {
 }
 .gside__fine {
     font-size: 13px;
+}
+/* What a group's people from outside the space can be told: one line per
+   Public thing, its folder under it, like the people list above. */
+.gpublic {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.gside__label {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink);
+}
+.gpublic__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 14px;
+}
+.gpublic__list li {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.gpublic__list span {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.gpublic__list small,
+.gpublic__more {
+    font-size: 12px;
+    color: var(--ink-2);
 }
 .gpeople {
     display: flex;

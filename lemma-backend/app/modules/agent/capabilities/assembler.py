@@ -45,6 +45,7 @@ from app.modules.agent.capabilities.open_notifications import (
     build_open_notifications_capability,
 )
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
+from app.modules.agent.domain.surface_prompts import is_group_conversation
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.domain.entities import Agent
@@ -317,7 +318,9 @@ async def _build_lemma_harness_tooling(
     if surface_platform and platform_is_known(surface_platform):
         capabilities.append(
             SurfacePlatformCapability(
-                str(surface_platform), answers_outsider=answers_outsider
+                str(surface_platform),
+                answers_outsider=answers_outsider,
+                in_group=is_group_conversation(ctx),
             )
         )
 

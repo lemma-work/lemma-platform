@@ -14,6 +14,7 @@ from ..types import UNSET, Unset
 if TYPE_CHECKING:
     from ..models.group_owner_response import GroupOwnerResponse
     from ..models.group_person_response import GroupPersonResponse
+    from ..models.group_public_response import GroupPublicResponse
     from ..models.group_waiting_response import GroupWaitingResponse
 
 
@@ -44,6 +45,7 @@ class GroupDetailResponse:
         pending (bool | Unset): Asked of the platform and not yet confirmed (WhatsApp). Default: False.
         people_in_pod (int | None | Unset): People in the pod seen speaking here; none where not kept.
         people_outside (int | None | Unset): People outside the pod seen speaking here.
+        public (GroupPublicResponse | None | Unset):
         shared_externally (bool | Unset): A Slack channel shared with another company. Default: False.
         title (None | str | Unset):
         waiting_for_you (int | Unset): Questions its people outside the pod passed on to you. Default: 0.
@@ -66,6 +68,7 @@ class GroupDetailResponse:
     pending: bool | Unset = False
     people_in_pod: int | None | Unset = UNSET
     people_outside: int | None | Unset = UNSET
+    public: GroupPublicResponse | None | Unset = UNSET
     shared_externally: bool | Unset = False
     title: None | str | Unset = UNSET
     waiting_for_you: int | Unset = 0
@@ -73,6 +76,7 @@ class GroupDetailResponse:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.group_owner_response import GroupOwnerResponse
+        from ..models.group_public_response import GroupPublicResponse
 
         answers_outsiders = self.answers_outsiders
 
@@ -142,6 +146,14 @@ class GroupDetailResponse:
         else:
             people_outside = self.people_outside
 
+        public: dict[str, Any] | None | Unset
+        if isinstance(self.public, Unset):
+            public = UNSET
+        elif isinstance(self.public, GroupPublicResponse):
+            public = self.public.to_dict()
+        else:
+            public = self.public
+
         shared_externally = self.shared_externally
 
         title: None | str | Unset
@@ -184,6 +196,8 @@ class GroupDetailResponse:
             field_dict["people_in_pod"] = people_in_pod
         if people_outside is not UNSET:
             field_dict["people_outside"] = people_outside
+        if public is not UNSET:
+            field_dict["public"] = public
         if shared_externally is not UNSET:
             field_dict["shared_externally"] = shared_externally
         if title is not UNSET:
@@ -197,6 +211,7 @@ class GroupDetailResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.group_owner_response import GroupOwnerResponse
         from ..models.group_person_response import GroupPersonResponse
+        from ..models.group_public_response import GroupPublicResponse
         from ..models.group_waiting_response import GroupWaitingResponse
 
         d = dict(src_dict)
@@ -304,6 +319,23 @@ class GroupDetailResponse:
 
         people_outside = _parse_people_outside(d.pop("people_outside", UNSET))
 
+        def _parse_public(data: object) -> GroupPublicResponse | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                public_type_0 = GroupPublicResponse.from_dict(data)
+
+                return public_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(GroupPublicResponse | None | Unset, data)
+
+        public = _parse_public(d.pop("public", UNSET))
+
         shared_externally = d.pop("shared_externally", UNSET)
 
         def _parse_title(data: object) -> None | str | Unset:
@@ -335,6 +367,7 @@ class GroupDetailResponse:
             pending=pending,
             people_in_pod=people_in_pod,
             people_outside=people_outside,
+            public=public,
             shared_externally=shared_externally,
             title=title,
             waiting_for_you=waiting_for_you,

@@ -185,6 +185,20 @@ export interface GroupQuestion {
 export interface GroupDetail extends Group {
     people: GroupPerson[];
     waiting: GroupQuestion[];
+    /** What its people outside the space can be answered from: the space's
+     *  Public files and tables, the first few of each. Null where the backend
+     *  did not say. */
+    publicReach: PublicReach | null;
+}
+
+/** Public is one mark with two readers — "anyone with a Lemma account" on the
+ *  Share sheet, and strangers in a group — so the group's page lists it. */
+export interface PublicReach {
+    /** `path` is null for a file in somebody's personal files. */
+    files: { name: string; path: string | null }[];
+    tables: string[];
+    /** More is Public than is listed. */
+    more: boolean;
 }
 
 /** One thing said in a group, as the space's log kept it. */

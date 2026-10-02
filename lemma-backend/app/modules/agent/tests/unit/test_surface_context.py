@@ -47,6 +47,7 @@ def test_a_conversation_with_no_surface_reads_as_all_nulls() -> None:
         "external_user_id",
         "external_message_id",
         "agent_display_name",
+        "surface_conversation_kind",
     }
     assert all(value is None for value in context.values())
 
