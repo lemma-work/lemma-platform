@@ -4,7 +4,7 @@ import { interviews } from "./apps/research-model";
 /** What is in each sample teammate's space on the landing's demo: the
  *  tables, pages, page views and schedules of one job each, so the product
  *  pages can show every part of a space as a real screen of real-looking
- *  work. Kit runs a launch, Remy a pipeline, Scout a research question and
+ *  work. Kit runs the feedback loop, Remy a pipeline, Scout a research question and
  *  June customer imports. Isolated from the general fixtures, like the rest
  *  of the preview source; the workflows are in ./preview-fixtures.
  *
@@ -33,105 +33,150 @@ export interface SampleSpace {
     ownRows?: string[];
 }
 
-/** A schedule that runs a workflow, switched on by Priya for everyone: on a
- *  cron when given one, otherwise when a row is added to `table`. */
-function schedule(pod: string, name: string, workflow: string, when: { cron: string } | { table: string }, firedDaysAgo: number): Record<string, unknown> {
-    const kind = "cron" in when ? { schedule_type: "TIME", config: { cron: when.cron, timezone: "Europe/London" } } : { schedule_type: "DATASTORE", config: { table_name: when.table, operations: ["INSERT"] } };
+/** A schedule that runs a workflow, switched on for everyone by `owner`
+ *  (Priya, unless said): on a cron, when a row is added to `table`, or when a
+ *  connected account's `source` sends its `trigger`. */
+type When = { cron: string } | { table: string } | { source: string; account: string; trigger: string };
+function schedule(pod: string, name: string, workflow: string, when: When, firedDaysAgo: number, owner = "priya-user"): Record<string, unknown> {
+    const kind = "cron" in when ? { schedule_type: "TIME", config: { cron: when.cron, timezone: "Europe/London" } }
+        : "table" in when ? { schedule_type: "DATASTORE", config: { table_name: when.table, operations: ["INSERT"] } }
+        : { schedule_type: "WEBHOOK", config: { source: when.source } };
+    const listens = "source" in when ? { account_id: when.account, connector_trigger_id: when.trigger } : { account_id: null, connector_trigger_id: null };
     return {
         id: pod + "-" + name, pod_id: pod, name, ...kind, workflow_name: workflow, workflow_id: "wf-" + workflow, instruction: null,
-        filter_instruction: null, filter_output_schema: null, account_id: null, connector_trigger_id: null,
-        user_id: "priya-user", visibility: "POD", is_active: true, is_internal: false, paused_by_failures: false,
+        filter_instruction: null, filter_output_schema: null, ...listens,
+        user_id: owner, visibility: "POD", is_active: true, is_internal: false, paused_by_failures: false,
         last_fired_at: at(-firedDaysAgo), last_fire_status: "TRIGGERED", last_error: null, consecutive_failures: 0,
         created_at: at(-40), allowed_actions: ["schedule.read", "schedule.update"],
     };
 }
 
-/* ── Kit: the launch ────────────────────────────────────────────────── */
+/* ── Kit: the feedback loop ─────────────────────────────────────────── */
 
-const LAUNCH_ASSETS: SampleTable = {
-    name: "launch_assets",
-    detail: "Every asset for the launch, who owns it and where it stands",
-    columns: columns("id", "asset", "owner", "status", "due", "launch_id", "created_at"),
-    links: { launch_id: "launches.id" },
-    rows: () => [
-        ["Launch post", "Priya", "In review", 2], ["Pricing page copy", "Aditi", "Drafting", 3],
-        ["Demo video, 90s", "Rohan", "Drafting", 5], ["Press release", "Priya", "In review", 4],
-        ["Customer quote, Northfield", "Kit", "Waiting on customer", 3], ["Changelog entry", "Kit", "Ready", 1],
-        ["Onboarding email", "Aditi", "Ready", 2], ["Social thread", "Kit", "Drafting", 4],
-        ["Help centre article", "Rohan", "Ready", 1], ["Sales one-pager", "Aditi", "In review", 5],
-        ["Webinar invite", "Kit", "Drafting", 6], ["App store screenshots", "Rohan", "Waiting on customer", 6],
-    ].map(([asset, owner, status, due], i) => ({
-        id: "asset-" + (i + 1), asset, owner, status, due: on(Number(due)), launch_id: "launch-oct", created_at: at(-12 + i),
+/** The themes Kit has grouped every report into, and how far each fix has
+ *  got. Report counts are the rows below, not a number typed twice. */
+const THEMES = [
+    { id: "large-imports", theme: "Large imports time out", stage: "No fix yet", owner: "Dev", ticket: "LIN-251", pr: "", retried: 0, works: 0,
+        quotes: ["14k rows, spinner for 10 min then a timeout. Second time this week.", "Our nightly import of 22k rows fails every time now.", "stuck at 99% on a big CSV"] },
+    { id: "bulk-edit", theme: "Bulk edit missing", stage: "No fix yet", owner: "", ticket: "", pr: "", retried: 0, works: 0,
+        quotes: ["Changing the owner on 300 rows one by one is brutal.", "Bulk edit would save our ops team hours every week."] },
+    { id: "upload-spinner", theme: "Upload spinner never ends", stage: "No fix yet", owner: "", ticket: "", pr: "", retried: 0, works: 0,
+        quotes: ["Uploaded a big file and the spinner just keeps going."] },
+    { id: "mobile-notifications", theme: "Notifications on mobile", stage: "Fix in progress", owner: "Dev", ticket: "LIN-244", pr: "#490", retried: 0, works: 0,
+        quotes: ["I never know when my import is done on my phone. Looks frozen.", "App feels stuck after I start an import on mobile."] },
+    { id: "dates-as-text", theme: "Dates import as text", stage: "Merged", owner: "Dev", ticket: "LIN-231", pr: "#482", retried: 0, works: 0,
+        quotes: ["My dates came in as 2026-09-14 text, so sorting is broken.", "Same date problem as last week. Twice now.", "dates = text again"] },
+    { id: "login-link", theme: "Login link expired", stage: "Closed", owner: "Dev", ticket: "LIN-219", pr: "#466", retried: 14, works: 12,
+        quotes: ["The login email link is dead by the time I open it."] },
+    { id: "column-mapping", theme: "Column mapping resets", stage: "Closed", owner: "Alex", ticket: "LIN-222", pr: "#471", retried: 10, works: 9,
+        quotes: ["Every re-upload forgets my column mapping."] },
+    { id: "duplicate-rows", theme: "Duplicate rows on re-import", stage: "Closed", owner: "Dev", ticket: "LIN-225", pr: "#474", retried: 6, works: 6,
+        quotes: ["Re-importing doubled every row."] },
+    { id: "timezone-emails", theme: "Wrong timezone in emails", stage: "Closed", owner: "Alex", ticket: "LIN-228", pr: "#478", retried: 14, works: 4,
+        quotes: ["Digest says 3am, it’s 9am here."] },
+];
+const REPORTS_PER_THEME: Record<string, number> = {
+    "large-imports": 41, "bulk-edit": 26, "upload-spinner": 5, "mobile-notifications": 31, "dates-as-text": 22,
+    "login-link": 31, "column-mapping": 27, "duplicate-rows": 22, "timezone-emails": 17,
+};
+const REPORTERS = ["@maria.k", "@tomasz", "@jun.ho", "@lena.p", "@amir", "@ravi.s", "@dina", "@oskar", "@priya.n", "@felix", "@noor", "@kenji"];
+const ENTERPRISE = ["Northfield", "Brightpath", "Kite Labs"];
+const SOURCES = ["Slack", "Slack", "Slack", "Email", "In app"];
+
+/** 222 reports this month, the newest first: each one a person, where they
+ *  said it, and the theme Kit filed it under. Deterministic, so the counts
+ *  on every screen agree with each other. */
+const FEEDBACK_REPORTS: SampleTable = {
+    name: "feedback_reports",
+    detail: "Every piece of feedback from Slack, email and the app, filed under a theme",
+    columns: columns("id", "reporter", "source", "plan", "said", "theme_id", "created_at"),
+    links: { theme_id: "feedback_themes.id" },
+    rows: () => THEMES.flatMap((theme, t) => Array.from({ length: REPORTS_PER_THEME[theme.id] }, (_, i) => {
+        const n = t * 7 + i;
+        const enterprise = i % 13 === 4;
+        return {
+            id: theme.id + "-" + (i + 1),
+            reporter: enterprise ? ENTERPRISE[n % ENTERPRISE.length] : REPORTERS[n % REPORTERS.length],
+            source: theme.id === "mobile-notifications" && i % 3 ? "In app" : SOURCES[n % SOURCES.length],
+            plan: enterprise ? "Enterprise" : ["Free", "Pro", "Pro"][n % 3],
+            said: theme.quotes[i % theme.quotes.length],
+            theme_id: theme.id,
+            // The spinner theme started from overnight reports; the rest span the month.
+            created_at: theme.id === "upload-spinner" ? at(-0.3 - i * 0.02) : at(-((i * 29 + t * 5) % 30) - 0.1),
+        };
+    })).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
+};
+
+const FEEDBACK_THEMES: SampleTable = {
+    name: "feedback_themes",
+    detail: "Each problem, its ticket and fix, and who owns it",
+    columns: columns("id", "theme", "reports", "stage", "owner", "ticket", "pr", "retried", "works", "created_at"),
+    rows: () => THEMES.map(({ quotes: _quotes, ...theme }, i) => ({ ...theme, reports: REPORTS_PER_THEME[theme.id], created_at: at(-30 + i) })),
+};
+
+/** The replies drafted when PR #482 merged: one per person who reported
+ *  dates importing as text. Enterprise accounts go through Sam. Nothing
+ *  goes out until Dev confirms the fix is live. */
+const RETRY_REPLIES: SampleTable = {
+    name: "retry_replies",
+    detail: "Replies to everyone who reported a problem, held until its fix is live",
+    columns: columns("id", "reporter", "where", "plan", "goes_via", "state", "pr", "created_at"),
+    rows: () => FEEDBACK_REPORTS.rows().filter((row) => row.theme_id === "dates-as-text").map((row, i) => ({
+        id: "reply-" + (i + 1), reporter: row.reporter, where: row.source === "Email" ? "email" : "#feedback thread", plan: row.plan,
+        goes_via: row.plan === "Enterprise" ? "Sam" : "Kit", state: row.plan === "Enterprise" ? "With Sam" : "Waits for Dev", pr: "#482", created_at: at(-0.45),
     })),
 };
 
 const KIT: SampleSpace = {
-    tables: [
-        LAUNCH_ASSETS,
-        {
-            name: "readiness_checks",
-            detail: "What has to be true before the launch goes out",
-            columns: columns("id", "check", "done", "due", "created_at"),
-            rows: () => ([
-                ["Demo matches the current onboarding", true, 1], ["Pricing page reviewed by finance", true, 2],
-                ["Customer names cleared in writing", false, 3], ["Press list confirmed with Priya", true, 3],
-                ["Support briefed on the new plan", false, 5], ["Changelog published", true, 6],
-                ["Status page has a maintenance note", false, 8],
-            ] as const).map(([check, done, due], i) => ({ id: "check-" + (i + 1), check, done, due: on(due), created_at: at(-8 + i) })),
-        },
-        {
-            name: "launches",
-            detail: "Each launch, its date and how far along it is",
-            columns: columns("id", "name", "ships_on", "stage", "created_at"),
-            rows: () => [
-                { id: "launch-oct", name: "Team plans", ships_on: on(9), stage: "Assets due", created_at: at(-30) },
-                { id: "launch-sep", name: "Usage reports", ships_on: on(-21), stage: "Shipped", created_at: at(-60) },
-                { id: "launch-aug", name: "Mobile app", ships_on: on(-48), stage: "Shipped", created_at: at(-90) },
-            ],
-        },
-    ],
+    tables: [FEEDBACK_THEMES, FEEDBACK_REPORTS, RETRY_REPLIES],
     pages: [
-        { path: "/pages/Team plans launch.md", detail: "The brief: who it is for and what has to ship", daysAgo: 0, text: `# Team plans launch
+        { path: "/pages/Feedback report, week 40.md", detail: "What users said this week, what got fixed, and what nobody owns", daysAgo: 0, text: `# Feedback report, week 40
 
-Team plans let a whole company share one Acme account, with a seat per person. We ship in nine days.
+222 reports this month across 9 themes, one of them new overnight. Captured as they landed, from Slack, email and the app.
 
-## Who it is for
+## The headline
 
-Founders who already pay for Acme themselves and now want their team in. The pain we lead with: three people expensing three cards for the same tool.
+Large imports are the biggest unsolved problem: 41 reports, up every day this week. Dev owns it as P0 and has a repro with a 14k row file.
 
-## What has to ship
+## Closing the loop
+
+31 of the 44 people we asked to retry this week say it works. PR #482 (dates import as text) adds 22 more once Dev confirms it’s live.
+
+## Still open
 
 \`\`\`lemma-view
--- Assets still open
-SELECT "asset", "owner", "status", "due" FROM "launch_assets" WHERE "status" != 'Ready' ORDER BY "due" LIMIT 50
+-- Themes without a fix that has shipped
+SELECT "theme", "reports", "stage", "owner" FROM "feedback_themes" WHERE "stage" != 'Closed' ORDER BY "reports" DESC LIMIT 50
 \`\`\`
 
-## Rules for this launch
+## Nobody owns these yet
 
-- Anything public goes to Priya before it goes out.
-- No customer name without written permission. Northfield's quote is still waiting on theirs.
-- The readiness check runs Thursdays at 9.
+- Bulk edit, 26 reports. Two Enterprise renewals mention it (Sam). Needs a decision this week.
 
-## Open questions
+## What changed in how I sort
 
-- [x] Do annual plans get the seat discount? Yes, agreed with finance.
-- [ ] Do we announce on WhatsApp or only email?
+- “App feels stuck” on mobile now goes to Notifications, per Dev. 11 reports moved.
 ` },
-        { path: "/pages/Launch day.md", detail: "The hour by hour for launch morning", daysAgo: 1, text: `# Launch day
+        { path: "/pages/Retry reply.md", detail: "What a person hears when their problem is fixed", daysAgo: 6, text: `# Retry reply
 
-- [x] Changelog entry published
-- [x] Help centre article live
-- [ ] Launch post goes out at 10:00
-- [ ] Social thread follows at 10:15
-- [ ] Sales one-pager sent to the team
-- [ ] Watch the support inbox for the first two hours
+Posted in the thread where the person reported it, once the engineer who shipped the fix confirms it’s live.
+
+> Hi {name}, the problem you reported ({theme}) is fixed and live now ({pr}). Could you try again and tell me if it works?
+
+- Enterprise accounts hear from their CSM instead. Kit drafts, Sam sends.
+- Nobody hears twice. A second report of the same problem joins the first reply.
+- If they say it still breaks, the theme reopens and its owner is told.
 ` },
     ],
-    query: () => LAUNCH_ASSETS.rows()
-        .filter((row) => row.status !== "Ready")
-        .sort((a, b) => String(a.due).localeCompare(String(b.due)))
-        .map(({ asset, owner, status, due }) => ({ asset, owner, status, due })),
-    schedules: [schedule("kit", "thursday_readiness", "readiness-check", { cron: "0 9 * * 4" }, 0.125)],
+    query: () => FEEDBACK_THEMES.rows()
+        .filter((row) => row.stage !== "Closed")
+        .sort((a, b) => Number(b.reports) - Number(a.reports))
+        .map(({ theme, reports, stage, owner }) => ({ theme, reports, stage, owner: owner || "No owner" })),
+    schedules: [
+        schedule("kit", "every_feedback_message", "capture-feedback", { source: "slack", account: "acct-acme-slack", trigger: "slack.message_posted" }, 0.002, "sample-user"),
+        schedule("kit", "when_a_fix_merges", "close-the-loop", { source: "github", account: "acct-acme-github", trigger: "github.pull_request_merged" }, 0.47, "sample-user"),
+        schedule("kit", "nightly_reconcile", "nightly-reconcile", { cron: "0 2 * * *" }, 0.35, "sample-user"),
+    ],
 };
 
 /* ── Remy: the pipeline ─────────────────────────────────────────────── */

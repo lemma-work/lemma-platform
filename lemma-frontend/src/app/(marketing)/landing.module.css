@@ -79,14 +79,14 @@
 .mobileMenu > div a { padding: 10px 12px; border-radius: var(--radius-control); font-size: 15px }
 
 /* ── Hero: the film behind the words ────────────────────────────────── */
-.hero { position: relative; min-height: 820px; overflow: hidden; background: var(--cream) }
+.hero { position: relative; min-height: 640px; overflow: hidden; background: var(--cream) }
 .heroFilm { position: absolute; top: 0; right: 0; width: 64%; height: 100%; object-fit: cover; object-position: 66% 55% }
 /* Softens only the film's left edge and its top and bottom, so the words
    sit on clean ground and the characters on the right stay solid. */
 .heroWash { position: absolute; top: 0; bottom: 0; right: 0; width: 64%; pointer-events: none; background:
     linear-gradient(90deg, var(--cream) 0%, rgb(245 243 238 / .7) 12%, rgb(245 243 238 / 0) 28%),
     linear-gradient(180deg, rgb(245 243 238 / .75) 0%, rgb(245 243 238 / 0) 16%, rgb(245 243 238 / 0) 80%, var(--cream) 100%) }
-.heroText { position: relative; z-index: 1; max-width: 640px; padding: 226px 0 180px }
+.heroText { position: relative; z-index: 1; max-width: 640px; padding: 176px 0 56px }
 .heroHeadline { font-family: var(--serif); font-weight: 400; font-size: clamp(48px, 5.3vw, 76px); line-height: 1; letter-spacing: -.03em; margin-top: 18px }
 .heroHeadline span { display: block }
 .heroIntro { margin-top: 26px; max-width: 40ch; font-size: 20px; line-height: 1.55; color: var(--ink-2) }
@@ -98,13 +98,20 @@
 /* A link to more, on its own line under a paragraph. */
 .moreLink { display: inline-block; margin-top: 12px; white-space: nowrap }
 
-.strip { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 22px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line) }
-.stripItems { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 36px; list-style: none; padding: 0; font-size: 16px; color: var(--ink-2) }
+/* The small announcement over the headline: what it is, in other people's
+   words, and the way to the code. */
+.announce { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 22px; padding: 4px 12px 4px 4px; border: 1px solid var(--line-2); border-radius: 999px; background: color-mix(in srgb, var(--paper) 70%, transparent); font-size: 13px; color: var(--ink-2); transition: border-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease) }
+.announce span { flex: none; padding: 2px 9px; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: 12px; white-space: nowrap }
+.announce em { font-style: normal; color: var(--ink-3) }
+.announce:hover { border-color: var(--ink-3); color: var(--ink) }
+.strip { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line) }
+.strip .label { margin-bottom: 14px }
+.stripItems { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 28px; list-style: none; margin: 0; padding: 0; font-size: 16px; color: var(--ink-2) }
 .stripItems li { display: inline-flex; align-items: center; gap: 10px }
 .mail { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 5px; background: var(--ink); color: var(--paper); font-size: 12px }
 
 /* ── The live workspace, on a dark band ─────────────────────────────── */
-.band { position: relative; margin-top: 120px; padding: 128px 0 120px; background: var(--night); color: var(--night-ink); overflow: hidden }
+.band { position: relative; margin-top: 24px; padding: 88px 0 120px; background: var(--night); color: var(--night-ink); overflow: hidden }
 .band::before { content: ""; position: absolute; left: 50%; top: 38%; width: 1100px; height: 700px; transform: translateX(-50%); background: radial-gradient(closest-side, rgb(90 63 212 / .38), rgb(90 63 212 / 0)); pointer-events: none }
 .band .label { color: var(--night-ink-2) }
 .band .title { color: var(--night-ink) }
@@ -140,13 +147,19 @@
 .stepFace { position: absolute; right: 4px; top: 12px; width: 88px; height: 88px }
 
 /* ── It builds: four apps, one frame, one scale ─────────────────────── */
-.masonry { margin-top: 56px; columns: 2; column-gap: 28px }
-.window { break-inside: avoid; margin: 0 0 28px; border-radius: 14px; overflow: hidden; background: var(--paper); border: 1px solid var(--line); box-shadow: var(--shadow-card) }
-.chrome { display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 14px; border-bottom: 1px solid var(--line); background: #faf9f5; font-size: 14px; color: var(--ink) }
-.chrome img { width: 22px; height: 22px; border-radius: 6px; background: var(--violet-soft); object-fit: contain }
-.chrome em { font-style: normal; color: var(--ink-3) }
-.dots { margin-left: auto; display: flex; gap: 6px }
-.dots i { width: 9px; height: 9px; border-radius: 50%; background: rgb(20 20 19 / .12) }
+/* The apps: a tab per teammate over one large frame. Unselected tabs are
+   faded, not boxed, so the picked one reads without a ring. */
+.appTabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 48px }
+.appTab { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid transparent; border-radius: 14px; background: none; text-align: left; color: var(--ink); opacity: .55; cursor: pointer; transition: opacity var(--motion-fast) var(--ease), background var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease) }
+.appTab:hover { opacity: .85 }
+.appTab[aria-selected="true"] { opacity: 1; background: var(--paper); border-color: var(--line) }
+.appTab:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px }
+.appTab img { flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--violet-soft); object-fit: contain }
+.appTab b { font-weight: 500; font-size: 16px }
+.appTab em { font-style: normal; color: var(--ink-3); font-size: 14px; margin-left: 6px }
+.appTab small { display: block; margin-top: 4px; font-size: 14px; line-height: 1.4; color: var(--ink-2) }
+.appFrame { margin-top: 16px; border-radius: 18px; overflow: hidden; background: var(--paper); border: 1px solid var(--line); box-shadow: var(--shadow-card) }
+.appFrame img { display: block; width: 100%; height: auto }
 
 /* ── Each sees their part ───────────────────────────────────────────── */
 .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 72px; align-items: center }
@@ -208,7 +221,7 @@
     .moment:nth-child(n) { grid-column: 1; grid-row: auto; margin-top: 0 }
     .moment:nth-child(n) > .label { align-self: auto }
     .arrow { display: none }
-    .band { padding: 96px 0 88px }
+    .band { padding: 72px 0 88px }
 }
 @media (max-width: 860px) {
     .navLinks { display: none }
@@ -216,9 +229,11 @@
     .hero { min-height: 0 }
     .heroFilm, .heroWash { width: 100% }
     .heroWash { background: linear-gradient(180deg, rgb(245 243 238 / .92) 0%, rgb(245 243 238 / .82) 55%, var(--cream) 100%) }
-    .heroText { padding: 128px 0 96px }
+    .heroText { padding: 128px 0 48px }
+    .announce { gap: 8px; font-size: 12px; padding-right: 10px }
     .heroIntro { font-size: 18px }
-    .masonry { columns: 1 }
+    .appTabs { display: flex; overflow-x: auto; scrollbar-width: none; margin-inline: -16px; padding-inline: 16px }
+    .appTab { flex: none; width: 240px }
     .panel { padding: 28px 20px 64px }
     .panel .scrawl { left: 24px; bottom: 20px; font-size: 18px }
     .stage { margin-top: 88px }
