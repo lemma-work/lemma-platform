@@ -105,6 +105,8 @@ The ingestion and asset proxy hosts are configurable at build time using
 `NEXT_PUBLIC_ANALYTICS_INGEST_HOST` and `NEXT_PUBLIC_ANALYTICS_ASSETS_HOST`.
 Only explicitly allowed event properties and redacted route templates leave
 the app; DOM autocapture and replay are disabled. Storage consent is remembered.
+Feature flags (Groups is the first) come from PostHog and are off wherever it
+does not run; `NEXT_PUBLIC_LEMMA_FEATURES=groups` turns one on regardless.
 
 Run `npm run check`, `npm test`, and `npm run build` for the component gates.
 With Node dependencies installed, the public website scenarios build and boot

@@ -13,9 +13,10 @@ export const timelineKey = (podId: string, groupId: string) => ["group-timeline"
 
 /** Every group the space's bots are in. `poll` keeps asking while a sheet
  *  waits for a group to arrive from Telegram or Slack. */
-export function useGroups(podId: string, poll: number | false = false) {
+export function useGroups(podId: string, poll: number | false = false, enabled = true) {
     return useQuery({
         queryKey: groupsKey(podId),
+        enabled,
         queryFn: () => source.listGroups(podId),
         staleTime: 30_000,
         refetchOnWindowFocus: true,

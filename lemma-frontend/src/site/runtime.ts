@@ -35,6 +35,9 @@ export interface SiteRuntime {
     deployment: string;
     analyticsKey: string;
     analyticsHost: string;
+    /** Comma-separated feature flags on regardless of PostHog -- for local
+     *  development and deployments with no analytics. */
+    features: string;
     /** The installer link. `null` is unset (use the public one); "" is no button. */
     desktopDownloadUrl: string | null;
     voiceProvider: string;
@@ -64,6 +67,7 @@ function built(): SiteRuntime {
         deployment: process.env.NEXT_PUBLIC_LEMMA_DEPLOYMENT || "hosted",
         analyticsKey: process.env.NEXT_PUBLIC_ANALYTICS_KEY ?? "",
         analyticsHost: process.env.NEXT_PUBLIC_ANALYTICS_HOST || "https://eu.posthog.com",
+        features: process.env.NEXT_PUBLIC_LEMMA_FEATURES ?? "",
         desktopDownloadUrl: process.env.NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL ?? null,
         voiceProvider: process.env.NEXT_PUBLIC_VOICE_PROVIDER ?? "",
         authEmailVerificationRequired: process.env.NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED ?? "",
@@ -81,6 +85,7 @@ const VARIABLES: Record<keyof SiteRuntime, string> = {
     deployment: "NEXT_PUBLIC_LEMMA_DEPLOYMENT",
     analyticsKey: "NEXT_PUBLIC_ANALYTICS_KEY",
     analyticsHost: "NEXT_PUBLIC_ANALYTICS_HOST",
+    features: "NEXT_PUBLIC_LEMMA_FEATURES",
     desktopDownloadUrl: "NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL",
     voiceProvider: "NEXT_PUBLIC_VOICE_PROVIDER",
     authEmailVerificationRequired: "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED",

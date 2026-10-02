@@ -45,6 +45,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 )
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     GROUP_SUBJECT_MAX_CHARS,
+    WhatsAppApiError,
     WhatsAppClient,
 )
 from app.modules.agent_surfaces.services.credential_resolver import (
@@ -75,6 +76,18 @@ class GroupNotOpened(RuntimeError):
 
 class GroupOpenLimitReached(RuntimeError):
     """This member has opened as many groups on this bot today as one may."""
+
+
+class GroupsNotAvailable(RuntimeError):
+    """Meta does not let this number create groups at all.
+
+    The Groups API is open to eligible business numbers only; a test number,
+    for one, is refused. Asking again changes nothing until Meta changes it.
+    """
+
+
+#: Meta's answer to a number that may not use the Groups API.
+_NOT_ELIGIBLE_FOR_GROUPS = 131215
 
 
 #: Groups one member may open on one bot in a day. A shared Meta number is
@@ -166,9 +179,17 @@ class WhatsAppGroupOpener:
         # Meta is called with no connection held, as every platform call is.
         client = WhatsAppClient.from_credentials(credentials)
         phone_number_id = str(credentials.get("phone_number_id") or "")
-        request_id = await client.create_group(
-            phone_number_id=phone_number_id, subject=name, description=description
-        )
+        try:
+            request_id = await client.create_group(
+                phone_number_id=phone_number_id, subject=name, description=description
+            )
+        except WhatsAppApiError as refused:
+            if refused.meta_code == _NOT_ELIGIBLE_FOR_GROUPS:
+                raise GroupsNotAvailable(
+                    "WhatsApp doesn't let this number start groups. Meta opens "
+                    "groups to eligible business numbers only."
+                ) from refused
+            raise
         if not request_id:
             raise GroupNotOpened("WhatsApp accepted the request but named none")
         async with self.uow_factory() as uow:
