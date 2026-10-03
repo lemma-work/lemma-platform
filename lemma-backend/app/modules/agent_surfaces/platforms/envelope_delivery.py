@@ -28,6 +28,25 @@ from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERROR
 logger = get_logger(__name__)
 
 
+class PartialTextDelivery(AgentSurfacePlatformError):
+    """A long reply split into several messages, of which only the first few went.
+
+    Distinct from failing outright because the two need opposite handling: a
+    reply that reached nobody wants its fallback, and one the person has half
+    of must not get one -- resending it all put the first half on their phone
+    twice. It is still an error, so a caller that knows nothing of it treats
+    the reply as not fully delivered, which is the truth.
+    """
+
+    def __init__(self, platform: str, *, sent_parts: int, total_parts: int) -> None:
+        self.sent_parts = sent_parts
+        self.total_parts = total_parts
+        super().__init__(
+            platform,
+            f"only {sent_parts} of {total_parts} parts of a long reply were sent.",
+        )
+
+
 def _keyed(collected: dict[str, list[PartDelivery]]) -> dict[str, PartDelivery]:
     """One receipt key per thing that was actually delivered.
 
@@ -251,6 +270,9 @@ class EnvelopeDeliveryMixin:
             await self.send_message(
                 credentials=credentials, event=event, message=text, metadata=metadata
             )
+        except PartialTextDelivery:
+            # Logged where it happened; part of it is on their phone.
+            return PartDelivery.DEGRADED
         except PLATFORM_TRANSPORT_ERRORS:
             logger.warning(
                 "agent_surfaces.delivery.part_reached_nobody.degraded",
@@ -273,6 +295,11 @@ class EnvelopeDeliveryMixin:
             await self.send_message(
                 credentials=credentials, event=event, message=text, metadata=metadata
             )
+        except PartialTextDelivery:
+            # The start of the answer is on their phone and the rest is not.
+            # DEGRADED rather than UNDELIVERED, because UNDELIVERED is what
+            # sends a caller looking for another way to say all of it.
+            return PartDelivery.DEGRADED
         except PLATFORM_TRANSPORT_ERRORS:
             logger.warning(
                 "agent_surfaces.delivery.part_reached_nobody.degraded",
@@ -412,8 +439,11 @@ class EnvelopeDeliveryMixin:
             ):
                 return PartDelivery.NATIVE
         except PLATFORM_TRANSPORT_ERRORS:
-            logger.debug(
-                "agent_surfaces.delivery.native_attachment_unavailable.diagnostic",
+            # A warning, like the other parts' native failures: the link
+            # below usually serves the person, which is exactly why an upload
+            # that keeps failing goes unnoticed at debug.
+            logger.warning(
+                "agent_surfaces.delivery.native_attachment_unavailable.degraded",
                 platform=self.platform,
                 exc_info=True,
             )
@@ -459,8 +489,8 @@ class EnvelopeDeliveryMixin:
             ):
                 return PartDelivery.NATIVE
         except PLATFORM_TRANSPORT_ERRORS:
-            logger.debug(
-                "agent_surfaces.delivery.native_voice_unavailable.diagnostic",
+            logger.warning(
+                "agent_surfaces.delivery.native_voice_unavailable.degraded",
                 platform=self.platform,
                 exc_info=True,
             )
@@ -481,9 +511,9 @@ class EnvelopeDeliveryMixin:
         )
         # Delivered, but not as the thing that was asked for. Returning the
         # file's own NATIVE said a voice note played in the thread when what
-        # arrived was an attachment to open -- and `_render_voice` is Telegram's
-        # alone, so that was the answer on every other platform. `_render_one`
-        # already records this exact outcome as DEGRADED for email; the two
+        # arrived was an attachment to open -- and only Telegram and WhatsApp
+        # implement `_render_voice`, so that was the answer everywhere else.
+        # `_render_one` already records this exact outcome as DEGRADED for email; the two
         # paths disagreed about one delivery, each with a comment explaining why
         # it was right.
         return PartDelivery.DEGRADED if outcome is PartDelivery.NATIVE else outcome

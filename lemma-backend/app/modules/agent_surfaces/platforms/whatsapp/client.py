@@ -32,6 +32,9 @@ from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
 )
+from app.modules.agent_surfaces.platforms.sent_message_ids import (
+    record_sent_message_id,
+)
 
 # The one canonical WhatsApp Graph API base. ``api_base_url`` in the bot
 # credentials overrides it (used by tests to point at a fake server).
@@ -111,9 +114,10 @@ _META_CODE = re.compile(r'"code"\s*:\s*(\d+)')
 class WhatsAppClient:
     """Thin WhatsApp Cloud API caller.
 
-    Message sends retry transient failures (429, 5xx, network) with bounded
-    backoff, through the same ``with_retry`` Telegram and Slack use. WhatsApp was
-    the one platform without it, so a single 503 from Meta lost the answer.
+    Sends retry with bounded backoff through the same ``with_retry`` Telegram
+    and Slack use, but a message and an upload retry on different failures --
+    see ``classify_whatsapp_error``: a message sent twice is a duplicate on the
+    person's phone, an upload made twice is an orphaned media id nobody sees.
     """
 
     def __init__(
@@ -295,6 +299,7 @@ class WhatsAppClient:
                 lambda: self._post_json(url, json=payload, method="messages"),
                 policy=self._retry_policy,
                 classify=classify_whatsapp_error,
+                retry_after=whatsapp_retry_after,
             )
         else:
             data = await self._post_json(url, json=payload, method="messages")
@@ -302,7 +307,12 @@ class WhatsAppClient:
         first = messages[0] if messages else {}
         if not isinstance(first, dict):
             return None
-        return str(first.get("id") or "").strip() or None
+        message_id = str(first.get("id") or "").strip() or None
+        if message_id and not is_indicator:
+            # A failed-delivery status names nothing but this id, so it is
+            # written down for whoever is collecting (see `sent_message_ids`).
+            record_sent_message_id(message_id)
+        return message_id
 
     async def upload_media(
         self,
@@ -315,14 +325,25 @@ class WhatsAppClient:
         """Upload a media object; return its media id."""
         url = f"{self._api_base}/{phone_number_id}/media"
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                url,
-                data={"messaging_product": "whatsapp", "type": mime_type},
-                files={"file": (file_name, file_bytes, mime_type)},
-                headers=self._auth_headers,
-            )
-        data = self._parse(response, method="media.upload")
+
+        async def upload() -> dict[str, object]:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    url,
+                    data={"messaging_product": "whatsapp", "type": mime_type},
+                    files={"file": (file_name, file_bytes, mime_type)},
+                    headers=self._auth_headers,
+                )
+            return self._parse(response, method="media.upload")
+
+        # An upload nobody references is invisible, so unlike a message it is
+        # safe to repeat on any transient failure, a read timeout included.
+        data = await with_retry(
+            upload,
+            policy=self._retry_policy,
+            classify=classify_whatsapp_idempotent_error,
+            retry_after=whatsapp_retry_after,
+        )
         return str((data or {}).get("id") or "").strip() or None
 
     async def get_media_info(self, media_id: str) -> dict[str, Any] | None:
@@ -423,15 +444,66 @@ class WhatsAppClient:
         return data if isinstance(data, dict) else {}
 
 
+#: Meta's throttling codes. Each one is a refusal *before* anything was sent --
+#: account and app rate limits (4, 80007, 130429), the spam limit (131048) and
+#: the per-recipient pair limit (131056) -- so retrying cannot duplicate. They
+#: arrive as an HTTP 400, which read as permanent and lost the message.
+RETRYABLE_META_CODES = frozenset({4, 80007, 130429, 131048, 131056})
+
+#: Meta asks for a pause before the next message to the same person without
+#: saying how long. Six seconds is a deliberate guess, inside the retry
+#: policy's cap, and the ordinary backoff would retry well before it.
+_PAIR_RATE_LIMIT_CODE = 131056
+_PAIR_RATE_LIMIT_PAUSE_SECONDS = 6.0
+
+#: Failures where the request provably never reached Meta: no connection, or
+#: no free connection to use. Anything later -- a read timeout, a dropped
+#: response -- may have been a message Meta accepted and delivered.
+_NOT_SENT_ERRORS: tuple[type[Exception], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+)
+
+
 def classify_whatsapp_error(exc: Exception) -> DeliveryClassification:
-    """Transient for 429 / 5xx / network errors; permanent for other 4xx."""
+    """Whether a *message* send may be tried again without a duplicate.
+
+    Only when Meta did not take it: the connection never opened, a 429 or a
+    503 (refused, not processed), or one of Meta's throttling codes. Any other
+    5xx and a read timeout are left alone -- Meta may have delivered the
+    message before failing to say so, and the retry then reached the person's
+    phone twice.
+    """
     if isinstance(exc, WhatsAppApiError):
-        if exc.status_code == 429 or exc.status_code >= 500:
+        if exc.status_code in (429, 503) or exc.meta_code in RETRYABLE_META_CODES:
+            return DeliveryClassification.TRANSIENT
+        return DeliveryClassification.PERMANENT
+    if isinstance(exc, _NOT_SENT_ERRORS):
+        return DeliveryClassification.TRANSIENT
+    return DeliveryClassification.PERMANENT
+
+
+def classify_whatsapp_idempotent_error(exc: Exception) -> DeliveryClassification:
+    """For calls that are safe to repeat (an upload): any transient failure."""
+    if isinstance(exc, WhatsAppApiError):
+        if (
+            exc.status_code == 429
+            or exc.status_code >= 500
+            or exc.meta_code in RETRYABLE_META_CODES
+        ):
             return DeliveryClassification.TRANSIENT
         return DeliveryClassification.PERMANENT
     if isinstance(exc, httpx.RequestError):
         return DeliveryClassification.TRANSIENT
     return DeliveryClassification.PERMANENT
+
+
+def whatsapp_retry_after(exc: Exception) -> float | None:
+    """The pause Meta's pair rate limit wants; exponential backoff otherwise."""
+    if isinstance(exc, WhatsAppApiError) and exc.meta_code == _PAIR_RATE_LIMIT_CODE:
+        return _PAIR_RATE_LIMIT_PAUSE_SECONDS
+    return None
 
 
 def _body_excerpt(response: httpx.Response, *, limit: int = 500) -> str:

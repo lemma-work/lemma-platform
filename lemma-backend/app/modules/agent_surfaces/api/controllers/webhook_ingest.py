@@ -10,8 +10,11 @@ ever reach it.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
+
+from pydantic import JsonValue
 
 from app.modules.agent_surfaces.contracts.whatsapp import (
     deployment_owns_whatsapp_number,
@@ -239,6 +242,93 @@ async def _published_whatsapp_verification(
     )
     await EventPublisher.publish(identity_event.stream_name(), identity_event)
     return True
+
+
+async def _without_whatsapp_verifications(
+    payload: dict[str, JsonValue],
+    uow_factory: UnitOfWorkFactory,
+    *,
+    publish: VerificationPublisher | None = None,
+) -> dict[str, JsonValue] | None:
+    """Publish every verification command in a body; return what is left of it.
+
+    ``None`` when the body was nothing but verification. Meta may batch several
+    messages into one delivery, and the check used to read only the first: a
+    code sent behind an ordinary message was answered as chat and never
+    verified, and one sent in front of an ordinary message swallowed it -- the
+    whole delivery returned as "verification received" and the other message
+    was never seen.
+
+    Each message is tested as a single-message body, the shape the identity
+    parser reads, and the rest of the body -- other messages, statuses -- is
+    kept exactly as it came.
+    """
+    entries = payload.get("entry")
+    if not isinstance(entries, list):
+        return payload
+    kept_entries: list[JsonValue] = []
+    removed = 0
+    for entry in entries:
+        kept_entry, published = await _entry_without_verifications(
+            entry, uow_factory, publish or _published_whatsapp_verification
+        )
+        removed += published
+        kept_entries.append(kept_entry)
+    if not removed:
+        return payload
+    remaining: dict[str, JsonValue] = {**payload, "entry": kept_entries}
+    return remaining if _carries_anything(kept_entries) else None
+
+
+#: Publishes a single-message body when it is a verification command.
+VerificationPublisher = Callable[
+    [dict[str, JsonValue], UnitOfWorkFactory], Awaitable[bool]
+]
+
+
+async def _entry_without_verifications(
+    entry: JsonValue, uow_factory: UnitOfWorkFactory, publish: VerificationPublisher
+) -> tuple[JsonValue, int]:
+    changes = entry.get("changes") if isinstance(entry, dict) else None
+    if not isinstance(entry, dict) or not isinstance(changes, list):
+        return entry, 0
+    kept_changes: list[JsonValue] = []
+    published = 0
+    for change in changes:
+        value = change.get("value") if isinstance(change, dict) else None
+        messages = value.get("messages") if isinstance(value, dict) else None
+        if not (
+            isinstance(change, dict)
+            and isinstance(value, dict)
+            and isinstance(messages, list)
+        ):
+            kept_changes.append(change)
+            continue
+        kept: list[JsonValue] = []
+        for message in messages:
+            single_change = {**change, "value": {**value, "messages": [message]}}
+            single: dict[str, JsonValue] = {
+                "entry": [{**entry, "changes": [single_change]}]
+            }
+            if await publish(single, uow_factory):
+                published += 1
+            else:
+                kept.append(message)
+        kept_changes.append({**change, "value": {**value, "messages": kept}})
+    return {**entry, "changes": kept_changes}, published
+
+
+def _carries_anything(entries: list[JsonValue]) -> bool:
+    """Whether what is left still holds a message or a status worth publishing."""
+    for entry in entries:
+        changes = entry.get("changes") if isinstance(entry, dict) else None
+        for change in changes if isinstance(changes, list) else []:
+            value = change.get("value") if isinstance(change, dict) else None
+            if isinstance(value, dict) and (
+                value.get("messages") or value.get("statuses")
+            ):
+                return True
+    return False
 
 
 async def _handled_slack_modal(

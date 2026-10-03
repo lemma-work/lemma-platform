@@ -26,6 +26,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import DisplayResourceRequest
+from app.modules.agent_surfaces.domain.delivery_result import SurfaceDeliveryResult
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 
 logger = get_logger(__name__)
@@ -65,12 +66,14 @@ async def deliver_display_resource_to_surface(
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
             service = build_egress(uow)
-            return await service.send_display_resource_for_conversation(
-                conversation_id=conversation_id,
-                request=request,
-                tool_call_id=tool_call_id,
-                tool_output=tool_output,
-                metadata=metadata,
+            return bool(
+                await service.send_display_resource_for_conversation(
+                    conversation_id=conversation_id,
+                    request=request,
+                    tool_call_id=tool_call_id,
+                    tool_output=tool_output,
+                    metadata=metadata,
+                )
             )
     except Exception:
         logger.warning(
@@ -86,11 +89,12 @@ async def deliver_surface_message_to_surface(
     *,
     conversation_id: UUID,
     message: str,
-) -> bool:
+) -> SurfaceDeliveryResult:
     """Deliver a plain message to the conversation's chat surface now.
 
     Backs the current-user ``surface_send_message`` agent tool. Best-effort:
-    returns False (never raises) when there is no active surface egress target.
+    undelivered (never raises) when there is no active surface egress target,
+    and says so when a closed reply window sent it by email instead.
     """
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
@@ -105,7 +109,7 @@ async def deliver_surface_message_to_surface(
             conversation_id=conversation_id,
             exc_info=True,
         )
-        return False
+        return SurfaceDeliveryResult.undelivered()
 
 
 async def deliver_voice_note_to_surface(
@@ -123,10 +127,12 @@ async def deliver_voice_note_to_surface(
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
             service = build_egress(uow)
-            return await service.send_voice_note_for_conversation(
-                conversation_id=conversation_id,
-                path=file_path,
-                caption=caption,
+            return bool(
+                await service.send_voice_note_for_conversation(
+                    conversation_id=conversation_id,
+                    path=file_path,
+                    caption=caption,
+                )
             )
     except Exception:
         logger.warning(

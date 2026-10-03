@@ -8,6 +8,7 @@ import { hasToken, lemma } from "@/session/client";
 import { useSession } from "@/session/session";
 import { displayName } from "@/session/profile-edit";
 import { ProfilePanel } from "@/session/profile-panel";
+import { ChatPodPreference } from "@/session/chat-pod-preference";
 import { AppearancePanel } from "@/session/theme";
 import { UsagePanel } from "@/usage/usage-panel";
 import { PlanSection } from "@/billing/plan-section";
@@ -266,6 +267,7 @@ export function SettingsModal({
                                         </div>
                                     </div>
                                     <ProfilePanel user={user.data} />
+                                    <ChatPodPreference />
                                 </>}
                                 {!sample && (
                                     <div className="settings-leave">

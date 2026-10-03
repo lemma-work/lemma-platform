@@ -7,6 +7,7 @@ import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
 import { agentChanges, agentRows, answeringAs, readAgentDetail, type AgentDraft } from "./agents";
 import { readGroup, readGroupDetail, readGroups, readTimeline, WHATSAPP_TITLE_MAX } from "./groups";
+import { readChatPodChoice } from "./chat-pod";
 import {
     createRequest,
     readRun,
@@ -35,6 +36,9 @@ import { SAMPLE_TABLES, sampleShape, sampleTable } from "./sample-tables";
  *  loudly labelled so it is never mistaken for your pods. */
 
 const ORGS: Org[] = [{ id: "acme", name: "Acme" }];
+
+/** The pod answering the sample person on WhatsApp. */
+let CHAT_POD = "personal";
 
 /** A first morning, on demand.
  *
@@ -3087,6 +3091,30 @@ export const fixtureSource: PodSource = {
             { platform: "SLACK", podId: "r2", name: "slack" },
             { platform: "RESEND", podId: "r1", name: "email" },
         ];
+    },
+    async chatPodChoice(platform: string) {
+        await wait(80);
+        if (platform.toUpperCase() !== "WHATSAPP") return null;
+        /* A second "Personal" in another organization, so the picker has to
+           say which is which. */
+        return readChatPodChoice({ groups: [{
+            platform: "WHATSAPP",
+            surfaces: [],
+            default_pod_id: CHAT_POD,
+            available_pods: [
+                ...PODS.map((pod) => ({ pod_id: pod.id, name: pod.name, organization_name: "Acme" })),
+                { pod_id: "northfield-personal", name: "Personal", organization_name: "Northfield" },
+            ],
+        }] }, platform);
+    },
+    async setChatPod(_platform: string, podId: string) {
+        await wait(450);
+        /* The refusal the server gives a pod that already answers WhatsApp
+           through its own number, so the sentence has somewhere to show. */
+        if (podId === "northfield-personal") {
+            throw new Error("Personal already answers WhatsApp on its own number, so it can't also answer on Lemma's.");
+        }
+        CHAT_POD = podId;
     },
     async slackManifest(agentName: string) {
         await wait(250);

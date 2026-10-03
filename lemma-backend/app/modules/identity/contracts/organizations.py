@@ -46,6 +46,9 @@ from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
 )
 from app.modules.identity.infrastructure.user_repositories import UserRepository
+from app.modules.identity.infrastructure.organization_memberships import (
+    oldest_membership,
+)
 
 
 def build_organization_membership(uow) -> OrganizationRepository:
@@ -129,6 +132,7 @@ __all__ = [
     "organization_exists",
     "organization_member_count",
     "organization_member_role",
+    "organization_names",
     "organization_slug",
 ]
 
@@ -151,12 +155,7 @@ async def preferred_organization_membership(
                 OrganizationMember.organization_id == preferred_organization_id,
             )
         )
-    membership = preferred or await uow.session.scalar(
-        select(OrganizationMember)
-        .where(OrganizationMember.user_id == user_id)
-        .order_by(OrganizationMember.created_at, OrganizationMember.id)
-        .limit(1)
-    )
+    membership = preferred or await oldest_membership(uow, user_id=user_id)
     if membership is None:
         return None
     return membership.organization_id, membership.id
@@ -185,3 +184,20 @@ async def organization_member_ids_for_user(
         .limit(limit)
     )
     return list(rows)
+
+
+async def organization_names(uow, organization_ids: list[UUID]) -> dict[UUID, str]:
+    """Display names for these organizations, in one read.
+
+    For a list that has to tell two same-named things apart -- two pods called
+    "Personal" in two organizations -- and would otherwise read one row per
+    entry to do it. Ids that no longer exist are simply absent.
+    """
+    if not organization_ids:
+        return {}
+    rows = await uow.session.execute(
+        select(Organization.id, Organization.name).where(
+            Organization.id.in_(sorted(set(organization_ids)))
+        )
+    )
+    return {row.id: row.name for row in rows}

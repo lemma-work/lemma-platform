@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from app.core.config import settings
@@ -11,6 +12,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.outbound_messages import FailedDeliveryStatus
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -28,6 +30,9 @@ from app.modules.agent_surfaces.platforms.whatsapp.parser import (
 from app.modules.agent_surfaces.platforms.whatsapp.service import (
     WhatsAppPlatformService,
 )
+from app.modules.agent_surfaces.platforms.whatsapp.statuses import (
+    parse_failed_whatsapp_statuses,
+)
 
 
 class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
@@ -43,6 +48,13 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         self, payload: dict[str, object]
     ) -> list[ParsedGroupUpdate]:
         return whatsapp_group_updates(payload)
+
+    def parse_delivery_statuses(
+        self, payload: Mapping[str, object]
+    ) -> list[FailedDeliveryStatus]:
+        # Meta answers a send with 200 and reports a window-closed or
+        # undeliverable message later, in `statuses[]`; this is where it is read.
+        return parse_failed_whatsapp_statuses(payload)
 
     async def parse_inbound_event(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
@@ -199,6 +211,24 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
     ) -> tuple[bytes, str, str] | None:
         return await WhatsAppPlatformService(credentials).download_attachment_bytes(
             event, attachment
+        )
+
+    async def _render_voice(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        file_name: str,
+        audio_bytes: bytes,
+        mime: str,
+        caption: str | None = None,
+    ) -> bool:
+        return await WhatsAppPlatformService(credentials).send_voice_note(
+            event,
+            file_name=file_name,
+            audio_bytes=audio_bytes,
+            mime_type=mime,
+            caption=caption,
         )
 
     async def _render_file(

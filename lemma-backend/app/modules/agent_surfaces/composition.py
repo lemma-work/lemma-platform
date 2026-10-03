@@ -81,6 +81,9 @@ from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
 from app.modules.agent_surfaces.services.member_reach import MemberReach
+from app.modules.agent_surfaces.services.notification_channels import (
+    NotificationChannelResolver,
+)
 from app.modules.agent_surfaces.services.notification_rate_limiter import (
     NotificationRateLimiter,
 )
@@ -252,6 +255,23 @@ def build_notification_service(uow: SqlAlchemyUnitOfWork) -> NotificationService
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         outside_origin_reader=partial(outside_origin, uow),
         rate_limiter=NotificationRateLimiter(),
+        surface_provisioner=_build_system_email_provisioner(uow),
+    )
+
+
+def build_notification_channel_resolver(
+    uow: SqlAlchemyUnitOfWork,
+) -> NotificationChannelResolver:
+    """How an agent can reach one person, minting a mailbox if it has none.
+
+    The notification service's routing, on its own: a chat reply whose reply
+    window has closed needs the email half of it and none of the rest.
+    """
+    return NotificationChannelResolver(
+        surface_repository=build_surface_repository(uow),
+        external_user_repository=ExternalSurfaceUserRepository(uow),
+        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+        pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         surface_provisioner=_build_system_email_provisioner(uow),
     )
 

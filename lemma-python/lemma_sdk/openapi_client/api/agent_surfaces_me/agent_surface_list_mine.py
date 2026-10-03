@@ -52,7 +52,7 @@ def sync_detailed(
 
      Every surface across the current user's pods, grouped by platform, with
     the chosen default and a ``conflict`` flag when two of them answer at the
-    same address.
+    same address. Shared-bot platforms also list the pods that could answer.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -79,7 +79,7 @@ def sync(
 
      Every surface across the current user's pods, grouped by platform, with
     the chosen default and a ``conflict`` flag when two of them answer at the
-    same address.
+    same address. Shared-bot platforms also list the pods that could answer.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -102,7 +102,7 @@ async def asyncio_detailed(
 
      Every surface across the current user's pods, grouped by platform, with
     the chosen default and a ``conflict`` flag when two of them answer at the
-    same address.
+    same address. Shared-bot platforms also list the pods that could answer.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -127,7 +127,7 @@ async def asyncio(
 
      Every surface across the current user's pods, grouped by platform, with
     the chosen default and a ``conflict`` flag when two of them answer at the
-    same address.
+    same address. Shared-bot platforms also list the pods that could answer.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

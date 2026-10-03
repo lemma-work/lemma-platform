@@ -27,6 +27,9 @@ from app.modules.agent_surfaces.domain.models import StreamAppendResult
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
+from app.modules.agent_surfaces.services.reply_window_fallback import (
+    reply_window_closed,
+)
 
 logger = get_logger(__name__)
 
@@ -67,6 +70,10 @@ class SurfaceProgress:
                 "agent_surfaces.egress.progress_no_target.diagnostic",
                 conversation_id=conversation_id,
             )
+            return progress_handle
+        if reply_window_closed(target):
+            # Each progress line would be another email, and the answer that
+            # follows is the one worth sending; see `reply_window_fallback`.
             return progress_handle
         try:
             # Author the stream as the agent: the answer that closes this same
@@ -208,7 +215,7 @@ class SurfaceProgress:
     ) -> bool:
         """The platform's own "working on it" affordance, where it has one."""
         target = await self.delivery.resolve_egress_target(conversation_id)
-        if target is None:
+        if target is None or reply_window_closed(target):
             return False
         indicator_metadata = await self.delivery.egress_metadata(target, metadata)
         try:

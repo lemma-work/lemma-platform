@@ -97,7 +97,7 @@ async def test_send_processing_indicator_for_conversation_uses_last_surface_even
         metadata={"progress_text": "Checking the calendar"},
     )
 
-    assert sent is True
+    assert sent
     adapter.add_processing_indicator.assert_awaited_once()
     assert (
         adapter.add_processing_indicator.await_args.kwargs["metadata"]["progress_text"]
@@ -133,7 +133,7 @@ async def test_send_agent_message_for_conversation_sends_surface_message():
         message="assistant update",
     )
 
-    assert sent is True
+    assert sent
     adapter.send_message.assert_awaited_once()
     assert adapter.send_message.await_args.kwargs["message"] == "assistant update"
 
@@ -173,7 +173,7 @@ async def test_send_agent_message_strips_thinking_tokens_before_delivery():
         message=raw_message,
     )
 
-    assert sent is True
+    assert sent
     delivered = adapter.send_message.await_args.kwargs["message"]
     assert "<think" not in delivered.lower()
     assert "internal reasoning" not in delivered
@@ -213,7 +213,7 @@ async def test_send_agent_message_returns_false_when_only_thinking_tokens():
         message=raw_message,
     )
 
-    assert sent is False
+    assert not sent
     adapter.send_message.assert_not_awaited()
 
 
@@ -247,7 +247,7 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
         tool_output={"success": True},
     )
 
-    assert sent is True
+    assert sent
     adapter._render_resource.assert_awaited_once()
     render_plan = adapter._render_resource.await_args.kwargs["render_plan"]
     assert isinstance(render_plan, SurfaceDisplayRenderPlan)
@@ -305,7 +305,7 @@ async def test_a_delivered_file_carries_no_caption(monkeypatch):
         tool_call_id="tool-file-caption",
     )
 
-    assert sent is True
+    assert sent
     assert resolve.await_args.kwargs["caption"] is None
 
 
@@ -327,7 +327,7 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     sent = await egress.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
-    assert sent is True
+    assert sent
     plan = adapter._render_choices.await_args.kwargs["question_plan"]
     assert isinstance(plan, SurfaceQuestionRenderPlan)
     assert [q.header for q in plan.questions] == ["color"]
@@ -339,7 +339,7 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     sent = await egress.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
-    assert sent is True
+    assert sent
     assert "Pick a color" in adapter.send_message.await_args.kwargs["message"]
 
 
@@ -369,7 +369,7 @@ async def test_send_questions_reads_flattened_pydantic_ai_args():
     sent = await egress.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
-    assert sent is True
+    assert sent
     plan = adapter._render_choices.await_args.kwargs["question_plan"]
     assert [q.header for q in plan.questions] == ["color"]
 
@@ -401,7 +401,7 @@ async def test_send_approval_prompt_renders_native_buttons():
     sent = await egress.send_approval_prompt_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-2"
     )
-    assert sent is True
+    assert sent
     # Native render is attempted; the plan carries Approve + Deny and the callback.
     plan = adapter._render_decision.await_args.kwargs["approval_plan"]
     assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
@@ -459,7 +459,7 @@ async def test_an_older_unanswered_question_does_not_shadow_the_approval():
         conversation_id=conversation_id, tool_call_id="tool-2"
     )
 
-    assert sent is True
+    assert sent
     # Through `deliver`, not `send_approval`: the per-content outbound verbs
     # became `_render_*` hooks only `deliver` calls, and this assertion was
     # left naming a method nothing invokes -- so it read `await_args` off a
@@ -489,7 +489,7 @@ async def test_send_approval_prompt_falls_back_to_text():
     sent = await egress.send_approval_prompt_for_conversation(
         conversation_id=conversation_id, tool_call_id="tool-2"
     )
-    assert sent is True
+    assert sent
     msg = adapter.send_message.await_args.kwargs["message"]
     assert "Write a record" in msg
     assert "approve" in msg.lower()
@@ -539,7 +539,7 @@ async def test_send_approval_prompt_skips_when_no_pending():
     sent = await egress.send_approval_prompt_for_conversation(
         conversation_id=conversation_id
     )
-    assert sent is False
+    assert not sent
     adapter.send_message.assert_not_awaited()
 
 
@@ -570,7 +570,7 @@ async def test_an_email_surface_delivers_the_question_in_its_one_reply():
         conversation_id=conversation_id, tool_call_id="tool-1"
     )
 
-    assert sent is True
+    assert sent
     assert "Pick a color" in adapter.send_message.await_args.kwargs["message"]
 
 
@@ -586,7 +586,7 @@ async def test_send_processing_indicator_for_conversation_stops_without_link():
         conversation_id=uuid4(),
     )
 
-    assert sent is False
+    assert not sent
     adapter.add_processing_indicator.assert_not_awaited()
 
 
@@ -637,7 +637,7 @@ async def test_a_refused_typing_indicator_does_not_cost_the_answer():
 
     shown = await egress.progress.show_typing(conversation_id=conversation_id)
 
-    assert shown is False
+    assert not shown
     adapter.add_processing_indicator.assert_awaited_once()
 
 
@@ -676,7 +676,7 @@ async def test_narration_that_lands_without_its_question_is_not_delivered():
         narration="Let me check with you first.",
     )
 
-    assert sent is False
+    assert not sent
     assert adapter.send_message.await_count == 2
 
 
@@ -705,7 +705,7 @@ async def test_a_lost_question_can_be_asked_again_in_plain_words():
         conversation_id=conversation_id, kind="ask_user", tool_call_id="tool-1"
     )
 
-    assert sent is True
+    assert sent
     adapter._render_choices.assert_not_awaited()
     message = adapter.send_message.await_args.kwargs["message"]
     assert "couldn't show the buttons" in message
@@ -731,7 +731,7 @@ async def test_a_lost_approval_can_be_asked_again_in_plain_words():
         conversation_id=conversation_id, kind="request_approval", tool_call_id="tool-2"
     )
 
-    assert sent is True
+    assert sent
     message = adapter.send_message.await_args.kwargs["message"]
     assert "Write a record" in message
     assert '"approve"' in message
@@ -826,6 +826,6 @@ async def test_a_file_that_cannot_be_read_is_not_replaced_by_a_link_card():
         tool_call_id="tool-9",
     )
 
-    assert sent is False
+    assert not sent
     adapter.send_message.assert_not_awaited()
     adapter._render_resource.assert_not_awaited()

@@ -21,6 +21,7 @@ adapter declares only what its platform can actually do.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -30,6 +31,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, SurfaceEnvelope
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.outbound_messages import FailedDeliveryStatus
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
     StreamAppendResult,
@@ -45,6 +47,10 @@ class SurfacePlatformAdapterPort(Protocol):
     def split_inbound_payloads(
         self, payload: dict[str, Any]
     ) -> list[dict[str, Any]]: ...
+
+    def parse_delivery_statuses(
+        self, payload: Mapping[str, object]
+    ) -> list[FailedDeliveryStatus]: ...
 
     async def parse_inbound_event(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None

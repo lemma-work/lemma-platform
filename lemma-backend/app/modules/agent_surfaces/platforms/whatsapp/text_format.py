@@ -53,9 +53,20 @@ _INLINE_CODE_PATTERN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 # leading ``!`` goes with it instead of being left stranded.
 _IMAGE_PATTERN = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)\s]+)\)")
 
-# Markdown link: ``[label](url)`` -> bare ``url`` (WhatsApp guidance: paste the
-# bare URL, which the client auto-links).
+# Markdown link: ``[label](url)`` -> ``label (url)``. WhatsApp auto-links a bare
+# URL, and keeping the label is what tells the person what the link is -- a
+# reply that read "see the [refund policy](...)" used to arrive as "see the
+# https://...", with the noun gone from the sentence.
 _LINK_PATTERN = re.compile(r"\[([^\]]*)\]\(([^)\s]+)\)")
+
+# Markdown autolink: ``<https://x>`` -> ``https://x``. The brackets otherwise
+# arrive as literal characters, and the client's own linking stops at them.
+_AUTOLINK_PATTERN = re.compile(r"<(?P<url>(?:https?|mailto):[^<>\s]+)>")
+
+# Markdown strikethrough: ``~~gone~~`` -> ``~gone~``. A doubled tilde is a run,
+# which the balancing pass leaves alone, so it reached the phone as four
+# literal tildes around words that were meant to be crossed out.
+_STRIKE_PATTERN = re.compile(r"~~(?P<text>[^\n~]+?)~~")
 
 # A thematic break (``---``, ``***``, ``___``) has no WhatsApp equivalent, and
 # the asterisk/underscore forms are stray delimiters if left in place.
@@ -71,14 +82,14 @@ _STAR_BULLET_PATTERN = re.compile(r"(?m)^(?P<indent>[ \t]*)[*+][ \t]+(?=\S)")
 # A lone ``*``/``+``/``-`` on its own line — an empty bullet, not formatting.
 _EMPTY_BULLET_PATTERN = re.compile(r"(?m)^[ \t]*[*+-][ \t]*$")
 
-# A markdown table separator row (``|---|:--:|``) is pure layout scaffolding.
-_TABLE_SEPARATOR_PATTERN = re.compile(
-    r"(?m)^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)+\|?[ \t]*$"
-)
-
 # A markdown table row. WhatsApp has no tables and a pipe grid on a phone is
 # unreadable, so cells are joined into one line.
 _TABLE_ROW_PATTERN = re.compile(r"(?m)^[ \t]*\|(?P<cells>.+)\|[ \t]*$")
+# A markdown table separator row (``|---|:--:|``, edge pipes optional) is pure
+# layout scaffolding -- and the one sure sign that the lines around it are a table.
+_TABLE_SEPARATOR_LINE = re.compile(
+    r"^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)+\|?[ \t]*$"
+)
 
 # Markdown strong that survived translation because it spans a newline.
 _LEFTOVER_STRONG_RUN_PATTERN = re.compile(r"\*{2,}")
@@ -89,6 +100,12 @@ _BLANK_RUN_PATTERN = re.compile(r"\n{3,}")
 # writes can collide with it.
 _FENCE_PLACEHOLDER = "\x00lemma-fence-"
 _FENCE_PLACEHOLDER_PATTERN = re.compile(r"\x00lemma-fence-(?P<index>\d+)\x00")
+
+# Inline code is stashed the same way, under its own marker, and for the same
+# reason: a ``|`` inside it is not a table cell and a ``*`` inside it is not
+# bold, and both used to be rewritten as if they were.
+_CODE_PLACEHOLDER = "\x00lemma-code-"
+_CODE_PLACEHOLDER_PATTERN = re.compile(r"\x00lemma-code-(?P<index>\d+)\x00")
 
 _FENCED_BACKTICK_PATTERN = re.compile(
     r"(?ms)^[ \t]*`{3,}[^\n]*\n(?P<body>.*?)\n^[ \t]*`{3,}[ \t]*$"
@@ -117,10 +134,14 @@ def to_whatsapp_text(text: str) -> str:
     # verbatim — rewriting them would corrupt the code being shown.
     result, blocks = _extract_code_fences(result)
 
+    # Inline code next, for the same reason: what is inside it is literal.
+    result, spans = _extract_inline_code(result)
+
     # Images before links: the pattern for a link also matches the ``[alt](url)``
     # tail of an image, which would leave a stranded ``!``.
     result = _IMAGE_PATTERN.sub(lambda m: m.group("url"), result)
-    result = _LINK_PATTERN.sub(lambda m: m.group(2), result)
+    result = _LINK_PATTERN.sub(_link_text, result)
+    result = _AUTOLINK_PATTERN.sub(lambda m: m.group("url"), result)
 
     result = _THEMATIC_BREAK_PATTERN.sub("", result)
     result = _flatten_tables(result)
@@ -128,22 +149,25 @@ def to_whatsapp_text(text: str) -> str:
     # Headings have no WhatsApp equivalent; bold is the closest thing it has.
     result = _HEADING_PATTERN.sub(lambda m: f"*{m.group('text')}*", result)
 
-    # Markdown strong -> WhatsApp bold.
+    # Markdown strong -> WhatsApp bold. A single ``*italic*`` is left as it is:
+    # the agent is told to write WhatsApp's own syntax, where that *is* bold.
     result = _STRONG_STAR_PATTERN.sub(lambda m: f"*{m.group('text')}*", result)
     result = _STRONG_UNDERSCORE_PATTERN.sub(lambda m: f"*{m.group('text')}*", result)
     # Any ``**`` left over spans a newline, which WhatsApp's bold cannot. Collapsed
     # to a single marker so the balancing pass below can judge it; left as a run it
     # would sail past that pass and land on the phone as literal asterisks.
     result = _LEFTOVER_STRONG_RUN_PATTERN.sub("*", result)
-
-    # Markdown inline code -> WhatsApp monospace (triple backticks).
-    result = _INLINE_CODE_PATTERN.sub(lambda m: "```" + m.group(1) + "```", result)
+    result = _STRIKE_PATTERN.sub(lambda m: f"~{m.group('text')}~", result)
 
     # ``* item`` / ``+ item`` -> ``- item``, which WhatsApp bullets natively.
     result = _STAR_BULLET_PATTERN.sub(lambda m: f"{m.group('indent')}- ", result)
     result = _EMPTY_BULLET_PATTERN.sub("", result)
 
     result = balance_whatsapp_delimiters(result)
+    # Markdown inline code -> WhatsApp monospace (triple backticks).
+    result = _CODE_PLACEHOLDER_PATTERN.sub(
+        lambda m: "```" + spans[int(m.group("index"))] + "```", result
+    )
     result = _restore_code_fences(result, blocks)
     # Dropped rules and empty bullets leave runs of blank lines behind.
     result = _BLANK_RUN_PATTERN.sub("\n\n", result)
@@ -212,20 +236,58 @@ def _restore_code_fences(text: str, blocks: list[str]) -> str:
     return _FENCE_PLACEHOLDER_PATTERN.sub(lambda m: blocks[int(m.group("index"))], text)
 
 
+def _extract_inline_code(text: str) -> tuple[str, list[str]]:
+    """Replace `` `code` `` spans with placeholders; return the text and spans."""
+    spans: list[str] = []
+
+    def _stash(match: re.Match[str]) -> str:
+        spans.append(match.group(1))
+        return f"{_CODE_PLACEHOLDER}{len(spans) - 1}\x00"
+
+    return _INLINE_CODE_PATTERN.sub(_stash, text), spans
+
+
+def _link_text(match: re.Match[str]) -> str:
+    """``label (url)``, or the bare URL when the label adds nothing."""
+    label, url = match.group(1).strip(), match.group(2)
+    if not label or label == url:
+        return url
+    return f"{label} ({url})"
+
+
 def _flatten_tables(text: str) -> str:
     """Turn a Markdown table into one line per row, ``a — b — c``.
 
     A pipe grid on a phone wraps into nonsense and the ``|---|`` rule row is
     pure scaffolding. Neither carries meaning WhatsApp can show, so the cells
-    become a readable line instead.
+    become a readable line instead. The edge pipes are optional in Markdown, so
+    a table is found by its rule row: the line above it and the piped lines
+    below it are its rows, whether or not they start with ``|``.
     """
-    result = _TABLE_SEPARATOR_PATTERN.sub("", text)
+    lines = text.split("\n")
+    in_table = [False] * len(lines)
+    for index, line in enumerate(lines):
+        if not _TABLE_SEPARATOR_LINE.match(line):
+            continue
+        in_table[index] = True
+        if index and "|" in lines[index - 1]:
+            in_table[index - 1] = True
+        below = index + 1
+        while below < len(lines) and "|" in lines[below] and lines[below].strip():
+            in_table[below] = True
+            below += 1
+    flattened = [
+        _row_text(line) if table else line
+        for line, table in zip(lines, in_table, strict=True)
+        if not (table and _TABLE_SEPARATOR_LINE.match(line))
+    ]
+    # A piped row outside any recognisable table still reads better as a line.
+    return _TABLE_ROW_PATTERN.sub(lambda m: _row_text(m.group(0)), "\n".join(flattened))
 
-    def _row(match: re.Match[str]) -> str:
-        cells = [cell.strip() for cell in match.group("cells").split("|")]
-        return " — ".join(cell for cell in cells if cell)
 
-    return _TABLE_ROW_PATTERN.sub(_row, result)
+def _row_text(line: str) -> str:
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    return " — ".join(cell for cell in cells if cell)
 
 
 def _flanking(line: str, index: int) -> tuple[bool, bool]:

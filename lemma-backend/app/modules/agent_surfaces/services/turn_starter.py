@@ -18,6 +18,7 @@ is what those became once nothing needed them to be methods on a namespace.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
@@ -75,6 +76,7 @@ from app.modules.agent_surfaces.services.group_audience import (
     email_audience,
     outside_names,
 )
+from app.modules.agent_surfaces.services.outbound_log import quoted_outbound_message
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
     IngestedAttachment,
@@ -91,6 +93,9 @@ from app.modules.agent_surfaces.services.telegram_command_service import (
 )
 
 logger = get_logger(__name__)
+
+#: The bot's own message a quote names, by platform message id.
+QuoteLookup = Callable[..., Awaitable[dict[str, object] | None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,8 +118,10 @@ class SurfaceTurnStarter:
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
         file_ingest_service: SurfaceFileIngestService | None = None,
         pooled_numbers: PooledNumberReader | None = None,
+        quote_lookup: QuoteLookup = quoted_outbound_message,
     ) -> None:
         self.uow_factory = uow_factory
+        self.quote_lookup = quote_lookup
         # `None` reads the pool through each short scope's own unit of work.
         self.pooled_numbers = pooled_numbers
         self.adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
@@ -174,6 +181,7 @@ class SurfaceTurnStarter:
         ingest = await self._ingest_files(context, credentials)
         ingested: list[IngestedAttachment] = ingest.saved
         metadata = _message_metadata(context, ingest)
+        await self._resolve_quote(context, metadata)
 
         # Group/channel continuity: each user has a separate conversation, so fetch
         # the last few thread/channel messages fresh for THIS run and hand them to
@@ -215,6 +223,32 @@ class SurfaceTurnStarter:
         # into the run already going, which answers all of them at once.
         async with self.uow_factory() as uow:
             await write_inbound_message(context, message_text, metadata, uow)
+
+    async def _resolve_quote(
+        self, context: SurfaceChatContext, metadata: dict[str, object]
+    ) -> None:
+        """Fill ``quoted_message`` from what we sent, when they quoted the bot.
+
+        WhatsApp names a quoted message only by id; its text is ours to find,
+        in the outbound log. Without it a reply to one of several earlier
+        answers reads as "this one is wrong" about nothing. A quote of their
+        own or somebody else's message is left as a bare reference: we never
+        kept those words.
+        """
+        reference = metadata.get("reply_ref")
+        if metadata.get("quoted_message") or not isinstance(reference, dict):
+            return
+        quoted_id = str(reference.get("id") or "")
+        if not quoted_id:
+            return
+        async with self.uow_factory() as uow:
+            quoted = await self.quote_lookup(
+                uow,
+                platform=context.platform.value,
+                external_message_id=quoted_id,
+            )
+        if quoted is not None:
+            metadata["quoted_message"] = quoted
 
     async def _ingest_files(
         self, context: SurfaceChatContext, credentials: dict[str, Any]

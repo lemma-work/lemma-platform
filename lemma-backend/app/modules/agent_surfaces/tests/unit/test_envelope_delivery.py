@@ -35,6 +35,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
+from app.modules.agent_surfaces.platforms.envelope_delivery import PartialTextDelivery
 
 pytestmark = pytest.mark.unit
 
@@ -458,3 +459,37 @@ def test_a_delivery_that_reached_nobody_is_an_error_not_a_warning() -> None:
         "renamed or downgraded"
     )
     assert spec.level == "error"
+
+
+async def test_a_reply_the_person_has_half_of_is_degraded_not_lost() -> None:
+    """UNDELIVERED is what sends a caller looking for another way to say it all,
+    and the first half is already on their phone."""
+    adapter = _Adapter(
+        send_message=AsyncMock(
+            side_effect=PartialTextDelivery("TEST", sent_parts=1, total_parts=3)
+        )
+    )
+
+    receipt = await _deliver(adapter, SurfaceEnvelope(text="a long answer"))
+
+    assert receipt.parts["text"] is PartDelivery.DEGRADED
+    assert adapter.send_message.await_count == 1
+
+
+async def test_a_failed_attachment_is_logged_above_debug(caplog) -> None:
+    """The link fallback serves the person, which is why a failing upload went
+    unnoticed at debug for as long as it did."""
+    adapter = _Adapter(
+        _render_file=AsyncMock(side_effect=httpx.ConnectError("no route"))
+    )
+    envelope = SurfaceEnvelope(
+        files=[EnvelopeFile(file_name="a.pdf", content=b"x", mime_type="text/plain")]
+    )
+
+    await _deliver(adapter, envelope)
+
+    assert any(
+        "native_attachment_unavailable" in record.getMessage()
+        and record.levelname == "WARNING"
+        for record in caplog.records
+    )

@@ -116,6 +116,13 @@ it is asked, not skipped.
   themselves, and shall treat neither a username nor a typed number as proof.
 - Where the sender is still unknown after that, the system shall verify their
   mailbox with an email code before provisioning anything.
+- Where the verified sender already has a Lemma account, the system shall
+  connect the chat to their only usable workspace, ask which one when they have
+  several, and create a workspace only when they have none.
+- If their plan has no room for a new workspace, then the system shall say so in
+  the chat rather than leave the message unanswered.
+- A person shall be able to choose, from their profile, which of their
+  workspaces answers them on the shared bot.
 - Where the deployment cannot deliver email to an inbox, the system shall not
   ask the sender for an address, and shall tell them to add their number to
   their profile or ask whoever runs this Lemma for an invitation.

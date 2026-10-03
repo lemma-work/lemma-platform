@@ -192,6 +192,8 @@ export const previewSource: PodSource = {
         return all.map(entry => entry.platform === "WHATSAPP" ? { ...entry, systemFree: true, claimedBy: undefined, effort: "instant" as const } : entry).sort(byEffort);
     },
     async listMySurfaces() { return teammates.map(person => ({ platform: "RESEND", podId: person.id, name: "email" })); },
+    async chatPodChoice() { return null; },
+    async setChatPod() { /* the landing preview has no chat number to point */ },
     async getPodDetail(id) { return { members: members(id), teammate: persona(id), subtitle: teammateFor(id).role }; },
     async listTabs(id) {
         const person = teammateFor(id);

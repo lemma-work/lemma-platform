@@ -6,6 +6,7 @@ adapters only override what their platform actually needs.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -13,6 +14,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
+from app.modules.agent_surfaces.domain.outbound_messages import FailedDeliveryStatus
 from app.modules.agent_surfaces.platforms.chrome import SurfaceChromeMixin
 from app.modules.agent_surfaces.platforms.envelope_delivery import (
     EnvelopeDeliveryMixin,
@@ -42,6 +44,17 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin, SurfaceChromeMixin):
         Default: the delivery is the message.
         """
         return [payload]
+
+    def parse_delivery_statuses(
+        self, payload: Mapping[str, object]
+    ) -> list[FailedDeliveryStatus]:
+        """Reports, in this webhook, of sends that never reached anyone.
+
+        Only a platform that reports delivery asynchronously has any; every
+        other one learns of a failure from the send call itself. Default: none.
+        """
+        del payload
+        return []
 
     async def enrich_inbound_event(
         self, *, credentials: dict[str, Any], event: ParsedInboundSurfaceEvent

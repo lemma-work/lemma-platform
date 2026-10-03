@@ -126,28 +126,74 @@ async def say_privately(
 READY_MESSAGE = "You're all set. Picking up your message now."
 
 
-def ready_message(invited_pod_name: str | None = None) -> str:
-    """The confirmation, plus the one thing it never said.
+def profile_url() -> str:
+    """Where a person changes which workspace answers them in chat."""
+    return f"{settings.frontend_url.rstrip('/')}/profile"
 
-    An account made here has a single login method and it is passwordless.
-    Everything on the web that a person would reach for first -- a password,
-    "forgot password", Continue with Google -- is refused for exactly that
-    reason, and the only door that opens is a code sent to this same address.
-    Nobody was ever told that, so signing up on WhatsApp and then trying the
-    website looked like an account that did not work.
+
+def connected_line(pod_name: str) -> str:
+    """Which workspace this chat now talks to, and where to change it.
+
+    Said whenever signup picks the workspace -- the only one they have, or the
+    one they chose from a list -- because the choice is not visible anywhere in
+    the chat afterwards, and without this the way to change it is a setting
+    nobody knows exists.
+    """
+    return (
+        f"This chat is connected to {pod_name}. Change it any time in "
+        f"Settings → Profile ({profile_url()})."
+    )
+
+
+def ready_message(
+    invited_pod_name: str | None = None,
+    *,
+    new_account: bool = True,
+    connected_pod_name: str | None = None,
+) -> str:
+    """The confirmation, plus how to reach the same account on the web.
+
+    The web half depends on whose account this is. An account made here has a
+    single login method and it is passwordless: everything on the web a person
+    would reach for first -- a password, "forgot password", Continue with Google
+    -- is refused for exactly that reason, and the only door that opens is a
+    code sent to this same address. Nobody was told that, so signing up on
+    WhatsApp and then trying the website looked like an account that did not
+    work.
+
+    An account that already existed is the opposite case, and was being told
+    the same thing: "there's no password to remember", to somebody with a
+    password. They sign in the way they always have.
 
     Composed rather than folded into `READY_MESSAGE` so the constant stays the
     literal confirmation sentence that the recovery test matches on, and so the
     URL is read when the message is sent rather than when the module is
     imported.
     """
-    joined = f"You were invited to {invited_pod_name}, and you're in it now.\n\n"
-    return (
-        f"{joined if invited_pod_name else ''}{READY_MESSAGE}\n\n"
-        f"To use Lemma on the web, go to {settings.frontend_url.rstrip('/')}/login "
-        "and enter this same email address. We'll send you a sign-in code -- "
-        "there's no password to remember."
-    )
+    parts: list[str] = []
+    if invited_pod_name:
+        parts.append(f"You were invited to {invited_pod_name}, and you're in it now.")
+    if connected_pod_name:
+        parts.append(connected_line(connected_pod_name))
+    parts.append(READY_MESSAGE)
+    web = settings.frontend_url.rstrip("/")
+    if new_account:
+        parts.append(
+            f"To use Lemma on the web, go to {web}/login "
+            "and enter this same email address. We'll send you a sign-in code -- "
+            "there's no password to remember."
+        )
+    else:
+        parts.append(
+            f"On the web, sign in at {web}/login the way you usually do."
+            + (
+                ""
+                if connected_pod_name
+                else " You can choose which workspace answers here in "
+                f"Settings → Profile ({profile_url()})."
+            )
+        )
+    return "\n\n".join(parts)
 
 
 #: What somebody is told when signup could only go on to an email code this

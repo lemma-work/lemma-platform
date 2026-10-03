@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.ports.plan_limits import PodAllowance
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -56,8 +57,11 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.services.email_challenges import EmailChallengeService
 from app.modules.identity.tests.e2e.test_email_challenges_e2e import allow_test_delivery
+from app.modules.test_support.plan_limits import plan
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
+
+__all__ = ["plan"]
 
 
 async def _swallow(*, email: str, code: str) -> bool:
@@ -134,6 +138,35 @@ async def recognised_sender(
     return say, sessions, binding_key
 
 
+@pytest.fixture
+async def second_pod(authenticated_client, test_pod) -> dict[str, str]:
+    """Another pod of the same person's, so there is a choice to ask about.
+
+    With one pod there is nothing to ask: signup attaches it and says how to
+    change it. Every test here that is about *the question* needs two.
+    """
+    response = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": test_pod["organization_id"],
+            "name": f"Second pod {uuid4().hex[:6]}",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def _pending_for(sessions, binding_key) -> PendingChatOnboarding:
+    async with sessions() as session:
+        row = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.binding_key == binding_key
+            )
+        )
+        assert row is not None
+        return row
+
+
 async def _shared_surfaces(sessions, pod_id) -> list[AgentSurface]:
     async with sessions() as session:
         rows = await session.scalars(
@@ -145,7 +178,9 @@ async def _shared_surfaces(sessions, pod_id) -> list[AgentSurface]:
         return list(rows)
 
 
-async def test_a_recognised_sender_is_asked_which_workspace(recognised_sender) -> None:
+async def test_a_recognised_sender_is_asked_which_workspace(
+    recognised_sender, second_pod
+) -> None:
     say, sessions, binding_key = recognised_sender
 
     result = await say("can you summarise my week")
@@ -166,7 +201,7 @@ async def test_a_recognised_sender_is_asked_which_workspace(recognised_sender) -
 
 
 async def test_choosing_a_workspace_wires_the_conversation_to_it(
-    recognised_sender,
+    recognised_sender, second_pod
 ) -> None:
     say, sessions, binding_key = recognised_sender
     await say("can you summarise my week")
@@ -198,7 +233,7 @@ async def test_choosing_a_workspace_wires_the_conversation_to_it(
 
 
 async def test_an_unreadable_answer_asks_again_rather_than_guessing(
-    recognised_sender,
+    recognised_sender, second_pod
 ) -> None:
     """The one outcome worth more than convenience: never guess a workspace."""
     say, sessions, binding_key = recognised_sender
@@ -226,7 +261,7 @@ async def test_an_unreadable_answer_asks_again_rather_than_guessing(
 
 
 async def test_a_number_nobody_was_offered_attaches_nothing(
-    recognised_sender,
+    recognised_sender, second_pod
 ) -> None:
     say, sessions, binding_key = recognised_sender
     await say("can you summarise my week")
@@ -502,12 +537,12 @@ async def test_a_workspace_that_cannot_carry_the_bot_asks_for_another(
     fake_whatsapp,
     monkeypatch,
 ) -> None:
-    """ "Pick another workspace" was an instruction nothing was listening for.
+    """A workspace that cannot carry the shared bot is never offered.
 
-    The refusal left the signup on VERIFIED, so the next message -- any message
-    -- re-ran provisioning against the same pod and was refused again in the
-    same words. A person whose only workspace already had its own WhatsApp bot
-    could not get past this sentence.
+    "Pick another workspace" used to be an instruction nothing was listening
+    for: the refusal left the signup on VERIFIED, so the next message re-ran
+    provisioning against the same pod and was refused again in the same words.
+    Now the pod is left off the list before anybody is asked.
     """
     monkeypatch.setattr(
         "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
@@ -542,6 +577,16 @@ async def test_a_workspace_that_cannot_carry_the_bot_asks_for_another(
         },
     )
     assert sibling.status_code == 201, sibling.text
+    # Two that can carry it, so there is still a question once the one that
+    # cannot is left out -- with a single usable pod it is simply attached.
+    other = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": test_pod["organization_id"],
+            "name": f"Elsewhere too {uuid4().hex[:6]}",
+        },
+    )
+    assert other.status_code == 201, other.text
 
     _, coordinator = _coordinator(db_session)
     sender_phone = "1555" + str(uuid4().int)[:7]
@@ -585,8 +630,8 @@ async def test_a_workspace_that_cannot_carry_the_bot_asks_for_another(
         )
         offered = [str(pod["id"]) for pod in (parked.offered_pods or [])]
     assert offered, "nothing was offered, so no reply can be read"
-    assert test_pod["id"] not in offered, "the workspace that just refused was offered"
-    assert sibling.json()["id"] in offered
+    assert test_pod["id"] not in offered, "a workspace that cannot carry it was offered"
+    assert set(offered) == {sibling.json()["id"], other.json()["id"]}
 
     # And the answer now lands: they are unstuck, which is the whole point.
     await say("1")
@@ -611,7 +656,7 @@ async def test_a_workspace_that_cannot_carry_the_bot_asks_for_another(
         assert identity.revoked_at is None
 
 
-async def test_a_sender_with_no_organization_can_still_name_a_workspace(
+async def test_a_sender_with_no_organization_gets_a_workspace_made(
     db_session, fake_whatsapp, monkeypatch
 ) -> None:
     """There was no administrator to ask.
@@ -665,18 +710,9 @@ async def test_a_sender_with_no_organization_can_still_name_a_workspace(
         )
         await session.commit()
 
+    # Nothing to choose between -- they have no workspace at all -- so one is
+    # made for them, organization and all, without a question first.
     await say("can you summarise my week")
-    async with sessions() as session:
-        asked = await session.scalar(
-            select(PendingChatOnboarding).where(
-                PendingChatOnboarding.binding_key == binding_key
-            )
-        )
-        assert asked.step == OnboardingStep.AWAITING_POD
-        # Nothing to list: they have no workspace at all, which is the case.
-        assert not asked.offered_pods
-
-    await say("new Personal")
 
     async with sessions() as session:
         done = await session.scalar(
@@ -685,7 +721,7 @@ async def test_a_sender_with_no_organization_can_still_name_a_workspace(
             )
         )
         assert done.step == OnboardingStep.READY, (
-            "naming a workspace was refused for want of an organization"
+            "making a workspace was refused for want of an organization"
         )
         made = await session.scalars(
             select(AgentSurface).where(
@@ -894,16 +930,8 @@ async def test_changing_workspace_keeps_a_telegram_senders_phone_proof(
         )
         await session.commit()
 
+    # One pod, so it is attached without a question.
     await say("can you summarise my week")
-    async with sessions() as session:
-        asked = await session.scalar(
-            select(PendingChatOnboarding).where(
-                PendingChatOnboarding.binding_key == binding_key
-            )
-        )
-        assert asked.step == OnboardingStep.AWAITING_POD
-
-    await say("new Another")
 
     async with sessions() as session:
         done = await session.scalar(
@@ -940,7 +968,7 @@ async def test_changing_workspace_keeps_a_telegram_senders_phone_proof(
     )
 
 
-async def test_a_pod_they_were_invited_to_is_offered(
+async def test_a_pod_they_were_invited_to_is_where_they_land(
     db_session, fake_whatsapp, monkeypatch
 ) -> None:
     """A returning sender asked which workspace sees the pod waiting for them."""
@@ -1026,9 +1054,265 @@ async def test_a_pod_they_were_invited_to_is_offered(
                 PendingChatOnboarding.binding_key == binding_key
             )
         )
-        assert asked.step == OnboardingStep.AWAITING_POD
-        assert str(owned.pod_id) in {pod["id"] for pod in asked.offered_pods}
+        # Their only workspace is the one they were invited to, so it is
+        # attached rather than offered as a list of one.
+        assert asked.step == OnboardingStep.READY
+    assert await _shared_surfaces(sessions, owned.pod_id)
+    async with sessions() as session:
         stored = await OrganizationRepository(
             SqlAlchemyUnitOfWork(session)
         ).get_invitation_by_id(invitation.id)
         assert stored is not None and stored.status.value == "ACCEPTED"
+
+
+def _said(message_store) -> list[str]:
+    return [str(item.get("text") or item) for item in message_store.get_all("WHATSAPP")]
+
+
+async def _default_whatsapp_surface(sessions, user_id):
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.identity.contracts.surfaces import user_preferences
+
+    async with sessions() as session:
+        preferences = await user_preferences(SqlAlchemyUnitOfWork(session), user_id)
+    return preferences.default_surface_for("WHATSAPP")
+
+
+async def test_a_single_pod_is_attached_and_where_to_change_it_is_said(
+    recognised_sender, test_pod, fixed_test_user, message_store
+) -> None:
+    """One workspace is not a question. Attach it, and name it."""
+    say, sessions, binding_key = recognised_sender
+
+    await say("can you summarise my week")
+
+    done = await _pending_for(sessions, binding_key)
+    assert done.step == OnboardingStep.READY
+    assert done.original_event is not None, "the request they sent was dropped"
+    surfaces = await _shared_surfaces(sessions, test_pod["id"])
+    assert len(surfaces) == 1
+    # The preference is written, so routing's tiebreak never decides for them
+    # and the profile can show which pod answers.
+    assert (
+        await _default_whatsapp_surface(sessions, UUID(fixed_test_user["id"]))
+        == surfaces[0].id
+    )
+    assert any(
+        f"This chat is connected to {test_pod['name']}" in text
+        and "Settings → Profile" in text
+        for text in _said(message_store)
+    ), _said(message_store)
+
+
+async def test_the_first_message_is_the_request_not_the_answer(
+    recognised_sender, second_pod
+) -> None:
+    """A first message of "2" used to attach workspace two.
+
+    Recognition parked the row on the workspace question and then read the very
+    message that triggered it as the reply. Now the question is asked, and the
+    message is held for replay once it is answered.
+    """
+    say, sessions, binding_key = recognised_sender
+
+    await say("2")
+
+    parked = await _pending_for(sessions, binding_key)
+    assert parked.step == OnboardingStep.AWAITING_POD
+    assert parked.original_event["message_text"] == "2"
+    for pod in parked.offered_pods:
+        assert not await _shared_surfaces(sessions, pod["id"]), (
+            "the triggering message was read as a choice"
+        )
+
+
+@pytest.fixture
+def whatsapp_stranger(db_session, fake_whatsapp, monkeypatch):
+    """A number nobody knows, signing up by email code on the shared bot."""
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.whatsapp.client._WHATSAPP_API_BASE",
+        f"{fake_whatsapp.api_base}/v21.0",
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-settle")
+    codes: list[str] = []
+
+    async def capture(*, email: str, code: str) -> bool:
+        del email
+        codes.append(code)
+        return True
+
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    coordinator = ChatOnboardingCoordinator(
+        SessionUnitOfWorkFactory(sessions),
+        challenges=EmailChallengeService(
+            sessions, send_email=capture, enforce_send_limits=allow_test_delivery
+        ),
+    )
+    sender = "1555" + str(uuid4().int)[:7]
+
+    async def say(text: str):
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(
+                source="whatsapp",
+                payload=_whatsapp_payload(
+                    text=text,
+                    message_id=uuid4().hex,
+                    phone_number_id=surface_settings.whatsapp_phone_number_id,
+                    waba_id=surface_settings.whatsapp_waba_id,
+                    sender_phone=sender,
+                ),
+            )
+        )
+
+    async def sign_up(email: str, *, first: str = "can you plan my trip") -> None:
+        await say(first)
+        await say(email)
+        assert codes, "no code was sent"
+        await say(codes[-1])
+
+    return say, sign_up, sessions
+
+
+async def _pods_owned_by(sessions, user_id) -> int:
+    from sqlalchemy import func
+
+    from app.modules.pod.infrastructure.models.pod_models import Pod
+
+    async with sessions() as session:
+        return await session.scalar(
+            select(func.count(Pod.id)).where(
+                Pod.user_id == user_id, Pod.is_deleted.is_(False)
+            )
+        )
+
+
+async def test_an_existing_user_at_their_pod_limit_is_asked_not_given_another(
+    plan, whatsapp_stranger, test_pod, second_pod, fixed_test_user, message_store
+) -> None:
+    """The reported bug: two pods, a plan with room for two, and silence.
+
+    The email path ran the web's first-workspace policy, which reuses a pod
+    only on narrow conditions and otherwise makes one. The plan refused, the
+    policy answered None, an assertion fired, and the person who had just typed
+    their code heard nothing -- with the row stuck on VERIFIED for good. They
+    already had two workspaces; the answer was to ask which.
+    """
+    plan.pods = PodAllowance(limit=2)
+    say, sign_up, sessions = whatsapp_stranger
+    user_id = UUID(fixed_test_user["id"])
+    owned_before = await _pods_owned_by(sessions, user_id)
+
+    await sign_up(fixed_test_user["email"], first="what's on today?")
+
+    async with sessions() as session:
+        parked = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.user_id == user_id
+            )
+        )
+    assert parked is not None
+    assert parked.step == OnboardingStep.AWAITING_POD, parked.step
+    assert {pod["id"] for pod in parked.offered_pods} == {
+        test_pod["id"],
+        second_pod["id"],
+    }
+    assert await _pods_owned_by(sessions, user_id) == owned_before, (
+        "signup made a pod for someone who already had two"
+    )
+    assert any("Which workspace" in text for text in _said(message_store))
+
+    await say("2")
+
+    chosen = parked.offered_pods[1]["id"]
+    surfaces = await _shared_surfaces(sessions, chosen)
+    assert len(surfaces) == 1
+    assert await _default_whatsapp_surface(sessions, user_id) == surfaces[0].id
+    async with sessions() as session:
+        done = await session.get(PendingChatOnboarding, parked.id)
+        assert done.step == OnboardingStep.READY
+        assert done.original_event["message_text"] == "what's on today?"
+    last = _said(message_store)[-1]
+    assert "This chat is connected to" in last
+    # An account that existed before is not told it has no password.
+    assert "no password" not in last and "the way you usually do" in last
+
+
+async def test_a_saved_default_is_kept_when_they_can_already_be_answered(
+    whatsapp_stranger, test_pod, second_pod, fixed_test_user
+) -> None:
+    """Somebody who already chose where WhatsApp answers them keeps that choice."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.identity.contracts.surfaces import (
+        set_user_preferences,
+        user_preferences,
+    )
+
+    say, sign_up, sessions = whatsapp_stranger
+    user_id = UUID(fixed_test_user["id"])
+    async with sessions() as session:
+        made = []
+        for pod in (test_pod, second_pod):
+            surface = AgentSurface(
+                pod_id=UUID(pod["id"]),
+                organization_id=UUID(pod["organization_id"]),
+                agent_id=UUID(pod["id"]),
+                name=f"whatsapp-{uuid4().hex[:6]}",
+                surface_type="WHATSAPP",
+                event_mode="WEBHOOK",
+                credential_mode="SYSTEM",
+                config={},
+            )
+            session.add(surface)
+            made.append(surface)
+        await session.flush()
+        uow = SqlAlchemyUnitOfWork(session)
+        preferences = await user_preferences(uow, user_id)
+        await set_user_preferences(
+            uow, user_id, preferences.with_default_surface("WHATSAPP", made[1].id)
+        )
+        await session.commit()
+        chosen = made[1].id
+
+    await sign_up(fixed_test_user["email"])
+
+    async with sessions() as session:
+        done = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.user_id == user_id
+            )
+        )
+    assert done.step == OnboardingStep.READY
+    assert await _default_whatsapp_surface(sessions, user_id) == chosen
+
+
+async def test_no_room_for_a_first_workspace_is_said_and_new_is_offered(
+    plan, whatsapp_stranger, message_store
+) -> None:
+    """None to attach and none allowed: the plan's own words, then a way on."""
+    plan.pods = PodAllowance(limit=0)
+    say, sign_up, sessions = whatsapp_stranger
+    email = f"no-room-{uuid4().hex[:8]}@gmail.com"
+
+    await sign_up(email)
+
+    async with sessions() as session:
+        user = await session.scalar(select(User).where(User.email == email))
+        assert user is not None
+        parked = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.user_id == user.id
+            )
+        )
+    assert parked.step == OnboardingStep.AWAITING_POD
+    last = _said(message_store)[-1]
+    assert "Your plan allows 0 pods" in last
+    assert "new <name>" in last
+
+    await say("new Personal")
+
+    async with sessions() as session:
+        still = await session.get(PendingChatOnboarding, parked.id)
+    assert still.step == OnboardingStep.AWAITING_POD
+    assert "Your plan allows 0 pods" in _said(message_store)[-1]

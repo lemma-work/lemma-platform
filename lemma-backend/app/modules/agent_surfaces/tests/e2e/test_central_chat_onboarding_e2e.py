@@ -444,7 +444,7 @@ async def test_removing_the_number_hands_it_back_as_a_stranger(
     )
 
 
-async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
+async def test_a_second_phone_keeps_the_first_and_is_proven_on_its_own(
     authenticated_client, fixed_test_user, db_session, fake_whatsapp, monkeypatch
 ):
     from uuid import UUID
@@ -510,35 +510,79 @@ async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
     assert (await say("Hello from my new number")).handled
     assert (await say(email)).handled
     assert (await say(codes[0])).handled
-    await on_identity_event(
-        UserMobileChangedEvent(user_id=user_id).model_dump(mode="json"),
-        uow_factory=factory,
-        inbox=PassthroughEventInbox(),
-    )
+
     async with sessions() as session:
         user = await session.get(User, user_id)
-        assert user.mobile_number == "+" + phone
-        bindings = list(
-            (
+        # A second phone is not a replacement. The number they verified on the
+        # web stays theirs, and so does everything bound to it.
+        assert user.mobile_number == "+155500000001"
+        bindings = {
+            binding.binding_key: binding
+            for binding in (
                 await session.scalars(
                     select(VerifiedSurfaceIdentity).where(
                         VerifiedSurfaceIdentity.user_id == user_id
                     )
                 )
             ).all()
+        }
+    assert bindings[old_binding].revoked_at is None, (
+        "signing up from a second phone signed out the first"
+    )
+    current = next(b for b in bindings.values() if b.external_user_id == phone)
+    assert current.revoked_at is None and current.verified_phone == "+" + phone
+
+    # And the WhatsApp number is recognised on its own proof.
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+        SurfacePlatform,
+    )
+    from app.modules.agent_surfaces.services.verified_surface_identity import (
+        resolve_shared_verified_identity,
+    )
+
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.WHATSAPP,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id=phone,
+        external_thread_id=phone,
+        sender_external_user_id=phone,
+        sender_phone=phone,
+        external_message_id=uuid4().hex,
+        tenant_id="waba-onboarding",
+        message_text="and again",
+        is_dm=True,
+    )
+    async with sessions() as session:
+        resolved = await resolve_shared_verified_identity(
+            SqlAlchemyUnitOfWork(session), event
         )
-        assert (
-            next(
-                binding for binding in bindings if binding.binding_key == old_binding
-            ).revoked_at
-            is not None
+    assert resolved is not None and resolved.internal_user_id == user_id
+
+    # Somebody else proving the number takes it: the newest proof wins.
+    async with sessions.begin() as session:
+        other = User(
+            email=f"new-holder-{uuid4().hex[:8]}@example.com",
+            is_verified=True,
+            is_active=True,
+            mobile_number="+" + phone,
+            mobile_verified_at=datetime.now(timezone.utc),
         )
-        current = next(
-            binding for binding in bindings if binding.external_user_id == phone
+        session.add(other)
+    await on_identity_event(
+        UserMobileChangedEvent(user_id=other.id).model_dump(mode="json"),
+        uow_factory=factory,
+        inbox=PassthroughEventInbox(),
+    )
+    async with sessions() as session:
+        taken = await session.scalar(
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.binding_key == current.binding_key
+            )
         )
-        assert (
-            current.revoked_at is None and current.verified_phone == user.mobile_number
-        )
+    assert taken.revoked_at is not None, "the old holder still answers as this number"
 
 
 async def test_whatsapp_signup_joins_the_pod_they_were_invited_to(

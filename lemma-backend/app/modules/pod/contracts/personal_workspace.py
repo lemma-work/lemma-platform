@@ -21,6 +21,20 @@ class PersonalWorkspace:
     created: bool
 
 
+@dataclass(frozen=True, slots=True)
+class NoRoomForWorkspace:
+    """They have no pod of their own here, and their plan has room for no more.
+
+    A value rather than ``None`` because the caller has to *say* something, and
+    the plan's own sentence -- how many pods it allows and how many they have --
+    is the only one that tells a person what to do about it. ``None`` used to
+    carry this case, and a chat signup then asserted a pod existed and crashed
+    without a word to the person who had just proved their email.
+    """
+
+    message: str
+
+
 async def ensure_personal_workspace(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -28,10 +42,11 @@ async def ensure_personal_workspace(
     owner_user_id: UUID,
     owner_membership_id: UUID,
     name: str,
-) -> PersonalWorkspace | None:
+) -> PersonalWorkspace | NoRoomForWorkspace:
     """The person's own pod in this organization, made if they have none.
 
-    ``None`` when they have none and their plan has no room for another. The
+    `NoRoomForWorkspace` when they have none and their plan has no room for
+    another. The
     pod counts like any other, and joining an organization must not fail
     because of it: the person arrives with no pod of their own there.
     """
@@ -91,9 +106,9 @@ async def ensure_personal_workspace(
             ),
             owner_user_id,
         )
-    except PodLimitReachedError:
+    except PodLimitReachedError as refused:
         # Refused before anything was written, so the transaction is intact.
-        return None
+        return NoRoomForWorkspace(refused.message)
     assistant_id = await ensure_pod_default_agent(
         uow, pod_id=pod.id, user_id=owner_user_id
     )

@@ -160,6 +160,9 @@ class AttachablePod:
 
     id: UUID
     name: str
+    #: Carried so a list holding two pods of the same name -- every person's
+    #: first pod is called after them -- can say which organization each is in.
+    organization_id: UUID
 
 
 async def list_attachable_pods(
@@ -191,7 +194,7 @@ async def list_attachable_pods(
         (Pod.organization_id == organization_id,) if organization_id is not None else ()
     )
     rows = await session.execute(
-        select(Pod.id, Pod.name)
+        select(Pod.id, Pod.name, Pod.organization_id)
         .join(PodMember, PodMember.pod_id == Pod.id)
         .where(
             PodMember.organization_member_id.in_(organization_member_ids),
@@ -201,4 +204,7 @@ async def list_attachable_pods(
         .order_by(Pod.created_at.desc(), Pod.id)
         .limit(limit)
     )
-    return [AttachablePod(id=pod_id, name=name) for pod_id, name in rows]
+    return [
+        AttachablePod(id=pod_id, name=name, organization_id=organization_id)
+        for pod_id, name, organization_id in rows
+    ]

@@ -1,5 +1,6 @@
 import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, GroupUpdateRequest, SurfaceUpdateRequest } from "lemma-sdk";
 import type { Connectable } from "./connectable";
+import type { ChatPodChoice } from "./chat-pod";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
 import type { Choice, Computer, Runtime, RuntimeTest } from "./runtimes";
@@ -731,6 +732,14 @@ export interface PodSource {
      *  per-pod, and the available-surfaces catalog reports the shared-identity
      *  claim but says nothing about a connected account's. */
     listMySurfaces(): Promise<{ platform: string; podId: string; name: string }[]>;
+    /** Which of the person's pods answers them on a shared chat number
+     *  (WhatsApp). Null when the platform has no shared number or the person
+     *  has no pod it could answer from. */
+    chatPodChoice(platform: string): Promise<ChatPodChoice | null>;
+    /** Make this pod answer the person on that platform. Rejects with the
+     *  server's own sentence when the pod already answers there through its
+     *  own connection. */
+    setChatPod(platform: string, podId: string): Promise<void>;
     /** The Slack app manifest for a bot that answers as this teammate alone.
      *  One Slack app is one bot user, so the name is set here or not at all. */
     slackManifest(agentName: string): Promise<Record<string, unknown>>;

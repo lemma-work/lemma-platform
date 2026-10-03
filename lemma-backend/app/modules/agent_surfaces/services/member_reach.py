@@ -29,6 +29,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.delivery_result import SurfaceDeliveryResult
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
@@ -67,7 +68,7 @@ class MemberReach:
         surface: AgentSurfaceEntity,
         user_id: UUID,
         message: str,
-    ) -> str | None:
+    ) -> SurfaceDeliveryResult:
         """Proactively send a message to a pod member on a specific surface.
 
         Powers ``surface.send`` (notifications from functions/workflows, or an
@@ -75,16 +76,21 @@ class MemberReach:
         the surface — bots can't cold-DM, so the member must have interacted
         before.
 
-        Returns ``None`` when the message went out, and otherwise the reason it
-        did not, written to be read by whoever asked.
+        Returns what became of it: delivered (on the chat, or by email when the
+        chat's reply window had closed), or the reason it was not, written to
+        be read by whoever asked.
         """
         if not surface.is_active:
-            return UndeliverableReason.SURFACE_NOT_ACTIVE
+            return SurfaceDeliveryResult.undelivered(
+                UndeliverableReason.SURFACE_NOT_ACTIVE
+            )
         # Members of this surface's pod only.
         if surface.pod_id not in set(
             await self.pod_membership_port.get_user_pod_ids(user_id)
         ):
-            return UndeliverableReason.NOT_A_POD_MEMBER
+            return SurfaceDeliveryResult.undelivered(
+                UndeliverableReason.NOT_A_POD_MEMBER
+            )
         # Every identity they hold on this platform, not just the most recently
         # seen one: Slack ids are per workspace and Teams ids per tenant, so
         # taking one made a pod's second workspace unreachable. The surface's own
@@ -104,11 +110,17 @@ class MemberReach:
                 sent = await self.egress.send_agent_message_for_conversation(
                     conversation_id=link.conversation_id, message=message
                 )
-                return None if sent else UndeliverableReason.SEND_FAILED
+                if sent:
+                    return sent
+                return SurfaceDeliveryResult.undelivered(
+                    sent.reason or UndeliverableReason.SEND_FAILED
+                )
         # Held apart because the repair differs: a tenant mismatch means they
         # are on the platform but in another workspace, so nothing they do in
         # this one will help until the surface is pointed at theirs.
         channel = surface.surface_type.value
-        if wrong_tenant:
-            return UndeliverableReason.wrong_tenant_on(channel)
-        return UndeliverableReason.never_interacted_on(channel)
+        return SurfaceDeliveryResult.undelivered(
+            UndeliverableReason.wrong_tenant_on(channel)
+            if wrong_tenant
+            else UndeliverableReason.never_interacted_on(channel)
+        )

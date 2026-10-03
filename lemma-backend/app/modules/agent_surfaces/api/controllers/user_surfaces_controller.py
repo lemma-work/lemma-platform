@@ -10,14 +10,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import CurrentUser, UoWDep
 from app.modules.agent_surfaces.api.dependencies import UserSurfacesServiceDep
 from app.modules.agent_surfaces.api.user_surface_schemas import (
+    AvailablePodItem,
     SetDefaultSurfaceRequest,
     UserSurfaceItem,
     UserSurfacePlatformGroup,
     UserSurfacesResponse,
 )
+from app.modules.agent_surfaces.services.shared_chat_surface import SharedBotPods
 from app.modules.agent_surfaces.services.user_surfaces_service import UserSurfaceGroup
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Me)"])
@@ -30,6 +32,15 @@ def _to_response(groups: list[UserSurfaceGroup]) -> UserSurfacesResponse:
                 platform=group.platform,
                 conflict=group.conflict,
                 default_surface_id=group.default_surface_id,
+                default_pod_id=group.default_pod_id,
+                available_pods=[
+                    AvailablePodItem(
+                        pod_id=pod.pod_id,
+                        name=pod.name,
+                        organization_name=pod.organization_name,
+                    )
+                    for pod in group.available_pods
+                ],
                 surfaces=[
                     UserSurfaceItem(
                         id=surface.id,
@@ -56,11 +67,12 @@ def _to_response(groups: list[UserSurfaceGroup]) -> UserSurfacesResponse:
 async def list_my_surfaces(
     user: CurrentUser,
     service: UserSurfacesServiceDep,
+    uow: UoWDep,
 ) -> UserSurfacesResponse:
     """Every surface across the current user's pods, grouped by platform, with
     the chosen default and a ``conflict`` flag when two of them answer at the
-    same address."""
-    groups = await service.list_user_surfaces(user.id)
+    same address. Shared-bot platforms also list the pods that could answer."""
+    groups = await service.list_user_surfaces(user.id, shared_pods=SharedBotPods(uow))
     return _to_response(groups)
 
 
@@ -73,13 +85,28 @@ async def set_my_default_surface(
     request: SetDefaultSurfaceRequest,
     user: CurrentUser,
     service: UserSurfacesServiceDep,
+    uow: UoWDep,
 ) -> UserSurfacesResponse:
     """Choose which surface answers the current user for a platform when several
-    could (e.g. a shared system bot spanning pods in different orgs)."""
-    await service.set_default_surface(
-        user_id=user.id,
-        platform=request.platform,
-        surface_id=request.surface_id,
-    )
-    groups = await service.list_user_surfaces(user.id)
+    could (e.g. a shared system bot spanning pods in different orgs).
+
+    Takes either an existing ``surface_id`` or a ``pod_id``; a pod with no
+    surface on the shared bot gets one. A pod whose assistant already answers
+    on the platform through its own connection is refused with 409."""
+    shared_pods = SharedBotPods(uow)
+    if request.pod_id is not None:
+        await service.set_default_pod(
+            user_id=user.id,
+            platform=request.platform,
+            pod_id=request.pod_id,
+            shared_pods=shared_pods,
+        )
+    else:
+        assert request.surface_id is not None
+        await service.set_default_surface(
+            user_id=user.id,
+            platform=request.platform,
+            surface_id=request.surface_id,
+        )
+    groups = await service.list_user_surfaces(user.id, shared_pods=shared_pods)
     return _to_response(groups)

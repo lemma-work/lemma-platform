@@ -13,6 +13,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.contracts import ConversationContext
+from app.modules.agent_surfaces.domain.delivery_result import SurfaceDeliveryResult
 from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 from app.modules.agent_surfaces.services.surface_display_delivery import (
     deliver_surface_message_to_surface,
@@ -22,7 +23,11 @@ from app.modules.agent_surfaces.services.surface_display_delivery import (
 class SurfaceSendMessageResult(BaseModel):
     success: bool
     message: str | None = Field(
-        default=None, description="Error detail when delivery failed."
+        default=None,
+        description=(
+            "Error detail when delivery failed, or where it went when it was "
+            "delivered somewhere other than the chat."
+        ),
     )
 
 
@@ -60,9 +65,23 @@ def build_surface_send_toolset(
             return SurfaceSendMessageResult(
                 success=False, message="Could not deliver the message."
             )
-        return SurfaceSendMessageResult(
-            success=sent,
-            message=None if sent else "No reachable surface for this conversation.",
-        )
+        result = sent if isinstance(sent, SurfaceDeliveryResult) else None
+        if not sent:
+            return SurfaceSendMessageResult(
+                success=False,
+                message=(result.reason if result is not None else None)
+                or "No reachable surface for this conversation.",
+            )
+        if result is not None and result.by_email:
+            # Say where it went: the person will find it in their inbox, not
+            # in this chat, and the agent should not tell them otherwise.
+            return SurfaceSendMessageResult(
+                success=True,
+                message=(
+                    "Delivered by email: the chat's reply window has closed, so "
+                    "the message went to their email address instead."
+                ),
+            )
+        return SurfaceSendMessageResult(success=True)
 
     return FunctionToolset[ConversationContext](tools=[surface_send_message])

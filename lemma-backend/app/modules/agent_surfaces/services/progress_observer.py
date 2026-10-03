@@ -557,4 +557,4 @@ class SurfaceAgentRunProgressObserver(
                 kwargs["attach_files_of"] = self._run_files
             if metadata:
                 kwargs["metadata"] = metadata
-            return await service.send_agent_message_for_conversation(**kwargs)
+            return bool(await service.send_agent_message_for_conversation(**kwargs))

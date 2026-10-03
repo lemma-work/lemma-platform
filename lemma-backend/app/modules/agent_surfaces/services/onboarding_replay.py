@@ -8,7 +8,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
 )
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -53,9 +53,7 @@ async def replay_onboarding(
         destination = ParsedInboundSurfaceEvent.model_validate(state.destination)
         if not destination.is_dm:
             raise ValueError("Onboarding replay requires a private destination")
-        if state.original_event is None or state.expires_at <= datetime.now(
-            timezone.utc
-        ):
+        if state.original_event is None or not _fresh_enough(state):
             context = await _expired_reply_context(uow, state, destination)
         else:
             original = ParsedInboundSurfaceEvent.model_validate(state.original_event)
@@ -86,15 +84,28 @@ async def replay_onboarding(
                     )
                 )
                 if route_id is None:
-                    raise ValueError("The personal DM route is missing")
-                context = await prepare_personal_dm_context(
-                    uow,
-                    route_id=route_id,
-                    event=event,
-                    linker=build_conversation_binder(uow),
-                )
+                    # Settled without a route of its own: they could already be
+                    # answered here, so signup left routing alone. Route the
+                    # replay the way the next message will go.
+                    context = await _routed_replay_context(
+                        uow,
+                        state,
+                        event,
+                        user,
+                        surface_ids=[state.installation_surface_id],
+                        system_credentials_only=False,
+                    )
+                else:
+                    context = await prepare_personal_dm_context(
+                        uow,
+                        route_id=route_id,
+                        event=event,
+                        linker=build_conversation_binder(uow),
+                    )
             else:
-                context = await _shared_replay_context(uow, state, event, user)
+                context = await _routed_replay_context(
+                    uow, state, event, user, system_credentials_only=True
+                )
             if isinstance(context, SurfaceChatContext):
                 context = context.model_copy(update={"onboarding_handoff_id": state.id})
     await job_queue.enqueue(
@@ -111,11 +122,26 @@ async def replay_onboarding(
             row.handed_off_at = datetime.now(timezone.utc)
 
 
-async def _shared_replay_context(
+#: How long the first message stays worth answering. The signup TTL is short
+#: on purpose -- it bounds how long a code and a half-finished row live -- but a
+#: person who takes a little longer than that to find the code email still
+#: wants their question answered, not "send a new request". A day is past any
+#: plausible wait for a code and short of the message being stale news.
+REPLAY_WINDOW = timedelta(hours=24)
+
+
+def _fresh_enough(state: PendingState) -> bool:
+    return state.created_at + REPLAY_WINDOW > datetime.now(timezone.utc)
+
+
+async def _routed_replay_context(
     uow: SqlAlchemyUnitOfWork,
     state: PendingState,
     event: ParsedInboundSurfaceEvent,
     user: UserEntity,
+    *,
+    system_credentials_only: bool,
+    surface_ids: list[UUID] | None = None,
 ) -> AgentSurfaceContext:
     handler = build_surface_ingress(uow)
     # Resolved rather than read back. This used to load the surface saved in the
@@ -127,7 +153,9 @@ async def _shared_replay_context(
     # tiebreak behind it, so asking it is strictly more answers and the same
     # preference.
     candidates = await SurfaceRepository(uow).list_active_for_routing(
-        event.platform.value, system_credentials_only=True
+        event.platform.value,
+        surface_ids=surface_ids,
+        system_credentials_only=system_credentials_only,
     )
     surface = await handler.router.reachable_surface(
         candidates=candidates,
@@ -136,7 +164,7 @@ async def _shared_replay_context(
         parsed=event,
     )
     if surface is None:
-        raise ValueError("The shared personal surface is missing")
+        raise ValueError("No surface can answer the onboarding replay")
     adapter = handler.adapter_registry.get(state.platform)
     if adapter is None:
         raise ValueError("The shared platform adapter is unavailable")
@@ -154,7 +182,7 @@ async def _shared_replay_context(
         ),
     )
     if not isinstance(context, SurfaceChatContext):
-        raise ValueError("The shared personal route is unavailable")
+        raise ValueError("The onboarding replay route is unavailable")
     return context
 
 

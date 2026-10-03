@@ -36,6 +36,7 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.platforms import rendering
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy
+from app.modules.agent_surfaces.platforms.envelope_delivery import PartialTextDelivery
 from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     _question_select_element,
 )
@@ -298,9 +299,10 @@ async def test_a_long_message_that_fails_part_way_says_how_far_it_got(caplog):
     client.fail_payload_number = 2
     service._client = client
 
-    with pytest.raises(WhatsAppApiError):
+    with pytest.raises(PartialTextDelivery) as raised:
         await service.send_message(_wa_event(), ("word " * 900).strip())
 
+    assert (raised.value.sent_parts, raised.value.total_parts) == (1, 2)
     partial = _events(caplog, "message_partially_delivered")
     assert partial and partial[0].levelname == "WARNING"
 
@@ -379,19 +381,28 @@ class _FakeMediaClient:
         return "wamid.media"
 
 
-async def _send_media(client, mime="image/webp"):
+async def _send_media(client, mime="image/png", file_name="chart.png"):
     return await whatsapp_media.send_file(
         client,
         phone_number_id="phone-1",
         recipient_wa_id="15551234567",
-        file_name="chart.webp",
+        file_name=file_name,
         file_bytes=b"RIFF",
         mime_type=mime,
     )
 
 
+async def test_a_format_meta_does_not_play_goes_as_a_document_from_the_start():
+    """WebP is not an image to Meta; finding that out at send time cost a call."""
+    client = _FakeMediaClient(reject={"image"})
+
+    assert await _send_media(client, mime="image/webp", file_name="c.webp") is True
+
+    assert client.kinds == ["document"]
+
+
 async def test_a_rejected_image_is_retried_once_as_a_document():
-    """Meta takes JPEG and PNG as images; a document takes what upload accepted."""
+    """A PNG Meta still refuses as an image (its dimensions, say) goes as a file."""
     client = _FakeMediaClient(reject={"image"})
 
     assert await _send_media(client) is True

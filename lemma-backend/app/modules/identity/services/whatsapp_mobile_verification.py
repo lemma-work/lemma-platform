@@ -37,7 +37,7 @@ from app.core.log.log import get_logger
 from app.modules.identity.domain.events import UserMobileChangedEvent
 from app.modules.identity.infrastructure.mobile_number_claims import (
     acquire_mobile_number_claim_lock,
-    get_other_mobile_number_owner_id,
+    proven_claim_blocker,
 )
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
@@ -140,6 +140,18 @@ class WhatsAppVerificationConfig:
 class _ClaimedVerification:
     transaction_id: str
     user_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class _PersistedNumber:
+    """A written claim, carrying the number it replaced.
+
+    The replaced number is what tells surface bindings which of them this change
+    retires: only the ones that rested on it, not a WhatsApp binding that proved
+    a different number of its own.
+    """
+
+    previous_mobile_number: str | None
 
 
 async def is_whatsapp_verification_configured() -> bool:
@@ -418,7 +430,7 @@ class WhatsAppMobileVerificationService:
 
     async def _persist_claim(
         self, *, claim: _ClaimedVerification, sender_phone: str
-    ) -> bool:
+    ) -> _PersistedNumber | None:
         async with async_session_maker() as session:
             await acquire_mobile_number_claim_lock(
                 session, sender_phone.removeprefix("+")
@@ -431,15 +443,18 @@ class WhatsAppMobileVerificationService:
                 or not user.is_verified
             ):
                 logger.info("identity.mobile_verification.whatsapp.ineligible_user")
-                return False
-            owner = await get_other_mobile_number_owner_id(
+                return None
+            # Proof against proof: the sender just showed they hold this
+            # number, so only a live account that proved it too outranks them.
+            owner = await proven_claim_blocker(
                 session,
                 digits=sender_phone.removeprefix("+"),
                 user_id=claim.user_id,
             )
             if owner is not None:
                 logger.info("identity.mobile_verification.whatsapp.owner_conflict")
-                return False
+                return None
+            previous = _PersistedNumber(user.mobile_number)
             user.mobile_number = sender_phone
             user.mobile_verified_at = datetime.now(timezone.utc)
             try:
@@ -447,14 +462,21 @@ class WhatsAppMobileVerificationService:
             except IntegrityError:
                 await session.rollback()
                 logger.info("identity.mobile_verification.whatsapp.owner_conflict")
-                return False
-        return True
+                return None
+        return previous
 
     async def _complete_claim(
-        self, *, redis: Redis, claim: _ClaimedVerification
+        self,
+        *,
+        redis: Redis,
+        claim: _ClaimedVerification,
+        persisted: _PersistedNumber,
     ) -> None:
         await get_user_cache().invalidate(claim.user_id)
-        phone_changed = UserMobileChangedEvent(user_id=claim.user_id)
+        phone_changed = UserMobileChangedEvent(
+            user_id=claim.user_id,
+            previous_mobile_number=persisted.previous_mobile_number,
+        )
         await EventPublisher.publish(phone_changed.stream_name(), phone_changed)
         await redis.eval(
             _COMPLETE_LUA,
@@ -531,7 +553,8 @@ class WhatsAppMobileVerificationService:
             )
             return False
 
-        if not await self._persist_claim(claim=claim, sender_phone=sender_phone):
+        persisted = await self._persist_claim(claim=claim, sender_phone=sender_phone)
+        if persisted is None:
             await self._send_feedback(
                 sender_wa_id=sender_wa_id,
                 whatsapp_message_id=whatsapp_message_id,
@@ -539,7 +562,7 @@ class WhatsAppMobileVerificationService:
             )
             return False
 
-        await self._complete_claim(redis=redis, claim=claim)
+        await self._complete_claim(redis=redis, claim=claim, persisted=persisted)
         await self._send_feedback(
             sender_wa_id=sender_wa_id,
             whatsapp_message_id=whatsapp_message_id,

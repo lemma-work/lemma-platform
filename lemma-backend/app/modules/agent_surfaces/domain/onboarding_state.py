@@ -78,3 +78,8 @@ class PendingState(BaseModel):
     expires_at: datetime
     ready_at: datetime | None
     handed_off_at: datetime | None
+    #: When this signup began. Read for two things that must not depend on the
+    #: short signup TTL: whether the account was made by this signup (so the
+    #: confirmation knows whether there is a password), and whether the held
+    #: first message is still fresh enough to replay.
+    created_at: datetime

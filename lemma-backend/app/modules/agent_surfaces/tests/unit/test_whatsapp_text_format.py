@@ -25,10 +25,30 @@ def test_markdown_strong_maps_to_whatsapp_bold():
     assert to_whatsapp_text("see **bold** here") == "see *bold* here"
 
 
-def test_markdown_link_reduces_to_bare_url():
+def test_markdown_link_keeps_its_label_beside_the_url():
+    # Reduced to the bare URL, the label's noun vanished from the sentence.
     assert to_whatsapp_text("read [the homepage](https://lemma.world)") == (
-        "read https://lemma.world"
+        "read the homepage (https://lemma.world)"
     )
+    # A label that only repeats the URL adds nothing.
+    assert to_whatsapp_text("[https://lemma.world](https://lemma.world)") == (
+        "https://lemma.world"
+    )
+
+
+def test_autolink_loses_its_angle_brackets():
+    assert to_whatsapp_text("see <https://lemma.world/docs>") == (
+        "see https://lemma.world/docs"
+    )
+
+
+def test_markdown_strikethrough_maps_to_whatsapp_strike():
+    assert to_whatsapp_text("~~old price~~ new price") == "~old price~ new price"
+
+
+def test_single_star_emphasis_is_left_as_whatsapp_bold():
+    # The agent is told to write WhatsApp syntax, where one star *is* bold.
+    assert to_whatsapp_text("this is *important*") == "this is *important*"
 
 
 def test_heading_becomes_bold():
@@ -94,7 +114,21 @@ def test_image_does_not_leave_a_stranded_bang():
 
 
 def test_table_is_flattened_into_readable_lines():
-    assert to_whatsapp_text("| a | b |\n|---|---|\n| 1 | 2 |") == "a — b\n\n1 — 2"
+    assert to_whatsapp_text("| a | b |\n|---|---|\n| 1 | 2 |") == "a — b\n1 — 2"
+
+
+def test_table_without_edge_pipes_is_flattened_too():
+    assert to_whatsapp_text("a | b\n--|--\n1 | 2\n\nafter") == "a — b\n1 — 2\n\nafter"
+
+
+def test_inline_code_inside_a_table_keeps_its_pipe_and_its_star():
+    text = "cmd | note\n---|---\n`a|b` | `x*y`"
+    assert to_whatsapp_text(text) == "cmd — note\n```a|b``` — ```x*y```"
+
+
+def test_inline_code_is_not_rebalanced():
+    # A lone `*` inside code is a character, not a broken bold marker.
+    assert to_whatsapp_text("glob `*.py` files") == "glob ```*.py``` files"
 
 
 def test_underscore_strong_maps_to_whatsapp_bold():
@@ -122,7 +156,7 @@ def test_empty_and_whitespace_input_are_safe():
 def test_plain_text_strips_markers_for_captions():
     assert to_plain_text("**Live** *hero*") == "Live hero"
     assert to_plain_text("2 * 3 = 6") == "2 * 3 = 6"
-    assert to_plain_text("[x](https://lemma.world)") == "https://lemma.world"
+    assert to_plain_text("[x](https://lemma.world)") == "x (https://lemma.world)"
     assert to_plain_text("# Heading text") == "Heading text"
 
 

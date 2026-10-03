@@ -80,6 +80,8 @@ def conversation_operations(monkeypatch):
         "surface_agent_identity": AsyncMock(return_value=None),
         "conversation_metadata_value": AsyncMock(return_value=None),
         "set_conversation_metadata_value": AsyncMock(),
+        "merge_conversation_metadata_mapping": AsyncMock(return_value={}),
+        "append_delivery_notice": AsyncMock(),
     }
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)

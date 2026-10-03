@@ -2816,6 +2816,37 @@
         "title": "AuthScheme",
         "type": "string"
       },
+      "AvailablePodItem": {
+        "description": "A pod that could answer this user on a shared-bot platform.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Name"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pod_id",
+          "name"
+        ],
+        "title": "AvailablePodItem",
+        "type": "object"
+      },
       "AvailableSurface": {
         "description": "One connectable surface platform. ``supported_credential_modes`` is the\nsingle source of truth for how it can be set up: ``[CUSTOM]`` means an account\nmust be connected; ``[CUSTOM, SYSTEM]`` means a Lemma-managed bot can also run\nwith no account. The frontend derives ``account_needed = SYSTEM not in modes``\nand ``system_bot_available = SYSTEM in modes``.",
         "properties": {
@@ -14025,20 +14056,38 @@
         "type": "object"
       },
       "SetDefaultSurfaceRequest": {
-        "description": "Pick which surface answers this user for ``platform`` when several could.",
+        "description": "Pick which surface answers this user for ``platform`` when several could.\n\nExactly one of ``surface_id`` (a surface that already exists) or ``pod_id``\n(a pod to be answered from on the platform's shared bot, whose surface is\nmade if it has none yet).",
         "properties": {
           "platform": {
             "$ref": "#/components/schemas/SurfacePlatform"
           },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Id"
+          },
           "surface_id": {
-            "format": "uuid",
-            "title": "Surface Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Id"
           }
         },
         "required": [
-          "platform",
-          "surface_id"
+          "platform"
         ],
         "title": "SetDefaultSurfaceRequest",
         "type": "object"
@@ -14903,6 +14952,30 @@
       },
       "SurfaceSendResponse": {
         "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where it went: `chat`, or `email` when the chat's reply window had closed and it was sent to the member's email address instead.",
+            "title": "Channel"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it went where it did.",
+            "title": "Detail"
+          },
           "sent": {
             "title": "Sent",
             "type": "boolean"
@@ -17389,12 +17462,32 @@
         "type": "object"
       },
       "UserSurfacePlatformGroup": {
-        "description": "All of a user's surfaces for one platform. ``conflict`` is true when two\nof them answer at the same address, so the user has to say which pod hears\nthem (the ``shares_address`` surfaces are the ones to choose between).",
+        "description": "All of a user's surfaces for one platform. ``conflict`` is true when two\nof them answer at the same address, so the user has to say which pod hears\nthem (the ``shares_address`` surfaces are the ones to choose between).\n\nOn a platform with a shared bot (WhatsApp), ``available_pods`` lists every\npod the user may be answered from -- including pods with no surface there\nyet -- and ``default_pod_id`` names the one that answers now. The group is\npresent even when the user has no surface on the platform at all.",
         "properties": {
+          "available_pods": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AvailablePodItem"
+            },
+            "title": "Available Pods",
+            "type": "array"
+          },
           "conflict": {
             "default": false,
             "title": "Conflict",
             "type": "boolean"
+          },
+          "default_pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Pod Id"
           },
           "default_surface_id": {
             "anyOf": [
@@ -35550,7 +35643,7 @@
     },
     "/surfaces/me": {
       "get": {
-        "description": "Every surface across the current user's pods, grouped by platform, with\nthe chosen default and a ``conflict`` flag when two of them answer at the\nsame address.",
+        "description": "Every surface across the current user's pods, grouped by platform, with\nthe chosen default and a ``conflict`` flag when two of them answer at the\nsame address. Shared-bot platforms also list the pods that could answer.",
         "operationId": "agent.surface.list_mine",
         "responses": {
           "200": {
@@ -35579,7 +35672,7 @@
     },
     "/surfaces/me/default": {
       "put": {
-        "description": "Choose which surface answers the current user for a platform when several\ncould (e.g. a shared system bot spanning pods in different orgs).",
+        "description": "Choose which surface answers the current user for a platform when several\ncould (e.g. a shared system bot spanning pods in different orgs).\n\nTakes either an existing ``surface_id`` or a ``pod_id``; a pod with no\nsurface on the shared bot gets one. A pod whose assistant already answers\non the platform through its own connection is refused with 409.",
         "operationId": "agent.surface.set_my_default",
         "requestBody": {
           "content": {

@@ -170,7 +170,7 @@ async def test_whatsapp_questions_half_asked_in_words_accept_the_typed_answer(
     delivered = await egress.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id=TOOL_CALL_ID
     )
-    assert delivered is True
+    assert delivered
     assert len(client.interactives) == 1, "the first question is buttons"
     assert "Which colour?" in client.payloads[0]["text"]["body"], "the rest is words"
 
@@ -195,7 +195,7 @@ async def test_telegram_questions_half_asked_in_words_accept_the_typed_answer(
     delivered = await egress.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id=TOOL_CALL_ID
     )
-    assert delivered is True
+    assert delivered
     assert service.sent[0] == "Which size?"
     assert "Which colour?" in service.sent[1]
 
@@ -206,10 +206,16 @@ async def test_telegram_questions_half_asked_in_words_accept_the_typed_answer(
     assert resolved["response"] == {"answers": ANSWERS}
 
 
-async def test_fully_native_questions_do_not_arm_a_typed_answer(
+async def test_whatsapp_questions_shown_as_buttons_still_take_a_typed_answer(
     conversation_metadata,
 ):
-    """The other half of the rule: buttons all the way is not a reason to swallow text."""
+    """On WhatsApp typing is how people answer, buttons or not.
+
+    Buttons hold three short options and a list ten, so the answer a person
+    has in mind is often not on them. With every question rendered natively, a
+    typed reply used to be a new message that cancelled the question it was
+    answering; `typed_reply_answers_native_choices` makes it the answer.
+    """
     client = _RecordingWhatsAppClient()
     service = _wa_service()
     service._client = client
@@ -220,13 +226,11 @@ async def test_fully_native_questions_do_not_arm_a_typed_answer(
     await egress.send_questions_for_conversation(
         conversation_id=conversation_id, tool_call_id=TOOL_CALL_ID
     )
-    outcome = await _type(
-        egress, conversation_id, "WHATSAPP", "Create a table called probes."
-    )
+    outcome = await _type(egress, conversation_id, "WHATSAPP", "Small, Blue")
 
     assert len(client.interactives) == 2
-    assert outcome is ResumeOutcome.NOT_A_DECISION
-    agent_conversations.resolve_pending_interaction.assert_not_awaited()
+    assert outcome is ResumeOutcome.CONSUMED
+    agent_conversations.resolve_pending_interaction.assert_awaited_once()
 
 
 async def test_an_instruction_typed_past_half_asked_questions_is_still_consumed_once(

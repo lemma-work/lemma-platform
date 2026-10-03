@@ -7,6 +7,7 @@ from app.modules.agent_surfaces.platforms.common import (
     payload_text,
 )
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,11 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
+)
+from app.modules.agent_surfaces.platforms.whatsapp.message_bodies import (
+    is_silent,
+    is_undeliverable,
+    message_body,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WHATSAPP_APPROVAL_HEADER,
@@ -80,19 +86,16 @@ def _split_all(payload: dict[str, Any], entries: object) -> list[dict[str, Any]]
             if not isinstance(messages, list) or not messages:
                 continue
             for message in messages:
+                part_value = {
+                    **value,
+                    "messages": [message],
+                    "contacts": _contacts_of(value, message),
+                }
                 parts.append(
                     {
                         **payload,
                         "entry": [
-                            {
-                                **entry,
-                                "changes": [
-                                    {
-                                        **change,
-                                        "value": {**value, "messages": [message]},
-                                    }
-                                ],
-                            }
+                            {**entry, "changes": [{**change, "value": part_value}]}
                         ],
                     }
                 )
@@ -102,38 +105,73 @@ def _split_all(payload: dict[str, Any], entries: object) -> list[dict[str, Any]]
     return parts or [payload]
 
 
-def _is_undeliverable(msg: dict[str, Any]) -> bool:
-    """Whether WhatsApp is reporting a message rather than delivering one.
+def _contacts_of(
+    value: Mapping[str, object], message: object
+) -> list[dict[str, object]]:
+    """The ``contacts`` entries describing whoever sent ``message``.
 
-    Cloud API answers a message it cannot hand over with ``type: "unsupported"``
-    and the reason in ``errors`` -- a forwarded sticker, a view-once, a poll.
-    There is no media id behind it and nothing to download.
+    ``contacts`` is one list for the whole delivery, so a batch from two people
+    carries both of them, and reading ``contacts[0]`` named every message after
+    the first sender -- the display name, and the number a tool send then went
+    to. Matched on ``wa_id`` (or the business-scoped ``user_id`` where a person
+    has no number). A list that names nobody in particular is left as it was.
     """
-    return msg.get("type") == "unsupported" or bool(msg.get("errors"))
+    listed = value.get("contacts")
+    contacts = (
+        [c for c in listed if isinstance(c, dict)] if isinstance(listed, list) else []
+    )
+    sender = _sender_id(message) if isinstance(message, dict) else ""
+    matched = [
+        contact
+        for contact in contacts
+        if sender
+        and sender in (payload_text(contact, "wa_id"), payload_text(contact, "user_id"))
+    ]
+    return matched or contacts
 
 
-def _undeliverable_notice(msg: dict[str, Any]) -> str:
-    """What to tell the agent about a message that never actually arrived.
+def _sender_id(msg: Mapping[str, object]) -> str:
+    """Who wrote a message: their number, else their business-scoped user id.
 
-    Read as ordinary media this produced the bare word ``unsupported`` as the
-    person's text -- the type name fallback below, applied to a type that is not
-    a kind of content but an error report. The agent then answered it as if they
-    had typed it. So say what happened, and say who is saying it: the line lands
-    in the transcript where the person's own words go.
+    With business-scoped user ids a person may come without a phone number at
+    all, and ``from_user_id`` is then the only name for them -- in a one-to-one
+    chat as much as in a group.
     """
-    errors = msg.get("errors")
-    first = errors[0] if isinstance(errors, list) and errors else {}
-    reason = ""
-    if isinstance(first, dict):
-        reason = str(first.get("title") or first.get("message") or "").strip()
     return (
-        "(System notice, not the person's words: WhatsApp could not deliver "
-        f"their message{f' — {reason}' if reason else ''}. None of its content "
-        "reached Lemma.)"
+        payload_text(msg, "from").strip() or payload_text(msg, "from_user_id").strip()
     )
 
 
-def _replies_to(msg: dict[str, object], business_number: str) -> bool:
+def _sender_contact(
+    value: Mapping[str, object], msg: Mapping[str, object]
+) -> dict[str, object]:
+    """The one ``contacts`` entry for this message's sender, or an empty one."""
+    contacts = _contacts_of(value, msg)
+    return contacts[0] if len(contacts) == 1 else {}
+
+
+def _reply_ref(
+    msg: Mapping[str, object], business_number: str
+) -> dict[str, object] | None:
+    """The message this one quotes, as a reference the turn can look up.
+
+    WhatsApp sends only the quoted message's id and author, never its text, so
+    this is a pointer: what the quoted message *said* has to come from the
+    record of what was sent. A forwarded message carries ``context`` too, with
+    no id, and quotes nothing.
+    """
+    context = payload_section(msg, "context")
+    quoted_id = payload_text(context, "id").strip()
+    if not quoted_id:
+        return None
+    return {
+        "id": quoted_id,
+        "from": payload_text(context, "from").strip() or None,
+        "is_bot": _replies_to(msg, business_number),
+    }
+
+
+def _replies_to(msg: Mapping[str, object], business_number: str) -> bool:
     """Whether the message quotes one the business sent.
 
     ``context.from`` names who wrote the quoted message; in a one-to-one chat it
@@ -190,7 +228,7 @@ class WhatsAppMessageParser:
             if not callback_id or not header:
                 return None
 
-            sender_wa_id = payload_text(msg, "from")
+            sender_wa_id = _sender_id(msg)
             # The number the tap arrived on, carried the same way `parse` carries
             # it. Without it an acknowledgement has only the configured number to
             # send from, so a button tapped in a chat with a pooled number is
@@ -231,28 +269,26 @@ class WhatsAppMessageParser:
     ) -> ParsedInboundSurfaceEvent | None:
         del headers
         envelope = _envelope(payload)
-        if envelope is None:
+        if envelope is None or is_silent(envelope.message):
+            # A reaction, a changed number, the chat being opened: none of them
+            # is somebody saying something, and each one used to start a run --
+            # or, from a stranger, a signup -- answering a message nobody wrote.
             return None
 
         msg = envelope.message
-        value = envelope.value
-        message_text, attachments = self._message_body(msg)
-
-        contacts = value.get("contacts") or []
-        sender = contacts[0] if contacts else {}
-        sender_wa_id = msg.get("from", "")
-        sender_name = (sender.get("wa_id") or "").replace("+", "") or sender_wa_id
-        waba_id = envelope.entry.get("id")
-        phone_number_id = payload_section(value, "metadata").get("phone_number_id")
         group_id = payload_text(msg, "group_id").strip()
         if group_id:
-            return self._group_message(
-                envelope,
-                payload=payload,
-                group_id=group_id,
-                text=message_text,
-                attachments=attachments,
-            )
+            return self._group_message(envelope, payload=payload, group_id=group_id)
+
+        value = envelope.value
+        message_text, attachments = message_body(msg)
+        sender = _sender_contact(value, msg)
+        sender_wa_id = _sender_id(msg)
+        sender_name = payload_text(sender, "wa_id").replace("+", "") or sender_wa_id
+        waba_id = envelope.entry.get("id")
+        metadata = payload_section(value, "metadata")
+        phone_number_id = metadata.get("phone_number_id")
+        business_number = str(metadata.get("display_phone_number") or "")
 
         return ParsedInboundSurfaceEvent(
             platform=self.platform,
@@ -262,7 +298,9 @@ class WhatsAppMessageParser:
             external_thread_id=f"{sender_wa_id}@{phone_number_id or waba_id}",
             external_message_id=msg.get("id"),
             sender_external_user_id=sender_wa_id,
-            sender_phone=sender_wa_id,
+            # Only a real number is a phone: a business-scoped user id is not
+            # something to match an account's mobile number against.
+            sender_phone=payload_text(msg, "from").strip() or None,
             sender_display_name=payload_section(sender, "profile").get(
                 "name", sender_name
             ),
@@ -277,11 +315,12 @@ class WhatsAppMessageParser:
             metadata={
                 "waba_id": waba_id,
                 "phone_number_id": phone_number_id,
-                "contacts": contacts,
+                "contacts": [sender] if sender else [],
                 "attachments": attachments,
                 # Carried so "the file never arrived" is answerable from the
                 # message row, not only from the agent's guess about it.
-                "undeliverable": _is_undeliverable(msg),
+                "undeliverable": is_undeliverable(msg),
+                "reply_ref": _reply_ref(msg, business_number),
             },
             raw_payload=payload,
         )
@@ -292,8 +331,6 @@ class WhatsAppMessageParser:
         *,
         payload: dict[str, object],
         group_id: str,
-        text: str,
-        attachments: list[dict[str, object]],
     ) -> ParsedInboundSurfaceEvent:
         """A message somebody wrote in a group the bot is in.
 
@@ -311,15 +348,13 @@ class WhatsAppMessageParser:
         """
         msg = envelope.message
         value = envelope.value
+        text, attachments = message_body(msg)
         metadata = payload_section(value, "metadata")
         phone_number_id = metadata.get("phone_number_id")
         business_number = str(metadata.get("display_phone_number") or "")
-        contacts = value.get("contacts") or []
-        sender = contacts[0] if contacts else {}
-        # With business-scoped user ids a participant may come without a phone
-        # number at all, and `from_user_id` is then the only name for them.
+        sender = _sender_contact(value, msg)
         sender_phone = payload_text(msg, "from").strip() or None
-        sender_id = sender_phone or payload_text(msg, "from_user_id").strip() or None
+        sender_id = _sender_id(msg) or None
         addressed = mentions_number(text, business_number) or _replies_to(
             msg, business_number
         )
@@ -343,61 +378,10 @@ class WhatsAppMessageParser:
                 "waba_id": envelope.entry.get("id"),
                 "phone_number_id": phone_number_id,
                 "group_id": group_id,
-                "contacts": contacts,
+                "contacts": [sender] if sender else [],
                 "attachments": attachments,
-                "undeliverable": _is_undeliverable(msg),
+                "undeliverable": is_undeliverable(msg),
+                "reply_ref": _reply_ref(msg, business_number),
             },
             raw_payload=payload,
         )
-
-    def _message_body(self, msg: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-        """The readable text of a message, and any attachment, by type.
-
-        WhatsApp puts the readable part somewhere different for each type. A
-        media message's caption lives on the *media* object -- ``image.caption``,
-        never ``text.body``, which a media message does not have at all -- and
-        reading the wrong one is why a photo sent with a question arrived at the
-        agent as the bare word "image" with the question dropped. The type name
-        stays as the fallback for media genuinely sent without a caption, so the
-        agent at least knows something arrived -- but only for types that *are*
-        content, which is why the undeliverable check comes first.
-        """
-        msg_type = msg.get("type", "text")
-        if msg_type == "text":
-            return payload_section(msg, "text").get("body", ""), []
-        if msg_type == "interactive":
-            return self._interactive_title(payload_section(msg, "interactive")), []
-        if _is_undeliverable(msg):
-            return _undeliverable_notice(msg), []
-        attachment = self._parse_attachment(msg, msg_type)
-        caption = (
-            str(payload_section(msg, msg_type).get("caption") or "").strip() or msg_type
-        )
-        return caption, ([attachment] if attachment else [])
-
-    def _interactive_title(self, interactive: dict[str, Any]) -> str:
-        """The label the person tapped, for a button or a list reply."""
-        kind = interactive.get("type")
-        if kind in ("button_reply", "list_reply"):
-            return payload_section(interactive, kind).get("title", "")
-        return str(interactive)
-
-    def _parse_attachment(self, msg: dict, msg_type: str) -> dict[str, Any] | None:
-        """One inbound media object, as an attachment the ingest step can save.
-
-        ``filename`` is sent for documents and for nothing else, so an image or
-        a voice note has only its mime type to be named by. Ingest completes the
-        name from the mime type of the bytes it actually downloads; the type name
-        alone is what the prompt block falls back to when the file is not saved.
-        """
-        media_data = msg.get(msg_type)
-        if not isinstance(media_data, dict):
-            return None
-        return {
-            "id": media_data.get("id"),
-            "name": media_data.get("filename") or msg_type,
-            "content_type": msg_type,
-            "mime_type": media_data.get("mime_type"),
-            "size": media_data.get("file_size"),
-            "download_url": None,
-        }

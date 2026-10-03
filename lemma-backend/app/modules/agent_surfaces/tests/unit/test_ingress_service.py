@@ -720,6 +720,9 @@ async def test_handle_interaction_resumes_via_approval_path():
     owner = link.external_user_id
     conversation = _surface_conversation(surface, conversation_id=conversation_id)
     agent_conversations.surface_conversation.return_value = conversation
+    agent_conversations.pending_interaction.return_value = _pending(
+        "ask_user", tool_call_id="tool-1"
+    )
 
     interaction = ParsedSurfaceInteraction(
         platform=SurfacePlatform.SLACK,
@@ -812,6 +815,9 @@ async def test_handle_interaction_routes_approval_decision(decision_value, expec
     owner = link.external_user_id
     conversation = _surface_conversation(surface, conversation_id=conversation_id)
     agent_conversations.surface_conversation.return_value = conversation
+    agent_conversations.pending_approval.return_value = _pending(
+        "request_approval", tool_call_id="tool-9"
+    )
 
     interaction = ParsedSurfaceInteraction(
         platform=SurfacePlatform.SLACK,

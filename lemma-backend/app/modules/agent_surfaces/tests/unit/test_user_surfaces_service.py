@@ -214,3 +214,84 @@ async def test_set_default_rejects_unknown_surface():
             platform=SurfacePlatform.WHATSAPP,
             surface_id=uuid4(),
         )
+
+
+def _shared_pods(pods, *, attached_surface_id=None):
+    from app.modules.agent_surfaces.domain.available_pods import AvailablePod
+
+    return SimpleNamespace(
+        member_pods=AsyncMock(
+            return_value=[
+                AvailablePod(pod, f"Pod {i}", "Org") for i, pod in enumerate(pods)
+            ]
+        ),
+        attach=AsyncMock(return_value=attached_surface_id or uuid4()),
+    )
+
+
+async def test_a_shared_bot_platform_gets_a_group_even_with_no_surface(monkeypatch):
+    """The person with no WhatsApp surface yet is exactly who needs the picker."""
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "telegram_bot_token", None)
+    pod_a, pod_b = uuid4(), uuid4()
+    service, _ = _service(pod_ids=[pod_a, pod_b], surfaces_by_pod={})
+
+    groups = await service.list_user_surfaces(
+        uuid4(), shared_pods=_shared_pods([pod_a, pod_b])
+    )
+
+    by_platform = {g.platform: g for g in groups}
+    assert set(by_platform) == {SurfacePlatform.WHATSAPP}
+    whatsapp = by_platform[SurfacePlatform.WHATSAPP]
+    assert whatsapp.surfaces == []
+    assert {pod.pod_id for pod in whatsapp.available_pods} == {pod_a, pod_b}
+    assert whatsapp.default_pod_id is None
+
+
+async def test_default_pod_is_the_pod_of_the_default_surface():
+    pod_a, pod_b = uuid4(), uuid4()
+    wa_a, wa_b = _surface(pod_a, created_offset=1), _surface(pod_b, created_offset=2)
+    service, _ = _service(
+        pod_ids=[pod_a, pod_b],
+        surfaces_by_pod={pod_a: [wa_a], pod_b: [wa_b]},
+        preferences=UserPreferences(default_surfaces={"WHATSAPP": wa_b.id}),
+    )
+
+    groups = await service.list_user_surfaces(
+        uuid4(), shared_pods=_shared_pods([pod_a, pod_b])
+    )
+
+    whatsapp = next(g for g in groups if g.platform is SurfacePlatform.WHATSAPP)
+    assert whatsapp.default_pod_id == pod_b
+
+
+async def test_choosing_a_pod_writes_the_surface_it_was_given():
+    pod, surface_id = uuid4(), uuid4()
+    service, users = _service(pod_ids=[pod], surfaces_by_pod={})
+    shared = _shared_pods([pod], attached_surface_id=surface_id)
+
+    updated = await service.set_default_pod(
+        user_id=uuid4(),
+        platform=SurfacePlatform.WHATSAPP,
+        pod_id=pod,
+        shared_pods=shared,
+    )
+
+    shared.attach.assert_awaited_once()
+    assert updated.default_surface_for("WHATSAPP") == surface_id
+    users.set_preferences.assert_awaited_once()
+
+
+async def test_choosing_a_pod_on_a_platform_without_a_shared_bot_is_refused():
+    service, users = _service(pod_ids=[], surfaces_by_pod={})
+    with pytest.raises(AgentSurfaceValidationError):
+        await service.set_default_pod(
+            user_id=uuid4(),
+            platform=SurfacePlatform.SLACK,
+            pod_id=uuid4(),
+            shared_pods=_shared_pods([]),
+        )
+    users.set_preferences.assert_not_awaited()

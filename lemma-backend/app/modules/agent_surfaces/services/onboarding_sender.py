@@ -50,7 +50,6 @@ from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
 from app.modules.agent_surfaces.services.onboarding_pod_choice import (
-    candidate_pods,
     has_somewhere_to_talk,
 )
 from app.modules.agent_surfaces.services.onboarding_transport import OnboardingTransport
@@ -58,8 +57,10 @@ from app.modules.agent_surfaces.services.personal_dm_routes import (
     PersonalRouteUnavailable,
     prepare_personal_dm_context,
 )
+from app.modules.agent_surfaces.services.verified_surface_identity import (
+    phone_binding_holds,
+)
 from app.modules.identity.contracts.onboarding import (
-    accept_chat_invitations,
     PENDING_TTL_SECONDS,
     active_chat_user,
 )
@@ -117,12 +118,8 @@ async def verified_sender(
         if verified_user_id is not None:
             assert identity is not None
             verified_user = await active_chat_user(uow, verified_user_id)
-            if verified_user is None or (
-                identity.verified_phone is not None
-                and (
-                    identity.verified_phone != verified_user.mobile_number
-                    or verified_user.mobile_verified_at is None
-                )
+            if verified_user is None or not phone_binding_holds(
+                identity, verified_user, identity.platform
             ):
                 verified_user_id = None
                 previously_revoked = True
@@ -351,10 +348,13 @@ async def offer_workspace_choice(
     shared surface, a group -- routing is not this person's to choose, so this
     declines by returning None and the caller carries on as before.
 
-    Returns the parked state rather than sending anything: the dispatcher walks
-    straight into the AWAITING_POD step, which asks the question through the
-    same reply path every other step uses, and the message that got them here
-    is kept for replay once they answer.
+    Returns the pending row on VERIFIED rather than sending anything, holding
+    the message that got them here for replay. The coordinator settles it
+    straight away -- already reachable, one pod, a list, or a new one -- through
+    the same policy an email code ends in. What it must not do is walk into the
+    workspace question with this message as the answer: that is how a first
+    message of "2" attached somebody's second workspace, and "New York trip"
+    came close to naming one.
     """
     event = transport.event
     if not event.is_dm:
@@ -373,22 +373,12 @@ async def offer_workspace_choice(
             receiver_surface_ids=transport.receiver_surface_ids,
         ):
             return None
-    # A pod they were invited to is one of the answers; accepting the
-    # invitation is what makes it one.
-    await accept_chat_invitations(uows, user_id=verified_user_id)
-    async with uows() as uow:
-        pods = await candidate_pods(
-            uow,
-            user_id=verified_user_id,
-            organization_id=transport.organization_id,
-        )
     state = await create_pending(uows, transport, event)
     async with uows() as uow:
         row = await uow.session.get(PendingChatOnboarding, state.id)
         assert row is not None
-        row.step = OnboardingStep.AWAITING_POD
+        row.step = OnboardingStep.VERIFIED
         row.user_id = verified_user_id
-        row.offered_pods = pods
         row.destination = event.model_dump(mode="json")
     parked = await require_state(uows, transport.binding_key)
     assert parked is not None

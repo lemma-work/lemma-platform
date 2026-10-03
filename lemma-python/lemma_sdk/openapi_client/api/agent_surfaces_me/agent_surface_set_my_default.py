@@ -70,9 +70,17 @@ def sync_detailed(
      Choose which surface answers the current user for a platform when several
     could (e.g. a shared system bot spanning pods in different orgs).
 
+    Takes either an existing ``surface_id`` or a ``pod_id``; a pod with no
+    surface on the shared bot gets one. A pod whose assistant already answers
+    on the platform through its own connection is refused with 409.
+
     Args:
         body (SetDefaultSurfaceRequest): Pick which surface answers this user for ``platform``
             when several could.
+
+            Exactly one of ``surface_id`` (a surface that already exists) or ``pod_id``
+            (a pod to be answered from on the platform's shared bot, whose surface is
+            made if it has none yet).
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -103,9 +111,17 @@ def sync(
      Choose which surface answers the current user for a platform when several
     could (e.g. a shared system bot spanning pods in different orgs).
 
+    Takes either an existing ``surface_id`` or a ``pod_id``; a pod with no
+    surface on the shared bot gets one. A pod whose assistant already answers
+    on the platform through its own connection is refused with 409.
+
     Args:
         body (SetDefaultSurfaceRequest): Pick which surface answers this user for ``platform``
             when several could.
+
+            Exactly one of ``surface_id`` (a surface that already exists) or ``pod_id``
+            (a pod to be answered from on the platform's shared bot, whose surface is
+            made if it has none yet).
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -131,9 +147,17 @@ async def asyncio_detailed(
      Choose which surface answers the current user for a platform when several
     could (e.g. a shared system bot spanning pods in different orgs).
 
+    Takes either an existing ``surface_id`` or a ``pod_id``; a pod with no
+    surface on the shared bot gets one. A pod whose assistant already answers
+    on the platform through its own connection is refused with 409.
+
     Args:
         body (SetDefaultSurfaceRequest): Pick which surface answers this user for ``platform``
             when several could.
+
+            Exactly one of ``surface_id`` (a surface that already exists) or ``pod_id``
+            (a pod to be answered from on the platform's shared bot, whose surface is
+            made if it has none yet).
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -162,9 +186,17 @@ async def asyncio(
      Choose which surface answers the current user for a platform when several
     could (e.g. a shared system bot spanning pods in different orgs).
 
+    Takes either an existing ``surface_id`` or a ``pod_id``; a pod with no
+    surface on the shared bot gets one. A pod whose assistant already answers
+    on the platform through its own connection is refused with 409.
+
     Args:
         body (SetDefaultSurfaceRequest): Pick which surface answers this user for ``platform``
             when several could.
+
+            Exactly one of ``surface_id`` (a surface that already exists) or ``pod_id``
+            (a pod to be answered from on the platform's shared bot, whose surface is
+            made if it has none yet).
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

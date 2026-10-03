@@ -20,6 +20,7 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
     inline_cap,
     media_cap_summary,
     media_kind_for_mime,
+    send_kind,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     resolve_whatsapp_send_type,
@@ -64,12 +65,46 @@ def test_whatsapp_caps_each_media_kind_separately():
     assert attachment_cap("WHATSAPP", media_kind=MediaKind.DOCUMENT) == 100 * _MB
 
 
-def test_a_whatsapp_image_over_5mb_is_not_attempted_inline():
-    """Meta refuses it, so paying for the download and upload first is waste."""
-    assert fits_inline("WHATSAPP", 4 * _MB, mime_type="image/png") is True
-    assert fits_inline("WHATSAPP", 6 * _MB, mime_type="image/png") is False
-    # Same bytes, sent as a document: comfortably inside the 20 MB soft cap.
-    assert fits_inline("WHATSAPP", 6 * _MB, mime_type="application/pdf") is True
+def test_a_whatsapp_image_over_5mb_goes_as_a_document_instead_of_a_link():
+    """Meta refuses it as an image, and takes the same bytes as a document.
+
+    It used to become a link -- one a recipient without a Lemma account cannot
+    open. The size check and the sender read one rule, so the check clears it
+    exactly when the send will make it a document.
+    """
+    assert send_kind("WHATSAPP", "image/png", 4 * _MB) is MediaKind.IMAGE
+    assert send_kind("WHATSAPP", "image/png", 6 * _MB) is MediaKind.DOCUMENT
+    assert fits_inline("WHATSAPP", 6 * _MB, mime_type="image/png") is True
+    assert (
+        resolve_whatsapp_send_type(
+            delivery_mode="auto", mime_type="image/png", size_bytes=6 * _MB
+        )
+        == "document"
+    )
+    # Past the chat soft cap it is a link whatever it is sent as.
+    assert fits_inline("WHATSAPP", 21 * _MB, mime_type="image/png") is False
+
+
+@pytest.mark.parametrize(
+    ("mime", "expected"),
+    [
+        ("image/jpeg", MediaKind.IMAGE),
+        ("image/webp", MediaKind.DOCUMENT),
+        ("image/svg+xml", MediaKind.DOCUMENT),
+        ("audio/ogg; codecs=opus", MediaKind.AUDIO),
+        ("audio/wav", MediaKind.DOCUMENT),
+        ("video/quicktime", MediaKind.DOCUMENT),
+        ("video/mp4", MediaKind.VIDEO),
+    ],
+)
+def test_a_format_whatsapp_does_not_play_goes_as_a_document(mime, expected):
+    """Meta plays a short list per kind and refuses the rest at send time."""
+    assert send_kind("WHATSAPP", mime, 1024) is expected
+
+
+def test_other_platforms_send_every_format_as_its_kind():
+    assert send_kind("TELEGRAM", "image/webp", 1024) is MediaKind.IMAGE
+    assert send_kind("SLACK", "image/png", 40 * _MB) is MediaKind.IMAGE
 
 
 def test_a_16mb_document_now_attaches_instead_of_becoming_a_link():
