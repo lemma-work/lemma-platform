@@ -7,6 +7,7 @@ import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
+import { readChatPodChoice, type ChatPodChoice } from "./chat-pod";
 import {
     agentChanges,
     agentRows,
@@ -921,6 +922,18 @@ export const liveSource: PodSource = {
                 name: String(surface.name ?? ""),
             })),
         );
+    },
+
+    async chatPodChoice(platform: string): Promise<ChatPodChoice | null> {
+        return readChatPodChoice(await lemma().userSurfaces.list(), platform);
+    },
+
+    async setChatPod(platform: string, podId: string): Promise<void> {
+        /* `pod_id` instead of `surface_id`: the server makes the pod's shared
+           surface when it has none yet, so any pod the person belongs to can
+           be picked. Cast until the generated request type carries it. */
+        const surfaces = lemma().userSurfaces;
+        await surfaces.setDefault({ platform, pod_id: podId } as unknown as Parameters<typeof surfaces.setDefault>[0]);
     },
 
     async slackManifest(agentName: string): Promise<Record<string, unknown>> {

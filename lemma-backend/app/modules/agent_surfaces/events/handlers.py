@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import asyncio
 from collections.abc import Awaitable, Callable
 
 
@@ -15,6 +17,7 @@ from app.core.infrastructure.events.stream_subscriber import (
 )
 from app.core.infrastructure.events.inbox import (
     EventInboxPort,
+    inbox_attempt,
     provide_domain_event_inbox,
 )
 from app.core.infrastructure.jobs.streaq_job_queue import (
@@ -61,6 +64,11 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
+
+# Imported for its registration: the daily sweep of the outbound log.
+from app.modules.agent_surfaces.events.outbound_retention import (  # noqa: F401
+    prune_surface_outbound_messages,
+)
 from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
@@ -76,6 +84,10 @@ from app.modules.agent_surfaces.domain.delivery_limits import CONSUMER_ATTEMPTS
 logger = get_logger(__name__)
 
 router = RedisRouter()
+
+EXPIRED_FORM_TEXT = (
+    "That form has expired. Send me any message and I'll send a fresh one."
+)
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
@@ -180,6 +192,9 @@ async def _context_for_delivery(
         [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
     ],
     uow_factory: UnitOfWorkFactory,
+    source: str = "",
+    event_dedup_store: SurfaceEventDedupStorePort | None = None,
+    tell: Callable[..., Awaitable[bool]] | None = None,
 ) -> AgentSurfaceContext | None:
     """Onboarding's answer for one delivery, or ordinary ingestion's.
 
@@ -190,7 +205,15 @@ async def _context_for_delivery(
     the person with no answer at all. Ordinary ingestion is the right next
     thing -- it routes by pod membership, and where it cannot it says so, which
     is the reply this was costing them.
+
+    Except an expired setup form, which is neither: it is a submission of a
+    form that stopped meaning anything, and ingesting it as a message would put
+    a form's fields in front of the agent as though somebody had typed them.
+    The person is told, and nothing is queued.
     """
+    from app.modules.agent_surfaces.services.onboarding_inputs import (
+        ExpiredOnboardingInput,
+    )
     from app.modules.agent_surfaces.services.onboarding_private_delivery import (
         PrivateDeliveryUnavailable,
     )
@@ -200,6 +223,20 @@ async def _context_for_delivery(
 
     try:
         onboarding = await onboarding_handler(part)
+    except ExpiredOnboardingInput:
+        if tell is None:
+            from app.modules.agent_surfaces.services.processing_failure_notice import (
+                tell_sender as tell,
+            )
+        await tell(
+            part,
+            text=EXPIRED_FORM_TEXT,
+            key=":expired-form",
+            source=source,
+            uow_factory=uow_factory,
+            event_dedup_store=event_dedup_store or get_surface_event_dedup_store(),
+        )
+        return None
     except (PersonalRouteUnavailable, PrivateDeliveryUnavailable) as unavailable:
         logger.info(
             "agent_surfaces.events.handlers.onboarding_route_unavailable",
@@ -278,6 +315,16 @@ async def _process_surface_webhook(
     # session opens, because spending the code and saying hello are not queries.
     if await claim_telegram_group_join(uow_factory, ingress_request, adapters=adapters):
         return
+    # A platform reporting that something we sent never arrived. Such a body
+    # carries no message, so it never instead of the paths below.
+    # Lazy: notification delivery is outside the worker's import budget.
+    from app.modules.agent_surfaces.services.delivery_statuses import (
+        apply_delivery_statuses,
+    )
+
+    await apply_delivery_statuses(
+        uow_factory, ingress_request.payload, source=event.source, adapters=adapters
+    )
 
     async with uow_factory() as uow:
         handler = build_surface_ingress(uow)
@@ -296,16 +343,12 @@ async def _process_surface_webhook(
         # instead of the message paths: such a body carries no message.
         await apply_group_updates(uow, ingress_request, adapters=adapters)
 
-        from app.modules.agent_surfaces.services.onboarding_inputs import (
-            is_onboarding_input,
+        # Split before anything reads a message out of it: a batch can hold a
+        # button tap behind an ordinary message, and every parser reads only
+        # the first one.
+        deliveries = handler.split_webhook_deliveries(
+            ingress_request, source=event.source
         )
-
-        if not is_onboarding_input(
-            ingress_request.payload
-        ) and await handler.try_handle_interaction(ingress_request):
-            return
-
-        deliveries = handler.split_webhook_deliveries(ingress_request)
 
     if onboarding_handler is None:
         from app.modules.agent_surfaces.services.chat_onboarding import (
@@ -333,55 +376,132 @@ async def _enqueue_deliveries(
     uow_factory: UnitOfWorkFactory,
     job_queue: SharedStreaqJobQueue,
     event_dedup_store: SurfaceEventDedupStorePort | None,
+    try_interaction: InteractionAttempt | None = None,
+    tell_failed: Callable[..., Awaitable[None]] | None = None,
 ) -> None:
+    """Every part on its own, and the delivery fails if any part did.
+
+    One part failing used to stop the rest: part N raised, and parts N+1..
+    waited for the retry -- which then met the same failure, if it was the
+    part's own, every time until the delivery dead-lettered and took the
+    healthy parts with it. Each part now succeeds or fails alone. A part that
+    succeeded holds its claim and its job, so the retry the re-raise asks for
+    finds it a duplicate and moves on; only the failed part is tried again.
+
+    On the last attempt, the people whose messages failed are told. Nothing
+    else would ever answer them.
+    """
+    failures: list[tuple[SurfaceIngressRequest, BaseException]] = []
     for index, part in enumerate(deliveries):
-        # Each part is enqueued as soon as it is prepared, not after every part
-        # has been. Preparing them all first spent every part's delivery claim
-        # up front, so an enqueue that failed on part N left the claims of
-        # parts N+1.. spent with no job behind them -- and the inbox's retry then
-        # read each of those as a duplicate and dropped it for good. This way at
-        # most one claim is ever held without a job, and a failure before a part
-        # is prepared leaves the later ones untouched for the retry.
-        context = await _context_for_delivery(
-            part,
-            onboarding_handler=onboarding_handler,
-            uow_factory=uow_factory,
+        # Gathered alone, not together: parts are one conversation's messages
+        # in the order they were sent, and the jobs must be queued in it.
+        (outcome,) = await asyncio.gather(
+            _deliver_part(
+                index,
+                part,
+                event,
+                onboarding_handler=onboarding_handler,
+                uow_factory=uow_factory,
+                job_queue=job_queue,
+                event_dedup_store=event_dedup_store,
+                try_interaction=try_interaction or _try_interaction(uow_factory),
+            ),
+            return_exceptions=True,
         )
-        if not context:
-            continue
-        # `prepare_ingress` spent the delivery claim above, and the work that
-        # claim guards is this enqueue. Losing the enqueue -- a Redis blip, a
-        # worker restart, a cancellation -- while still holding the claim makes
-        # the inbox's retry a no-op: the replay re-enters preparation, is told
-        # the message is a duplicate, and drops it for good. `finally` rather
-        # than `except` so cancellation counts too, since `CancelledError` is
-        # not an `Exception`. The deterministic `_job_id` already makes a double
-        # enqueue harmless, so handing the claim back costs nothing.
-        enqueued = False
-        try:
-            await job_queue.enqueue(
-                "process_surface_message",
-                payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
-                    mode="json"
-                ),
-                # The first part keeps the bare id, so the dedup key for an
-                # ordinary single-message delivery is byte-identical to what it
-                # was.
-                _job_id=(
-                    f"surface-event:{event.event_id}"
-                    if index == 0
-                    else f"surface-event:{event.event_id}:{index}"
-                ),
+        if isinstance(outcome, asyncio.CancelledError):
+            raise outcome
+        if isinstance(outcome, BaseException):
+            failures.append((part, outcome))
+    if not failures:
+        return
+    attempt = inbox_attempt()
+    if attempt is not None and attempt.is_final:
+        if tell_failed is None:
+            from app.modules.agent_surfaces.services.processing_failure_notice import (
+                tell_failed_senders as tell_failed,
             )
-            enqueued = True
-        finally:
-            if not enqueued:
-                await _release_claim_for_retry(
-                    context,
-                    event=event,
-                    event_dedup_store=event_dedup_store
-                    or get_surface_event_dedup_store(),
-                )
+        await tell_failed(
+            [part for part, _ in failures],
+            source=event.source,
+            uow_factory=uow_factory,
+            event_dedup_store=event_dedup_store or get_surface_event_dedup_store(),
+        )
+    raise failures[0][1]
+
+
+#: Resolves a part that is a native interaction (a tap); False for a message.
+InteractionAttempt = Callable[[SurfaceIngressRequest], Awaitable[bool]]
+
+
+def _try_interaction(uow_factory: UnitOfWorkFactory) -> InteractionAttempt:
+    async def attempt(part: SurfaceIngressRequest) -> bool:
+        async with uow_factory() as uow:
+            return await build_surface_ingress(uow).try_handle_interaction(part)
+
+    return attempt
+
+
+async def _deliver_part(
+    index: int,
+    part: SurfaceIngressRequest,
+    event: SurfaceWebhookReceivedEvent,
+    *,
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ],
+    uow_factory: UnitOfWorkFactory,
+    job_queue: SharedStreaqJobQueue,
+    event_dedup_store: SurfaceEventDedupStorePort | None,
+    try_interaction: InteractionAttempt,
+) -> None:
+    """One message of a delivery: a tap that resumes a run, or a queued turn."""
+    from app.modules.agent_surfaces.services.onboarding_inputs import (
+        is_onboarding_input,
+    )
+
+    if not is_onboarding_input(part.payload) and await try_interaction(part):
+        return
+    context = await _context_for_delivery(
+        part,
+        onboarding_handler=onboarding_handler,
+        uow_factory=uow_factory,
+        source=event.source,
+        event_dedup_store=event_dedup_store,
+    )
+    if not context:
+        return
+    # `prepare_ingress` spent the delivery claim above, and the work that
+    # claim guards is this enqueue. Losing the enqueue -- a Redis blip, a
+    # worker restart, a cancellation -- while still holding the claim makes
+    # the inbox's retry a no-op: the replay re-enters preparation, is told
+    # the message is a duplicate, and drops it for good. `finally` rather
+    # than `except` so cancellation counts too, since `CancelledError` is
+    # not an `Exception`. The deterministic `_job_id` already makes a double
+    # enqueue harmless, so handing the claim back costs nothing.
+    enqueued = False
+    try:
+        await job_queue.enqueue(
+            "process_surface_message",
+            payload=SurfaceProcessMessageTaskPayload(context=context).model_dump(
+                mode="json"
+            ),
+            # The first part keeps the bare id, so the dedup key for an
+            # ordinary single-message delivery is byte-identical to what it
+            # was.
+            _job_id=(
+                f"surface-event:{event.event_id}"
+                if index == 0
+                else f"surface-event:{event.event_id}:{index}"
+            ),
+        )
+        enqueued = True
+    finally:
+        if not enqueued:
+            await _release_claim_for_retry(
+                context,
+                event=event,
+                event_dedup_store=event_dedup_store or get_surface_event_dedup_store(),
+            )
 
 
 @reliable_redis_stream_subscriber(
@@ -434,9 +554,13 @@ async def on_identity_event(
         phone = await current_verified_phone(uow_factory, parsed.user_id)
         async with uow_factory() as uow:
             await ExternalSurfaceUserRepository(uow).clear_resolved_user(parsed.user_id)
-            await VerifiedSurfaceIdentityRepository(uow).revoke_phone_bound_except(
-                parsed.user_id, phone
+            bindings = VerifiedSurfaceIdentityRepository(uow)
+            await bindings.revoke_phone_bound_except(
+                parsed.user_id, phone, previous_phone=parsed.previous_mobile_number
             )
+            if phone is not None:
+                # Proving a number takes it from whoever proved it before.
+                await bindings.revoke_phone_held_by_others(parsed.user_id, phone)
 
     await inbox.process(
         "agent-surfaces.identity", event, process, max_attempts=CONSUMER_ATTEMPTS
@@ -456,4 +580,21 @@ async def process_surface_message(
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
     starter = build_surface_turn_starter(worker_ctx.uow_factory)
-    await starter.execute_chat(task_payload.context)
+    finished = False
+    try:
+        await starter.execute_chat(task_payload.context)
+        finished = True
+    finally:
+        # The job's last try failing is the message going unanswered for good;
+        # the person is told rather than left looking at a sent message. A
+        # `finally` and a flag rather than an `except`, so the failure itself
+        # still propagates untouched to the retry machinery that logs it.
+        from app.modules.agent_surfaces.services.processing_failure_notice import (
+            final_job_attempt,
+            tell_chat_sender_safely,
+        )
+
+        if not finished and final_job_attempt(CONSUMER_ATTEMPTS):
+            await tell_chat_sender_safely(
+                task_payload.context, uow_factory=worker_ctx.uow_factory
+            )

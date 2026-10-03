@@ -5216,6 +5216,22 @@ button.filecard__open {
 .settings-who strong { display: block; font-weight: 500; font-size: 15px; }
 .settings-who small { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
 .settings-account .profile-form { align-self: stretch; }
+/* Which pod answers on Lemma's WhatsApp number. Apart from the form above it
+   because it saves on its own; the rule says so before anyone looks for Save. */
+.chat-pod {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    text-align: left;
+}
+.chat-pod--quiet { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+.chat-pod__field { margin-bottom: 2px; }
+.chat-pod__field select { max-width: 360px; }
+.chat-pod__status { margin: 2px 0 0; font-size: 12.5px; }
+.chat-pod__status--pending { color: var(--ink-3); }
 /* Signing out is separated from the form so it is not read as one of the
    things Save applies to. */
 .settings-leave {

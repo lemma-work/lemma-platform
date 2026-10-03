@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from uuid import UUID
@@ -35,6 +36,10 @@ def _first_section(payload: dict[str, JsonValue], key: str) -> dict[str, JsonVal
         if isinstance(values, list) and len(values) == 1 and isinstance(values[0], dict)
         else {}
     )
+
+
+#: Where a native form submission's own id rides on the event it becomes.
+SUBMISSION_ID_KEY = "onboarding_submission_id"
 
 
 async def parse_native_submission(
@@ -86,15 +91,42 @@ async def parse_native_submission(
         raise PrivateDeliveryUnavailable(
             "Submit setup in its original personal conversation"
         )
+    return bound.destination.model_copy(
+        update={
+            "message_text": _checked_answer(bound.step, answer),
+            "metadata": {
+                **bound.destination.metadata,
+                SUBMISSION_ID_KEY: _submission_id(event, token, answer),
+            },
+        }
+    )
+
+
+def _checked_answer(step: str, answer: str) -> str:
     answer = answer.strip()
-    if bound.step == OnboardingStep.AWAITING_EMAIL:
+    if step == OnboardingStep.AWAITING_EMAIL:
         try:
-            answer = validate_email(answer, check_deliverability=False).normalized
+            return validate_email(answer, check_deliverability=False).normalized
         except EmailNotValidError as error:
             raise PrivateDeliveryUnavailable("Enter a valid email address") from error
-    elif not re.fullmatch(r"[0-9]{6}", answer):
+    if not re.fullmatch(r"[0-9]{6}", answer):
         raise PrivateDeliveryUnavailable("Enter exactly six digits")
-    return bound.destination.model_copy(update={"message_text": answer})
+    return answer
+
+
+def _submission_id(
+    event: ParsedInboundSurfaceEvent | None, token: str, answer: str
+) -> str:
+    """The submission's own id, for signup's redelivery claim.
+
+    The event a submission becomes is the stored destination, so it carries
+    the id of whatever message opened the private chat -- the same id for every
+    form submitted in it. A Slack modal has no message at all, so it is keyed
+    on what was submitted with which form.
+    """
+    if event is not None and event.external_message_id:
+        return event.external_message_id
+    return "form:" + hashlib.sha256(f"{token}:{answer}".encode()).hexdigest()[:32]
 
 
 @dataclass(frozen=True, slots=True)

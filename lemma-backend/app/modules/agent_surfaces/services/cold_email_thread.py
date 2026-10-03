@@ -16,21 +16,30 @@ root. This is the ordinary ticketing-system dangling-reference pattern, and it
 needs no control over the ``Message-ID`` the provider generates — which we do
 not have.
 
-Everything here is pure, so the coordinate arithmetic that decides whether a
-reply is ever seen again can be tested without a mail provider or a database.
+The coordinate arithmetic is pure, so what decides whether a reply is ever
+seen again can be tested without a mail provider or a database. The two async
+functions at the end are the send and the link that records it, shared by a
+notification's cold open and a chat reply rerouted to email when the chat's
+reply window has closed (``reply_window_fallback``).
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
 from app.modules.agent_surfaces.domain.ports import ColdEmailThread
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
+    SurfaceConversationLinkRepository,
+)
+from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 
 # ``external_thread_id`` is a String(255). A message id longer than that is
 # truncated on write and then never matches the reply, so the budget is real.
@@ -58,6 +67,19 @@ def cold_thread_seed_id(*, notification_id: UUID, surface: AgentSurfaceEntity) -
     conversation on somebody who has not even replied to the first.
     """
     seed = f"<lemma-notification-{notification_id}@{_domain_of(surface.surface_identity_email)}>"
+    return seed[:MAX_THREAD_ID_LENGTH]
+
+
+def cold_conversation_seed_id(
+    *, conversation_id: UUID, surface: AgentSurfaceEntity
+) -> str:
+    """The seed for a chat reply rerouted to email, one per conversation.
+
+    Per conversation rather than per message, so every reply that missed the
+    chat lands in one email thread -- and the person's reply to any of them
+    comes back to the conversation they were having.
+    """
+    seed = f"<lemma-conversation-{conversation_id}@{_domain_of(surface.surface_identity_email)}>"
     return seed[:MAX_THREAD_ID_LENGTH]
 
 
@@ -101,9 +123,98 @@ def build_cold_email_thread(
     )
 
 
+async def open_cold_email_thread(
+    *,
+    adapter: SurfacePlatformAdapterPort | None,
+    credentials: dict[str, object],
+    surface: AgentSurfaceEntity,
+    recipient_email: str,
+    subject: str,
+    message: str,
+    thread_seed_id: str,
+    metadata: dict[str, object] | None = None,
+) -> ColdEmailThread | None:
+    """Email somebody who has never written to this mailbox.
+
+    ``None`` when the surface is inactive, has no adapter, the message is empty
+    once cleaned, or the platform cannot start a thread -- all of which are
+    "no", not failures.
+    """
+    if not surface.is_active or adapter is None:
+        return None
+    clean_message = sanitize_user_visible_text(message)
+    if not clean_message:
+        return None
+    sent = await adapter.send_cold_email(
+        credentials=credentials,
+        recipient_email=recipient_email,
+        subject=subject,
+        message=clean_message,
+        thread_seed_id=thread_seed_id,
+        metadata=metadata,
+    )
+    if sent is None:
+        return None
+    return build_cold_email_thread(
+        surface=surface, recipient_email=recipient_email, sent=sent
+    )
+
+
+async def remember_cold_email_thread(
+    links: SurfaceConversationLinkRepository,
+    thread: ColdEmailThread,
+    *,
+    surface: AgentSurfaceEntity,
+    recipient_email: str | None,
+    conversation_id: UUID,
+) -> None:
+    """Record the thread so the reply resolves to this conversation.
+
+    Get-then-create rather than a blind insert: the seed is derived from the
+    notification or the conversation, so a second send arrives here with a link
+    already written and must reuse it instead of tripping the unique index.
+    """
+    external_user_id = (recipient_email or "").strip().lower() or None
+    existing = await links.get_by_external_thread(
+        surface_id=surface.id,
+        platform=surface.surface_type.value,
+        external_channel_id=thread.external_channel_id,
+        external_thread_id=thread.external_thread_id,
+        external_user_id=external_user_id,
+    )
+    if existing is not None:
+        return
+    await links.create(
+        AgentSurfaceConversationLink(
+            surface_id=surface.id,
+            conversation_id=conversation_id,
+            platform=surface.surface_type.value,
+            external_channel_id=thread.external_channel_id,
+            external_thread_id=thread.external_thread_id,
+            external_user_id=external_user_id,
+            # The agent the conversation was opened under. Inbound compares
+            # it to the agent the reply routes to, and a link that names
+            # nobody reads as the pod's own assistant -- so for any other
+            # agent's mailbox the person's first reply would be cut into a
+            # new conversation, away from the message it answers.
+            routed_agent_id=surface.agent_id,
+            conversation_kind="EMAIL",
+            route_key="email",
+            last_event=thread.last_event,
+            last_message_id=thread.external_message_id,
+            # They have not written to us. Claiming otherwise would let an
+            # outbound masquerade as inbound activity in channel ranking.
+            last_inbound_at=None,
+        )
+    )
+
+
 __all__ = [
     "MAX_THREAD_ID_LENGTH",
     "build_cold_email_thread",
+    "cold_conversation_seed_id",
     "cold_email_channel_id",
     "cold_thread_seed_id",
+    "open_cold_email_thread",
+    "remember_cold_email_thread",
 ]

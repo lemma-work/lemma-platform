@@ -74,6 +74,16 @@ def parse_interaction_target(
         return None
 
 
+def interaction_arrival_number(parsed: ParsedSurfaceInteraction) -> str | None:
+    """The WhatsApp number a tap arrived on, as `arrival_number` reads a message.
+
+    An acknowledgement on a pooled line has to come from the number the person
+    tapped in, or they are answered by a stranger.
+    """
+    arrived = parsed.reply_target.get("phone_number_id")
+    return str(arrived) if arrived else None
+
+
 def _external_id(value) -> str:
     """One external user id, folded so two spellings of a person are one person.
 
@@ -219,5 +229,7 @@ async def _resolve_link_delivery(
     adapter = ingress.adapter_registry.get(surface.surface_type)
     if adapter is None:
         return None
-    credentials = await ingress.credential_resolver.for_surface(surface)
+    credentials = await ingress.credential_resolver.for_surface(
+        surface, arrived_on=interaction_arrival_number(parsed)
+    )
     return link, surface, adapter, credentials

@@ -84,7 +84,7 @@ class AgentSurfaceIngressService(SurfaceInboundMixin, SurfaceInteractionMixin):
         self.event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
 
     def split_webhook_deliveries(
-        self, request: SurfaceIngressRequest
+        self, request: SurfaceIngressRequest, *, source: str | None = None
     ) -> list[SurfaceIngressRequest]:
         """One webhook delivery, as the one-or-more inbound events it carries.
 
@@ -92,10 +92,16 @@ class AgentSurfaceIngressService(SurfaceInboundMixin, SurfaceInteractionMixin):
         is asked of the adapter; every adapter that cannot answers "itself" and
         this returns the request unchanged, which is the whole of the behaviour
         for four of the five platforms -- only WhatsApp overrides it.
+
+        ``source`` names the platform for a delivery to one surface's own URL,
+        which carries no source of its own. Those batch exactly as the shared
+        endpoint's do, and were never split.
         """
-        if not isinstance(request, SurfacePlatformWebhookIngress):
+        if isinstance(request, SurfacePlatformWebhookIngress):
+            source = request.source
+        if not source:
             return [request]
-        platform = platform_value_for_source(request.source)
+        platform = platform_value_for_source(source)
         adapter = self.adapter_registry.get(platform) if platform else None
         if adapter is None:
             return [request]
@@ -108,7 +114,7 @@ class AgentSurfaceIngressService(SurfaceInboundMixin, SurfaceInteractionMixin):
             return [request]
         logger.info(
             "agent_surfaces.ingress_service.webhook_carried_several_messages.observed",
-            source=request.source,
+            source=source,
             message_count=len(payloads),
         )
         return [request.model_copy(update={"payload": payload}) for payload in payloads]

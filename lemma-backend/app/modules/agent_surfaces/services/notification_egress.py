@@ -23,15 +23,12 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
-)
 from app.modules.agent_surfaces.domain.notification import NotificationEntity
-from app.modules.agent_surfaces.domain.ports import (
-    ColdEmailThread,
-    SurfaceNotificationEgressPort,
+from app.modules.agent_surfaces.domain.ports import SurfaceNotificationEgressPort
+from app.modules.agent_surfaces.services.cold_email_thread import (
+    cold_thread_seed_id,
+    remember_cold_email_thread,
 )
-from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
 from app.modules.agent_surfaces.services.notification_delivery import DeliveryChannel
 
 logger = get_logger(__name__)
@@ -94,10 +91,14 @@ class NotificationEgress:
         if actor_display_name:
             metadata["actor_display_name"] = actor_display_name
         if channel.link is not None:
-            return await self.egress.send_agent_message_for_conversation(
-                conversation_id=conversation_id,
-                message=message,
-                metadata=metadata,
+            # A bool on purpose: the channel resolver already kept closed
+            # reply windows out, so where it went is the channel's platform.
+            return bool(
+                await self.egress.send_agent_message_for_conversation(
+                    conversation_id=conversation_id,
+                    message=message,
+                    metadata=metadata,
+                )
             )
         if not channel.email_address:
             return False
@@ -145,57 +146,14 @@ class NotificationEgress:
                 platform=channel.surface.surface_type.value,
             )
             return False
-        await self._remember_thread(
-            thread, channel=channel, conversation_id=conversation_id
+        await remember_cold_email_thread(
+            self.links,
+            thread,
+            surface=channel.surface,
+            recipient_email=channel.email_address,
+            conversation_id=conversation_id,
         )
         return True
-
-    async def _remember_thread(
-        self,
-        thread: ColdEmailThread,
-        *,
-        channel: DeliveryChannel,
-        conversation_id: UUID,
-    ) -> None:
-        """Record the thread so the reply resolves to this conversation.
-
-        Get-then-create rather than a blind insert: the seed is derived from the
-        notification id, so a re-delivered notification arrives here with a link
-        already written and must reuse it instead of tripping the unique index.
-        """
-        surface = channel.surface
-        existing = await self.links.get_by_external_thread(
-            surface_id=surface.id,
-            platform=surface.surface_type.value,
-            external_channel_id=thread.external_channel_id,
-            external_thread_id=thread.external_thread_id,
-            external_user_id=(channel.email_address or "").strip().lower() or None,
-        )
-        if existing is not None:
-            return
-        await self.links.create(
-            AgentSurfaceConversationLink(
-                surface_id=surface.id,
-                conversation_id=conversation_id,
-                platform=surface.surface_type.value,
-                external_channel_id=thread.external_channel_id,
-                external_thread_id=thread.external_thread_id,
-                external_user_id=(channel.email_address or "").strip().lower() or None,
-                # The agent the conversation was opened under. Inbound compares
-                # it to the agent the reply routes to, and a link that names
-                # nobody reads as the pod's own assistant -- so for any other
-                # agent's mailbox the person's first reply would be cut into a
-                # new conversation, away from the notification it answers.
-                routed_agent_id=surface.agent_id,
-                conversation_kind="EMAIL",
-                route_key="email",
-                last_event=thread.last_event,
-                last_message_id=thread.external_message_id,
-                # They have not written to us. Claiming otherwise would let an
-                # outbound masquerade as inbound activity in channel ranking.
-                last_inbound_at=None,
-            )
-        )
 
     async def conversation_for(
         self, channel: DeliveryChannel, *, notification: NotificationEntity

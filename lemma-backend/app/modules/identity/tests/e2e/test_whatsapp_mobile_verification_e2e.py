@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -273,9 +274,35 @@ async def test_whatsapp_api_rejects_a_number_claimed_by_another_profile(
     signup_user,
     monkeypatch,
 ):
+    """Only a live account that *verified* the number blocks a proof of it."""
     _enable(monkeypatch)
     phone = "+14155552679"
     owner = await signup_user(email=f"wa-owner-{uuid4().hex[:8]}@example.com")
+    async with async_session_maker() as session:
+        owner_model = await session.get(User, UUID(owner["id"]))
+        assert owner_model is not None
+        owner_model.mobile_number = phone
+        owner_model.mobile_verified_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    response = await authenticated_client.post(
+        "/auth/mobile-verification/whatsapp/start",
+        json={"mobile_number": phone},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["message"] == "This mobile number is already in use"
+
+
+async def test_whatsapp_api_lets_a_number_someone_only_typed_be_proven(
+    authenticated_client,
+    signup_user,
+    monkeypatch,
+):
+    """A number typed into another profile and never verified is not an owner."""
+    _enable(monkeypatch)
+    phone = "+14155552680"
+    owner = await signup_user(email=f"wa-typed-{uuid4().hex[:8]}@example.com")
     async with async_session_maker() as session:
         owner_model = await session.get(User, UUID(owner["id"]))
         assert owner_model is not None
@@ -288,8 +315,7 @@ async def test_whatsapp_api_rejects_a_number_claimed_by_another_profile(
         json={"mobile_number": phone},
     )
 
-    assert response.status_code == 409
-    assert response.json()["message"] == "This mobile number is already in use"
+    assert response.status_code != 409, response.text
 
 
 async def test_authenticated_whatsapp_verification_api_journey(

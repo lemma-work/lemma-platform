@@ -116,32 +116,47 @@ def _said(message_store) -> list[str]:
 async def test_a_phone_that_belongs_to_someone_else_ends_the_signup_rather_than_repeating_itself(
     whatsapp_signup, db_session, fixed_test_user, message_store
 ) -> None:
-    """The refusal every re-used number reaches, and used to reach forever.
+    """The refusal a re-used number reaches, and used to reach forever.
 
     The person verifies a mailbox, an account is created for it, and only then
-    does provisioning discover that the number they messaged from is already on
-    a different Lemma account. That is a real refusal and it has to be said.
-    What it must not be is the *only* thing that can ever happen again: the step
-    was left on VERIFIED, so the next message walked back into `_complete`, was
-    refused in the same words, and there was no message they could send that
-    meant anything else.
+    does provisioning discover that the number they messaged from is verified
+    on a different, live Lemma account. That is a real refusal and it has to be
+    said -- with what to do about it. What it must not be is the *only* thing
+    that can ever happen again: the step was left on VERIFIED, so the next
+    message walked back into the same check and was refused in the same words.
+
+    Reached through a revoked binding because a *verified* owner is otherwise
+    recognised by their number before signup starts: the binding being revoked
+    is what says "not them any more" and sends the number through signup.
     """
     say, sessions, codes, sender = whatsapp_signup
+    await say("hello")
+    started = await _pending(sessions)
     async with sessions() as session:
         owner = await session.get(User, fixed_test_user["id"])
-        # Unverified on purpose: identity resolution only matches a *proven*
-        # number, so this does not short out signup -- it waits at the one
-        # place that checks every number, which is where the refusal lives.
         owner.mobile_number = f"+{sender}"
+        owner.mobile_verified_at = datetime.now(timezone.utc)
+        session.add(
+            VerifiedSurfaceIdentity(
+                binding_key=started.binding_key,
+                platform="WHATSAPP",
+                tenant_id=surface_settings.whatsapp_waba_id,
+                external_user_id=sender,
+                user_id=fixed_test_user["id"],
+                revoked_at=datetime.now(timezone.utc),
+            )
+        )
         await session.commit()
 
-    await say("can you look at this invoice")
     await say(f"recovery-{uuid4().hex}@gmail.com")
     await say(codes[0])
 
-    refusal = "This phone belongs to another account"
+    refusal = "This phone number is verified on another Lemma account"
     assert any(refusal in text for text in _said(message_store)), (
         "the person was never told why setup stopped"
+    )
+    assert any("Settings → Profile" in text for text in _said(message_store)), (
+        "the refusal did not say what to do about it"
     )
     stopped = await _pending(sessions)
     assert stopped.step == OnboardingStep.REFUSED
@@ -157,6 +172,76 @@ async def test_a_phone_that_belongs_to_someone_else_ends_the_signup_rather_than_
     assert reopened.step != OnboardingStep.REFUSED, (
         "nothing a person can send moves this row"
     )
+
+
+async def test_a_number_someone_only_typed_does_not_block_the_person_who_proves_it(
+    whatsapp_signup, db_session, fixed_test_user, message_store
+) -> None:
+    """Only a live, verified owner outranks a proven number.
+
+    A profile number nobody verified is somebody's say-so; the sender just
+    proved the number by messaging from it. Refusing them on its account sent
+    the person holding the phone away with "belongs to another account".
+    """
+    say, sessions, codes, sender = whatsapp_signup
+    async with sessions() as session:
+        owner = await session.get(User, fixed_test_user["id"])
+        owner.mobile_number = f"+{sender}"
+        await session.commit()
+
+    email = f"proven-{uuid4().hex}@gmail.com"
+    await say("can you look at this invoice")
+    await say(email)
+    await say(codes[0])
+
+    async with sessions() as session:
+        arrived = await session.scalar(select(User).where(User.email == email))
+        assert arrived is not None
+        assert arrived.mobile_number == f"+{sender}"
+        assert arrived.mobile_verified_at is not None
+    assert (await _pending(sessions)).step == OnboardingStep.READY
+    assert "another Lemma account" not in " ".join(_said(message_store))
+
+
+async def test_a_deleted_accounts_number_is_released_to_the_person_who_proves_it(
+    whatsapp_signup, db_session, fixed_test_user, message_store
+) -> None:
+    """A gone account kept its verified number, and nobody could ever take it."""
+    say, sessions, codes, sender = whatsapp_signup
+    await say("hello")
+    started = await _pending(sessions)
+    async with sessions() as session:
+        owner = await session.get(User, fixed_test_user["id"])
+        owner.mobile_number = f"+{sender}"
+        owner.mobile_verified_at = datetime.now(timezone.utc)
+        owner.is_active = False
+        session.add(
+            VerifiedSurfaceIdentity(
+                binding_key=started.binding_key,
+                platform="WHATSAPP",
+                tenant_id=surface_settings.whatsapp_waba_id,
+                external_user_id=sender,
+                user_id=fixed_test_user["id"],
+                verified_phone=f"+{sender}",
+            )
+        )
+        await session.commit()
+
+    email = f"released-{uuid4().hex}@gmail.com"
+    await say(email)
+    await say(codes[0])
+
+    async with sessions() as session:
+        arrived = await session.scalar(select(User).where(User.email == email))
+        gone = await session.get(User, fixed_test_user["id"])
+        identity = await session.scalar(
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.binding_key == started.binding_key
+            )
+        )
+    assert arrived is not None and arrived.mobile_number == f"+{sender}"
+    assert gone.mobile_number is None, "the deactivated account still holds it"
+    assert identity.user_id == arrived.id, "the dead account's binding was kept"
 
 
 async def test_a_revoked_identity_can_be_bound_to_the_account_that_proves_it_next(
@@ -297,8 +382,11 @@ async def test_a_prompt_that_never_arrives_leaves_the_step_where_the_person_last
 
     monkeypatch.setattr(WhatsAppSurfaceAdapter, "send_message", refuse)
 
-    with pytest.raises(RuntimeError, match="whatsapp send failed"):
-        await say(f"undelivered-{uuid4().hex}@gmail.com")
+    # The step's own reply failed, so the person is told something went wrong
+    # -- one sentence, rather than the silence a dead-lettered retry left.
+    handled = await say(f"undelivered-{uuid4().hex}@gmail.com")
+    assert handled.handled
+    assert "Something went wrong on our side" in _said(message_store)[-1]
 
     stuck = await _pending(sessions)
     assert stuck.step == OnboardingStep.AWAITING_EMAIL, (
@@ -380,3 +468,157 @@ async def test_a_signup_waiting_on_an_administrator_outlives_the_purge(
         assert await session.scalar(select(PendingChatOnboarding)) is None, (
             "an attached row is kept forever, which is a retention policy nobody chose"
         )
+
+
+async def test_a_redelivered_message_does_not_send_a_second_code(
+    whatsapp_signup, message_store
+) -> None:
+    """The platform redelivers; signup must not act twice on one message."""
+    say, sessions, codes, sender = whatsapp_signup
+    await say("hello")
+    payload = _whatsapp_payload(
+        text=f"once-{uuid4().hex}@gmail.com",
+        message_id="wamid.redelivered-" + uuid4().hex,
+        phone_number_id=surface_settings.whatsapp_phone_number_id,
+        waba_id=surface_settings.whatsapp_waba_id,
+        sender_phone=sender,
+    )
+    coordinator = whatsapp_signup_coordinator(sessions, codes)
+    for _ in range(2):
+        result = await coordinator.handle(
+            SurfacePlatformWebhookIngress(source="whatsapp", payload=payload)
+        )
+        assert result.handled
+    assert len(codes) == 1, "the redelivery sent another code email"
+
+
+def whatsapp_signup_coordinator(sessions, codes) -> ChatOnboardingCoordinator:
+    async def capture(*, email: str, code: str) -> bool:
+        del email
+        codes.append(code)
+        return True
+
+    return ChatOnboardingCoordinator(
+        SessionUnitOfWorkFactory(sessions),
+        challenges=EmailChallengeService(
+            sessions, send_email=capture, enforce_send_limits=allow_test_delivery
+        ),
+    )
+
+
+class _BrokenChallenges:
+    """A challenge service that fails the way a bug or an outage would."""
+
+    async def start_challenge(self, **_kwargs):
+        raise KeyError("injected")
+
+
+async def test_a_crashed_step_is_answered_once(whatsapp_signup, message_store) -> None:
+    """A bug in a step gets an apology, not a dead letter and silence."""
+    say, sessions, _codes, sender = whatsapp_signup
+    await say("hello")
+    broken = ChatOnboardingCoordinator(
+        SessionUnitOfWorkFactory(sessions), challenges=_BrokenChallenges()
+    )
+
+    result = await broken.handle(
+        SurfacePlatformWebhookIngress(
+            source="whatsapp",
+            payload=_whatsapp_payload(
+                text=f"crash-{uuid4().hex}@gmail.com",
+                message_id=uuid4().hex,
+                phone_number_id=surface_settings.whatsapp_phone_number_id,
+                waba_id=surface_settings.whatsapp_waba_id,
+                sender_phone=sender,
+            ),
+        )
+    )
+
+    assert result.handled
+    apologies = [t for t in _said(message_store) if "Something went wrong" in t]
+    assert len(apologies) == 1
+    assert (await _pending(sessions)).step == OnboardingStep.AWAITING_EMAIL
+
+
+async def test_an_expired_signup_restarts_with_the_message_that_found_it(
+    whatsapp_signup, message_store
+) -> None:
+    """ "Setup expired. Send a fresh request" threw the request away."""
+    say, sessions, _codes, _sender = whatsapp_signup
+    await say("hello")
+    await say(f"slow-{uuid4().hex}@gmail.com")
+    async with sessions() as session:
+        row = await session.scalar(select(PendingChatOnboarding))
+        row.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        await session.commit()
+
+    await say("are you still there? book my flight")
+
+    fresh = await _pending(sessions)
+    assert fresh.step == OnboardingStep.AWAITING_EMAIL
+    assert fresh.original_event["message_text"] == "are you still there? book my flight"
+    last = _said(message_store)[-1]
+    assert "expired" in last and "email address" in last
+
+
+async def test_a_code_found_after_the_signup_ttl_still_replays_the_request(
+    whatsapp_signup,
+) -> None:
+    """Half an hour to find a code email is slow, not stale."""
+    from unittest.mock import AsyncMock
+
+    from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
+    from app.modules.agent_surfaces.services.onboarding_replay import (
+        replay_onboarding,
+    )
+
+    say, sessions, codes, _sender = whatsapp_signup
+    await say("summarise the board deck")
+    await say(f"late-{uuid4().hex}@gmail.com")
+    await say(codes[0])
+    row = await _pending(sessions)
+    assert row.ready_at is not None
+    async with sessions() as session:
+        stored = await session.get(PendingChatOnboarding, row.id)
+        stored.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        await session.commit()
+
+    queue = AsyncMock(spec=SharedStreaqJobQueue)
+    await replay_onboarding(
+        row.id, uow_factory=SessionUnitOfWorkFactory(sessions), job_queue=queue
+    )
+
+    context = queue.enqueue.call_args.kwargs["payload"]["context"]
+    assert context.get("message_text") == "summarise the board deck", (
+        "the request was swapped for 'send a new request'"
+    )
+
+
+async def test_an_account_that_cannot_sign_in_ends_the_signup(
+    whatsapp_signup, async_client, db_session, message_store
+) -> None:
+    """A right code for an account that is switched off has no next message.
+
+    Left on AWAITING_CODE, every later message was read as a code against a
+    challenge already spent and answered with the same refusal, forever.
+    """
+    say, sessions, codes, _sender = whatsapp_signup
+    email = f"switched-off-{uuid4().hex[:8]}@gmail.com"
+    async with sessions() as session:
+        user = User(email=email, is_verified=True, is_active=True)
+        session.add(user)
+        await session.commit()
+
+    await say("hello")
+    await say(email)
+    # Switched off between the code being sent and being typed: the code is
+    # right, and the account it would finish still cannot be used.
+    async with sessions() as session:
+        stored = await session.get(User, user.id)
+        stored.is_active = False
+        await session.commit()
+    await say(codes[0])
+
+    stopped = await _pending(sessions)
+    assert stopped.step == OnboardingStep.REFUSED
+    assert any("cannot sign in" in text for text in _said(message_store))

@@ -5,10 +5,10 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (  # noq
     VerifiedSurfaceIdentity,
 )
 
-# Re-exported for its side effect, like the onboarding models above: importing
-# this module is what registers `surface_whatsapp_numbers` on `Base.metadata`,
-# and `migrations/env.py` imports this file and not that one. A table missing
-# from the metadata is a table autogenerate offers to create on every run.
+# Re-exported for their side effect, like the onboarding models above: importing
+# this module is what registers those tables on `Base.metadata`, and
+# `migrations/env.py` imports only this file. A table missing from the metadata
+# is one autogenerate offers to create on every run.
 from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (  # noqa: F401
     WhatsAppNumber,
 )
@@ -16,7 +16,9 @@ from app.modules.agent_surfaces.infrastructure.group_models import (  # noqa: F4
     AgentSurfaceGroupMessageModel,
     AgentSurfaceGroupModel,
 )
-
+from app.modules.agent_surfaces.infrastructure.outbound_models import (  # noqa: F401
+    AgentSurfaceOutboundMessageModel,
+)
 from datetime import datetime
 from uuid import UUID
 

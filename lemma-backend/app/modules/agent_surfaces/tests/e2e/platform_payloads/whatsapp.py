@@ -172,6 +172,159 @@ def batched(*bodies: str) -> dict[str, Any]:
     )
 
 
+def reaction(
+    *,
+    emoji: str = "\U0001f44d",
+    reacted_to: str = "wamid-out-001",
+    message_id: str = "wamid-reaction-001",
+) -> dict[str, Any]:
+    """An emoji on an earlier message: not something the person said."""
+    return envelope(
+        _message(
+            message_id,
+            type="reaction",
+            reaction={"message_id": reacted_to, "emoji": emoji},
+        )
+    )
+
+
+def location(
+    *,
+    latitude: float = 51.5074,
+    longitude: float = -0.1278,
+    name: str = "Trafalgar Square",
+    address: str = "London WC2N 5DN",
+    message_id: str = "wamid-location-001",
+) -> dict[str, Any]:
+    return envelope(
+        _message(
+            message_id,
+            type="location",
+            location={
+                "latitude": latitude,
+                "longitude": longitude,
+                "name": name,
+                "address": address,
+            },
+        )
+    )
+
+
+def contacts(
+    *,
+    name: str = "Ada Lovelace",
+    phone: str = "+44 20 7946 0000",
+    email: str = "ada@example.com",
+    message_id: str = "wamid-contacts-001",
+) -> dict[str, Any]:
+    """A shared contact card. The message's ``contacts`` is the card, not the
+    envelope's ``contacts``, which names the sender."""
+    return envelope(
+        _message(
+            message_id,
+            type="contacts",
+            contacts=[
+                {
+                    "name": {"formatted_name": name, "first_name": name.split()[0]},
+                    "phones": [{"phone": phone, "type": "CELL"}],
+                    "emails": [{"email": email, "type": "WORK"}],
+                }
+            ],
+        )
+    )
+
+
+def template_button(
+    *,
+    text: str = "Yes, confirm",
+    payload: str = "CONFIRM_ORDER",
+    message_id: str = "wamid-button-001",
+) -> dict[str, Any]:
+    """A quick-reply button tapped on a template message."""
+    return envelope(
+        _message(
+            message_id,
+            type="button",
+            button={"text": text, "payload": payload},
+            context={"from": PHONE_NUMBER_ID, "id": "wamid-template-001"},
+        )
+    )
+
+
+def system_number_change(
+    *,
+    new_wa_id: str = "15550888888",
+    message_id: str = "wamid-system-001",
+) -> dict[str, Any]:
+    """WhatsApp's notice that the person changed their number."""
+    return envelope(
+        _message(
+            message_id,
+            type="system",
+            system={
+                "body": f"User changed from {SENDER_PHONE} to {new_wa_id}",
+                "wa_id": new_wa_id,
+                "type": "user_changed_number",
+            },
+        )
+    )
+
+
+def unknown_type(
+    *, kind: str = "poll", message_id: str = "wamid-unknown-001"
+) -> dict[str, Any]:
+    """A message type Lemma has no reader for."""
+    return envelope(_message(message_id, type=kind, **{kind: {"question": "?"}}))
+
+
+def status_failed(
+    code: int = 131047,
+    wamid: str = "wamid-out-001",
+    *,
+    recipient_id: str = SENDER_PHONE,
+    title: str = "Re-engagement message",
+    phone_number_id: str = PHONE_NUMBER_ID,
+) -> dict[str, Any]:
+    """Meta reporting that a message we sent did not reach the person.
+
+    No ``messages`` at all: a status delivery carries ``statuses`` instead, and
+    131047 is the one sent when the 24-hour window had closed.
+    """
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": WABA_ID,
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "metadata": {"phone_number_id": phone_number_id},
+                            "statuses": [
+                                {
+                                    "id": wamid,
+                                    "status": "failed",
+                                    "timestamp": "1700000100",
+                                    "recipient_id": recipient_id,
+                                    "errors": [
+                                        {
+                                            "code": code,
+                                            "title": title,
+                                            "message": title,
+                                            "error_data": {"details": title},
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
 @register_inbound(SurfacePlatform.WHATSAPP)
 def inbound_cases() -> list[InboundCase]:
     return [
@@ -202,6 +355,35 @@ def inbound_cases() -> list[InboundCase]:
             platform=SurfacePlatform.WHATSAPP,
             payload=voice_note(),
             expected={"sender_external_user_id": SENDER_PHONE},
+        ),
+        InboundCase(
+            name="location",
+            platform=SurfacePlatform.WHATSAPP,
+            payload=location(),
+            expected={
+                "sender_external_user_id": SENDER_PHONE,
+                "external_message_id": "wamid-location-001",
+            },
+        ),
+        InboundCase(
+            name="template_button",
+            platform=SurfacePlatform.WHATSAPP,
+            payload=template_button(),
+            expected={"message_text": "Yes, confirm"},
+        ),
+        InboundCase(
+            name="a_reaction_is_not_a_message",
+            platform=SurfacePlatform.WHATSAPP,
+            payload=reaction(),
+            expected={},
+            refused=True,
+        ),
+        InboundCase(
+            name="a_changed_number_notice_is_not_a_message",
+            platform=SurfacePlatform.WHATSAPP,
+            payload=system_number_change(),
+            expected={},
+            refused=True,
         ),
     ]
 

@@ -44,6 +44,18 @@ from app.modules.identity.services.email_challenges import (
 )
 from app.modules.identity.services.signup_gate import get_signup_gate
 
+#: Codes on the refusals below, so a caller can tell the two kinds apart without
+#: matching on wording. The first three are permanent for this mailbox -- no
+#: later message from the same person changes the answer -- and the last means
+#: the same completion, run again, may well succeed.
+ACCOUNT_INACTIVE = "ACCOUNT_INACTIVE"
+SIGNUP_NOT_ALLOWED = "SIGNUP_NOT_ALLOWED"
+ACCOUNT_CONFLICT = "ACCOUNT_CONFLICT"
+ACCOUNT_RETRY = "ACCOUNT_RETRY"
+PERMANENT_ACCOUNT_REFUSALS = frozenset(
+    {ACCOUNT_INACTIVE, SIGNUP_NOT_ALLOWED, ACCOUNT_CONFLICT}
+)
+
 #: Raises `SignupNotAllowedError` to refuse a new account. Injected so a test
 #: stands a gate in front of this function rather than patching the real one.
 AdmitSignup = Callable[[str], Awaitable[object]]
@@ -84,7 +96,9 @@ async def _secure_recovered_account(user: AuthUser, email: str) -> None:
             apply_password_policy=False,
         )
         if not isinstance(updated, UpdateEmailOrPasswordOkResult):
-            raise ChallengeRejected("Password recovery could not finish; retry")
+            raise ChallengeRejected(
+                "Password recovery could not finish; retry", code=ACCOUNT_RETRY
+            )
     await revoke_all_sessions_for_user(user.id)
     for method in user.login_methods:
         if method.has_same_email_as(email) and not method.verified:
@@ -122,7 +136,9 @@ async def complete_verified_account(
                 select(User).where(func.lower(User.email) == email)
             )
             if local is not None and (not local.is_active or local.is_deleted):
-                raise ChallengeRejected("This account cannot sign in")
+                raise ChallengeRejected(
+                    "This account cannot sign in", code=ACCOUNT_INACTIVE
+                )
             local_id = local.id if local else None
             locally_verified = bool(local and local.is_verified)
         # A code proves the mailbox, not a right to an account here. With no
@@ -133,7 +149,9 @@ async def complete_verified_account(
             try:
                 await admit_signup(email)
             except SignupNotAllowedError as refused:
-                raise ChallengeRejected(refused.message) from refused
+                raise ChallengeRejected(
+                    refused.message, code=SIGNUP_NOT_ALLOWED
+                ) from refused
         users = await _auth_users(email)
         await lease.require_ownership()
         _require_canonical_identity(users, local_id)
@@ -144,7 +162,9 @@ async def complete_verified_account(
             # duplicate returned after an interrupted previous creation.
             users = await _auth_users(email)
             if len(users) != 1 or users[0].id != created.user.id:
-                raise ChallengeRejected("Account creation needs to be retried")
+                raise ChallengeRejected(
+                    "Account creation needs to be retried", code=ACCOUNT_RETRY
+                )
         auth_user = users[0]
         if not locally_verified:
             await _secure_recovered_account(auth_user, email)
@@ -179,7 +199,9 @@ async def _record_completed_account(
         EmailChallengeService._require_bound(proof, digest, purpose)
         assert proof is not None
         if proof.completed_user_id not in (None, user_id):
-            raise ChallengeRejected("Conflicting verification completion")
+            raise ChallengeRejected(
+                "Conflicting verification completion", code=ACCOUNT_CONFLICT
+            )
         if proof.verified_at is None or proof.verified_at + timedelta(
             seconds=PENDING_TTL_SECONDS
         ) <= datetime.now(timezone.utc):
@@ -192,7 +214,9 @@ async def _record_completed_account(
             await repository.create(local_entity)
         else:
             if not local_entity.is_active or local_entity.is_deleted:
-                raise ChallengeRejected("This account cannot sign in")
+                raise ChallengeRejected(
+                    "This account cannot sign in", code=ACCOUNT_INACTIVE
+                )
             local_entity.mark_email_verified()
             await repository.update(local_entity)
         proof.completed_user_id = user_id
@@ -202,4 +226,6 @@ def _require_canonical_identity(users: list[AuthUser], local_id: UUID | None) ->
     if len(users) > 1 or (
         local_id is not None and (not users or users[0].id != str(local_id))
     ):
-        raise ChallengeRejected("Conflicting identities require account support")
+        raise ChallengeRejected(
+            "Conflicting identities require account support", code=ACCOUNT_CONFLICT
+        )

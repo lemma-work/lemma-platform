@@ -81,9 +81,18 @@ def test_no_platform_names_a_reply_tool_any_more():
         assert not hasattr(get_platform_capabilities(platform), "reply_tool")
 
 
-def test_only_telegram_renders_a_native_voice_note():
+def test_telegram_and_whatsapp_render_a_native_voice_note():
     voice = {p for p, c in PLATFORM_CAPABILITIES.items() if c.supports_native_voice}
-    assert voice == {"TELEGRAM"}
+    assert voice == {"TELEGRAM", "WHATSAPP"}
+
+
+def test_only_whatsapp_takes_a_typed_reply_as_the_answer_to_its_buttons():
+    typed = {
+        p
+        for p, c in PLATFORM_CAPABILITIES.items()
+        if c.typed_reply_answers_native_choices
+    }
+    assert typed == {"WHATSAPP"}
 
 
 def test_the_shared_system_bot_platforms():

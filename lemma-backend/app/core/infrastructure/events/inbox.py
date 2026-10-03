@@ -6,6 +6,8 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -73,6 +75,34 @@ class InboxStatus(StrEnum):
     COMPLETED = "COMPLETED"
     TERMINAL = "TERMINAL"
     DEAD_LETTER = "DEAD_LETTER"
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAttempt:
+    """Which delivery of an event a handler is running as.
+
+    A handler whose failure somebody should hear about -- a message nobody will
+    answer -- has to know whether this attempt is the last one, because only
+    then is the failure final. Saying so on every attempt tells a person five
+    times that something went wrong with a message that then goes through.
+    """
+
+    number: int
+    max_attempts: int
+
+    @property
+    def is_final(self) -> bool:
+        return self.number >= self.max_attempts
+
+
+_inbox_attempt: ContextVar[InboxAttempt | None] = ContextVar(
+    "lemma_inbox_attempt", default=None
+)
+
+
+def inbox_attempt() -> InboxAttempt | None:
+    """The attempt the running inbox handler is, or ``None`` outside one."""
+    return _inbox_attempt.get()
 
 
 @runtime_checkable
@@ -235,6 +265,12 @@ class InboxConsumer:
                     # schedule stays SCHEDULE. Deriving it from this worker's own
                     # surroundings instead is how the dimension goes quietly
                     # wrong: the worker knows nothing about the caller.
+                    attempt_token = _inbox_attempt.set(
+                        InboxAttempt(
+                            number=attempt,
+                            max_attempts=max_attempts or self.max_attempts,
+                        )
+                    )
                     try:
                         await handler()
                     except asyncio.CancelledError as exc:
@@ -288,6 +324,8 @@ class InboxConsumer:
                         return await self._retry_or_dead_letter(
                             consumer, event_id, event_type, attempt, exc, max_attempts
                         )
+                    finally:
+                        _inbox_attempt.reset(attempt_token)
 
             await self._finish(consumer, event_id, InboxStatus.COMPLETED)
             return True

@@ -31,6 +31,7 @@ from app.modules.agent_surfaces.services.event_receiver_service import (
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     _ask_user_link,
+    _pending,
     _slack_event,
     _slack_surface,
     _surface_conversation,
@@ -54,6 +55,11 @@ async def _tap(*, sender: str | None = None, decision: str = "APPROVE_ONCE"):
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     agent_conversations.surface_conversation.return_value = _surface_conversation(
         surface, conversation_id=conversation_id
+    )
+    # Still open: a tap on a closed question is answered as stale and goes no
+    # further, which is not the failure these tests are about.
+    agent_conversations.pending_interaction.return_value = _pending(
+        "request_approval", tool_call_id="tool-1"
     )
     interaction = ParsedSurfaceInteraction(
         platform=SurfacePlatform.SLACK,

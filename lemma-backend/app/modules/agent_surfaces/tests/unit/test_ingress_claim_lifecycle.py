@@ -271,6 +271,7 @@ class _BatchedDelivery:
         self.parts = [_slack_request()] * parts
         self.order: list[str] = []
         self.store = SimpleNamespace(release_message=AsyncMock())
+        self.told = AsyncMock()
 
     async def prepare(self, _request) -> OnboardingIngressResult:
         self.order.append("prepare")
@@ -284,6 +285,8 @@ class _BatchedDelivery:
             uow_factory=_uow_factory,
             job_queue=job_queue,
             event_dedup_store=self.store,
+            try_interaction=AsyncMock(return_value=False),
+            tell_failed=self.told,
         )
 
 
@@ -303,15 +306,17 @@ async def test_each_part_is_enqueued_before_the_next_is_prepared():
     assert delivery.order == ["prepare", "enqueue"] * 3
 
 
-async def test_a_failed_part_leaves_no_later_claim_spent_and_frees_its_own():
-    """Part 2 fails to enqueue: part 3 was never prepared, so its claim was never
-    taken, and part 2's own is handed back -- the retry can then deliver both."""
+async def test_a_failed_part_frees_its_own_claim_and_does_not_stop_the_rest():
+    """Part 2 fails to enqueue: its claim is handed back, part 3 still goes out,
+    and the delivery still fails so the inbox retries -- which then finds parts
+    1 and 3 duplicates and delivers only part 2."""
     delivery = _BatchedDelivery(parts=3)
     attempts = 0
 
     async def enqueue(*_args, **_kwargs):
         nonlocal attempts
         attempts += 1
+        delivery.order.append("enqueue")
         if attempts == 2:
             raise ConnectionError("redis blip")
 
@@ -321,8 +326,29 @@ async def test_a_failed_part_leaves_no_later_claim_spent_and_frees_its_own():
     with pytest.raises(ConnectionError):
         await delivery.run(job_queue)
 
-    assert delivery.order.count("prepare") == 2, "part 3 must not have been prepared"
+    assert delivery.order == ["prepare", "enqueue"] * 3
     delivery.store.release_message.assert_awaited_once()
+
+
+async def test_the_last_attempt_tells_the_sender_once():
+    """Only the final attempt speaks: an earlier failure is retried, and usually
+    goes through."""
+    from app.core.infrastructure.events import inbox
+
+    job_queue = AsyncMock()
+    job_queue.enqueue.side_effect = ConnectionError("redis blip")
+
+    for number, told in ((1, False), (3, True)):
+        delivery = _BatchedDelivery(parts=1)
+        token = inbox._inbox_attempt.set(
+            inbox.InboxAttempt(number=number, max_attempts=3)
+        )
+        try:
+            with pytest.raises(ConnectionError):
+                await delivery.run(job_queue)
+        finally:
+            inbox._inbox_attempt.reset(token)
+        assert delivery.told.await_count == int(told)
 
 
 # --- 7. the stranger-reply window -----------------------------------------

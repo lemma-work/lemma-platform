@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -32,6 +33,52 @@ from app.modules.agent_surfaces.services.onboarding_private_delivery import (
 
 CALLBACK = "lemma_onboarding"
 OPEN_ACTION = "lemma_onboarding_open"
+
+
+class ExpiredOnboardingInput(PrivateDeliveryUnavailable):
+    """A native setup form was submitted after it stopped meaning anything.
+
+    The commonest way to reach it is ordinary: a WhatsApp Flow left open in the
+    chat, submitted after the code it asked for was resent or the signup moved
+    on. Its own type so the caller can answer "that form has expired" to the
+    person instead of treating it like every other undeliverable submission --
+    which are about the destination, not the form.
+    """
+
+
+#: The words that mean the same command, after punctuation and case are gone.
+#: People type "Cancel.", "STOP", "new code please" -- and a step that only
+#: knew the exact word read every other spelling as an answer: a wrong code, an
+#: email address that is not one.
+_COMMANDS: dict[str, str] = {
+    "cancel": "cancel",
+    "stop": "cancel",
+    "quit": "cancel",
+    "cancel setup": "cancel",
+    "resend": "resend",
+    "resend code": "resend",
+    "resend the code": "resend",
+    "new code": "resend",
+    "send new code": "resend",
+    "send a new code": "resend",
+    "send again": "resend",
+    "send code again": "resend",
+    "another code": "resend",
+    "change email": "change email",
+    "change my email": "change email",
+    "different email": "change email",
+    "use a different email": "change email",
+    "use another email": "change email",
+    "wrong email": "change email",
+}
+_NOT_WORD = re.compile(r"[^\w\s]+")
+_PLEASE = re.compile(r"\b(please|pls|plz)\b")
+
+
+def command_of(text: str | None) -> str | None:
+    """The signup command this message is, if it is one: cancel, resend, change email."""
+    cleaned = _PLEASE.sub(" ", _NOT_WORD.sub(" ", (text or "").casefold()))
+    return _COMMANDS.get(" ".join(cleaned.split()))
 
 
 def section(payload: dict[str, JsonValue], key: str) -> dict[str, JsonValue]:
@@ -69,7 +116,7 @@ async def require_input(
     receiver_ids: list[UUID] | None,
 ) -> BoundInput:
     if not token or not actor:
-        raise PrivateDeliveryUnavailable("This setup form is no longer available")
+        raise ExpiredOnboardingInput("This setup form is no longer available")
     async with uows() as uow:
         handle = await uow.session.scalar(
             select(OnboardingInputToken).where(
@@ -289,7 +336,7 @@ def _require_current_handle(
         or pending.challenge_id != handle.challenge_id
         or pending.handed_off_at is not None
     ):
-        raise PrivateDeliveryUnavailable(
+        raise ExpiredOnboardingInput(
             "This setup form expired; continue in your private chat"
         )
     return pending

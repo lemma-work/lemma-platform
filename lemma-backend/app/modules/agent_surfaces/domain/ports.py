@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.core.domain.uow import IUnitOfWork
+from app.modules.agent_surfaces.domain.delivery_result import SurfaceDeliveryResult
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
@@ -253,7 +254,7 @@ class SurfaceNotificationEgressPort(Protocol):
         conversation_id: UUID,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> bool: ...
+    ) -> SurfaceDeliveryResult: ...
 
     async def open_cold_email_thread(
         self,
@@ -330,6 +331,33 @@ class SurfaceEventDedupStorePort(Protocol):
         with the claim still held would make the delivery unrecoverable: every
         retry would see a duplicate and drop it.
         """
+
+    async def claim_onboarding_message(
+        self,
+        *,
+        platform: str,
+        binding_key: str,
+        external_message_id: str | None,
+    ) -> bool:
+        """Whether signup may act on this message: False for a redelivery.
+
+        Keyed apart from `claim_message`, on the signup's own binding, because
+        the two guard different work and must not consume each other: signup
+        hands a message on to ordinary ingestion, which then takes its own
+        claim. What this one stops is signup doing a side effect twice -- a
+        second code email for a redelivered address, a code read twice.
+        """
+        ...
+
+    async def release_onboarding_message(
+        self,
+        *,
+        platform: str,
+        binding_key: str,
+        external_message_id: str | None,
+    ) -> None:
+        """Give an onboarding claim back: signup handed the message on, or failed."""
+        ...
 
 
 class SurfaceUserDirectoryPort(Protocol):

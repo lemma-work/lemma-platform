@@ -37,7 +37,7 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
     _decode_webhook_payload,
     _handle_resend_webhook,
     _handled_slack_modal,
-    _published_whatsapp_verification,
+    _without_whatsapp_verifications,
     _redacted_headers,
     _verify_inbound_request,
 )
@@ -145,10 +145,11 @@ async def handle_platform_webhook(
         uow_factory=uow_factory,
     )
 
-    if platform == "whatsapp" and await _published_whatsapp_verification(
-        payload, uow_factory
-    ):
-        return {"message": "Verification message received"}
+    if platform == "whatsapp":
+        remaining = await _without_whatsapp_verifications(payload, uow_factory)
+        if remaining is None:
+            return {"message": "Verification message received"}
+        payload = remaining
 
     if platform == "slack" and await open_onboarding_modal(
         payload, receiver_surface_ids, uow_factory
@@ -307,8 +308,10 @@ async def handle_whatsapp_number_webhook(
             detail="Webhook payload is addressed to a different phone number",
         )
 
-    if await _published_whatsapp_verification(payload, uow_factory):
+    remaining = await _without_whatsapp_verifications(payload, uow_factory)
+    if remaining is None:
         return {"message": "Verification message received"}
+    payload = remaining
 
     # The number is the receiver, not `SHARED_PLATFORM_RECEIVER`: this URL has
     # one per pooled number, and the content-hash fallback in

@@ -40,7 +40,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, func, literal, select, update
+from sqlalchemy.dialects.postgresql import JSONB, array
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
@@ -58,8 +59,9 @@ from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     MessageDraft,
+    MessageRole,
 )
-from app.modules.agent.infrastructure.models import AgentModel
+from app.modules.agent.infrastructure.models import AgentModel, ConversationModel
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
@@ -292,6 +294,31 @@ async def append_notification_message(
     )
 
 
+async def append_delivery_notice(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    notice: str,
+    metadata: dict[str, str] | None = None,
+) -> None:
+    """Tell the conversation's agent what became of something it sent.
+
+    A system line rather than an assistant one: the agent did not say it, and
+    replaying it as the agent's own words would have it apologise for a message
+    it believes it wrote. It is what lets the agent answer "did she get it?"
+    truthfully after a platform reported the send as failed.
+    """
+    await ConversationRepository(uow).append_message(
+        conversation_id=conversation_id,
+        agent_run_id=None,
+        draft=MessageDraft.of_notification(
+            notice,
+            role=MessageRole.SYSTEM,
+            metadata={"delivery_notice": True, **(metadata or {})},
+        ),
+    )
+
+
 async def pending_interaction(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> PendingInteraction | None:
@@ -495,6 +522,46 @@ async def set_conversation_metadata_value(
     )
 
 
+async def merge_conversation_metadata_mapping(
+    uow: SqlAlchemyUnitOfWork,
+    conversation_id: UUID,
+    key: str,
+    mapping: dict[str, object],
+) -> dict[str, object]:
+    """Merge ``mapping`` into the object under one metadata key, atomically.
+
+    One ``UPDATE`` with ``||`` rather than a read and a write: two answers to
+    the same multi-question card arrive as two webhooks, often in the same
+    second, and a read-modify-write loses whichever lands first. Returns the
+    merged object, so the caller learns what is now held without a second read
+    that could already be stale. Empty when the conversation is gone.
+    """
+    column = ConversationModel.conversation_metadata
+    current = func.coalesce(column, literal({}, JSONB))
+    held = current.op("->")(key)
+    # Anything but an object under the key -- absent, or the JSON null a
+    # cleared value leaves -- starts from empty: `null || {...}` is an array.
+    base = case((func.jsonb_typeof(held) == "object", held), else_=literal({}, JSONB))
+    merged = await uow.session.execute(
+        update(ConversationModel)
+        .where(ConversationModel.id == conversation_id)
+        .values(
+            conversation_metadata=func.jsonb_set(
+                current,
+                array([key]),
+                base.op("||")(literal(mapping, JSONB)),
+                True,
+            )
+        )
+        .returning(column)
+    )
+    row = merged.scalar_one_or_none()
+    value = row.get(key) if isinstance(row, dict) else None
+    if not isinstance(value, dict):
+        return {}
+    return {str(name): item for name, item in value.items()}
+
+
 __all__ = [
     # The tool an approval card for an answer to someone outside the pod
     # approves; the surface renders that card in its own words.
@@ -510,9 +577,11 @@ __all__ = [
     "PendingInteraction",
     "SurfaceAgentIdentity",
     "SurfaceConversation",
+    "append_delivery_notice",
     "append_notification_message",
     "conversation_metadata_value",
     "lemma_message_run_started_at",
+    "merge_conversation_metadata_mapping",
     "open_surface_conversation",
     "pending_approval",
     "pending_sign_in",

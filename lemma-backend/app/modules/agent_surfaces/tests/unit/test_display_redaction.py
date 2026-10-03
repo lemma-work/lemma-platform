@@ -187,5 +187,5 @@ async def test_the_text_approval_prompt_carries_no_nested_credential():
         conversation_id=conversation_id, kind="request_approval", tool_call_id="tool-9"
     )
 
-    assert sent is True
+    assert sent
     assert SECRET not in adapter.send_message.await_args.kwargs["message"]

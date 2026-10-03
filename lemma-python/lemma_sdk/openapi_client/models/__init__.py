@@ -98,6 +98,7 @@ _NAME_TO_MODULE = {
     'AuthConfigUpdateSchema': 'auth_config_update_schema',
     'AuthConfigUpdateSchemaConfigType0': 'auth_config_update_schema_config_type_0',
     'AuthScheme': 'auth_scheme',
+    'AvailablePodItem': 'available_pod_item',
     'AvailableSurface': 'available_surface',
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
@@ -653,6 +654,7 @@ if TYPE_CHECKING:
     from .auth_config_update_schema import AuthConfigUpdateSchema
     from .auth_config_update_schema_config_type_0 import AuthConfigUpdateSchemaConfigType0
     from .auth_scheme import AuthScheme
+    from .available_pod_item import AvailablePodItem
     from .available_surface import AvailableSurface
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
@@ -1221,6 +1223,7 @@ __all__ = [
     'AuthConfigUpdateSchema',
     'AuthConfigUpdateSchemaConfigType0',
     'AuthScheme',
+    'AvailablePodItem',
     'AvailableSurface',
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',

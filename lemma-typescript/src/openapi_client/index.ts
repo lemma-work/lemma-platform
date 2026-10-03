@@ -67,6 +67,7 @@ export type { AuthConfigResponseSchema } from './models/AuthConfigResponseSchema
 export type { AuthConfigUpdateResponseSchema } from './models/AuthConfigUpdateResponseSchema.js';
 export type { AuthConfigUpdateSchema } from './models/AuthConfigUpdateSchema.js';
 export { AuthScheme } from './models/AuthScheme.js';
+export type { AvailablePodItem } from './models/AvailablePodItem.js';
 export type { AvailableSurface } from './models/AvailableSurface.js';
 export type { AvailableSurfaceChannelResponse } from './models/AvailableSurfaceChannelResponse.js';
 export type { AvailableSurfaceChannelsResponse } from './models/AvailableSurfaceChannelsResponse.js';

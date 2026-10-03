@@ -353,17 +353,6 @@ class AgentSurfaceListResponse(BaseModel):
     next_page_token: str | None = None
 
 
-class SurfaceSendRequest(BaseModel):
-    """Send a proactive message to a pod member on this surface."""
-
-    user_id: UUID = Field(..., description="Target pod member (Lemma user id).")
-    message: str = Field(..., min_length=1, description="Message text to deliver.")
-
-
-class SurfaceSendResponse(BaseModel):
-    sent: bool
-
-
 class SurfaceAdminConsentInfo(BaseModel):
     """Admin-consent state for surfaces that require an OAuth grant (Teams)."""
 

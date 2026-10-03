@@ -75,7 +75,12 @@ class UserEntity(AggregateRoot):
                             UserMobileChangedEvent,
                         )
 
-                        self.add_event(UserMobileChangedEvent(user_id=self.id))
+                        self.add_event(
+                            UserMobileChangedEvent(
+                                user_id=self.id,
+                                previous_mobile_number=self.mobile_number,
+                            )
+                        )
                     elif self.mobile_verified_at is not None and digits:
                         # A verified number remains in its canonical E.164 form
                         # even if a profile client submits cosmetic formatting.

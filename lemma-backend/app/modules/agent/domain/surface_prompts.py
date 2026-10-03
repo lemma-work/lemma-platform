@@ -307,8 +307,8 @@ def _delivery_section(facts: PlatformFacts) -> str:
 def _voice_delivery(facts: PlatformFacts) -> str:
     """How ``say`` reaches the person here.
 
-    Only Telegram renders a voice-note bubble. Everywhere else the same audio is
-    an ordinary attachment, or a link into Lemma where the platform cannot
+    Telegram and WhatsApp render a voice-note bubble. Everywhere else the same
+    audio is an ordinary attachment, or a link into Lemma where the platform cannot
     receive a file at all, and saying "native voice note" of those promised a
     bubble the person would never see.
     """

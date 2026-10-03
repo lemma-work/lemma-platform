@@ -8,7 +8,7 @@ A verified profile number always wins. Where the deployment accepts unverified
 matches (``SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH``, which Lemma Desktop turns
 on), exactly one live profile that wrote this number down unverified is taken
 as its owner -- the same rule `IdentityResolutionService` applies to every
-later message, asked once here. `ensure_chat_workspace` then stamps the number
+later message, asked once here. `claim_chat_phone` then stamps the number
 verified, which is true now and stops anyone else claiming it afterwards.
 """
 

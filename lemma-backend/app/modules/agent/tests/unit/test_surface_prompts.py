@@ -189,21 +189,23 @@ def test_email_quotes_the_base64_adjusted_cap_not_the_chat_cap():
 # --- P2: the voice sentence follows the platform's own capability ----------
 
 
-def test_only_telegram_promises_a_native_voice_note():
+def test_only_platforms_with_a_voice_bubble_promise_a_native_voice_note():
     """`say` lands as a voice bubble only where the adapter renders one.
 
     Every chat platform used to be told "it delivers a native voice note here".
-    Telegram's `_render_voice` is the only one; the rest deliver the same audio
-    as a file (or, on Teams, a link), and promising a bubble was the lie.
+    Telegram and WhatsApp render one; the rest deliver the same audio as a file
+    (or, on Teams, a link), and promising a bubble there was the lie.
     """
-    assert platform_facts("TELEGRAM").supports_native_voice is True
-    assert "delivers a native voice note here" in surface_platform_guidance("TELEGRAM")
+    for platform in ("TELEGRAM", "WHATSAPP"):
+        assert platform_facts(platform).supports_native_voice is True, platform
+        assert "delivers a native voice note here" in surface_platform_guidance(
+            platform
+        ), platform
 
-    for platform in ("SLACK", "WHATSAPP"):
-        text = surface_platform_guidance(platform)
-        assert "native voice note" not in text, platform
-        assert "has no voice-note bubble" in text, platform
-        assert "as an audio attachment" in text, platform
+    slack = surface_platform_guidance("SLACK")
+    assert "native voice note" not in slack
+    assert "has no voice-note bubble" in slack
+    assert "as an audio attachment" in slack
 
     teams = surface_platform_guidance("TEAMS")
     assert "native voice note" not in teams

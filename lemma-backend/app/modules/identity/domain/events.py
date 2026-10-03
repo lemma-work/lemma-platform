@@ -101,6 +101,13 @@ class UserMobileChangedEvent(DomainEvent):
 
     event_type: str = "identity.user.mobile.changed"
     user_id: UUID
+    #: The number the profile held before, when the producer knew it. It names
+    #: which chat bindings rested on the profile: a WhatsApp binding proves its
+    #: own number, which may never have been the profile's, and retiring it
+    #: because the profile moved would sign out a number nobody gave up. Absent
+    #: (older producers, direct edits) the consumer falls back to revoking every
+    #: binding the new number does not match -- the cautious reading.
+    previous_mobile_number: str | None = None
 
     @classmethod
     def stream_name(cls) -> str:

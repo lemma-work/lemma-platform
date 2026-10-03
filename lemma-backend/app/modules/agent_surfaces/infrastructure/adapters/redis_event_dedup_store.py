@@ -176,6 +176,60 @@ class RedisSurfaceEventDedupStore:
             )
         )
 
+    @staticmethod
+    def _onboarding_key(
+        *, platform: str, binding_key: str, external_message_id: str
+    ) -> str:
+        return (
+            "agent_surfaces:onboarding_dedup:"
+            f"{platform.lower()}:{binding_key}:{external_message_id}"
+        )
+
+    async def claim_onboarding_message(
+        self,
+        *,
+        platform: str,
+        binding_key: str,
+        external_message_id: str | None,
+    ) -> bool:
+        """Once per message for signup, on a key of its own.
+
+        A message without an id gets through, as it does for `claim_message`:
+        there is nothing to hold the claim on.
+        """
+        if not external_message_id:
+            return True
+        redis = await self._get_redis()
+        claimed = await redis.set(
+            self._onboarding_key(
+                platform=platform,
+                binding_key=binding_key,
+                external_message_id=external_message_id,
+            ),
+            "1",
+            ex=self._ttl_seconds,
+            nx=True,
+        )
+        return bool(claimed)
+
+    async def release_onboarding_message(
+        self,
+        *,
+        platform: str,
+        binding_key: str,
+        external_message_id: str | None,
+    ) -> None:
+        if not external_message_id:
+            return
+        redis = await self._get_redis()
+        await redis.delete(
+            self._onboarding_key(
+                platform=platform,
+                binding_key=binding_key,
+                external_message_id=external_message_id,
+            )
+        )
+
     async def close(self) -> None:
         # The client is shared process-wide; closing it here would break
         # every other component still using the same pool. Disposal is

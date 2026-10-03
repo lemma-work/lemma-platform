@@ -83,6 +83,21 @@ _PER_MEDIA_BYTE_CAPS: dict[str, dict[MediaKind, int]] = {
     },
 }
 
+# The formats a platform plays as their own kind. Meta takes an image as JPEG or
+# PNG and nothing else, and says so only when the message is sent -- after the
+# upload. Anything outside the list goes as a document from the start, which is
+# what the send-time retry used to discover the slow way. Platforms absent here
+# send every MIME type as its kind.
+_INLINE_MIME_TYPES: dict[str, dict[MediaKind, frozenset[str]]] = {
+    "WHATSAPP": {
+        MediaKind.IMAGE: frozenset({"image/jpeg", "image/png"}),
+        MediaKind.AUDIO: frozenset(
+            {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg"}
+        ),
+        MediaKind.VIDEO: frozenset({"video/mp4", "video/3gpp"}),
+    },
+}
+
 # Default cap for any platform not listed above.
 _DEFAULT_ATTACHMENT_BYTE_CAP = 16 * _MB
 
@@ -141,6 +156,29 @@ def email_inline_cap(platform: str | None) -> int:
     return attachment_cap(platform) * _EMAIL_RAW_BYTES_PER_TEN_WIRE // 10
 
 
+def send_kind(
+    platform: str | None, mime_type: str | None, size_bytes: int | None = None
+) -> MediaKind:
+    """The kind a file is actually sent as on ``platform``.
+
+    Its MIME kind, unless the platform would refuse it as that kind -- a format
+    it does not play, or bigger than that kind's ceiling -- in which case it
+    goes as a document, which takes any format at a far higher ceiling. A 6 MB
+    photo used to become a link on WhatsApp; as a document it simply arrives.
+    """
+    kind = media_kind_for_mime(mime_type)
+    key = str(platform or "").upper()
+    playable = _INLINE_MIME_TYPES.get(key, {}).get(kind)
+    if kind is MediaKind.DOCUMENT or playable is None:
+        return kind
+    base_mime = str(mime_type or "").split(";", 1)[0].strip().lower()
+    if base_mime not in playable:
+        return MediaKind.DOCUMENT
+    if size_bytes is not None and size_bytes > attachment_cap(key, media_kind=kind):
+        return MediaKind.DOCUMENT
+    return kind
+
+
 def fits_inline(
     platform: str | None,
     size_bytes: int | None,
@@ -149,13 +187,17 @@ def fits_inline(
 ) -> bool:
     """True when a file should be attached natively on a chat ``platform``.
 
-    Uses the effective chat cap for the kind of send ``mime_type`` implies.
+    Uses the effective chat cap for the kind the file will be sent as
+    (``send_kind``), the same rule the sender applies -- so the check never
+    clears a file the send then refuses, nor refuses one it would send.
     Unknown size (``None``) is treated as too large → prefer a link, since we
     cannot guarantee it fits.
     """
     if size_bytes is None:
         return False
-    cap = inline_cap(platform, media_kind=media_kind_for_mime(mime_type))
+    cap = inline_cap(
+        platform, media_kind=send_kind(platform, mime_type, size_bytes=size_bytes)
+    )
     return 0 <= size_bytes <= cap
 
 

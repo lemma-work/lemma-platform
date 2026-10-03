@@ -24,6 +24,14 @@ from uuid import UUID
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
+from app.modules.agent_surfaces.domain.envelope import (
+    DeliveryReceipt,
+    PartDelivery,
+    SurfaceEnvelope,
+)
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    get_platform_capabilities,
+)
 
 #: Holds the ``tool_call_id`` of the pause whose answer is being typed.
 _KEY = "surface_free_text_answer_for"
@@ -110,6 +118,7 @@ async def remember_a_prompt_that_arrived_as_words(
     conversation_id: UUID,
     envelope: Any,
     receipt: Any,
+    platform: str | None = None,
 ) -> None:
     """Record a question or approval that reached the person as text, not a control.
 
@@ -128,10 +137,32 @@ async def remember_a_prompt_that_arrived_as_words(
     prompt = envelope.choices or envelope.decision
     if prompt is None:
         return
-    if not {"choices", "decision"}.intersection(receipt.degraded):
+    if not {"choices", "decision"}.intersection(
+        receipt.degraded
+    ) and not _typing_answers_native_choices(envelope, receipt, platform):
         return
     await remember_answer_will_be_typed(
         uow,
         conversation_id=conversation_id,
         tool_call_id=tool_call_id_of(prompt),
+    )
+
+
+def _typing_answers_native_choices(
+    envelope: SurfaceEnvelope, receipt: DeliveryReceipt, platform: str | None
+) -> bool:
+    """Whether a question shown *with* buttons is still answered by typing.
+
+    On WhatsApp it is. Buttons hold three short options and a list ten, so the
+    answer a person has in mind is often not on them; and typing a reply is what
+    everybody does in that app anyway. Without this a typed "the second one,
+    but on Friday" was a new message that cancelled the question it answered.
+    """
+    if platform is None or envelope.choices is None:
+        return False
+    if receipt.parts.get("choices") is not PartDelivery.NATIVE:
+        return False
+    capabilities = get_platform_capabilities(platform)
+    return bool(
+        capabilities is not None and capabilities.typed_reply_answers_native_choices
     )

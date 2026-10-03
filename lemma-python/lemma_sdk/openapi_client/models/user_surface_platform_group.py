@@ -11,6 +11,7 @@ from ..models.surface_platform import SurfacePlatform
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.available_pod_item import AvailablePodItem
     from ..models.user_surface_item import UserSurfaceItem
 
 
@@ -23,6 +24,11 @@ class UserSurfacePlatformGroup:
     of them answer at the same address, so the user has to say which pod hears
     them (the ``shares_address`` surfaces are the ones to choose between).
 
+    On a platform with a shared bot (WhatsApp), ``available_pods`` lists every
+    pod the user may be answered from -- including pods with no surface there
+    yet -- and ``default_pod_id`` names the one that answers now. The group is
+    present even when the user has no surface on the platform at all.
+
         Attributes:
             platform (SurfacePlatform): The platforms a pod can be reached on.
 
@@ -33,13 +39,17 @@ class UserSurfacePlatformGroup:
                 a Gmail *account* is still something an agent does, through the connector;
                 it is just not a surface.
             surfaces (list[UserSurfaceItem]):
+            available_pods (list[AvailablePodItem] | Unset):
             conflict (bool | Unset):  Default: False.
+            default_pod_id (None | Unset | UUID):
             default_surface_id (None | Unset | UUID):
     """
 
     platform: SurfacePlatform
     surfaces: list[UserSurfaceItem]
+    available_pods: list[AvailablePodItem] | Unset = UNSET
     conflict: bool | Unset = False
+    default_pod_id: None | Unset | UUID = UNSET
     default_surface_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -51,7 +61,22 @@ class UserSurfacePlatformGroup:
             surfaces_item = surfaces_item_data.to_dict()
             surfaces.append(surfaces_item)
 
+        available_pods: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.available_pods, Unset):
+            available_pods = []
+            for available_pods_item_data in self.available_pods:
+                available_pods_item = available_pods_item_data.to_dict()
+                available_pods.append(available_pods_item)
+
         conflict = self.conflict
+
+        default_pod_id: None | str | Unset
+        if isinstance(self.default_pod_id, Unset):
+            default_pod_id = UNSET
+        elif isinstance(self.default_pod_id, UUID):
+            default_pod_id = str(self.default_pod_id)
+        else:
+            default_pod_id = self.default_pod_id
 
         default_surface_id: None | str | Unset
         if isinstance(self.default_surface_id, Unset):
@@ -69,8 +94,12 @@ class UserSurfacePlatformGroup:
                 "surfaces": surfaces,
             }
         )
+        if available_pods is not UNSET:
+            field_dict["available_pods"] = available_pods
         if conflict is not UNSET:
             field_dict["conflict"] = conflict
+        if default_pod_id is not UNSET:
+            field_dict["default_pod_id"] = default_pod_id
         if default_surface_id is not UNSET:
             field_dict["default_surface_id"] = default_surface_id
 
@@ -78,6 +107,7 @@ class UserSurfacePlatformGroup:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.available_pod_item import AvailablePodItem
         from ..models.user_surface_item import UserSurfaceItem
 
         d = dict(src_dict)
@@ -90,7 +120,35 @@ class UserSurfacePlatformGroup:
 
             surfaces.append(surfaces_item)
 
+        _available_pods = d.pop("available_pods", UNSET)
+        available_pods: list[AvailablePodItem] | Unset = UNSET
+        if _available_pods is not UNSET:
+            available_pods = []
+            for available_pods_item_data in _available_pods:
+                available_pods_item = AvailablePodItem.from_dict(
+                    available_pods_item_data
+                )
+
+                available_pods.append(available_pods_item)
+
         conflict = d.pop("conflict", UNSET)
+
+        def _parse_default_pod_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                default_pod_id_type_0 = UUID(data)
+
+                return default_pod_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        default_pod_id = _parse_default_pod_id(d.pop("default_pod_id", UNSET))
 
         def _parse_default_surface_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -114,7 +172,9 @@ class UserSurfacePlatformGroup:
         user_surface_platform_group = cls(
             platform=platform,
             surfaces=surfaces,
+            available_pods=available_pods,
             conflict=conflict,
+            default_pod_id=default_pod_id,
             default_surface_id=default_surface_id,
         )
 

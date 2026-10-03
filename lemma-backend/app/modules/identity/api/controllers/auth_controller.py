@@ -19,7 +19,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.infrastructure.mobile_number_claims import (
-    get_other_mobile_number_owner_id,
+    get_live_mobile_number_owner_id,
 )
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
@@ -265,7 +265,7 @@ async def start_whatsapp_mobile_verification(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         async with async_session_maker() as db_session:
-            owner = await get_other_mobile_number_owner_id(
+            owner = await get_live_mobile_number_owner_id(
                 db_session,
                 digits=normalized_phone.removeprefix("+"),
                 user_id=user.id,

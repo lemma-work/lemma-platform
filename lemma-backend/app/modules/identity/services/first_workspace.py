@@ -26,12 +26,16 @@ from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
+from app.modules.identity.infrastructure.organization_memberships import (
+    oldest_membership,
+)
 from app.modules.identity.infrastructure.workspace_locks import lock_workspace_selection
 from app.modules.identity.services.organization_service import OrganizationService
 from app.modules.identity.services.pending_invitations import (
     accept_pending_invitations,
 )
 from app.modules.pod.contracts.personal_workspace import (
+    NoRoomForWorkspace,
     ensure_personal_workspace,
     invited_workspace,
 )
@@ -39,7 +43,7 @@ from app.modules.pod.contracts.personal_workspace import (
 WorkspaceEntry = Literal[
     "existing", "surface_join", "invitation", "domain_join", "new_org"
 ]
-WorkspaceStatus = Literal["ready", "organization_access_required"]
+WorkspaceStatus = Literal["ready", "organization_access_required", "pod_limit_reached"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,9 @@ class ProvisionedWorkspace:
     status: WorkspaceStatus = "ready"
     organization_created: bool = False
     pod_created: bool = False
+    #: The plan's own words when `status` is ``pod_limit_reached``: how many pods
+    #: it allows and how many they have, which is what the person can act on.
+    refusal: str | None = None
 
 
 async def ensure_first_workspace(
@@ -104,12 +111,8 @@ async def ensure_first_workspace(
             invited_pod_id = invited.pod_id
             entry = "invitation"
         else:
-            organization_id = await uow.session.scalar(
-                select(OrganizationMember.organization_id)
-                .where(OrganizationMember.user_id == user_id)
-                .order_by(OrganizationMember.organization_id)
-                .limit(1)
-            )
+            oldest = await oldest_membership(uow, user_id=user_id)
+            organization_id = oldest.organization_id if oldest is not None else None
         if organization_id is None:
             organization_id, entry = await _join_or_create_organization(
                 uow, organization_service=organization_service, user=user
@@ -142,12 +145,21 @@ async def ensure_first_workspace(
             owner_membership_id=membership_id,
             name=first_pod_name(full_name),
         )
-        if personal is not None:
-            pod_id, assistant_id, pod_created = (
-                personal.pod_id,
-                personal.assistant_id,
-                personal.created,
+        if isinstance(personal, NoRoomForWorkspace):
+            await uow.session.flush()
+            return ProvisionedWorkspace(
+                organization_id,
+                None,
+                entry,
+                status="pod_limit_reached",
+                organization_created=entry == "new_org",
+                refusal=personal.message,
             )
+        pod_id, assistant_id, pod_created = (
+            personal.pod_id,
+            personal.assistant_id,
+            personal.created,
+        )
     await uow.session.flush()
     return ProvisionedWorkspace(
         organization_id,

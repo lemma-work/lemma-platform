@@ -1,7 +1,9 @@
-"""The three ways a signup ends without an account at the other side.
+"""The ways a signup ends without an account at the other side.
 
-Cancelled because they asked, expired because nobody came back, refused because
-it cannot be finished. Separated from `ChatOnboardingCoordinator` because they
+Cancelled because they asked, refused because it cannot be finished. (Expired
+used to be the third; an expired signup now restarts itself with the message
+that found it -- see `ChatOnboardingCoordinator._restart` -- and only borrows
+`revoke_code` from here.) Separated from `ChatOnboardingCoordinator` because they
 are one thing said three ways, and saying it three times in the middle of the
 state machine is what let `_refused` go missing in the first place -- a refusal
 that replied and changed nothing, so the next message re-entered the same branch
@@ -74,7 +76,8 @@ class OnboardingOutcomes:
             row.step = step
             row.handed_off_at = datetime.now(timezone.utc)
 
-    async def _revoke_code(self, state: PendingState, platform: str) -> None:
+    async def revoke_code(self, state: PendingState, platform: str) -> None:
+        """Make sure no live code is left behind by a signup that is ending."""
         if state.challenge_id is None:
             return
         try:
@@ -95,26 +98,10 @@ class OnboardingOutcomes:
         state: PendingState,
         destination: ParsedInboundSurfaceEvent,
     ) -> None:
-        await self._revoke_code(state, transport.event.platform.value)
+        await self.revoke_code(state, transport.event.platform.value)
         await self._end_with(state, OnboardingStep.CANCELLED)
         await say_privately(
             self._adapters, self._uows, transport, destination, "Setup cancelled."
-        )
-
-    async def expired(
-        self,
-        transport: OnboardingTransport,
-        state: PendingState,
-        destination: ParsedInboundSurfaceEvent,
-    ) -> None:
-        await self._revoke_code(state, transport.event.platform.value)
-        await self._end_with(state, OnboardingStep.EXPIRED)
-        await say_privately(
-            self._adapters,
-            self._uows,
-            transport,
-            destination,
-            "Setup expired. Send a fresh request to start again.",
         )
 
     async def email_unavailable(

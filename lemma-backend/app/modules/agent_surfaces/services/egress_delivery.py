@@ -17,6 +17,7 @@ Nothing here reads an inbound event.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import timezone
 from typing import Any
 from uuid import UUID
@@ -35,6 +36,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
 )
+from app.modules.agent_surfaces.domain.delivery_result import SurfaceDeliveryResult
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.ports import (
@@ -45,6 +47,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 )
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
+)
+from app.modules.agent_surfaces.platforms.sent_message_ids import (
+    collect_sent_message_ids,
 )
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.credential_resolver import (
@@ -58,9 +63,17 @@ from app.modules.agent_surfaces.services.group_log import (
     GroupLog,
     answered_in_group,
 )
+from app.modules.agent_surfaces.services.outbound_log import record_outbound
+from app.modules.agent_surfaces.services.reply_window_fallback import (
+    deliver_after_the_window,
+    reply_window_closed,
+)
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 
 logger = get_logger(__name__)
+
+WindowFallback = Callable[..., Awaitable[SurfaceDeliveryResult]]
+OutboundLog = Callable[..., Awaitable[None]]
 
 
 class SurfaceDelivery:
@@ -74,6 +87,8 @@ class SurfaceDelivery:
         conversation_link_repository: SurfaceConversationLinkRepository,
         adapter_registry: SurfacePlatformAdapterRegistry,
         credential_resolver: SurfaceCredentialResolver,
+        after_the_window: WindowFallback = deliver_after_the_window,
+        outbound_log: OutboundLog = record_outbound,
     ) -> None:
         # Every one of these is required, and `uow` most of all. The service
         # this was carved out of took either a unit of work or a factory and
@@ -85,6 +100,10 @@ class SurfaceDelivery:
         self.conversation_link_repository = conversation_link_repository
         self.adapter_registry = adapter_registry
         self.credential_resolver = credential_resolver
+        # What a closed reply window falls back to, and where sent message ids
+        # are written down. Defaults are the real ones; a test hands its own.
+        self.after_the_window = after_the_window
+        self.outbound_log = outbound_log
 
     async def egress_credentials(
         self,
@@ -284,8 +303,8 @@ class SurfaceDelivery:
         envelope: SurfaceEnvelope,
         metadata: dict[str, Any],
         conversation_id: UUID,
-    ) -> bool:
-        """Hand one envelope to the platform and say whether it arrived.
+    ) -> SurfaceDeliveryResult:
+        """Hand one envelope to the platform and say whether, and where, it arrived.
 
         The ladder -- native, then the part's own text, then nothing -- lives in
         ``BaseSurfaceAdapter.deliver``, and this is what is left once the two
@@ -300,16 +319,28 @@ class SurfaceDelivery:
         and that is the worst outcome there is: the person reads "let me check
         with you first" and is given nothing to answer. That used to report
         True because *something* arrived.
+
+        A chat whose reply window has closed is not tried at all: the platform
+        would accept the call and drop the message. See `reply_window_fallback`.
         """
+        if reply_window_closed(target):
+            return await self.after_the_window(
+                self.uow,
+                target,
+                envelope=envelope,
+                metadata=metadata,
+                conversation_id=conversation_id,
+            )
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(self.uow.session):
             try:
-                receipt = await target.adapter.deliver(
-                    credentials=target.credentials,
-                    event=target.event,
-                    envelope=envelope,
-                    metadata=metadata,
-                )
+                with collect_sent_message_ids() as sent_ids:
+                    receipt = await target.adapter.deliver(
+                        credentials=target.credentials,
+                        event=target.event,
+                        envelope=envelope,
+                        metadata=metadata,
+                    )
             except AgentSurfaceError:
                 # An error, not a warning, and with the traceback. This is the
                 # end of every ladder: native, then text, then nobody. A run
@@ -321,7 +352,7 @@ class SurfaceDelivery:
                     platform=target.surface.surface_type.value,
                     exc_info=True,
                 )
-                return False
+                return SurfaceDeliveryResult.undelivered()
             if receipt.degraded:
                 logger.debug(
                     "agent_surfaces.egress.envelope_degraded.diagnostic",
@@ -339,12 +370,21 @@ class SurfaceDelivery:
                 platform=target.surface.surface_type.value,
                 parts=receipt.undelivered,
             )
-            return False
+            return SurfaceDeliveryResult.undelivered()
+        await self.outbound_log(
+            self.uow,
+            target,
+            sent_ids=sent_ids,
+            envelope=envelope,
+            metadata=metadata,
+            conversation_id=conversation_id,
+        )
         await remember_a_prompt_that_arrived_as_words(
             self.uow,
             conversation_id=conversation_id,
             envelope=envelope,
             receipt=receipt,
+            platform=target.surface.surface_type.value,
         )
         # What the bot said in a group, for the pod's log of it. After the
         # delivery, so the log never holds a line the group did not see.
@@ -355,4 +395,4 @@ class SurfaceDelivery:
                 text=envelope.text,
                 answered=answered_in_group(target.link, target.conversation_user_id),
             )
-        return True
+        return SurfaceDeliveryResult.on_chat()

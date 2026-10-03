@@ -35,10 +35,12 @@ from app.modules.agent_surfaces.api.schemas import (
     AvailableSurfacesResponse,
     SurfaceCreateRequest,
     SurfaceReach,
-    SurfaceSendRequest,
-    SurfaceSendResponse,
     SurfaceSetupResponse,
     SurfaceUpdateRequest,
+)
+from app.modules.agent_surfaces.api.surface_send_schemas import (
+    SurfaceSendRequest,
+    SurfaceSendResponse,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -485,15 +487,15 @@ async def send_surface_message(
         agent_id=surface.agent_id,
         action=Permissions.AGENT_UPDATE,
     )
-    undeliverable = await reach.send_to_member(
+    result = await reach.send_to_member(
         surface=surface,
         user_id=request.user_id,
         message=request.message,
     )
-    if undeliverable is not None:
-        raise HTTPException(status_code=404, detail=undeliverable)
+    if not result:
+        raise HTTPException(status_code=404, detail=result.reason)
     del user
-    return SurfaceSendResponse(sent=True)
+    return SurfaceSendResponse(sent=True, channel=result.channel, detail=result.reason)
 
 
 @router.get(

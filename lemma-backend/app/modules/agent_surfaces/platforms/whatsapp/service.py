@@ -2,28 +2,25 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from pydantic_ai.tools import RunContext
 
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import ConversationContext
-import httpx
-
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
-from app.modules.agent_surfaces.domain.envelope import PartDelivery
-from app.modules.agent_surfaces.domain.models import (
-    SurfaceApprovalRenderPlan,
-    SurfaceDisplayRenderPlan,
-    SurfaceQuestionRenderPlan,
-    SurfaceSenderProfile,
-)
+from app.modules.agent_surfaces.domain.errors import AgentSurfacePlatformError
+from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     WhatsAppSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms import common
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.envelope_delivery import (
+    PartialTextDelivery,
+)
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp import media
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
@@ -31,18 +28,17 @@ from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppClient,
     resolve_api_base,
 )
+from app.modules.agent_surfaces.platforms.whatsapp.interactive_sends import (
+    WhatsAppInteractiveSends,
+    recipient_of,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.models import (
     WhatsAppFileAttachment,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     WhatsAppRecipient,
-    build_whatsapp_approval_interactive,
-    build_whatsapp_interactive,
-    whatsapp_cta_url_payload,
-    whatsapp_display_resource_text,
     flow_with_message,
     whatsapp_message_bodies,
-    whatsapp_recipient,
     whatsapp_text_payload,
     truncate_whatsapp_text,
 )
@@ -53,7 +49,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
 logger = get_logger(__name__)
 
 
-class WhatsAppPlatformService:
+class WhatsAppPlatformService(WhatsAppInteractiveSends):
     def __init__(
         self, credentials: dict[str, Any], *, client: WhatsAppClient | None = None
     ):
@@ -68,10 +64,6 @@ class WhatsAppPlatformService:
             phone_number_id=self._phone_number_id,
             api_base=self._api_base,
         )
-
-    def _arrival_number(self, event: ParsedInboundSurfaceEvent) -> str:
-        """The number to send from: the one the message arrived on, else ours."""
-        return event.reply_target.get("phone_number_id") or self._phone_number_id
 
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent
@@ -113,7 +105,7 @@ class WhatsAppPlatformService:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
+        recipient = recipient_of(event)
         if recipient is None or not phone_number_id or not self._access_token:
             if (metadata or {}).get("private_onboarding"):
                 raise RuntimeError("WhatsApp cannot deliver private onboarding")
@@ -132,32 +124,89 @@ class WhatsAppPlatformService:
                 interactive=flow_with_message(flow, message),
             )
             return
-        bodies = whatsapp_message_bodies(message)
+        await self._send_text_parts(
+            event, phone_number_id, recipient, whatsapp_message_bodies(message)
+        )
+
+    async def _send_text_parts(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        phone_number_id: str,
+        recipient: WhatsAppRecipient,
+        bodies: list[str],
+    ) -> None:
+        """Send a reply split into parts, saying how far it got if it stops."""
+        if not bodies:
+            # Formatting can leave nothing (a message that was only a rule or
+            # an empty bullet). Returning quietly reported it as delivered.
+            raise AgentSurfacePlatformError(
+                "WHATSAPP", "the message was empty once formatted; nothing was sent."
+            )
+        # In a group the answer quotes what it answers: several people may be
+        # talking to the bot at once, and an unquoted reply is anyone's.
+        quote = (
+            str(event.external_message_id or "").strip() if recipient.is_group else ""
+        )
         for index, body in enumerate(bodies):
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": recipient.recipient_type,
+                "to": recipient.to,
+                "type": "text",
+                "text": {"body": body},
+            }
             try:
-                await self._client.send_message_payload(
-                    phone_number_id=phone_number_id,
-                    payload={
-                        "messaging_product": "whatsapp",
-                        "recipient_type": recipient.recipient_type,
-                        "to": recipient.to,
-                        "type": "text",
-                        "text": {"body": body},
-                    },
+                await self._send_quoting(
+                    phone_number_id, payload, quote=quote if not index else ""
                 )
-            except PLATFORM_TRANSPORT_ERRORS:
-                if index:
-                    # The person already has the first part. The caller sees
-                    # this as "not delivered" and there is no rung below plain
-                    # text to fall back to, so what it cannot say is that half
-                    # the answer is on their phone.
-                    logger.warning(
-                        "agent_surfaces.service.whatsapp_message_partially_delivered.degraded",
-                        sent_parts=index,
-                        total_parts=len(bodies),
-                        exc_info=True,
-                    )
+            except PLATFORM_TRANSPORT_ERRORS as exc:
+                if not index:
+                    raise
+                # The person already has the first part. Raising the plain
+                # error made the caller treat the whole answer as undelivered,
+                # and a fallback then resent what they had already read.
+                logger.warning(
+                    "agent_surfaces.service.whatsapp_message_partially_delivered.degraded",
+                    sent_parts=index,
+                    total_parts=len(bodies),
+                    exc_info=True,
+                )
+                raise PartialTextDelivery(
+                    "WHATSAPP", sent_parts=index, total_parts=len(bodies)
+                ) from exc
+
+    async def _send_quoting(
+        self, phone_number_id: str, payload: dict[str, object], *, quote: str
+    ) -> None:
+        """Send ``payload`` as a reply to message ``quote``, or plainly.
+
+        Meta documents ``context`` for one-to-one chats and says nothing of
+        groups. A refusal is therefore read as the quote being unwelcome rather
+        than the message: the same body goes once more without it. A 5xx or a
+        429 may mean it was delivered, so those are not repeated.
+        """
+        if not quote:
+            await self._client.send_message_payload(
+                phone_number_id=phone_number_id, payload=payload
+            )
+            return
+        try:
+            await self._client.send_message_payload(
+                phone_number_id=phone_number_id,
+                payload={**payload, "context": {"message_id": quote}},
+            )
+        except WhatsAppApiError as exc:
+            if exc.status_code >= 500 or exc.status_code == 429:
                 raise
+            logger.warning(
+                "agent_surfaces.service.whatsapp_group_quote_rejected.degraded",
+                status_code=exc.status_code,
+                meta_code=exc.meta_code,
+                exc_info=True,
+            )
+            await self._client.send_message_payload(
+                phone_number_id=phone_number_id, payload=payload
+            )
 
     async def acknowledge_interaction(
         self,
@@ -230,7 +279,7 @@ class WhatsAppPlatformService:
         run.
         """
         phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
+        recipient = recipient_of(event)
         if recipient is None or not phone_number_id or not self._access_token:
             return
         body = to_whatsapp_text(progress_text)
@@ -245,174 +294,6 @@ class WhatsAppPlatformService:
                 preview_url=False,
             ),
         )
-
-    async def _render_choices(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        question_plan: SurfaceQuestionRenderPlan,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool | PartDelivery:
-        """Render ask_user questions as native interactive replies.
-
-        ≤3 options → reply buttons, 4–10 → a list; multi-select or anything that
-        can't be encoded returns ``False`` so the caller falls back to text. The
-        button/list ``id`` carries ``callback_id~header~value`` (no token store —
-        WhatsApp ids allow 256 chars).
-        """
-        del metadata
-        phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
-        if recipient is None or not phone_number_id or not self._access_token:
-            # Nothing can be sent. Declining here lets the caller's text fallback
-            # try, and that hits the raising guard in `send_message`, so the
-            # missing part is named there rather than in a debug line here.
-            return False
-        if recipient.is_group:
-            # A group takes no interactive message: the question goes as text.
-            return False
-        sender_wa_id = recipient.to
-        if any(q.multi_select for q in question_plan.questions):
-            return False
-        interactives = []
-        for question in question_plan.questions:
-            interactive = build_whatsapp_interactive(
-                question_plan.callback_id, question
-            )
-            if interactive is None:
-                return False
-            interactives.append(interactive)
-        for index, interactive in enumerate(interactives):
-            try:
-                await self._client.send_interactive(
-                    phone_number_id=phone_number_id,
-                    to=sender_wa_id,
-                    interactive=interactive,
-                )
-            except PLATFORM_TRANSPORT_ERRORS:
-                if not index:
-                    # Nothing went out: the caller's fallback sends every
-                    # question as text, and none of them is a duplicate.
-                    raise
-                # Earlier questions are already on the person's phone as
-                # buttons. Letting this raise made the caller resend *all* of
-                # them as text, so the first question appeared twice. Ask only
-                # what has not been asked.
-                logger.warning(
-                    "agent_surfaces.service.whatsapp_questions_partially_delivered.degraded",
-                    sent_questions=index,
-                    total_questions=len(interactives),
-                    exc_info=True,
-                )
-                await self.send_message(
-                    event,
-                    question_plan.model_copy(
-                        update={"questions": question_plan.questions[index:]}
-                    ).to_plain_text(),
-                )
-                # Delivered, but not all of it as controls: reporting True says
-                # every question is tappable, and nothing then accepts a typed
-                # answer to the ones that arrived as words.
-                return PartDelivery.DEGRADED
-        return True
-
-    async def _render_decision(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        approval_plan: SurfaceApprovalRenderPlan,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool:
-        """Render a request_approval prompt as WhatsApp reply buttons.
-
-        Approve/Deny (and optionally Approve-for-session) render as ≤3 reply
-        buttons; the tapped button's id carries the decision. Returns ``False``
-        (caller falls back to text) when the buttons can't be encoded natively.
-        """
-        del metadata
-        phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
-        if recipient is None or not phone_number_id or not self._access_token:
-            return False
-        if recipient.is_group:
-            # No buttons in a group: the approval is asked in words.
-            return False
-        sender_wa_id = recipient.to
-        interactive = build_whatsapp_approval_interactive(approval_plan)
-        if interactive is None:
-            return False
-        await self._client.send_interactive(
-            phone_number_id=phone_number_id,
-            to=sender_wa_id,
-            interactive=interactive,
-        )
-        return True
-
-    async def _render_resource(
-        self,
-        event: ParsedInboundSurfaceEvent,
-        render_plan: SurfaceDisplayRenderPlan,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool:
-        """Send a resource card; True when it went as one, False when as text.
-
-        The bool is what lets a delivery receipt tell a card from a sentence. It
-        answered ``None`` -- which the adapter turned into ``True`` -- so every
-        resource read as delivered natively whichever way it actually arrived.
-        """
-        del metadata
-        phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
-        if not phone_number_id or recipient is None or not self._access_token:
-            raise unsendable(
-                "WhatsApp",
-                access_token=self._access_token,
-                phone_number_id=phone_number_id,
-                recipient=recipient.to if recipient else None,
-            )
-        action = render_plan.primary_action
-        if action is None or recipient.is_group:
-            # A card is an interactive message, which a group does not take;
-            # there the link goes as text, with its preview.
-            await self._client.send_message_payload(
-                phone_number_id=phone_number_id,
-                payload=whatsapp_text_payload(
-                    recipient_wa_id=recipient.to,
-                    recipient_type=recipient.recipient_type,
-                    body=whatsapp_display_resource_text(render_plan),
-                    preview_url=action is not None,
-                ),
-            )
-            return False
-        sender_wa_id = recipient.to
-
-        try:
-            await self._client.send_message_payload(
-                phone_number_id=phone_number_id,
-                payload=whatsapp_cta_url_payload(
-                    recipient_wa_id=sender_wa_id,
-                    render_plan=render_plan,
-                ),
-            )
-        except WhatsAppApiError as exc:
-            # This one does recover -- the resource goes out as text below --
-            # so the person is still served and this is not an error. It is
-            # still a thing that failed, and at `LOG_LEVEL=INFO` a `debug` line
-            # is indistinguishable from it never having happened, so the
-            # fallback is recorded rather than hidden.
-            logger.warning(
-                "agent_surfaces.service.whatsapp_display_resource_cta_rejected.degraded",
-                status_code=exc.status_code,
-                exc_info=True,
-            )
-            await self._client.send_message_payload(
-                phone_number_id=phone_number_id,
-                payload=whatsapp_text_payload(
-                    recipient_wa_id=sender_wa_id,
-                    body=whatsapp_display_resource_text(render_plan),
-                    preview_url=True,
-                ),
-            )
-            return False
-        return True
 
     async def add_processing_indicator(
         self,
@@ -433,7 +314,7 @@ class WhatsAppPlatformService:
         """
         is_refresh = bool((metadata or {}).get("is_refresh"))
         phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
+        recipient = recipient_of(event)
         message_id = str(event.external_message_id or "").strip()
         if not phone_number_id or not self._access_token:
             return
@@ -506,7 +387,7 @@ class WhatsAppPlatformService:
         Returns True on success; False so the caller falls back to a URL link.
         """
         phone_number_id = self._arrival_number(event)
-        recipient = _recipient(event)
+        recipient = recipient_of(event)
         if not self._access_token or not phone_number_id or recipient is None:
             return False
         return await media.send_file(
@@ -519,6 +400,44 @@ class WhatsAppPlatformService:
             mime_type=mime_type,
             caption=caption,
         )
+
+    async def send_voice_note(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        *,
+        file_name: str,
+        audio_bytes: bytes,
+        mime_type: str,
+        caption: str | None = None,
+    ) -> bool:
+        """Send audio as a voice note; False so the caller sends it as a file.
+
+        A WhatsApp audio message takes no caption, and dropping it would lose
+        the words the note was sent with. They follow as a message of their
+        own -- best-effort, because the note itself has already arrived.
+        """
+        phone_number_id = self._arrival_number(event)
+        recipient = recipient_of(event)
+        if not self._access_token or not phone_number_id or recipient is None:
+            return False
+        sent = await media.send_voice(
+            self._client,
+            phone_number_id=phone_number_id,
+            recipient_wa_id=recipient.to,
+            recipient_type=recipient.recipient_type,
+            file_name=file_name,
+            audio_bytes=audio_bytes,
+            mime_type=mime_type,
+        )
+        if sent and caption and caption.strip():
+            try:
+                await self.send_message(event, caption)
+            except PLATFORM_TRANSPORT_ERRORS:
+                logger.warning(
+                    "agent_surfaces.service.whatsapp_voice_caption_failed.degraded",
+                    exc_info=True,
+                )
+        return sent
 
     def _whatsapp_metadata(
         self,
@@ -565,8 +484,3 @@ class WhatsAppPlatformService:
             if candidate:
                 return candidate
         return None
-
-
-def _recipient(event: ParsedInboundSurfaceEvent) -> WhatsAppRecipient | None:
-    """Who a reply to this event goes to: its group, else the person."""
-    return whatsapp_recipient(event.reply_target, fallback_wa_id=event.sender_phone)

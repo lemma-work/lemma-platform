@@ -1,201 +1,113 @@
-"""Private, resumable signup before surface routing and conversation ingestion."""
+"""The writes that end a chat signup: who they are, and where they will talk.
+
+`onboarding_settle` decides *which* of these happens -- already reachable,
+attach the one pod, ask which, or make one. This module does them, each in its
+own unit of work, and each leaving the pending row on a step that says what is
+true afterwards.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import UUID
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-
 from datetime import datetime, timezone
+from uuid import UUID
 
 from sqlalchemy import select
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceEntity,
-    SurfaceCredentialMode,
-    AgentSurfaceStatus,
-)
+from app.modules.agent.contracts.provisioning import ensure_pod_default_agent
 from app.modules.agent_surfaces.domain.events import SurfaceOnboardingReadyEvent
+from app.modules.agent_surfaces.domain.onboarding_state import (
+    OnboardingStep,
+    PendingState,
+)
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
     VerifiedSurfaceIdentity,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-    SurfaceRepository,
-)
-from app.modules.agent_surfaces.services.onboarding_transport import (
-    OnboardingTransport,
-)
-from app.modules.identity.contracts.onboarding import (
-    ChallengeRejected,
-    UserEntity,
-    active_chat_user,
-    ensure_chat_organization,
-    ensure_chat_workspace,
-)
-from app.modules.agent.contracts.provisioning import ensure_pod_default_agent
 from app.modules.agent_surfaces.services.onboarding_pod_choice import (
     PodChoice,
     candidate_pods,
     offer_text,
     organization_for_new_pod,
 )
-from app.modules.identity.contracts.surfaces import (
-    set_user_preferences,
-    user_preferences,
+from app.modules.agent_surfaces.services.onboarding_transport import (
+    OnboardingTransport,
+)
+from app.modules.agent_surfaces.services.shared_chat_surface import (
+    SharedSurfaceUnavailable,
+    ensure_shared_surface,
+    make_default,
+)
+from app.modules.identity.contracts.onboarding import (
+    ChallengeRejected,
+    UserEntity,
+    active_chat_user,
+    ensure_chat_organization,
 )
 from app.modules.pod.contracts.members import pod_name
 from app.modules.pod.contracts.personal_workspace import (
     PodLimitReachedError,
     create_named_workspace,
 )
+from pydantic import JsonValue
 
-
-from app.modules.agent_surfaces.domain.onboarding_state import (
-    OnboardingStep,
-    PendingState,
-)
-
-
-class SharedSurfaceUnavailable(ChallengeRejected):
-    """This workspace cannot carry the shared bot, but another one might.
-
-    Separate from every other refusal because it is the only one with a next
-    step the person can take, and saying "pick another workspace" is not the
-    same as letting them. Carries the pod that refused, so the list offered
-    next does not lead with it.
-    """
-
-    def __init__(self, message: str, *, pod_id: UUID) -> None:
-        super().__init__(message)
-        self.pod_id = pod_id
-
-
-class WorkspaceChoiceAsked(ChallengeRejected):
-    """A refusal that has already moved the signup onto its own next question.
-
-    Every other `ChallengeRejected` leaving this module is a dead stop, and the
-    coordinator now ends the signup when it sees one so the next message can
-    start a fresh one. This one must not be treated that way: the row is
-    already parked on AWAITING_POD and the offer is in the message, so ending
-    the signup here would throw away the question in the act of asking it.
-
-    A distinct type rather than re-reading the step afterwards, because the step
-    at the moment of the raise is not the step the coordinator dispatched on --
-    `_code` advances to VERIFIED before it provisions -- so "did anything move"
-    cannot be answered by comparing the two.
-    """
+__all__ = [
+    "Attached",
+    "SharedSurfaceUnavailable",
+    "attach_chosen_workspace",
+    "bind_workspace",
+    "mark_ready",
+    "park_on_choice",
+    "record_verified_identity",
+]
 
 
 @dataclass(frozen=True, slots=True)
-class OnboardingOutcome:
-    """How provisioning ended, as far as the confirmation needs to know."""
+class Attached:
+    """The conversation is wired to this pod; the confirmation names it."""
 
-    waiting_on_an_admin: bool = False
-    #: The pod an accepted invitation brought them into, for the reply to name.
-    invited_pod_name: str | None = None
-
-
-async def complete_onboarding_workspace(
-    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
-) -> OnboardingOutcome:
-    assert state.user_id is not None
-    try:
-        return await _provision_and_bind(uows, transport, state)
-    except SharedSurfaceUnavailable as conflict:
-        # Raised from inside a unit of work, so the park has to happen after it
-        # has rolled back -- and `_step` turns what comes out of here into the
-        # reply, so the offer travels on the message.
-        raise WorkspaceChoiceAsked(
-            await _park_on_another_workspace(uows, transport, state, conflict)
-        ) from conflict
+    pod_id: UUID
+    pod_name: str
 
 
-async def _park_on_another_workspace(
+async def park_on_choice(
     uows: UnitOfWorkFactory,
-    transport: OnboardingTransport,
     state: PendingState,
-    conflict: SharedSurfaceUnavailable,
+    pods: list[dict[str, JsonValue]],
+    *,
+    lead: str | None = None,
 ) -> str:
-    """Move a stuck signup onto the workspace question, and ask it.
+    """Move the signup onto the workspace question, and return the question.
 
-    Without this the refusal was a dead end wearing an instruction: the step
-    stayed on VERIFIED, so the next message -- `new Personal`, or anything --
-    re-ran provisioning against the same pod and was refused again in the same
-    words. Nothing was reading the answer, because nothing had asked a question.
-
-    The pod that just refused is left off the list. It is still re-checked if
-    they name it some other way, but offering it back is offering the failure.
+    One way onto AWAITING_POD for every reason there is to ask: several
+    workspaces to choose from, a workspace that just refused the shared bot, a
+    plan with no room for the one they would have been given. Before this the
+    refusals were dead ends wearing an instruction -- the step stayed where it
+    was, so the next message re-ran the same provisioning and was refused again
+    in the same words, with nothing reading the answer because nothing had
+    asked a question.
     """
     assert state.user_id is not None
-    async with uows() as uow:
-        pods = [
-            pod
-            for pod in await candidate_pods(
-                uow,
-                user_id=state.user_id,
-                organization_id=transport.organization_id,
-            )
-            if UUID(str(pod["id"])) != conflict.pod_id
-        ]
     async with uows() as uow:
         row = await uow.session.get(PendingChatOnboarding, state.id)
         assert row is not None
         row.step = OnboardingStep.AWAITING_POD
         row.user_id = state.user_id
         row.offered_pods = pods
-    return f"{conflict.message}\n\n{offer_text(pods)}"
+    return offer_text(pods, lead=lead)
 
 
-async def _provision_and_bind(
-    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
-) -> OnboardingOutcome:
-    assert state.user_id is not None
-    workspace = await ensure_chat_workspace(
-        uows,
-        user_id=state.user_id,
-        verified_phone=state.verified_phone,
-        full_name=transport.event.sender_display_name,
-        installation_organization_id=transport.organization_id,
-    )
-    user = await record_verified_identity(uows, transport, state)
-    async with uows() as uow:
-        pending = await uow.session.get(PendingChatOnboarding, state.id)
-        assert pending is not None
-        if workspace.status == "organization_access_required":
-            pending.step = OnboardingStep.ORGANIZATION_ACCESS_REQUIRED
-            return OnboardingOutcome(waiting_on_an_admin=True)
-        assert workspace.pod_id is not None and workspace.assistant_id is not None
-        if transport.surface is not None:
-            # The destination goes on the identity row, which by now exists:
-            # one write, and nothing that can outlive a revocation.
-            identity = await uow.session.scalar(
-                select(VerifiedSurfaceIdentity).where(
-                    VerifiedSurfaceIdentity.binding_key == state.binding_key
-                )
-            )
-            assert identity is not None
-            identity.installation_surface_id = transport.surface.id
-            identity.pod_id = workspace.pod_id
-        else:
-            await _ensure_shared_surface(
-                uow,
-                pod_id=workspace.pod_id,
-                assistant_id=workspace.assistant_id,
-                user_id=user.id,
-                platform=transport.event.platform,
-            )
-        pending.step = OnboardingStep.READY
-        if pending.ready_at is None:
-            pending.ready_at = datetime.now(timezone.utc)
-            uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
-        if workspace.entry == "invitation":
-            return OnboardingOutcome(
-                invited_pod_name=await pod_name(uow.session, workspace.pod_id)
-            )
-    return OnboardingOutcome()
+async def mark_ready(uow: SqlAlchemyUnitOfWork, state: PendingState) -> None:
+    """READY, and the replay of the held message set going -- exactly once."""
+    pending = await uow.session.get(PendingChatOnboarding, state.id)
+    assert pending is not None
+    pending.step = OnboardingStep.READY
+    pending.offered_pods = None
+    if pending.ready_at is None:
+        pending.ready_at = datetime.now(timezone.utc)
+        uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
 
 
 async def record_verified_identity(
@@ -223,9 +135,7 @@ async def record_verified_identity(
     when this is a returning person changing workspaces, because there was
     nothing to verify. Assigning it unconditionally wrote that nothing over a
     live proof, and it is `resolve_shared_verified_identity`, on the *ingestion*
-    side, that then stopped recognising them: for WhatsApp and Telegram it
-    requires the stored phone and a match. Onboarding said READY and handed off,
-    and the next message was answered with "please share your phone number".
+    side, that then stopped recognising them.
     """
     assert state.user_id is not None
     async with uows() as uow:
@@ -238,27 +148,7 @@ async def record_verified_identity(
             )
         )
         if identity is not None and identity.user_id != user.id:
-            if identity.revoked_at is None:
-                raise ChallengeRejected(
-                    "This platform identity belongs to another account"
-                )
-            # Revoked is not "somebody else's", it is "nobody's". `verified_
-            # sender` reads a revoked row as an unrecognised sender and
-            # `recognize_sender` sends them through a fresh signup on purpose;
-            # refusing here made that invitation a trap -- the flow asked a
-            # person to prove who they are and then refused to finish, in the
-            # same words every time, with no exit. The commonest way in is a
-            # reused phone number or a handed-on work account: the platform
-            # actor is the same string, the person is not.
-            #
-            # Nothing of the previous owner's survives the reassignment. The
-            # destination columns are already NULL -- `ck_surface_identity_
-            # route_is_live` refuses a revoked row that carries one -- and the
-            # phone is cleared here, because `resolve_shared_verified_identity`
-            # matches WhatsApp and Telegram senders on exactly that column and
-            # a leftover number would answer the wrong person.
-            identity.user_id = user.id
-            identity.verified_phone = None
+            await _take_over(uow, identity, user.id)
         if identity is None:
             identity = VerifiedSurfaceIdentity(
                 binding_key=state.binding_key,
@@ -274,67 +164,92 @@ async def record_verified_identity(
     return user
 
 
-async def _ensure_shared_surface(
+async def _take_over(
+    uow: SqlAlchemyUnitOfWork, identity: VerifiedSurfaceIdentity, user_id: UUID
+) -> None:
+    """Hand a binding to the account that just proved it, if nobody else holds it.
+
+    Revoked is not "somebody else's", it is "nobody's". `verified_sender` reads
+    a revoked row as an unrecognised sender and `recognize_sender` sends them
+    through a fresh signup on purpose; refusing here made that invitation a
+    trap. The commonest way in is a reused phone number or a handed-on work
+    account: the platform actor is the same string, the person is not.
+
+    The same goes for a binding whose account has gone -- deleted or
+    deactivated. Nobody can sign in as that account, so refusing on its behalf
+    stranded the person holding the phone now with an instruction nobody could
+    follow. Only a live binding of a live account is somebody else's.
+
+    Nothing of the previous owner's survives the reassignment. The destination
+    columns are cleared -- `ck_surface_identity_route_is_live` refuses a revoked
+    row that carries one, and a dead account's route is not this person's --
+    and so is the phone, which `resolve_shared_verified_identity` would
+    otherwise keep matching for the wrong person.
+    """
+    if (
+        identity.revoked_at is None
+        and await active_chat_user(uow, identity.user_id) is not None
+    ):
+        raise ChallengeRejected("This platform identity belongs to another account")
+    identity.user_id = user_id
+    identity.verified_phone = None
+    identity.installation_surface_id = None
+    identity.pod_id = None
+
+
+async def bind_workspace(
     uow: SqlAlchemyUnitOfWork,
     *,
+    transport: OnboardingTransport,
+    state: PendingState,
+    user_id: UUID,
     pod_id: UUID,
     assistant_id: UUID,
-    user_id: UUID,
-    platform: SurfacePlatform,
-) -> None:
-    repository = SurfaceRepository(uow)
-    surfaces, _ = await repository.list_by_pod(pod_id, platform=platform.value)
-    surface = next(
-        (
-            item
-            for item in surfaces
-            if item.account_id is None
-            and item.credential_mode == SurfaceCredentialMode.SYSTEM
-            and item.agent_id == assistant_id
-        ),
-        None,
-    )
-    if surface is None:
-        # An agent reaches a platform in one place, so if this one already has
-        # a surface here that the lookup above did not match -- a bot on the
-        # company's own credentials -- there is no second place to put the
-        # shared one. Creating it anyway is what `uq_agent_surface_agent_type`
-        # refuses, and an IntegrityError is a poor way to tell someone their
-        # workspace is already reachable another way.
-        #
-        # Nor can the existing one simply be reused: shared routing considers
-        # system-credential surfaces only, so a default pointing at a custom
-        # bot is a default that is always ignored.
-        if any(item.agent_id == assistant_id for item in surfaces):
-            raise SharedSurfaceUnavailable(
-                "That workspace's assistant already answers on "
-                f"{platform.value.title()} through its own connection. "
-                "Pick another workspace, or message it there.",
-                pod_id=pod_id,
-            )
-        surface = await repository.create(
-            AgentSurfaceEntity.create(
-                pod_id=pod_id,
-                surface_type=platform,
-                agent_id=assistant_id,
-                name=f"lemma-{platform.value.lower()}-{str(assistant_id)[:8]}",
-            )
+) -> str | None:
+    """Point this conversation at a pod, the way its transport routes.
+
+    A company installation routes a private message by the identity row, so the
+    destination is written there. The shared bot routes by the person's
+    default surface, so the pod gets its shared surface and the default names
+    it -- always, which is what lets the profile show which pod answers and
+    keeps routing's oldest-pod tiebreak from choosing for someone who chose.
+
+    Returns a message when the binding has gone in the meantime.
+    """
+    if transport.surface is None:
+        surface = await ensure_shared_surface(
+            uow,
+            pod_id=pod_id,
+            assistant_id=assistant_id,
+            platform=transport.event.platform,
         )
-    if not surface.is_active or surface.status != AgentSurfaceStatus.ACTIVE:
-        surface.activate()
-        surface = await repository.update(surface)
-    preferences = await user_preferences(uow, user_id)
-    await set_user_preferences(
-        uow,
-        user_id,
-        preferences.with_default_surface(platform.value, surface.id),
+        await make_default(
+            uow,
+            user_id=user_id,
+            platform=transport.event.platform,
+            surface_id=surface.id,
+        )
+        return None
+    identity = await uow.session.scalar(
+        select(VerifiedSurfaceIdentity).where(
+            VerifiedSurfaceIdentity.binding_key == state.binding_key,
+            VerifiedSurfaceIdentity.revoked_at.is_(None),
+        )
     )
+    if identity is None:
+        # Recorded moments ago and not revoked since, so this is a race with a
+        # revocation rather than a missing binding -- and a revocation means
+        # exactly what this says.
+        return "That account needs to verify again before it can chat."
+    identity.installation_surface_id = transport.surface.id
+    identity.pod_id = pod_id
+    return None
 
 
 async def _organization_for(
     uow: SqlAlchemyUnitOfWork,
     *,
-    user,
+    user: UserEntity,
     transport: OnboardingTransport,
     placement: tuple[UUID, UUID] | None,
 ) -> UUID | None:
@@ -344,9 +259,8 @@ async def _organization_for(
     installation genuinely has to be added by an administrator -- that boundary
     is the point of the installation. Somebody arriving on the *shared* bot with
     a personal address and no organization at all was told the same thing, and
-    there was no administrator to ask: the message sent a verified person to a
-    door that does not exist. For them this runs the ordinary first-workspace
-    policy, which is what the web signup would have done a minute earlier.
+    there was no administrator to ask. For them this runs the ordinary
+    first-workspace policy, which is what the web signup would have done.
     """
     if placement is not None:
         return placement[0]
@@ -355,56 +269,64 @@ async def _organization_for(
     return await ensure_chat_organization(uow, user_id=user.id)
 
 
+async def _new_pod(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    user: UserEntity,
+    transport: OnboardingTransport,
+    name: str,
+) -> UUID | str:
+    placement = await organization_for_new_pod(
+        uow, user_id=user.id, installation_organization_id=transport.organization_id
+    )
+    organization_id = await _organization_for(
+        uow, user=user, transport=transport, placement=placement
+    )
+    if organization_id is None:
+        return (
+            "That account is not in any Lemma organization yet, so there "
+            "is nowhere to put a workspace. Ask your admin to add you."
+        )
+    try:
+        made = await create_named_workspace(
+            uow, organization_id=organization_id, owner_user_id=user.id, name=name
+        )
+    except PodLimitReachedError as refused:
+        return refused.message
+    return made.pod_id
+
+
 async def attach_chosen_workspace(
     uows: UnitOfWorkFactory,
     transport: OnboardingTransport,
     state: PendingState,
     choice: PodChoice,
-) -> str | None:
-    """Wire this conversation to the workspace the person picked.
+) -> Attached | str:
+    """Wire this conversation to the workspace the person picked (or was given).
 
-    The sibling of `complete_onboarding_workspace`, for someone who already had
-    an account: no organization is provisioned and no pod is invented, because
-    they chose. Returns a message to send back when the choice could not be
-    honoured, and None when it was.
+    For someone who already had an account: no organization is provisioned and
+    no pod is invented unless they named one. Returns the pod on success and a
+    message to send back when the choice could not be honoured. Raises
+    `SharedSurfaceUnavailable` when the pod cannot carry the shared bot, which
+    the caller answers by offering the others.
 
-    The proof of identity is recorded first, on the same reasoning as there.
-    Both ways into the workspace choice carry a *proven* `user_id` -- one from
-    an existing binding, one from `require_proven_identity` on a verified phone
-    -- but only the first left a row behind, so somebody recognised by their
-    number and picking a company workspace was told to verify again, which is
-    the one thing recognition exists to avoid.
+    The proof of identity is recorded first, on the same reasoning as in
+    `record_verified_identity`: every way here carries a *proven* `user_id`,
+    and only a recorded one survives a refusal further down.
     """
     assert state.user_id is not None
     user = await record_verified_identity(uows, transport, state)
     async with uows() as uow:
-        pod_id = choice.pod_id
-        if pod_id is None:
+        if choice.pod_id is None:
             assert choice.new_name is not None
-            placement = await organization_for_new_pod(
-                uow,
-                user_id=user.id,
-                installation_organization_id=transport.organization_id,
+            made = await _new_pod(
+                uow, user=user, transport=transport, name=choice.new_name
             )
-            organization_id = await _organization_for(
-                uow, user=user, transport=transport, placement=placement
-            )
-            if organization_id is None:
-                return (
-                    "That account is not in any Lemma organization yet, so there "
-                    "is nowhere to put a workspace. Ask your admin to add you."
-                )
-            try:
-                made = await create_named_workspace(
-                    uow,
-                    organization_id=organization_id,
-                    owner_user_id=user.id,
-                    name=choice.new_name,
-                )
-            except PodLimitReachedError as refused:
-                return refused.message
-            pod_id = made.pod_id
+            if isinstance(made, str):
+                return made
+            pod_id = made
         else:
+            pod_id = choice.pod_id
             # Re-proving membership rather than trusting the stored list: the
             # offer was written when the question was asked, and access can be
             # taken away between a question and its answer.
@@ -419,33 +341,15 @@ async def attach_chosen_workspace(
         assistant_id = await ensure_pod_default_agent(
             uow, pod_id=pod_id, user_id=user.id
         )
-        if transport.surface is not None:
-            identity = await uow.session.scalar(
-                select(VerifiedSurfaceIdentity).where(
-                    VerifiedSurfaceIdentity.binding_key == state.binding_key,
-                    VerifiedSurfaceIdentity.revoked_at.is_(None),
-                )
-            )
-            if identity is None:
-                # Recorded above and not revoked since, so this is a race with a
-                # revocation rather than a missing binding -- and a revocation
-                # means exactly what this says.
-                return "That account needs to verify again before it can chat."
-            identity.installation_surface_id = transport.surface.id
-            identity.pod_id = pod_id
-        else:
-            await _ensure_shared_surface(
-                uow,
-                pod_id=pod_id,
-                assistant_id=assistant_id,
-                user_id=user.id,
-                platform=transport.event.platform,
-            )
-        pending = await uow.session.get(PendingChatOnboarding, state.id)
-        assert pending is not None
-        pending.step = OnboardingStep.READY
-        pending.offered_pods = None
-        if pending.ready_at is None:
-            pending.ready_at = datetime.now(timezone.utc)
-            uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
-    return None
+        refusal = await bind_workspace(
+            uow,
+            transport=transport,
+            state=state,
+            user_id=user.id,
+            pod_id=pod_id,
+            assistant_id=assistant_id,
+        )
+        if refusal is not None:
+            return refusal
+        await mark_ready(uow, state)
+        return Attached(pod_id, await pod_name(uow.session, pod_id) or "your workspace")

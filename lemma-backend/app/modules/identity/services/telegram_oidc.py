@@ -25,7 +25,7 @@ from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.helpers.identifiers import normalize_mobile_digits, normalize_mobile_e164
 from app.modules.identity.infrastructure.mobile_number_claims import (
     acquire_mobile_number_claim_lock,
-    get_other_mobile_number_owner_id,
+    proven_claim_blocker,
 )
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
@@ -327,11 +327,15 @@ class TelegramOIDCService:
             user = await session.get(User, user_id)
             if user is None or not user.is_active or not user.is_verified:
                 raise TelegramOIDCError("A verified Lemma session is required")
-            owner = await get_other_mobile_number_owner_id(
-                session, digits=digits, user_id=user_id
-            )
+            # Telegram returned this number for this person, which is proof; only
+            # a live account that proved it too is a real owner.
+            owner = await proven_claim_blocker(session, digits=digits, user_id=user_id)
             if owner is not None:
-                raise TelegramOIDCError("This mobile number is already in use")
+                raise TelegramOIDCError(
+                    "This mobile number is already in use on another Lemma "
+                    "account. Remove it from that account's profile first."
+                )
+            previous_mobile_number = user.mobile_number
             user.mobile_number = phone_number
             user.mobile_verified_at = datetime.now(timezone.utc)
             try:
@@ -340,7 +344,9 @@ class TelegramOIDCService:
                 await session.rollback()
                 raise TelegramOIDCError("This mobile number is already in use") from exc
         await get_user_cache().invalidate(user_id)
-        phone_changed = UserMobileChangedEvent(user_id=user_id)
+        phone_changed = UserMobileChangedEvent(
+            user_id=user_id, previous_mobile_number=previous_mobile_number
+        )
         await EventPublisher.publish(phone_changed.stream_name(), phone_changed)
 
     async def close(self) -> None:

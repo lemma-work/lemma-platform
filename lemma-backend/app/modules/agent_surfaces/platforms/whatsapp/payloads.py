@@ -27,7 +27,10 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestion,
 )
-from app.modules.agent_surfaces.platforms.attachment_limits import media_kind_for_mime
+from app.modules.agent_surfaces.platforms.attachment_limits import (
+    MediaKind,
+    send_kind,
+)
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
     balance_whatsapp_delimiters,
@@ -41,6 +44,17 @@ WHATSAPP_TEXT_LIMIT = 4096
 #: Meta's cap on an interactive message's body text. A flow whose body is
 #: longer is rejected outright, which would lose the form as well as the words.
 INTERACTIVE_BODY_LIMIT = 1024
+
+#: Meta's caps on a reply button's title and a list row's title.
+_BUTTON_TITLE_LIMIT = 20
+_LIST_TITLE_LIMIT = 24
+#: A list row's description line.
+_LIST_DESCRIPTION_LIMIT = 72
+
+#: Under every question asked with buttons. A typed reply answers the question
+#: too, and nothing on a button card says so -- the person sees three choices
+#: and assumes those are the only three.
+TYPE_YOUR_OWN_FOOTER = "Or just type your own answer."
 
 # What an approval card may spend on the action line. The rest of the body is
 # the title and the model's reason, which gives way first.
@@ -114,52 +128,69 @@ def build_whatsapp_interactive(
         if len(button_id.encode("utf-8")) > 256:
             return None
         rows.append((button_id, option.label, option.description or ""))
+    if not 1 <= len(rows) <= 10:
+        return None
     # The question is model-authored, so it arrives as Markdown like every other
     # outbound string and needs the same translation the message body gets.
     question_text = to_whatsapp_text(question.question or "")
-    if 1 <= len(rows) <= 3:
+    footer = {"text": TYPE_YOUR_OWN_FOOTER}
+    if len(rows) <= 3 and _fits_as_buttons(rows):
         # A reply button has a title and nothing else, so what each option means
         # goes in the body -- otherwise "Refund" and "Credit" are all the person
         # gets to choose between, and the explanation the agent wrote is dropped.
-        body = {"text": _body_with_option_notes(question_text, rows)}
         return {
             "type": "button",
-            "body": body,
+            "body": {"text": _body_with_option_notes(question_text, rows)},
+            "footer": footer,
             "action": {
                 "buttons": [
-                    {"type": "reply", "reply": {"id": rid, "title": title[:20]}}
+                    {"type": "reply", "reply": {"id": rid, "title": title}}
                     for rid, title, _description in rows
                 ]
             },
         }
-    if 4 <= len(rows) <= 10:
-        body = {"text": question_text[:INTERACTIVE_BODY_LIMIT] or "Please choose"}
-        return {
-            "type": "list",
-            "body": body,
-            "action": {
-                "button": "Choose",
-                "sections": [
-                    {
-                        "rows": [
-                            {
-                                "id": rid,
-                                "title": title[:24],
-                                # A list row has a line of its own for this; Meta
-                                # caps it at 72 characters.
-                                **(
-                                    {"description": truncate_whatsapp_text(desc, 72)}
-                                    if desc.strip()
-                                    else {}
-                                ),
-                            }
-                            for rid, title, desc in rows
-                        ]
-                    }
-                ],
-            },
-        }
-    return None
+    return {
+        "type": "list",
+        "body": {"text": question_text[:INTERACTIVE_BODY_LIMIT] or "Please choose"},
+        "footer": footer,
+        "action": {"button": "Choose", "sections": [{"rows": _list_rows(rows)}]},
+    }
+
+
+def _fits_as_buttons(rows: list[tuple[str, str, str]]) -> bool:
+    """Whether every option can be a button that says what it is.
+
+    A button title is cut at 20 characters, so "Schedule for Monday morning"
+    and "Schedule for Monday evening" both became "Schedule for Monday " --
+    two buttons the person cannot tell apart. Meta refuses
+    duplicate titles outright. A list row has more room and a line beneath it.
+    """
+    titles = [title for _rid, title, _desc in rows]
+    return all(0 < len(title) <= _BUTTON_TITLE_LIMIT for title in titles) and len(
+        set(titles)
+    ) == len(titles)
+
+
+def _list_rows(rows: list[tuple[str, str, str]]) -> list[dict[str, str]]:
+    """List rows whose titles are distinct, numbered when cutting made twins.
+
+    A title cut to fit keeps its whole text on the description line when the
+    option has no description of its own, so nothing the agent wrote is lost.
+    """
+    titles = [truncate_whatsapp_text(title, _LIST_TITLE_LIMIT) for _r, title, _ in rows]
+    if len(set(titles)) != len(titles):
+        titles = [
+            truncate_whatsapp_text(f"{index}. {title}", _LIST_TITLE_LIMIT)
+            for index, (_rid, title, _desc) in enumerate(rows, start=1)
+        ]
+    built: list[dict[str, str]] = []
+    for (rid, title, desc), shown in zip(rows, titles, strict=True):
+        note = desc.strip() or (title if shown != title else "")
+        row = {"id": rid, "title": shown}
+        if note:
+            row["description"] = truncate_whatsapp_text(note, _LIST_DESCRIPTION_LIMIT)
+        built.append(row)
+    return built
 
 
 def _body_with_option_notes(
@@ -181,12 +212,37 @@ def _body_with_option_notes(
     return f"{question_part}\n\n" + truncate_whatsapp_text("\n".join(notes), room)
 
 
+def whatsapp_approval_text(plan: SurfaceApprovalRenderPlan) -> str:
+    """Everything an approval says, uncut: the title, the reason, the action."""
+    parts = (
+        f"*{to_plain_text(plan.title)}*",
+        to_whatsapp_text(plan.reason or ""),
+        f"Action: {to_whatsapp_text(plan.action_summary)}"
+        if plan.action_summary
+        else "",
+    )
+    return "\n\n".join(part for part in parts if part.strip())
+
+
+def approval_needs_details_first(plan: SurfaceApprovalRenderPlan) -> bool:
+    """Whether the card's 1024 characters would cut what is being approved.
+
+    Cutting is what the card did, and the cut fell on the reason and then the
+    action: a person was asked to approve a command they could only half see.
+    When it will not fit, the whole text goes as a message of its own first.
+    """
+    return len(whatsapp_approval_text(plan)) > INTERACTIVE_BODY_LIMIT
+
+
 def build_whatsapp_approval_interactive(
-    plan: SurfaceApprovalRenderPlan,
+    plan: SurfaceApprovalRenderPlan, *, details_sent: bool = False
 ) -> dict[str, Any] | None:
     """Build a WhatsApp reply-button payload for an approval prompt, or ``None``
     if it can't be expressed natively (more than 3 buttons, or an id over 256
-    chars). Each button id packs ``callback_id~__approval__~<decision>``."""
+    chars). Each button id packs ``callback_id~__approval__~<decision>``.
+
+    ``details_sent`` means the full text already went as a message above, so
+    the card carries only the title and points up at it."""
     buttons: list[dict[str, Any]] = []
     for button in plan.buttons:
         button_id = (
@@ -203,6 +259,16 @@ def build_whatsapp_approval_interactive(
     # The title is wrapped in bold here, so its own markers are stripped first —
     # a ``*`` inside it would close the wrapper early and leave the rest literal.
     title_part = f"*{to_plain_text(plan.title)}*"
+    if details_sent:
+        body = truncate_whatsapp_text(
+            f"{title_part}\n\nThe full request is in the message above.",
+            INTERACTIVE_BODY_LIMIT,
+        )
+        return {
+            "type": "button",
+            "body": {"text": balance_whatsapp_delimiters(body)},
+            "action": {"buttons": buttons},
+        }
     # The action is the thing being approved, so it is the last line to go: the
     # reason is written by the model and can run to paragraphs, and cutting the
     # tail of a 1024-character body used to drop the action first.
@@ -234,18 +300,82 @@ def build_whatsapp_approval_interactive(
     }
 
 
-def resolve_whatsapp_send_type(*, delivery_mode: str, mime_type: str) -> str:
+def resolve_whatsapp_send_type(
+    *, delivery_mode: str, mime_type: str, size_bytes: int | None = None
+) -> str:
     """The Cloud API media type this file will be sent as.
 
-    Delegates the ``auto`` case to ``media_kind_for_mime`` because Meta caps each
-    media type separately (an image at 5 MB, a document at 100 MB) and
-    ``attachment_cap`` reads those caps off the same classification. Two copies of
-    this branch would let the size check clear a file the send then rejects.
+    Delegates the ``auto`` case to ``send_kind`` because Meta caps each media
+    type separately (an image at 5 MB, a document at 100 MB) and plays only a
+    few formats of each, and ``fits_inline`` reads the same rule. Two copies of
+    it would let the size check clear a file the send then rejects.
     """
     requested = str(delivery_mode or "auto").lower()
     if requested != "auto":
         return requested
-    return media_kind_for_mime(mime_type).value
+    return send_kind("WHATSAPP", mime_type, size_bytes=size_bytes).value
+
+
+#: Documents Meta lists by MIME type. Anything else may be refused at upload.
+_DOCUMENT_MIME_TYPES = frozenset(
+    {
+        "text/plain",
+        "application/pdf",
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+)
+
+#: Files that are text whatever their MIME type says: they open as text on
+#: the phone, and ``text/plain`` is a document type Meta accepts.
+_TEXT_LIKE_SUFFIXES = (
+    ".md",
+    ".markdown",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".jsonl",
+    ".html",
+    ".htm",
+    ".svg",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".log",
+    ".txt",
+)
+_TEXT_LIKE_MIME_TYPES = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/x-yaml",
+        "application/yaml",
+        "image/svg+xml",
+    }
+)
+
+
+def whatsapp_upload_mime(*, file_name: str, mime_type: str, kind: str) -> str:
+    """The MIME type to upload a file under, for the kind it is sent as.
+
+    A Markdown report or a CSV was refused at upload -- ``text/markdown`` is not
+    on Meta's document list -- and fell back to a link the recipient may not be
+    able to open. Text is text: uploaded as ``text/plain`` under its own file
+    name, it arrives as the file it is. Media and listed documents keep theirs.
+    """
+    base = str(mime_type or "").split(";", 1)[0].strip().lower()
+    if kind != MediaKind.DOCUMENT.value or base in _DOCUMENT_MIME_TYPES:
+        return mime_type
+    is_text = (
+        base.startswith("text/")
+        or base in _TEXT_LIKE_MIME_TYPES
+        or str(file_name or "").lower().endswith(_TEXT_LIKE_SUFFIXES)
+    )
+    return "text/plain" if is_text else mime_type
 
 
 def flow_with_message(flow: dict[str, JsonValue], message: str) -> dict[str, JsonValue]:
@@ -367,13 +497,24 @@ def whatsapp_display_resource_text(
 
 
 def truncate_whatsapp_button_text(value: str) -> str:
+    """A CTA's label, inside Meta's 20 characters *including* the ellipsis."""
     text = " ".join(str(value or "").split()) or "Open"
-    return text if len(text) <= 20 else text[:19].rstrip() + "..."
+    return truncate_whatsapp_text(text, _BUTTON_TITLE_LIMIT)
 
 
 def truncate_whatsapp_text(value: str, max_length: int) -> str:
+    """``value`` cut to at most ``max_length`` characters, ellipsis included.
+
+    It kept ``max_length - 1`` characters and then added three dots, so every
+    cut string came out two over the limit it was cut for -- and Meta refuses an
+    over-long field rather than trimming it.
+    """
     text = str(value or "").strip()
-    return text if len(text) <= max_length else text[: max_length - 1].rstrip() + "..."
+    if len(text) <= max_length:
+        return text
+    if max_length <= 3:
+        return text[:max_length]
+    return text[: max_length - 3].rstrip() + "..."
 
 
 def filename_from_url(url: str) -> str:

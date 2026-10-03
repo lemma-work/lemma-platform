@@ -36,12 +36,13 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
+from app.modules.agent_surfaces.domain.delivery_result import SurfaceDeliveryResult
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.envelope import EnvelopeVoice, SurfaceEnvelope
 from app.modules.agent_surfaces.domain.ports import ColdEmailThread
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.cold_email_thread import (
-    build_cold_email_thread,
+    open_cold_email_thread,
 )
 from app.modules.agent_surfaces.services.display_resource_content import (
     apply_file_facts,
@@ -113,26 +114,15 @@ class SurfaceEgress:
         platform that cannot start a thread -- all of which are "no", not
         failures.
         """
-        if not surface.is_active:
-            return None
-        adapter = self.delivery.adapter_registry.get(surface.surface_type)
-        if adapter is None:
-            return None
-        clean_message = sanitize_user_visible_text(message)
-        if not clean_message:
-            return None
-        sent = await adapter.send_cold_email(
+        return await open_cold_email_thread(
+            adapter=self.delivery.adapter_registry.get(surface.surface_type),
             credentials=await self.delivery.egress_credentials(surface),
+            surface=surface,
             recipient_email=recipient_email,
             subject=subject,
-            message=clean_message,
+            message=message,
             thread_seed_id=thread_seed_id,
             metadata=metadata,
-        )
-        if sent is None:
-            return None
-        return build_cold_email_thread(
-            surface=surface, recipient_email=recipient_email, sent=sent
         )
 
     async def send_agent_message_for_conversation(
@@ -142,7 +132,7 @@ class SurfaceEgress:
         message: str,
         metadata: dict[str, Any] | None = None,
         attach_files_of: RunFiles | None = None,
-    ) -> bool:
+    ) -> SurfaceDeliveryResult:
         """Send a message; ``attach_files_of`` names the run whose held files ride it.
 
         Left out, nothing is attached: a notification or a nudge is not the reply
@@ -150,13 +140,13 @@ class SurfaceEgress:
         """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
-            return False
+            return SurfaceDeliveryResult.undelivered()
         # Safety net: never deliver model reasoning/thinking tokens
         # (``<tool_call>…``) as a chat message to any surface. Some
         # OpenAI-compatible models emit these inline in the text content.
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
-            return False
+            return SurfaceDeliveryResult.undelivered()
         # A failure notice is not the reply the files were shown for. Attaching
         # them to it sent a person a half-finished run's files under an apology,
         # and -- since held files were drained on read -- spent them on it.
@@ -193,7 +183,7 @@ class SurfaceEgress:
         tool_call_id: str | None = None,
         tool_output: object | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> bool:
+    ) -> SurfaceDeliveryResult:
         """Show one resource -- a file, a table, a card -- on the surface.
 
         ``request`` is the validated model. It used to also accept the raw dict
@@ -203,7 +193,7 @@ class SurfaceEgress:
         """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
-            return False
+            return SurfaceDeliveryResult.undelivered()
         display_request = request
         render_plan = build_display_resource_render_plan(
             pod_id=target.pod_id,
@@ -236,7 +226,7 @@ class SurfaceEgress:
                 # for a file that could not be opened is a card the recipient
                 # usually cannot open either, so report that it was not shown
                 # and let the tool tell the model, instead of sending it.
-                return False
+                return SurfaceDeliveryResult.undelivered()
             if resolved.files:
                 # A PDF's page image and the document itself are one envelope,
                 # so they arrive in that order rather than as two sends racing
@@ -288,7 +278,7 @@ class SurfaceEgress:
         tool_call_id: str | None = None,
         narration: str | None = None,
         attach_files_of: RunFiles | None = None,
-    ) -> bool:
+    ) -> SurfaceDeliveryResult:
         """Render the conversation's pending ``ask_user`` questions on its surface.
 
         Triggered by the WAITING run event. Reads the paused ask_user tool-call
@@ -304,7 +294,7 @@ class SurfaceEgress:
                 "agent_surfaces.egress.ask_user_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
-            return False
+            return SurfaceDeliveryResult.undelivered()
         pending, validated = request
         plan = build_ask_user_render_plan(
             request=validated,
@@ -341,7 +331,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         kind: str,
         tool_call_id: str | None = None,
-    ) -> bool:
+    ) -> SurfaceDeliveryResult:
         """Ask a paused run's question or approval as a plain message.
 
         For a prompt whose native render did not arrive: the run is parked on an
@@ -351,11 +341,11 @@ class SurfaceEgress:
         """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
-            return False
+            return SurfaceDeliveryResult.undelivered()
         if kind == "ask_user":
             request = await self._pending_ask_user(conversation_id)
             if request is None:
-                return False
+                return SurfaceDeliveryResult.undelivered()
             pending, validated = request
             plan = build_ask_user_render_plan(
                 request=validated,
@@ -368,11 +358,11 @@ class SurfaceEgress:
                 self.uow, conversation_id
             )
             if pending is None or not pending.is_approval:
-                return False
+                return SurfaceDeliveryResult.undelivered()
             plan = await approval_plan(self.uow, pending, conversation_id, tool_call_id)
             lead = "I need your approval to go on, but I couldn't show the buttons. Reply here to answer."
         else:
-            return False
+            return SurfaceDeliveryResult.undelivered()
         delivered = await self.delivery.deliver_envelope(
             target,
             envelope=SurfaceEnvelope(text=f"{lead}\n\n{plan.to_plain_text()}"),
@@ -416,7 +406,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         tool_call_id: str | None = None,
         narration: str | None = None,
-    ) -> bool:
+    ) -> SurfaceDeliveryResult:
         """A link to the site their agent is stuck at. See `surface_sign_in`.
 
         False when this conversation has no surface: a web-only one has the
@@ -438,7 +428,7 @@ class SurfaceEgress:
                 "agent_surfaces.egress.sign_in_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
-            return False
+            return SurfaceDeliveryResult.undelivered()
         return await self.delivery.deliver_envelope(
             target,
             envelope=envelope,
@@ -453,7 +443,7 @@ class SurfaceEgress:
         tool_call_id: str | None = None,
         narration: str | None = None,
         attach_files_of: RunFiles | None = None,
-    ) -> bool:
+    ) -> SurfaceDeliveryResult:
         """Render a pending ``request_approval`` on the surface.
 
         Delivers native Approve/Deny buttons where supported (the tapped decision
@@ -478,7 +468,7 @@ class SurfaceEgress:
                 "agent_surfaces.egress.approval_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
-            return False
+            return SurfaceDeliveryResult.undelivered()
         # Native buttons, then a text prompt, then admit it reached nobody.
         files, held = await held_files_for_run(
             uow=self.uow,
@@ -513,7 +503,7 @@ class SurfaceEgress:
         conversation_id: UUID,
         path: str,
         caption: str | None = None,
-    ) -> bool:
+    ) -> SurfaceDeliveryResult:
         """Deliver a pod audio file as a native voice note on the surface.
 
         Called by the ``say`` tool. Tries the platform's native voice note
@@ -522,7 +512,7 @@ class SurfaceEgress:
         """
         target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
-            return False
+            return SurfaceDeliveryResult.undelivered()
         # The caption is model-authored — strip any reasoning before delivery.
         caption = sanitize_user_visible_text(caption) if caption else caption
         loaded = await load_pod_file_bytes(
@@ -538,7 +528,7 @@ class SurfaceEgress:
                 conversation_id=str(conversation_id),
                 path=path,
             )
-            return False
+            return SurfaceDeliveryResult.undelivered()
         entity, content = loaded
 
         # `or` was not enough: a file stored without an extension is typed

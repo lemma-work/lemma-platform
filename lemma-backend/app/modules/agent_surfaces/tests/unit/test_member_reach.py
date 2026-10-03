@@ -57,12 +57,12 @@ async def test_send_to_member_reuses_existing_thread():
         AsyncMock(return_value=link)
     )
 
-    undeliverable = await reach.send_to_member(
+    result = await reach.send_to_member(
         surface=surface,
         user_id=uuid4(),
         message="Your report is ready.",
     )
-    assert undeliverable is None
+    assert result
     assert "Your report is ready." in adapter.send_message.await_args.kwargs["message"]
 
 
@@ -108,13 +108,13 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
     )
     reach.conversation_link_repository.get_by_conversation_id.return_value = latest_link
 
-    undeliverable = await reach.send_to_member(
+    result = await reach.send_to_member(
         surface=surface,
         user_id=user_id,
         message="Use the newest thread.",
     )
 
-    assert undeliverable is None
+    assert result
     reach.conversation_link_repository.get_latest_by_surface_and_external_user.assert_awaited_once_with(
         surface_id=surface.id,
         external_user_id="777",
@@ -196,8 +196,8 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
         message="system only",
     )
 
-    assert custom_sent is None
-    assert system_sent is None
+    assert custom_sent
+    assert system_sent
     first_event = adapter.send_message.await_args_list[0].kwargs["event"]
     second_event = adapter.send_message.await_args_list[1].kwargs["event"]
     assert first_event.external_thread_id == "custom-chat"
@@ -212,14 +212,14 @@ async def test_send_to_member_says_the_person_is_not_in_the_pod():
         get_user_pod_ids=AsyncMock(return_value=[uuid4()])  # a different pod
     )
 
-    undeliverable = await reach.send_to_member(
+    result = await reach.send_to_member(
         surface=surface,
         user_id=uuid4(),
         message="x",
     )
     # One 404 for six causes told a caller nothing: "no reachable conversation"
     # is not what happened to somebody who is not in the pod at all.
-    assert undeliverable == UndeliverableReason.NOT_A_POD_MEMBER
+    assert result.reason == UndeliverableReason.NOT_A_POD_MEMBER
     adapter.send_message.assert_not_awaited()
 
 
@@ -239,12 +239,12 @@ async def test_send_to_member_says_they_have_never_written_in():
         AsyncMock(return_value=None)
     )
 
-    undeliverable = await reach.send_to_member(
+    result = await reach.send_to_member(
         surface=surface,
         user_id=uuid4(),
         message="x",
     )
-    assert undeliverable == UndeliverableReason.never_interacted_on("SLACK")
+    assert result.reason == UndeliverableReason.never_interacted_on("SLACK")
     adapter.send_message.assert_not_awaited()
 
 
@@ -254,11 +254,9 @@ async def test_send_to_member_says_the_surface_is_switched_off():
     adapter = AsyncMock()
     reach = build_member_reach(adapter=adapter, surfaces=[surface])
 
-    undeliverable = await reach.send_to_member(
-        surface=surface, user_id=uuid4(), message="x"
-    )
+    result = await reach.send_to_member(surface=surface, user_id=uuid4(), message="x")
 
-    assert undeliverable == UndeliverableReason.SURFACE_NOT_ACTIVE
+    assert result.reason == UndeliverableReason.SURFACE_NOT_ACTIVE
     adapter.send_message.assert_not_awaited()
 
 
@@ -283,10 +281,8 @@ async def test_send_to_member_says_the_person_is_in_another_workspace():
         )
     )
 
-    undeliverable = await reach.send_to_member(
-        surface=surface, user_id=uuid4(), message="x"
-    )
+    result = await reach.send_to_member(surface=surface, user_id=uuid4(), message="x")
 
-    assert undeliverable == UndeliverableReason.wrong_tenant_on("SLACK")
-    assert undeliverable != UndeliverableReason.never_interacted_on("SLACK")
+    assert result.reason == UndeliverableReason.wrong_tenant_on("SLACK")
+    assert result.reason != UndeliverableReason.never_interacted_on("SLACK")
     adapter.send_message.assert_not_awaited()

@@ -269,7 +269,7 @@ async def test_a_failed_final_email_keeps_its_files_for_that_run_and_no_other(
         message="Here is the Q3 report.",
         attach_files_of=RunFiles(run_a),
     )
-    assert delivered is True
+    assert delivered
     assert _attachments(adapter, 0) == ["q3.pdf"]
     assert await held_display_paths(conversation_id, RunFiles(run_a)) == []
 

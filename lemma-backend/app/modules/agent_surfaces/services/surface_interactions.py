@@ -52,14 +52,27 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_activity import (  # noqa: E501
+    touch_inbound,
+)
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_free_text_answer_wanted,
+)
+from app.modules.agent_surfaces.services.partial_answers import (
+    collect_answers,
+    forget_answers,
+    progress_text,
+)
+from app.modules.agent_surfaces.services.stale_interactions import (
+    STALE_INTERACTION_TEXT,
+    is_still_open,
 )
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     merge_other_answers,
 )
 from app.modules.agent_surfaces.services.interaction_helpers import (
     InteractionDelivery,
+    interaction_arrival_number,
     interaction_sender_matches,
     parse_interaction_target,
     resolve_current_interaction_delivery,
@@ -150,7 +163,9 @@ class SurfaceInteractionMixin:
                     if surface is not None:
                         break
             if surface is not None:
-                credentials = await self.credential_resolver.for_surface(surface)
+                credentials = await self.credential_resolver.for_surface(
+                    surface, arrived_on=interaction_arrival_number(parsed)
+                )
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
@@ -227,6 +242,9 @@ class SurfaceInteractionMixin:
         delivery, tool_call_id = located
         attempt.delivery = delivery
         link, surface, _adapter, _credentials = delivery
+        if interaction_sender_matches(link, parsed):
+            # A tap reopens a reply window; see `conversation_link_activity`.
+            await touch_inbound(self.uow.session, link_id=link.id)
 
         if parsed.interaction_state == "other":
             # Remember that they asked to type the answer. Without this the
@@ -303,6 +321,11 @@ class SurfaceInteractionMixin:
             )
             return
         attempt.claimed = True
+        # After the claim, so a redelivered tap stays a silent duplicate.
+        if parsed.action != "retry" and await self._refused_as_stale(
+            parsed, delivery, tool_call_id
+        ):
+            return
 
         conversation = await agent_conversations.surface_conversation(
             self.uow, link.conversation_id
@@ -351,6 +374,24 @@ class SurfaceInteractionMixin:
             authorized_surface_ids=authorized_surface_ids,
         )
         return (delivery, tool_call_id) if delivery is not None else None
+
+    async def _refused_as_stale(
+        self,
+        parsed: ParsedSurfaceInteraction,
+        delivery: InteractionDelivery,
+        tool_call_id: str,
+    ) -> bool:
+        """Say so, when the tapped question is no longer being asked."""
+        if await is_still_open(
+            self.uow,
+            conversation_id=delivery[0].conversation_id,
+            tool_call_id=tool_call_id,
+        ):
+            return False
+        await self._acknowledge(
+            parsed, delivery, text=STALE_INTERACTION_TEXT, clear_actions=True
+        )
+        return True
 
     async def _acknowledge(
         self,
@@ -427,7 +468,19 @@ class SurfaceInteractionMixin:
             response: dict[str, object] = {}
         else:
             decision = AgentRunApprovalDecision.APPROVE_ONCE
-            response = {"answers": merge_other_answers(parsed.values)}
+            collected = await collect_answers(
+                self.uow,
+                conversation_id=conversation.id,
+                tool_call_id=tool_call_id,
+                submitted=merge_other_answers(parsed.values),
+            )
+            if not collected.complete:  # One of several; see `partial_answers`.
+                attempt.applied = True
+                await self._acknowledge(
+                    parsed, delivery, text=progress_text(collected.remaining)
+                )
+                return
+            response = {"answers": collected.answers}
         auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
             user_id=conversation.user_id,
             pod_id=conversation.pod_id,
@@ -446,6 +499,8 @@ class SurfaceInteractionMixin:
         finally:
             reset_current_context(token)
         attempt.applied = True
+        if parsed.approval_decision is None:
+            await forget_answers(self.uow, conversation_id=conversation.id)
         await self._acknowledge(parsed, delivery, text="Done", clear_actions=True)
 
     async def _recover_from_failed_interaction(

@@ -97,7 +97,7 @@ async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
     handler = AsyncMock()
     # Sync on the real service: the delivery is split before anything is
     # awaited, and every non-batching platform hands the request back.
-    handler.split_webhook_deliveries = lambda request: [request]
+    handler.split_webhook_deliveries = lambda request, **_: [request]
     context = _reply_context()
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
@@ -135,7 +135,7 @@ async def test_a_batched_delivery_enqueues_one_job_per_message(monkeypatch):
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
     handler.prepare_ingress.return_value = _reply_context()
-    handler.split_webhook_deliveries = lambda request: [request, request, request]
+    handler.split_webhook_deliveries = lambda request, **_: [request, request, request]
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
@@ -170,7 +170,7 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
     handler = AsyncMock()
     # Sync on the real service: the delivery is split before anything is
     # awaited, and every non-batching platform hands the request back.
-    handler.split_webhook_deliveries = lambda request: [request]
+    handler.split_webhook_deliveries = lambda request, **_: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = True
@@ -199,7 +199,7 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
     handler = AsyncMock()
     # Sync on the real service: the delivery is split before anything is
     # awaited, and every non-batching platform hands the request back.
-    handler.split_webhook_deliveries = lambda request: [request]
+    handler.split_webhook_deliveries = lambda request, **_: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
@@ -229,7 +229,7 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     handler = AsyncMock()
     # Sync on the real service: the delivery is split before anything is
     # awaited, and every non-batching platform hands the request back.
-    handler.split_webhook_deliveries = lambda request: [request]
+    handler.split_webhook_deliveries = lambda request, **_: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = False
     handler.try_handle_interaction.return_value = False
@@ -291,7 +291,7 @@ async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
     handler = AsyncMock()
     # Sync on the real service: the delivery is split before anything is
     # awaited, and every non-batching platform hands the request back.
-    handler.split_webhook_deliveries = lambda request: [request]
+    handler.split_webhook_deliveries = lambda request, **_: [request]
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
@@ -361,7 +361,7 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
     handler = AsyncMock()
     # Sync on the real service: the delivery is split before anything is
     # awaited, and every non-batching platform hands the request back.
-    handler.split_webhook_deliveries = lambda request: [request]
+    handler.split_webhook_deliveries = lambda request, **_: [request]
     handler.try_handle_channel_setup.return_value = False
     handler.try_handle_lifecycle.return_value = True
     job_queue = AsyncMock()
@@ -384,3 +384,93 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
     handler.try_handle_interaction.assert_not_awaited()
     handler.prepare_ingress.assert_not_awaited()
     job_queue.enqueue.assert_not_awaited()
+
+
+def _parts(count: int) -> list[handlers.SurfacePlatformWebhookIngress]:
+    return [
+        handlers.SurfacePlatformWebhookIngress(source="whatsapp", payload={"part": n})
+        for n in range(count)
+    ]
+
+
+async def _prepared(_request) -> OnboardingIngressResult:
+    return OnboardingIngressResult(True, _reply_context())
+
+
+@pytest.mark.asyncio
+async def test_a_tap_behind_a_message_in_one_delivery_is_still_a_tap():
+    """Interactions are tried per part, after the split: a parser reads only the
+    first message, so a button reply second in a batch used to become text."""
+    tried: list[int] = []
+
+    async def is_tap(part) -> bool:
+        tried.append(part.payload["part"])
+        return part.payload["part"] == 1
+
+    job_queue = AsyncMock()
+
+    await handlers._enqueue_deliveries(
+        _parts(2),
+        SurfaceWebhookReceivedEvent(source="whatsapp", payload={"entry": []}),
+        onboarding_handler=_prepared,
+        uow_factory=partial(_mock_uow_factory, AsyncMock()),
+        job_queue=job_queue,
+        event_dedup_store=AsyncMock(),
+        try_interaction=is_tap,
+    )
+
+    assert tried == [0, 1]
+    job_queue.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_one_failing_part_does_not_hold_back_the_others():
+    prepared: list[int] = []
+
+    async def prepare(request) -> OnboardingIngressResult:
+        prepared.append(request.payload["part"])
+        if request.payload["part"] == 0:
+            raise RuntimeError("part zero is broken")
+        return OnboardingIngressResult(True, _reply_context())
+
+    job_queue = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="part zero"):
+        await handlers._enqueue_deliveries(
+            _parts(3),
+            SurfaceWebhookReceivedEvent(source="whatsapp", payload={"entry": []}),
+            onboarding_handler=prepare,
+            uow_factory=partial(_mock_uow_factory, AsyncMock()),
+            job_queue=job_queue,
+            event_dedup_store=AsyncMock(),
+            try_interaction=AsyncMock(return_value=False),
+        )
+
+    assert prepared == [0, 1, 2]
+    assert job_queue.enqueue.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_an_expired_setup_form_is_answered_and_never_queued():
+    from app.modules.agent_surfaces.services.onboarding_inputs import (
+        ExpiredOnboardingInput,
+    )
+
+    async def expired(_request):
+        raise ExpiredOnboardingInput("the form outlived its code")
+
+    told = AsyncMock(return_value=True)
+    uow = AsyncMock()
+
+    context = await handlers._context_for_delivery(
+        _parts(1)[0],
+        onboarding_handler=expired,
+        uow_factory=partial(_mock_uow_factory, uow),
+        source="whatsapp",
+        event_dedup_store=AsyncMock(),
+        tell=told,
+    )
+
+    assert context is None
+    assert told.await_args.kwargs["text"] == handlers.EXPIRED_FORM_TEXT
+    uow.assert_not_called()

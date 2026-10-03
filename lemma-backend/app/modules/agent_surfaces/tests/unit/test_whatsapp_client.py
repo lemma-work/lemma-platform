@@ -14,6 +14,8 @@ from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
     classify_whatsapp_error,
+    classify_whatsapp_idempotent_error,
+    whatsapp_retry_after,
     resolve_api_base,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.service import (
@@ -67,6 +69,38 @@ def test_classify_whatsapp_error():
         is DeliveryClassification.TRANSIENT
     )
     assert classify_whatsapp_error(ValueError("x")) is DeliveryClassification.PERMANENT
+
+
+@pytest.mark.parametrize("code", [4, 80007, 130429, 131048, 131056])
+def test_meta_throttling_codes_are_retried_although_they_arrive_as_400(code):
+    error = WhatsAppApiError(
+        method="m", status_code=400, body_excerpt=f'{{"error":{{"code":{code}}}}}'
+    )
+    assert classify_whatsapp_error(error) is DeliveryClassification.TRANSIENT
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        WhatsAppApiError(method="m", status_code=500),
+        WhatsAppApiError(method="m", status_code=504),
+        httpx.ReadTimeout("slow"),
+        httpx.RemoteProtocolError("dropped"),
+    ],
+)
+def test_a_message_that_may_have_been_delivered_is_not_sent_again(error):
+    """Meta may have delivered it before failing to answer; a retry duplicates."""
+    assert classify_whatsapp_error(error) is DeliveryClassification.PERMANENT
+    # An upload repeated is only an orphaned media id, so it does retry.
+    assert classify_whatsapp_idempotent_error(error) is DeliveryClassification.TRANSIENT
+
+
+def test_the_pair_rate_limit_waits_before_the_retry():
+    pair = WhatsAppApiError(
+        method="m", status_code=400, body_excerpt='{"error":{"code":131056}}'
+    )
+    assert whatsapp_retry_after(pair) == 6.0
+    assert whatsapp_retry_after(WhatsAppApiError(method="m", status_code=429)) is None
 
 
 @pytest.mark.asyncio

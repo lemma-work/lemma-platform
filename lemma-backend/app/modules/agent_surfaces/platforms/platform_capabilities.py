@@ -159,7 +159,8 @@ class PlatformCapabilities:
     # is legitimately not on system credentials.
     has_shared_system_bot: bool = False
     # Does ``say`` land as a real voice-note bubble? Only where the adapter
-    # implements ``_render_voice`` (Telegram's sendVoice). Everywhere else the
+    # implements ``_render_voice`` (Telegram's sendVoice, WhatsApp's audio
+    # message flagged ``voice``). Everywhere else the
     # same audio is delivered as an ordinary attachment, or as a link where the
     # platform cannot receive one -- see ``PlatformEnvelopeDelivery._deliver_voice``.
     supports_native_voice: bool = False
@@ -169,6 +170,13 @@ class PlatformCapabilities:
     # for it, so its messages go to that pod's surface and no other, whichever
     # pods on the shared number the sender is in.
     bot_creates_groups: bool = False
+    # Does a typed reply answer a question that was shown with native controls?
+    #
+    # On WhatsApp the buttons sit under a free-text box the person can always
+    # type into, and the card says so ("Or just type your own answer"). Where
+    # this is True, a question delivered natively still accepts the next typed
+    # message as its answer, instead of leaving the run waiting on a tap.
+    typed_reply_answers_native_choices: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -299,6 +307,9 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # ``domain/addressing``).
         is_channel_capable=True,
         bot_creates_groups=True,
+        # An OGG/Opus audio message flagged `voice`, so a voice-note bubble.
+        supports_native_voice=True,
+        typed_reply_answers_native_choices=True,
         markdown_mode="whatsapp",
         formatting_style=_WHATSAPP_FORMATTING,
         soft_char_limit=1500,
