@@ -6,6 +6,8 @@ import json
 
 from typing import Any
 
+import httpx
+
 from harness.run import a_name_for
 from harness.drivers.api import UnexpectedResponse, every_item, items_of
 
@@ -413,6 +415,46 @@ class DatastoreSteps:
             params={"path": path},
             what=f"{self.label} making a signed link to {path!r}",
         )
+
+    async def rewrites_file(
+        self,
+        path: str,
+        *,
+        content: bytes,
+        in_pod: JSON,
+        content_type: str = "text/markdown",
+    ) -> JSON:
+        return await self.api.patch(
+            f"/pods/{in_pod['id']}/datastore/files/by-path",
+            what=f"{self.label} rewriting {path!r}",
+            files={
+                "path": (None, path),
+                "data": (path.rsplit("/", 1)[-1], content, content_type),
+            },
+        )
+
+    async def a_stranger_opens(self, link: JSON) -> bytes | None:
+        """What somebody holding the link, with no account at all, is served.
+
+        None when they are refused. Not through this person's client: that one
+        carries their session, and the whole point is that nobody's does.
+        """
+        return await self._without_a_session(link)
+
+    async def a_stranger_loads_from(self, link: JSON, *, embedded: str) -> bytes | None:
+        """What the shared page's reader is served for something it embeds, by
+        the reference the page writes it with. None when refused."""
+        return await self._without_a_session(link, embedded=embedded)
+
+    async def _without_a_session(
+        self, link: JSON, *, embedded: str | None = None
+    ) -> bytes | None:
+        code = str(link["signed_url"]).rstrip("/").rsplit("/", 1)[-1]
+        path = f"/s/{code}" + ("/a" if embedded is not None else "")
+        params = {"ref": embedded} if embedded is not None else None
+        async with httpx.AsyncClient(base_url=self.api.base_url, timeout=60) as nobody:
+            response = await nobody.get(path, params=params)
+        return response.content if response.status_code == 200 else None
 
     async def downloads(self, path: str, *, in_pod: JSON) -> bytes:
         response = await self.api.call(

@@ -631,6 +631,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.schema_manager.dropped_schema_pod.observed': EventSpec('debug', frozenset({'pod_id'})),
     'datastore.search.readable_set_enumerated': EventSpec('warning', frozenset({'candidates', 'pod_id', 'post_filtered', 'requested'})),
     'datastore.signed_url.cache_population_failed.observed': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
+    'datastore.signed_url.live_cache_write_failed.observed': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'datastore.signed_url.purged_expired_link_rows.observed': EventSpec('info', frozenset({'count'})),
     'datastore.signed_url.rehydrated_link_from_record.observed': EventSpec('debug', frozenset({'pod_id'})),
     'datastore.signed_url.revocation_cache_invalidation_failed.observed': EventSpec('warning', frozenset({'error_type', 'pod_id'})),

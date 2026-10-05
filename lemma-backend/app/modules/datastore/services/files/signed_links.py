@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from app.core.authorization.context import Context
+from app.core.authorization.context import ActorType, Context
 from app.modules.datastore.domain.errors import (
     DatastoreRevocationIncompleteError,
     DatastoreValidationError,
@@ -30,6 +30,23 @@ from app.modules.datastore.services.files.signed_url import (
     SignedUrlRevocationIncomplete,
     get_signed_url_store,
 )
+
+
+def minting_workload(ctx: Context) -> str | None:
+    """``agent:<id>`` when an agent holding less than its person minted this.
+
+    A live link is re-checked on every fetch, and the check has to be the one
+    the minter was held to: the person's access, intersected with the agent's
+    when an agent acts for them. The pod's default agent acts *as* the person,
+    so it is recorded as the person alone.
+    """
+    if ctx.is_user_equivalent:
+        return None
+    if ctx.actor_type is ActorType.DELEGATED_USER_WORKLOAD:
+        return ctx.actor_id
+    if ctx.actor_type in (ActorType.AGENT, ActorType.FUNCTION):
+        return f"{ctx.actor_type.value.lower()}:{ctx.actor_id}"
+    return None
 
 
 class SignedLinks:
@@ -74,6 +91,7 @@ class SignedLinks:
             file=entity,
             links=self._links(),
             created_by_user_id=ctx.user_id,
+            minted_by_workload=minting_workload(ctx),
             expires_seconds=expires_seconds,
             max_hits=max_hits,
         )

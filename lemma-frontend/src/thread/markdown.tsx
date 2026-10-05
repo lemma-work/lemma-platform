@@ -100,6 +100,19 @@ const schema = {
     },
 };
 
+/** The same, with pictures. Only for a caller that says where a picture's
+ *  bytes come from: in chat an `<img>` an agent wrote would fetch from
+ *  wherever it pointed the moment the message drew, which is why the default
+ *  drops them. */
+const schemaWithImages = {
+    ...schema,
+    tagNames: [...schema.tagNames, "img"],
+    attributes: {
+        ...schema.attributes,
+        img: ["src", "alt", "title", "width", "height"],
+    },
+};
+
 function codeText(node: Element | Root["children"][number]): string {
     if (node.type === "text") return node.value;
     return "children" in node ? node.children.map(codeText).join("") : "";
@@ -109,18 +122,27 @@ function CopySection({ children, text }: { children: ReactNode; text: string }) 
     return <div className="copy-section"><CopyButton text={text} label="Copy section" />{children}</div>;
 }
 
-export function Prose({ text }: { text: string }) {
+export function Prose({ text, imageSource }: {
+    text: string;
+    /** Where a picture written as `src` is fetched from, or null to drop it.
+     *  Without one, pictures are not drawn at all. */
+    imageSource?: (src: string) => string | null;
+}) {
     return (
         <div className="md">
             <Markdown
                 components={{
+                    img: ({ node: _node, src, alt, ...props }) => {
+                        const resolved = imageSource && typeof src === "string" ? imageSource(src) : null;
+                        return resolved ? <img {...props} src={resolved} alt={alt ?? ""} loading="lazy" /> : null;
+                    },
                     pre: ({ children, node, ...props }) => <CopySection text={node ? codeText(node) : ""}><pre {...props}>{children}</pre></CopySection>,
                     blockquote: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><blockquote {...props}>{children}</blockquote></CopySection>,
                     details: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><details {...props}>{children}</details></CopySection>,
                     table: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><table {...props}>{children}</table></CopySection>,
                 }}
                 remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw, [rehypeSanitize, schema], narrowStyles]}
+                rehypePlugins={[rehypeRaw, [rehypeSanitize, imageSource ? schemaWithImages : schema], narrowStyles]}
             >
                 {text}
             </Markdown>
