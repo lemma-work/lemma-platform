@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { allConversationsKey, applyArchived, applyTitle, patchConversationLists, refreshConversationLists, titleToSend, titleToShow, unbound, UNTITLED } from "../src/thread/conversation-list.ts";
+import { allConversationsKey, applyArchived, applyTitle, patchConversationLists, refreshConversationLists, seedTitle, titleToSend, titleToShow, unbound, UNTITLED, withNewConversation } from "../src/thread/conversation-list.ts";
 import type { ConversationRef } from "../src/data/types.ts";
 
 function list(): ConversationRef[] {
@@ -178,4 +178,28 @@ test("a refresh cuts every loaded view back to its first page, then asks the ser
     assert.deepEqual(trimmed.pageParams, [null]);
     assert.equal(cache.getQueryData<Pages>(allConversationsKey("other-pod", ""))!.pages.length, 2, "another pod is left alone");
     assert.deepEqual(cache.invalidated, [["conversations", "pod"]]);
+});
+
+test("a conversation created here is at the top of the history at once, named for what was asked", () => {
+    // Refetched instead, it came back "Untitled" for the length of the run.
+    const made: ConversationRef = { id: "new", title: UNTITLED, at: "Now", kind: "CHAT", agentId: null };
+    const next = withNewConversation(list(), made, "Draft the renewal email for Acme");
+
+    assert.deepEqual(next?.map((entry) => [entry.id, entry.title]).slice(0, 2), [
+        ["new", "Draft the renewal email for Acme"],
+        ["a", "Renewal triage"],
+    ]);
+});
+
+test("a conversation already listed, or one with a named bot, is left where it is", () => {
+    const before = list();
+    assert.equal(withNewConversation(before, { ...before[0] }, "anything"), before);
+    // The short list holds the space's own assistant only.
+    assert.equal(withNewConversation(before, { id: "bot", title: UNTITLED, at: "Now", kind: "CHAT", agentId: "agent-1" }, "hi"), before);
+});
+
+test("a long first message is cut to one line", () => {
+    assert.equal(seedTitle("  Look at\nthe   numbers  "), "Look at the numbers");
+    const long = seedTitle("word ".repeat(30));
+    assert.ok(long.length <= 60 && long.endsWith("…"));
 });

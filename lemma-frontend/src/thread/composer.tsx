@@ -1,5 +1,5 @@
 import { VoiceIcon, StopIcon, SendIcon, AttachIcon, CloseIcon, FileIcon } from "@/ui/icons";
-import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
     canSend,
     describeSize,
@@ -7,6 +7,7 @@ import {
     type Attachment,
 } from "./attachments";
 import { composerActions, type Queued } from "./queued";
+import { draftStore, readDraft, writeDraft } from "./drafts";
 
 /** Where the next message goes, when there is more than one place: a note to
  *  the bot alone, or a reply that goes out on the chat platform. Each option
@@ -59,7 +60,13 @@ function Choices({ choices }: { choices: ComposerChoices }) {
  *  card docked above the composer gives way to it. */
 const TALL_PX = 110;
 
-export function Composer({
+/** How long typing has to pause before the draft is written down. */
+const DRAFT_SAVE_MS = 300;
+
+/** Memoised: the pane around it re-renders for every few tokens of a reply,
+ *  and a box redrawn that often is a box that lags behind typing. Everything
+ *  the pane hands it is stable for that reason. */
+export const Composer = memo(function Composer({
     placeholder,
     note,
     busy,
@@ -78,6 +85,7 @@ export function Composer({
     onWithdraw,
     choices,
     onTall,
+    draftKey,
 }: {
     placeholder: string;
     note?: string;
@@ -116,10 +124,45 @@ export function Composer({
      *  A long draft and a docked card together left the conversation a line
      *  tall; the card folds on this. */
     onTall?: (tall: boolean) => void;
+    /** Where an unsent draft is kept in this browser, so it is still here
+     *  after switching away and back (`drafts.ts`). Null keeps it only as long
+     *  as the box. */
+    draftKey?: string | null;
 }) {
     const hintId = useId();
     const chosen = choices?.options.find((option) => option.id === choices.value) ?? null;
-    const [draft, setDraft] = useState("");
+    const [draft, setDraft] = useState(() => {
+        const store = draftStore();
+        return store && draftKey ? readDraft(store, draftKey) : "";
+    });
+
+    /* Written a moment after typing stops, and at once when the box empties —
+       a message just sent must not come back as a draft because the page
+       closed inside that moment. A key that changes under the draft is a new
+       conversation getting its id: the draft moves with it. */
+    const savedUnder = useRef(draftKey ?? null);
+    const latestDraft = useRef(draft);
+    latestDraft.current = draft;
+    useEffect(() => {
+        const store = draftStore();
+        if (!store) return;
+        const previous = savedUnder.current;
+        if (previous !== (draftKey ?? null)) {
+            if (previous) writeDraft(store, previous, "");
+            savedUnder.current = draftKey ?? null;
+        }
+        if (!draftKey) return;
+        if (!draft.trim()) {
+            writeDraft(store, draftKey, "");
+            return;
+        }
+        const timer = setTimeout(() => writeDraft(store, draftKey, draft), DRAFT_SAVE_MS);
+        return () => clearTimeout(timer);
+    }, [draft, draftKey]);
+    useEffect(() => () => {
+        const store = draftStore();
+        if (store && savedUnder.current) writeDraft(store, savedUnder.current, latestDraft.current);
+    }, []);
     const [over, setOver] = useState(false);
     const [refused, setRefused] = useState<string | null>(null);
     const input = useRef<HTMLTextAreaElement | null>(null);
@@ -353,4 +396,4 @@ export function Composer({
             </div>
         </div>
     );
-}
+});

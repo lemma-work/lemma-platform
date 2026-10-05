@@ -140,6 +140,39 @@ export function patchConversationLists(cache: ConversationCache, podId: string, 
     }
 }
 
+/** How a conversation the server has not named yet is listed: the start of
+ *  what was asked, on one line. */
+export function seedTitle(firstMessage: string): string {
+    const line = firstMessage.trim().split(/\s+/).join(" ");
+    return line.length > 60 ? line.slice(0, 59).trimEnd() + "…" : line;
+}
+
+/** A conversation just created here, put at the top of the list now.
+ *
+ *  The history used to learn of it by refetching after the create, and then
+ *  showed it as "Untitled" for the length of the run — the server only titles
+ *  a conversation once its first run is under way. Named for what was asked
+ *  instead, until the title event on the stream replaces it (`applyTitle`).
+ *  Only the short list: it is the one beside the conversation, and it holds
+ *  only the space's own assistant, so a conversation with a named bot is
+ *  not one of its rows. */
+export function withNewConversation(
+    list: ConversationRef[] | undefined,
+    created: ConversationRef,
+    firstMessage: string,
+): ConversationRef[] | undefined {
+    if (!list || created.agentId || list.some((entry) => entry.id === created.id)) return list;
+    const named = created.title === UNTITLED && firstMessage.trim() ? { ...created, title: seedTitle(firstMessage) } : created;
+    return [named, ...list];
+}
+
+export function insertConversation(cache: ConversationCache, podId: string, created: ConversationRef, firstMessage: string): void {
+    const key = ["conversations", podId];
+    const list = cache.getQueryData<ConversationRef[]>(key);
+    const next = withNewConversation(list, created, firstMessage);
+    if (next !== list) cache.setQueryData(key, next);
+}
+
 /** Ask the server for the conversation lists again — the page 1 of each.
  *
  *  An infinite query refetches every page it holds, one after another, and a
