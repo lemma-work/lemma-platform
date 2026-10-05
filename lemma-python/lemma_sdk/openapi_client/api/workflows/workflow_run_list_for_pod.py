@@ -18,6 +18,7 @@ def _get_kwargs(
     *,
     limit: int | Unset = 50,
     status: list[WorkflowRunStatus] | None | Unset = UNSET,
+    workflow_id: None | Unset | UUID = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
@@ -37,6 +38,15 @@ def _get_kwargs(
     else:
         json_status = status
     params["status"] = json_status
+
+    json_workflow_id: None | str | Unset
+    if isinstance(workflow_id, Unset):
+        json_workflow_id = UNSET
+    elif isinstance(workflow_id, UUID):
+        json_workflow_id = str(workflow_id)
+    else:
+        json_workflow_id = workflow_id
+    params["workflow_id"] = json_workflow_id
 
     json_page_token: None | str | Unset
     if isinstance(page_token, Unset):
@@ -94,18 +104,21 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
     status: list[WorkflowRunStatus] | None | Unset = UNSET,
+    workflow_id: None | Unset | UUID = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkflowRunListResponse]:
     """List Workflow Runs In Pod
 
      Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has
     been happening here' makes one request instead of one per workflow. Filter with `status`
-    (repeatable).
+    (repeatable) and `workflow_id`. Each run carries its `title` and, while it has one, the active wait
+    as `waiting_on`.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
         status (list[WorkflowRunStatus] | None | Unset):
+        workflow_id (None | Unset | UUID):
         page_token (None | str | Unset):
 
     Raises:
@@ -120,6 +133,7 @@ def sync_detailed(
         pod_id=pod_id,
         limit=limit,
         status=status,
+        workflow_id=workflow_id,
         page_token=page_token,
     )
 
@@ -136,18 +150,21 @@ def sync(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
     status: list[WorkflowRunStatus] | None | Unset = UNSET,
+    workflow_id: None | Unset | UUID = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkflowRunListResponse | None:
     """List Workflow Runs In Pod
 
      Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has
     been happening here' makes one request instead of one per workflow. Filter with `status`
-    (repeatable).
+    (repeatable) and `workflow_id`. Each run carries its `title` and, while it has one, the active wait
+    as `waiting_on`.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
         status (list[WorkflowRunStatus] | None | Unset):
+        workflow_id (None | Unset | UUID):
         page_token (None | str | Unset):
 
     Raises:
@@ -163,6 +180,7 @@ def sync(
         client=client,
         limit=limit,
         status=status,
+        workflow_id=workflow_id,
         page_token=page_token,
     ).parsed
 
@@ -173,18 +191,21 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
     status: list[WorkflowRunStatus] | None | Unset = UNSET,
+    workflow_id: None | Unset | UUID = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkflowRunListResponse]:
     """List Workflow Runs In Pod
 
      Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has
     been happening here' makes one request instead of one per workflow. Filter with `status`
-    (repeatable).
+    (repeatable) and `workflow_id`. Each run carries its `title` and, while it has one, the active wait
+    as `waiting_on`.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
         status (list[WorkflowRunStatus] | None | Unset):
+        workflow_id (None | Unset | UUID):
         page_token (None | str | Unset):
 
     Raises:
@@ -199,6 +220,7 @@ async def asyncio_detailed(
         pod_id=pod_id,
         limit=limit,
         status=status,
+        workflow_id=workflow_id,
         page_token=page_token,
     )
 
@@ -213,18 +235,21 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
     status: list[WorkflowRunStatus] | None | Unset = UNSET,
+    workflow_id: None | Unset | UUID = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkflowRunListResponse | None:
     """List Workflow Runs In Pod
 
      Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has
     been happening here' makes one request instead of one per workflow. Filter with `status`
-    (repeatable).
+    (repeatable) and `workflow_id`. Each run carries its `title` and, while it has one, the active wait
+    as `waiting_on`.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
         status (list[WorkflowRunStatus] | None | Unset):
+        workflow_id (None | Unset | UUID):
         page_token (None | str | Unset):
 
     Raises:
@@ -241,6 +266,7 @@ async def asyncio(
             client=client,
             limit=limit,
             status=status,
+            workflow_id=workflow_id,
             page_token=page_token,
         )
     ).parsed

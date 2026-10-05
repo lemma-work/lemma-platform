@@ -58,6 +58,7 @@ async def create_workflow(
     edges: list[object] | None,
     user_id: UUID,
     ctx: Context,
+    run_title: list[str] | None = None,
 ) -> WorkflowEntity:
     """Create a workflow with its graph."""
     return await get_workflow_service(uow).create_workflow(
@@ -72,6 +73,7 @@ async def create_workflow(
         edges=edges,
         requester_user_id=user_id,
         ctx=ctx,
+        run_title=run_title,
     )
 
 

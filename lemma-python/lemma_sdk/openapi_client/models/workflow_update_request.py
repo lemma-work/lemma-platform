@@ -27,6 +27,10 @@ class WorkflowUpdateRequest:
         description (None | str | Unset): Updated workflow description.
         icon_url (None | str | Unset): Updated public icon URL for the workflow.
         mode (None | Unset | WorkflowMode): Updated workflow schedule ownership mode.
+        run_title (list[str] | None | Unset): What each run is about, as up to four JMESPath expressions over the run
+            context, joined with ' · '. Example: `["collect.candidate_name", "collect.role"]`. Evaluated whenever a run is
+            read, so a part filled in by a later form appears once that form is answered; parts that resolve to nothing are
+            skipped. Empty means runs carry no title. Send `[]` to remove the title.
         start (DataStoreWorkflowStartInput | EventWorkflowStartInput | ManualWorkflowStartInput | None |
             ScheduledWorkflowStartInput | Unset): Updated start trigger configuration.
         visibility (None | ResourceVisibility | Unset):
@@ -35,6 +39,7 @@ class WorkflowUpdateRequest:
     description: None | str | Unset = UNSET
     icon_url: None | str | Unset = UNSET
     mode: None | Unset | WorkflowMode = UNSET
+    run_title: list[str] | None | Unset = UNSET
     start: (
         DataStoreWorkflowStartInput
         | EventWorkflowStartInput
@@ -72,6 +77,15 @@ class WorkflowUpdateRequest:
         else:
             mode = self.mode
 
+        run_title: list[str] | None | Unset
+        if isinstance(self.run_title, Unset):
+            run_title = UNSET
+        elif isinstance(self.run_title, list):
+            run_title = self.run_title
+
+        else:
+            run_title = self.run_title
+
         start: dict[str, Any] | None | Unset
         if isinstance(self.start, Unset):
             start = UNSET
@@ -103,6 +117,8 @@ class WorkflowUpdateRequest:
             field_dict["icon_url"] = icon_url
         if mode is not UNSET:
             field_dict["mode"] = mode
+        if run_title is not UNSET:
+            field_dict["run_title"] = run_title
         if start is not UNSET:
             field_dict["start"] = start
         if visibility is not UNSET:
@@ -153,6 +169,23 @@ class WorkflowUpdateRequest:
             return cast(None | Unset | WorkflowMode, data)
 
         mode = _parse_mode(d.pop("mode", UNSET))
+
+        def _parse_run_title(data: object) -> list[str] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                run_title_type_0 = cast(list[str], data)
+
+                return run_title_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(list[str] | None | Unset, data)
+
+        run_title = _parse_run_title(d.pop("run_title", UNSET))
 
         def _parse_start(
             data: object,
@@ -233,6 +266,7 @@ class WorkflowUpdateRequest:
             description=description,
             icon_url=icon_url,
             mode=mode,
+            run_title=run_title,
             start=start,
             visibility=visibility,
         )

@@ -18,10 +18,11 @@ import { request as __request } from '../core/request.js';
 export class WorkflowsService {
     /**
      * List Workflow Runs In Pod
-     * Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable).
+     * Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable) and `workflow_id`. Each run carries its `title` and, while it has one, the active wait as `waiting_on`.
      * @param podId
      * @param limit
      * @param status
+     * @param workflowId
      * @param pageToken
      * @returns WorkflowRunListResponse Successful Response
      * @throws ApiError
@@ -30,6 +31,7 @@ export class WorkflowsService {
         podId: string,
         limit: number = 50,
         status?: (Array<WorkflowRunStatus> | null),
+        workflowId?: (string | null),
         pageToken?: (string | null),
     ): CancelablePromise<WorkflowRunListResponse> {
         return __request(OpenAPI, {
@@ -41,6 +43,7 @@ export class WorkflowsService {
             query: {
                 'limit': limit,
                 'status': status,
+                'workflow_id': workflowId,
                 'page_token': pageToken,
             },
             errors: {

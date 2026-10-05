@@ -42,6 +42,10 @@ class WorkflowCreateRequest:
             `workflow.graph.update` call is not required. Omit (or pass an empty list) to create a shell and upload the
             graph later. Node `input_mapping` entries must use explicit typed bindings like `{"type": "expression", "value":
             "start.payload.x"}`.
+        run_title (list[str] | Unset): What each run is about, as up to four JMESPath expressions over the run context,
+            joined with ' · '. Example: `["collect.candidate_name", "collect.role"]`. Evaluated whenever a run is read, so a
+            part filled in by a later form appears once that form is answered; parts that resolve to nothing are skipped.
+            Empty means runs carry no title.
         start (DataStoreWorkflowStartInput | EventWorkflowStartInput | ManualWorkflowStartInput | None |
             ScheduledWorkflowStartInput | Unset): Start configuration. If omitted, the workflow can be started manually via
             `workflow.start`.
@@ -65,6 +69,7 @@ class WorkflowCreateRequest:
         ]
         | Unset
     ) = UNSET
+    run_title: list[str] | Unset = UNSET
     start: (
         DataStoreWorkflowStartInput
         | EventWorkflowStartInput
@@ -135,6 +140,10 @@ class WorkflowCreateRequest:
 
                 nodes.append(nodes_item)
 
+        run_title: list[str] | Unset = UNSET
+        if not isinstance(self.run_title, Unset):
+            run_title = self.run_title
+
         start: dict[str, Any] | None | Unset
         if isinstance(self.start, Unset):
             start = UNSET
@@ -170,6 +179,8 @@ class WorkflowCreateRequest:
             field_dict["mode"] = mode
         if nodes is not UNSET:
             field_dict["nodes"] = nodes
+        if run_title is not UNSET:
+            field_dict["run_title"] = run_title
         if start is not UNSET:
             field_dict["start"] = start
         if visibility is not UNSET:
@@ -315,6 +326,8 @@ class WorkflowCreateRequest:
 
                 nodes.append(nodes_item)
 
+        run_title = cast(list[str], d.pop("run_title", UNSET))
+
         def _parse_start(
             data: object,
         ) -> (
@@ -387,6 +400,7 @@ class WorkflowCreateRequest:
             icon_url=icon_url,
             mode=mode,
             nodes=nodes,
+            run_title=run_title,
             start=start,
             visibility=visibility,
         )

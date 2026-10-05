@@ -186,9 +186,10 @@ function WaitingRow({ row, open, onToggle, onAnswered }: {
             <button className="wf-wait__open" aria-expanded={open} onClick={onToggle}>
                 <span className="wf-wait__body">
                     <strong>{workflowName}</strong>
-                    {/* The pod, because this list crosses them. Which teammate
-                        asked is half of what the row is. */}
-                    <small>{podName}{wait.nodeId ? " · " + wait.nodeId : ""}</small>
+                    {/* What the run is about, then the pod, because this list
+                        crosses them. Which teammate asked is half of what the
+                        row is. */}
+                    <small>{[run.title, podName, wait.nodeId].filter(Boolean).join(" · ")}</small>
                 </span>
                 <span className="wf-wait__age">{sayStuckFor(wait, run)}</span>
             </button>
