@@ -37395,6 +37395,57 @@
         }
       }
     },
+    "/public/web/{public_key}/stream": {
+      "post": {
+        "description": "The bot's answer as it is written, one JSON object per line.\n\nRead with ``fetch`` rather than ``EventSource`` so the session stays in the\nbody and the request stays simple. Only what a visitor may see is sent:\nsee ``agent.contracts.visitor_stream``. The page reconnects when it closes.",
+        "operationId": "public.web.stream.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Stream Answers",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.stream"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.stream",
+          "result": "entity",
+          "verb": "read"
+        }
+      }
+    },
     "/public/web/{public_key}/submit": {
       "post": {
         "operationId": "public.web.form.submit",

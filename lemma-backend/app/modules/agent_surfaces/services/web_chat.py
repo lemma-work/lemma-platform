@@ -64,7 +64,7 @@ from app.modules.function.contracts.contact_functions import (
     ContactFunctionUnavailable,
     run_function_for_contact,
 )
-from app.modules.pod.contracts.members import pod_member_id
+from app.modules.pod.contracts.members import pod_member_id, pod_name
 
 logger = get_logger(__name__)
 
@@ -330,6 +330,18 @@ class WebChat:
             return await visible_messages(
                 uow, session.conversation_id, after=after, limit=MAX_HISTORY
             )
+
+    async def visitor_conversation(
+        self, widget: WebWidget, *, token: str
+    ) -> UUID | None:
+        """The conversation this visitor's session writes to, once there is one."""
+        session = await self._visitor_session(widget, token)
+        return session.conversation_id
+
+    async def widget_title(self, widget: WebWidget) -> str:
+        """What the chat calls itself at the top: the space's name."""
+        async with self.uow_factory() as uow:
+            return await pod_name(uow.session, widget.pod_id) or widget.name
 
     # -- codes --------------------------------------------------------------
 

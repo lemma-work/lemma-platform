@@ -278,6 +278,14 @@ class SurfaceSettings(BaseSettings):
         default=500,
         description="How many times one web form may be submitted in a day.",
     )
+    surface_web_stream_seconds: int = Field(
+        default=300,
+        description=(
+            "How long one visitor's live stream stays open before the page "
+            "reconnects. Each open stream holds a realtime subscription, so "
+            "this bounds what an open tab costs."
+        ),
+    )
     surface_new_contacts_per_surface_per_day: int = Field(
         default=200,
         description=(

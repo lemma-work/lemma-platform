@@ -89,6 +89,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
+| POST | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
 | POST | `/public/web/{public_key}/submit` | `public.web.form.submit` | Web Submit Form |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |

@@ -107,6 +107,31 @@ export class AgentSurfacesWebService {
         });
     }
     /**
+     * Web Stream Answers
+     * The bot's answer as it is written, one JSON object per line.
+     *
+     * Read with ``fetch`` rather than ``EventSource`` so the session stays in the
+     * body and the request stays simple. Only what a visitor may see is sent:
+     * see ``agent.contracts.visitor_stream``. The page reconnects when it closes.
+     * @param publicKey
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static publicWebStreamRead(
+        publicKey: string,
+    ): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/public/web/{public_key}/stream',
+            path: {
+                'public_key': publicKey,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Web Submit Form
      * @param publicKey
      * @returns any Successful Response

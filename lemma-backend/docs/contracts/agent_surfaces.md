@@ -50,6 +50,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `public.web.history.read` | POST | `/public/web/{public_key}/history` | Web Read History |
 | `public.web.message.send` | POST | `/public/web/{public_key}/messages` | Web Send Message |
 | `public.web.session.start` | POST | `/public/web/{public_key}/session` | Web Start Session |
+| `public.web.stream.read` | POST | `/public/web/{public_key}/stream` | Web Stream Answers |
 | `surface.webhook.handle_platform` | POST | `/surfaces/webhooks/{platform}` | Handle platform-level surface webhook |
 | `surface.webhook.handle_surface` | POST | `/surfaces/{surface_id}/webhook` | Handle surface-level webhook |
 | `surface.webhook.handle_telegram_manager` | POST | `/surfaces/webhooks/telegram-manager` | Handle Telegram manager-bot webhook |

@@ -12,14 +12,19 @@ response then names the page's origin itself -- only when the widget allows it.
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.api.dependencies import get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent.contracts.visitor_stream import visitor_frames
+from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.web_widgets import WebWidget
 from app.modules.agent_surfaces.services.web_chat import WebChat, WebChatRefused
 
@@ -36,6 +41,10 @@ class SessionRequest(BaseModel):
 class MessageRequest(BaseModel):
     session: str = Field(max_length=128)
     text: str = Field(max_length=8000)
+
+
+class StreamRequest(BaseModel):
+    session: str = Field(max_length=128)
 
 
 class HistoryRequest(BaseModel):
@@ -139,6 +148,7 @@ async def web_start_session(
             "display_name": started.display_name,
             "kind": widget.kind.value,
             "requires_code": widget.form_requires_code,
+            "title": await chat.widget_title(widget),
         },
         headers=_cors(request, widget),
     )
@@ -156,6 +166,56 @@ async def web_send_message(
     except WebChatRefused as exc:
         return _refusal(request, widget, exc)
     return JSONResponse({"ok": True}, status_code=202, headers=_cors(request, widget))
+
+
+@router.post("/{public_key}/stream", operation_id="public.web.stream.read")
+async def web_stream_answers(
+    public_key: str,
+    request: Request,
+    chat: WebChat = Depends(_chat),
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> Response:
+    """The bot's answer as it is written, one JSON object per line.
+
+    Read with ``fetch`` rather than ``EventSource`` so the session stays in the
+    body and the request stays simple. Only what a visitor may see is sent:
+    see ``agent.contracts.visitor_stream``. The page reconnects when it closes.
+    """
+    widget = None
+    try:
+        widget = await _widget_for(request, chat, public_key)
+        body = await _body(request, StreamRequest)
+        conversation_id = await chat.visitor_conversation(widget, token=body.session)
+    except WebChatRefused as exc:
+        return _refusal(request, widget, exc)
+    if conversation_id is None:
+        return Response(status_code=204, headers=_cors(request, widget))
+    return StreamingResponse(
+        _lines(conversation_id, uow_factory),
+        media_type="application/x-ndjson",
+        headers={
+            **_cors(request, widget),
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _lines(
+    conversation_id: UUID, uow_factory: UnitOfWorkFactory
+) -> AsyncIterator[str]:
+    yield _line({"type": "open"})
+    async for frame in visitor_frames(
+        conversation_id,
+        uow_factory=uow_factory,
+        max_seconds=surface_settings.surface_web_stream_seconds,
+    ):
+        yield "\n" if frame is None else _line(frame)
+
+
+def _line(frame: dict[str, object]) -> str:
+    """One frame on the wire. A delta is a few words, a message one answer."""
+    return json.dumps(frame) + "\n"
 
 
 @router.post("/{public_key}/history", operation_id="public.web.history.read")

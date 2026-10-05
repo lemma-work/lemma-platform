@@ -393,6 +393,28 @@ async def test_the_widget_script_is_served_without_a_session(async_client: Async
     assert "data-lemma-key" in script.text
 
 
+async def test_the_live_stream_needs_a_session_and_a_conversation(
+    authenticated_client: AsyncClient, test_pod
+):
+    widget = await _widget(authenticated_client, test_pod["id"], name="Streams")
+    key = widget["public_key"]
+    session = await _session(authenticated_client, key)
+
+    stranger = await authenticated_client.post(
+        f"/public/web/{key}/stream", **_text({"session": "not-a-session"})
+    )
+    assert stranger.status_code == 401
+
+    # Nothing has been said yet, so there is nothing to watch: no subscription
+    # is held open for a visitor who has only opened the page.
+    quiet = await authenticated_client.post(
+        f"/public/web/{key}/stream", **_text({"session": session["session"]})
+    )
+    assert quiet.status_code == 204
+    assert quiet.headers["access-control-allow-origin"] == SHOP
+    assert session["title"]
+
+
 async def test_a_follow_up_waits_in_a_web_contacts_chat(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
