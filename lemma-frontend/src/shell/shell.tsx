@@ -143,9 +143,11 @@ function readJson<T>(key: string, fallback: T): T {
 }
 
 /** One pane of the stage. Hidden while another is in front, and saying so
- *  to what is inside it, so nothing behind it keeps a clock running. */
-function Pane({ hidden, children, ...rest }: HTMLAttributes<HTMLDivElement> & { inert?: boolean; "data-side"?: string }) {
-    return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden}>{children}</PaneVisibleContext.Provider></div>;
+ *  to what is inside it, so nothing behind it keeps a clock running. The
+ *  stage itself can be hidden too — hiring, an expanded call, the team page —
+ *  and then even the pane in front is out of sight. */
+function Pane({ hidden, onStage, children, ...rest }: HTMLAttributes<HTMLDivElement> & { inert?: boolean; "data-side"?: string; onStage: boolean }) {
+    return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden && onStage}>{children}</PaneVisibleContext.Provider></div>;
 }
 
 const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
@@ -606,6 +608,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const docAsk = useMemo(() => chatResource && pod ? { label: pod.name, ask: chat.ask } : null, [chatResource !== null, pod?.name, chat.ask]);  
     const paneProps = (id: string) => ({
         hidden: !isVisible(id),
+        onStage: !(hiring || huddle.expanded || stranger || atTeam),
         "data-side": id === layout.right ? "right" : "left",
         inert: sheetLowered && id === layout.right,
     });
@@ -1537,6 +1540,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         ["--field" as string]: pressSlot(identityGenes(pod.id).tone).field,
                         ["--field-ink" as string]: pressSlot(identityGenes(pod.id).tone).ink,
                     } : undefined}
+                    /* The same test the panes read as `onStage`. */
                     hidden={Boolean(hiring || huddle.expanded || stranger || atTeam)}
                 >
                 {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :

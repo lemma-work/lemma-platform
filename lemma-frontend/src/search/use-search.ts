@@ -253,7 +253,9 @@ export function useSearch(podId: string | null, pods: Pod[], query: string): Sea
     const failed = catalogueNames.filter((_, index) => catalogue[index].isError);
     if (olderConversations.isError) failed.push("conversations");
     if (docs.isError) failed.push("documents");
-    if (records.isError) failed.push("records");
+    /* Without the tables' shapes there is no record search at all, which is
+       a failure to admit rather than an empty answer. */
+    if (records.isError || columns.isError) failed.push("records");
 
     return {
         hits,

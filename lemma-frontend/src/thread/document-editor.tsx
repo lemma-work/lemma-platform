@@ -85,6 +85,18 @@ function titleOf(editor: Editor): string | null {
     return first.textContent;
 }
 
+/** The SHA-256 of the UTF-8 bytes a save writes, as the server records it
+ *  (`content_sha256`). Null where the browser has no subtle crypto — an
+ *  insecure origin — and then every change is read back, as before. */
+async function contentStamp(text: string): Promise<string | null> {
+    try {
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+        return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    } catch {
+        return null;
+    }
+}
+
 export function DocumentEditor({ podId, path, text }: { podId: string; path: string; text: string }) {
     const cache = useQueryClient();
     const visible = usePaneVisible();
@@ -235,10 +247,12 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     const target = useRef(path);
     useEffect(() => { target.current = path; }, [path]);
     const renaming = useRef(false);
-    /* How many of our own writes have landed. The change check below reads
-       it, so the stamp a save of ours puts on the file is taken as known
-       rather than as somebody else's edit to be fetched back. */
-    const wrote = useRef(0);
+    /* The fingerprints of what this editor has written: the SHA-256 of the
+       bytes, which is what the server stamps the file with. The change check
+       below takes a stamp found here as a file that already says what the
+       editor holds, so a save of ours is not fetched back — and any other
+       stamp, an agent's edit landing beside ours included, still is. */
+    const ourStamps = useRef<string[]>([]);
     const persist = useCallback(async (next: string) => {
         /* Held while the file moves; the autosave comes back round once the
            new path is in. */
@@ -247,8 +261,9 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
         const at = target.current;
         setState("saving");
         try {
+            const stamp = await contentStamp(next);
+            if (stamp) ourStamps.current = [...ourStamps.current.slice(-7), stamp];
             await source.writeFile(podId, at, next);
-            wrote.current += 1;
             if (attempt.current !== mine) return;
             setSaved(next);
             setState("saved");
@@ -452,26 +467,22 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
        back. The last stamp outlives the pause in a ref, so that first ask
        can still tell an edit made while it was hidden.
 
-       A change that follows one of our own saves is our own save. The editor
-       and the file cache already hold those words, and reading them back
-       costs three requests for every pause in typing. A check that was
-       already asking when the save landed cannot tell, and refetches once —
-       the harmless way round. */
+       A stamp that is the fingerprint of something this editor wrote is our
+       own save: the editor and the file cache already hold those words, and
+       reading them back cost a refetch for every pause in typing. Anything
+       else is somebody else's edit and is read in. */
     const lastStamp = useRef<{ path: string; stamp: string | null } | null>(null);
     useEffect(() => {
         if (!asPage || source.label !== "live" || !visible) return;
         let stopped = false;
-        let seen = wrote.current;
         const tick = async () => {
             if (document.hidden) return;
-            const writes = wrote.current;
             try {
                 const meta = (await lemma(podId).files.get(path)) as { content_sha256?: string | null; updated_at?: string | null };
                 if (stopped) return;
                 const stamp = meta.content_sha256 ?? meta.updated_at ?? null;
                 const last = lastStamp.current?.path === path ? lastStamp.current.stamp : null;
-                const ours = writes !== seen;
-                seen = writes;
+                const ours = meta.content_sha256 != null && ourStamps.current.includes(meta.content_sha256);
                 if (last !== null && stamp !== last && !ours) void cache.invalidateQueries({ queryKey: ["file", podId, path] });
                 lastStamp.current = { path, stamp };
             } catch {

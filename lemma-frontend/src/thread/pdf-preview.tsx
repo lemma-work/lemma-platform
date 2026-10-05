@@ -40,7 +40,7 @@ export function PdfPreview({ podId, path, name, size, rawUrl, full }: {
     return <div className={`pdf-preview${full ? " pdf-preview--full" : ""}`}>
         {!settled && <div className="pdf-preview__status">
             {preview.error ? <span role="alert">{preview.error}</span> : <span>Loading PDF…</span>}
-            <div>{preview.url && <a href={preview.url} target="_blank" rel="noreferrer">Open PDF</a>}<button onClick={() => { if (!large) void file.refetch(); }}>Retry</button></div>
+            <div>{preview.url && <a href={preview.url} target="_blank" rel="noreferrer">Open PDF</a>}{!large && <button onClick={() => void file.refetch()}>Retry</button>}</div>
         </div>}
         {preview.url && <object data={preview.url} type="application/pdf" aria-label={name} className="pdf-preview__document"><p>Your browser cannot display this PDF inline. <a href={preview.url} target="_blank" rel="noreferrer">Open PDF</a> or use Download.</p></object>}
     </div>;

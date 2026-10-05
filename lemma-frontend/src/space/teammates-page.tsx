@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefO
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { initialsOf, source, type Org, type Pod, type PodDetail } from "@/data";
 import { lemma } from "@/session/client";
+import { isForbidden } from "@/session/auth-state";
 import { AI_MATE, MATES, NEW_MATE } from "@/copy";
 import { Mark, markTint } from "@/shell/mark";
 import { unbound } from "@/thread/conversation-list";
@@ -157,10 +158,12 @@ async function cardMembers(pod: Pod): Promise<{ id: string; name: string; initia
             const name = m.user_name?.trim() || m.email || m.user_email || "Member";
             return { id: m.pod_member_id ?? m.user_id ?? name, name, initials: initialsOf(name) };
         });
-    } catch {
-        /* As the detail does: a pod whose members you may not list still
-           has a card. */
-        return [];
+    } catch (problem) {
+        /* A pod whose members you may not list still has a card, with no
+           faces. Anything else is a moment's failure: thrown, so it is
+           asked again rather than held as an empty roster. */
+        if (isForbidden(problem)) return [];
+        throw problem;
     }
 }
 
