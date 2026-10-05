@@ -1,0 +1,160 @@
+<!--
+widget: gmail/inbox
+description: A Gmail search as a live inbox (unread by default): one dense line per email, tabs by category, open a line to read its preview, mark read or archive one or all.
+connector: gmail
+kind: composio
+operations: GMAIL_FETCH_EMAILS, GMAIL_BATCH_MODIFY_MESSAGES
+data: { query?, max_results?, messages?: [{ messageId, threadId, sender, subject, preview: { body }, messageTimestamp, labelIds, display_url }], next_page_token? }
+version: 1
+-->
+<div id="inbox"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "query": "is:unread in:inbox",
+  "messages": [
+    { "messageId": "18f2a6c1d9e0b7a4", "threadId": "18f2a6c1d9e0b7a4", "sender": "Priya Nair <priya@contoso.com>", "subject": "Pilot pricing for the Q4 rollout", "preview": { "body": "For a 40-seat pilot we can do $29 a seat for the first three months, then the standard rate." }, "messageTimestamp": "2026-10-01T16:40:00Z", "labelIds": ["UNREAD", "INBOX", "CATEGORY_PERSONAL"], "display_url": "https://mail.google.com/mail/u/0/#inbox/18f2a6c1d9e0b7a4" },
+    { "messageId": "18f2a5b0c8d9e6f3", "threadId": "18f2a5b0c8d9e6f3", "sender": "\"Sam Rivera\" <sam@northwind.io>", "subject": "Order form for the pilot", "preview": { "body": "Attached is the order form. Can you countersign by Friday so we can start on the 14th?" }, "messageTimestamp": "2026-10-01T09:12:00Z", "labelIds": ["UNREAD", "INBOX"], "display_url": "https://mail.google.com/mail/u/0/#inbox/18f2a5b0c8d9e6f3" },
+    { "messageId": "18f2a4a9b7c8d5e2", "threadId": "18f2a4a9b7c8d5e2", "sender": "Weekly Digest <digest@news.example.com>", "subject": "Five things that happened in AI this week", "preview": { "body": "Agents get calendars, a new open model tops the charts, and why evals are the new unit tests." }, "messageTimestamp": "2026-09-30T06:00:00Z", "labelIds": ["UNREAD", "INBOX", "CATEGORY_UPDATES"], "display_url": "https://mail.google.com/mail/u/0/#inbox/18f2a4a9b7c8d5e2" },
+    { "messageId": "18f2a3f8a6b7c4d1", "threadId": "18f2a3f8a6b7c4d1", "sender": "Acme Cloud <hello@acme.example>", "subject": "Your October credits are here", "preview": { "body": "We've added $50 in credits to your account. They expire on 31 October." }, "messageTimestamp": "2026-09-29T15:30:00Z", "labelIds": ["UNREAD", "INBOX", "CATEGORY_PROMOTIONS"], "display_url": "https://mail.google.com/mail/u/0/#inbox/18f2a3f8a6b7c4d1" }
+  ]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data || {}, el = document.getElementById("inbox"), e = lemma.esc;
+  var query = d.query || "is:unread in:inbox", size = Math.min(d.max_results || 50, 100);
+  var mail = [], next = null, tab = "All", open = null;
+  var TABS = { CATEGORY_PERSONAL: "Primary", CATEGORY_UPDATES: "Updates", CATEGORY_PROMOTIONS: "Promotions", CATEGORY_SOCIAL: "Social", CATEGORY_FORUMS: "Forums" };
+
+  // Gmail previews arrive HTML-escaped ("India&#39;s"); a textarea decodes without running anything.
+  var plain = function (s) { var t = document.createElement("textarea"); t.innerHTML = s || ""; return t.value.replace(/\s+/g, " ").trim(); };
+  var sender = function (raw) {
+    var m = String(raw || "").match(/^\s*"?(.*?)"?\s*<([^>]+)>\s*$/);
+    return m ? { name: m[1] || m[2], email: m[2] } : { name: raw || "Unknown", email: raw || "" };
+  };
+  var shape = function (m) {
+    var labels = m.labelIds || [], from = sender(m.sender);
+    var cat = labels.filter(function (l) { return TABS[l]; })[0];
+    return {
+      id: m.messageId || m.id, thread: m.threadId, from: from, subject: plain(m.subject || (m.preview || {}).subject) || "(no subject)",
+      text: plain((m.preview || {}).body), date: m.messageTimestamp, url: m.display_url,
+      tab: cat ? TABS[cat] : "Primary", unread: labels.indexOf("UNREAD") >= 0, gone: false
+    };
+  };
+
+  var fetchPage = function (token) {
+    var payload = { query: query, user_id: "me", max_results: size, verbose: false, include_payload: false };
+    if (token) payload.page_token = token;
+    return lemma.act("gmail", "GMAIL_FETCH_EMAILS", payload, { kind: "composio" }).then(function (r) {
+      r = (r && r.data) || r || {};
+      return { messages: r.messages || [], next: r.nextPageToken || null };
+    });
+  };
+  var modify = function (ids, change) {
+    var body = { userId: "me", messageIds: ids };
+    if (change.add) body.addLabelIds = change.add;
+    if (change.remove) body.removeLabelIds = change.remove;
+    return lemma.act("gmail", "GMAIL_BATCH_MODIFY_MESSAGES", body, { kind: "composio" });
+  };
+
+  function live() { return mail.filter(function (m) { return !m.gone; }); }
+  function shown() { return live().filter(function (m) { return tab === "All" || m.tab === tab; }); }
+
+  function draw() {
+    var all = live(), rows = shown(), unread = all.filter(function (m) { return m.unread; });
+    var counts = {};
+    all.forEach(function (m) { counts[m.tab] = (counts[m.tab] || 0) + 1; });
+    var tabs = ["All"].concat(["Primary", "Updates", "Promotions", "Social", "Forums"].filter(function (t) { return counts[t]; }));
+    if (tabs.indexOf(tab) < 0) tab = "All";
+
+    el.innerHTML =
+      '<div class="lw-card">' +
+        '<div class="lw-sec" data-say>' +
+          '<div class="lw-top">' + lemma.icon("mail") + "<span>Gmail</span><span>·</span><span style=\"white-space:nowrap\">" +
+            all.length + (next ? "+" : "") + (/is:unread/.test(query) ? " unread" : all.length === 1 ? " email" : " emails") + "</span>" +
+            '<span class="lw-spacer"></span><span class="lw-bar">' +
+              (unread.length ? '<button class="lw-btn" id="all-read" style="white-space:nowrap">' + lemma.icon("read") + "<span>Mark " + (tab === "All" ? "all" : tab) + " read</span></button>" : "") +
+            "</span></div>" +
+          (tabs.length > 2 ? '<div class="lw-seg" role="tablist" style="margin-top:10px;max-width:100%;overflow-x:auto;scrollbar-width:none">' + tabs.map(function (t) {
+            return '<button type="button" style="white-space:nowrap" data-tab="' + e(t) + '" aria-pressed="' + (t === tab) + '">' + e(t) + ' <span class="lw-quiet">' + (t === "All" ? all.length : counts[t]) + "</span></button>";
+          }).join("") + "</div>" : "") +
+        "</div>" +
+        (rows.length ? '<div class="lw-rows">' + rows.map(function (m) {
+          var row =
+            '<button class="lw-item" type="button" data-row="' + e(m.id) + '"' + (m.unread ? "" : ' style="opacity:.6"') + ">" +
+              lemma.avatar(m.from.name, "s") +
+              '<span class="lw-two"><span class="lw-grow">' + e(m.from.name) + '</span><span class="lw-grow">' + e(m.subject) + "</span></span>" +
+              '<span class="lw-end">' + lemma.when(m.date, { ago: true }) + "</span></button>";
+          if (open !== m.id) return row;
+          return row +
+            '<div class="lw-sec">' +
+              '<div class="lw-sub">' + e(m.from.email) + " · " + lemma.when(m.date) + "</div>" +
+              '<h2 class="lw-title" style="margin-top:4px">' + (m.url ? '<a href="' + e(m.url) + '" target="_blank" rel="noopener">' + e(m.subject) + "</a>" : e(m.subject)) + "</h2>" +
+              (m.text ? '<div class="lw-body" style="margin-top:8px">' + e(m.text) + "</div>" : "") +
+              '<div class="lw-bar" style="margin-top:12px">' +
+                (m.url ? '<a class="lw-btn" href="' + e(m.url) + '" target="_blank" rel="noopener">' + lemma.icon("mail") + "<span>Open in Gmail</span></a>" : "") +
+                '<span class="lw-spacer"></span>' +
+                (m.unread ? '<button class="lw-btn" id="one-read">' + lemma.icon("read") + "<span>Mark read</span></button>" : "") +
+                '<button class="lw-btn" id="one-archive">' + lemma.icon("archive") + "<span>Archive</span></button>" +
+              "</div>" +
+            "</div>";
+        }).join("") + "</div>"
+        : '<div class="lw-sec"><p class="lw-quiet">' + (all.length ? "Nothing in " + e(tab) + "." : "Nothing matches " + e(query) + ". Inbox zero.") + "</p></div>") +
+        (next ? '<div class="lw-sec"><div class="lw-bar"><span class="lw-spacer"></span><button class="lw-btn" id="more">Load more</button></div></div>' : "") +
+      "</div>";
+
+    el.querySelectorAll("[data-tab]").forEach(function (b) {
+      b.addEventListener("click", function () { tab = b.dataset.tab; open = null; draw(); });
+    });
+    el.querySelectorAll("[data-row]").forEach(function (b) {
+      b.addEventListener("click", function () { open = open === b.dataset.row ? null : b.dataset.row; draw(); });
+    });
+
+    var current = rows.filter(function (m) { return m.id === open; })[0];
+    if (current) {
+      if (current.unread) lemma.button("one-read", {
+        does: "mark this email read",
+        run: function () { return modify([current.id], { remove: ["UNREAD"] }); },
+        done: function () { current.unread = false; setTimeout(draw, 900); return "Marked as read."; }
+      });
+      lemma.button("one-archive", {
+        does: "archive this email",
+        run: function () { return modify([current.id], { remove: ["INBOX"] }); },
+        done: function () { current.gone = true; open = null; setTimeout(draw, 900); return "Archived."; }
+      });
+    }
+    if (unread.length) {
+      var targets = rows.filter(function (m) { return m.unread; });
+      lemma.button("all-read", {
+        does: "mark " + targets.length + " emails read",
+        confirm: function () { return targets.length ? "Mark " + targets.length + (targets.length === 1 ? " email" : " emails") + " read in Gmail?" : ""; },
+        yes: "Mark read",
+        run: function () { return modify(targets.map(function (m) { return m.id; }), { remove: ["UNREAD"] }); },
+        done: function () { targets.forEach(function (m) { m.unread = false; }); setTimeout(draw, 900); return "Marked " + targets.length + " read."; }
+      });
+    }
+    var more = document.getElementById("more");
+    if (more) lemma.button(more, {
+      does: "load the next page",
+      run: function () { return fetchPage(next).then(function (page) { mail = mail.concat(page.messages.map(shape)); next = page.next; }); },
+      done: function () { setTimeout(draw, 0); return ""; }
+    });
+  }
+
+  function fail(error) {
+    el.innerHTML = '<div class="lw-card"><div class="lw-sec"><div class="lw-top">' + lemma.icon("mail") + "<span>Gmail</span></div>" +
+      '<p class="lw-quiet" style="margin-top:8px">' + e((error && error.message) || "Couldn't read your inbox.") + "</p></div></div>";
+  }
+
+  // Given messages draw at once; otherwise the widget reads the inbox itself, as
+  // the viewer, so the agent never has to fetch and re-send the mail.
+  if (d.messages) {
+    mail = d.messages.map(shape);
+    next = d.next_page_token || null;
+    draw();
+  } else {
+    el.innerHTML = '<div class="lw-card"><div class="lw-sec"><div class="lw-top">' + lemma.icon("mail") + "<span>Gmail</span><span>·</span><span>Reading " + e(query) + "…</span></div></div></div>";
+    fetchPage(null).then(function (page) { mail = page.messages.map(shape); next = page.next; draw(); }, fail);
+  }
+})();
+</script>

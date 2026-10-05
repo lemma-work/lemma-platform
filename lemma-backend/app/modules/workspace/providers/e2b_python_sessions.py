@@ -25,7 +25,11 @@ from sandbox_runtime.protocol import (
 
 from app.modules.workspace.providers.base import ProviderInstance, PythonResult
 from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
-from app.modules.workspace.providers.e2b_common import sdk_best_effort, sdk_errors
+from app.modules.workspace.providers.e2b_common import (
+    CommandExited,
+    sdk_best_effort,
+    sdk_errors,
+)
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
 
@@ -132,27 +136,32 @@ async def execute_python(
     await ops._output.record_start(tracked_id)
     exit_code: int | None = None
     try:
-        with sdk_errors():
-            await sandbox.files.write(code_path, request.code)
-            await sandbox.files.write(
-                runner_path,
-                PYTHON_RUNNER.format(
-                    state_path=state_path,
-                    code_path=code_path,
-                    result_path=result_path,
-                ),
-            )
-            outcome = await sandbox.commands.run(
-                f"python3 {runner_path}",
-                cwd=session.cwd,
-                envs={item.name: item.value for item in request.environment},
-                # `None` here meant unbounded, so `execute_python`'s
-                # `timeout_seconds` bounded only how long the backend
-                # waited -- nothing stopped the code itself. A runaway loop
-                # kept running in the sandbox after the tool had returned,
-                # holding CPU and memory on a box with one core.
-                timeout=seconds_until(request.deadline_at),
-            )
+        try:
+            with sdk_errors():
+                await sandbox.files.write(code_path, request.code)
+                await sandbox.files.write(
+                    runner_path,
+                    PYTHON_RUNNER.format(
+                        state_path=state_path,
+                        code_path=code_path,
+                        result_path=result_path,
+                    ),
+                )
+                outcome = await sandbox.commands.run(
+                    f"python3 {runner_path}",
+                    cwd=session.cwd,
+                    envs={item.name: item.value for item in request.environment},
+                    # `None` here meant unbounded, so `execute_python`'s
+                    # `timeout_seconds` bounded only how long the backend
+                    # waited -- nothing stopped the code itself. A runaway loop
+                    # kept running in the sandbox after the tool had returned,
+                    # holding CPU and memory on a box with one core.
+                    timeout=seconds_until(request.deadline_at),
+                )
+        except CommandExited as exited:
+            # The agent's code raised. That is this call's answer -- a FAILED
+            # result with the traceback -- not a sandbox that went away.
+            outcome = exited.result
         exit_code = outcome.exit_code
     finally:
         if exit_code is None:
