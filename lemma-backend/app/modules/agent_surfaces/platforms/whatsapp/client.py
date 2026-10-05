@@ -32,9 +32,6 @@ from app.core.net.capped_read import read_capped
 from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
 )
-from app.modules.agent_surfaces.platforms.sent_message_ids import (
-    record_sent_message_id,
-)
 
 # The one canonical WhatsApp Graph API base. ``api_base_url`` in the bot
 # credentials overrides it (used by tests to point at a fake server).
@@ -307,12 +304,7 @@ class WhatsAppClient:
         first = messages[0] if messages else {}
         if not isinstance(first, dict):
             return None
-        message_id = str(first.get("id") or "").strip() or None
-        if message_id and not is_indicator:
-            # A failed-delivery status names nothing but this id, so it is
-            # written down for whoever is collecting (see `sent_message_ids`).
-            record_sent_message_id(message_id)
-        return message_id
+        return str(first.get("id") or "").strip() or None
 
     async def upload_media(
         self,

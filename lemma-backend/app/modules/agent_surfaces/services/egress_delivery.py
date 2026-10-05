@@ -48,9 +48,6 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
-from app.modules.agent_surfaces.platforms.sent_message_ids import (
-    collect_sent_message_ids,
-)
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -63,7 +60,6 @@ from app.modules.agent_surfaces.services.group_log import (
     GroupLog,
     answered_in_group,
 )
-from app.modules.agent_surfaces.services.outbound_log import record_outbound
 from app.modules.agent_surfaces.services.reply_window_fallback import (
     deliver_after_the_window,
     reply_window_closed,
@@ -73,7 +69,6 @@ from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgres
 logger = get_logger(__name__)
 
 WindowFallback = Callable[..., Awaitable[SurfaceDeliveryResult]]
-OutboundLog = Callable[..., Awaitable[None]]
 
 
 class SurfaceDelivery:
@@ -88,7 +83,6 @@ class SurfaceDelivery:
         adapter_registry: SurfacePlatformAdapterRegistry,
         credential_resolver: SurfaceCredentialResolver,
         after_the_window: WindowFallback = deliver_after_the_window,
-        outbound_log: OutboundLog = record_outbound,
     ) -> None:
         # Every one of these is required, and `uow` most of all. The service
         # this was carved out of took either a unit of work or a factory and
@@ -100,10 +94,9 @@ class SurfaceDelivery:
         self.conversation_link_repository = conversation_link_repository
         self.adapter_registry = adapter_registry
         self.credential_resolver = credential_resolver
-        # What a closed reply window falls back to, and where sent message ids
-        # are written down. Defaults are the real ones; a test hands its own.
+        # What a closed reply window falls back to. The default is the real
+        # one; a test hands its own.
         self.after_the_window = after_the_window
-        self.outbound_log = outbound_log
 
     async def egress_credentials(
         self,
@@ -334,13 +327,12 @@ class SurfaceDelivery:
         # No connection held for the platform call; see `connection_released`.
         async with connection_released(self.uow.session):
             try:
-                with collect_sent_message_ids() as sent_ids:
-                    receipt = await target.adapter.deliver(
-                        credentials=target.credentials,
-                        event=target.event,
-                        envelope=envelope,
-                        metadata=metadata,
-                    )
+                receipt = await target.adapter.deliver(
+                    credentials=target.credentials,
+                    event=target.event,
+                    envelope=envelope,
+                    metadata=metadata,
+                )
             except AgentSurfaceError:
                 # An error, not a warning, and with the traceback. This is the
                 # end of every ladder: native, then text, then nobody. A run
@@ -371,14 +363,6 @@ class SurfaceDelivery:
                 parts=receipt.undelivered,
             )
             return SurfaceDeliveryResult.undelivered()
-        await self.outbound_log(
-            self.uow,
-            target,
-            sent_ids=sent_ids,
-            envelope=envelope,
-            metadata=metadata,
-            conversation_id=conversation_id,
-        )
         await remember_a_prompt_that_arrived_as_words(
             self.uow,
             conversation_id=conversation_id,

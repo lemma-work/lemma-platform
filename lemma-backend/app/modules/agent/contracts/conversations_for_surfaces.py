@@ -59,7 +59,6 @@ from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     MessageDraft,
-    MessageRole,
 )
 from app.modules.agent.infrastructure.models import AgentModel, ConversationModel
 from app.modules.agent.infrastructure.repositories import (
@@ -290,31 +289,6 @@ async def append_notification_message(
         agent_run_id=None,
         draft=MessageDraft.of_notification(
             message, metadata={"notification_id": str(notification_id)}
-        ),
-    )
-
-
-async def append_delivery_notice(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    conversation_id: UUID,
-    notice: str,
-    metadata: dict[str, str] | None = None,
-) -> None:
-    """Tell the conversation's agent what became of something it sent.
-
-    A system line rather than an assistant one: the agent did not say it, and
-    replaying it as the agent's own words would have it apologise for a message
-    it believes it wrote. It is what lets the agent answer "did she get it?"
-    truthfully after a platform reported the send as failed.
-    """
-    await ConversationRepository(uow).append_message(
-        conversation_id=conversation_id,
-        agent_run_id=None,
-        draft=MessageDraft.of_notification(
-            notice,
-            role=MessageRole.SYSTEM,
-            metadata={"delivery_notice": True, **(metadata or {})},
         ),
     )
 
@@ -577,7 +551,6 @@ __all__ = [
     "PendingInteraction",
     "SurfaceAgentIdentity",
     "SurfaceConversation",
-    "append_delivery_notice",
     "append_notification_message",
     "conversation_metadata_value",
     "lemma_message_run_started_at",

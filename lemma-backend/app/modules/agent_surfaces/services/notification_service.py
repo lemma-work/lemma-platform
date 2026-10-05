@@ -25,7 +25,6 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     NotificationNotFoundError,
 )
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
 from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
@@ -254,8 +253,6 @@ class NotificationService:
         actor_display_name: str | None = None,
         origin_surface_id: UUID | None = None,
         channel: str | None = None,
-        # A platform that already reported this notification undelivered.
-        exclude_platform: SurfacePlatform | None = None,
     ) -> NotificationEntity:
         channels, fallback_reason = await self.resolve_channels(
             pod_id=notification.pod_id,
@@ -265,11 +262,8 @@ class NotificationService:
             agent_name=agent_name,
             channel=channel,
         )
-        channels = [c for c in channels if c.platform is not exclude_platform]
         if not channels:
-            notification.mark_undeliverable(
-                fallback_reason or UndeliverableReason.NO_OTHER_CHANNEL
-            )
+            notification.mark_undeliverable(fallback_reason)
             logger.info(
                 "agent_surfaces.notification_service.undeliverable.observed",
                 notification_id=str(notification.id),

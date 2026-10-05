@@ -1,8 +1,7 @@
-"""What ``deliver_envelope`` does before and after the platform call.
+"""What ``deliver_envelope`` does around the platform call.
 
-Before: a direct chat whose reply window has closed is not tried at all. After:
-the ids the platform gave its messages are written down, which is the only way
-a failure reported later can be traced to anything.
+A direct chat whose reply window has closed is not tried at all; one still open
+is delivered on the chat.
 """
 
 from __future__ import annotations
@@ -20,9 +19,6 @@ from app.modules.agent_surfaces.domain.envelope import (
     DeliveryReceipt,
     PartDelivery,
     SurfaceEnvelope,
-)
-from app.modules.agent_surfaces.platforms.sent_message_ids import (
-    record_sent_message_id,
 )
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 
@@ -76,16 +72,14 @@ async def test_a_closed_window_is_not_tried_on_the_chat():
     adapter.deliver.assert_not_awaited()
 
 
-async def test_the_ids_a_send_produced_are_recorded():
-    async def deliver(**_kwargs):
-        record_sent_message_id("wamid.out-1")
-        record_sent_message_id("wamid.out-2")
-        return DeliveryReceipt(parts={"text": PartDelivery.NATIVE})
+async def test_an_open_window_is_delivered_on_the_chat():
+    adapter = SimpleNamespace(
+        deliver=AsyncMock(
+            return_value=DeliveryReceipt(parts={"text": PartDelivery.NATIVE})
+        )
+    )
 
-    adapter = SimpleNamespace(deliver=deliver)
-    recorded = AsyncMock()
-
-    result = await _delivery(outbound_log=recorded).deliver_envelope(
+    result = await _delivery().deliver_envelope(
         _target(adapter, hours_since_inbound=1),
         envelope=SurfaceEnvelope(text="on time"),
         metadata={},
@@ -93,4 +87,4 @@ async def test_the_ids_a_send_produced_are_recorded():
     )
 
     assert result and result.channel == "chat"
-    assert recorded.await_args.kwargs["sent_ids"] == ["wamid.out-1", "wamid.out-2"]
+    adapter.deliver.assert_awaited_once()

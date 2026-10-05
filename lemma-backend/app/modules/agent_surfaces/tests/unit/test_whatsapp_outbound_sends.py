@@ -26,10 +26,6 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionOption,
 )
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy
-from app.modules.agent_surfaces.platforms.sent_message_ids import (
-    collect_sent_message_ids,
-    record_sent_message_id,
-)
 from app.modules.agent_surfaces.platforms.whatsapp import media as whatsapp_media
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
@@ -237,27 +233,6 @@ async def test_a_message_formatting_empties_is_an_error_not_a_delivery():
         await _service(client).send_message(_event(), "---")
 
     assert client.posts == []
-
-
-async def test_sent_message_ids_are_collected_for_whoever_asks():
-    client = _Recorder()
-
-    with collect_sent_message_ids() as ids:
-        await _service(client).send_message(_event(), "one")
-        await _service(client).send_message(_event(), "two")
-
-    assert ids == ["wamid.out-1", "wamid.out-2"]
-    # Outside a collector recording is a no-op, not an error.
-    record_sent_message_id("wamid.nobody-asked")
-
-
-async def test_a_typing_indicator_is_not_recorded_as_a_sent_message():
-    client = _Recorder()
-
-    with collect_sent_message_ids() as ids:
-        await client.mark_read_and_typing(phone_number_id="phone-1", message_id="m")
-
-    assert ids == []
 
 
 async def test_an_approval_too_long_for_the_card_is_sent_in_full_first():

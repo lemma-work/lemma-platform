@@ -181,10 +181,6 @@ class UndeliverableReason:
         "The surface could not deliver the message. It is worth trying again; "
         "if it keeps failing, check the surface's connection."
     )
-    NO_OTHER_CHANNEL = (
-        "The platform reported the message undelivered, and no other channel "
-        "can reach this person."
-    )
 
     @staticmethod
     def wrong_tenant_on(channel: str) -> str:

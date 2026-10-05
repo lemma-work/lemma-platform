@@ -63,12 +63,11 @@ from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store 
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.services.delivery_statuses import (
+    log_delivery_statuses,
+)
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
 
-# Imported for its registration: the daily sweep of the outbound log.
-from app.modules.agent_surfaces.events.outbound_retention import (  # noqa: F401
-    prune_surface_outbound_messages,
-)
 from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
 )
@@ -316,14 +315,9 @@ async def _process_surface_webhook(
     if await claim_telegram_group_join(uow_factory, ingress_request, adapters=adapters):
         return
     # A platform reporting that something we sent never arrived. Such a body
-    # carries no message, so it never instead of the paths below.
-    # Lazy: notification delivery is outside the worker's import budget.
-    from app.modules.agent_surfaces.services.delivery_statuses import (
-        apply_delivery_statuses,
-    )
-
-    await apply_delivery_statuses(
-        uow_factory, ingress_request.payload, source=event.source, adapters=adapters
+    # carries no message, so it is logged alongside the paths below, not instead.
+    log_delivery_statuses(
+        ingress_request.payload, source=event.source, adapters=adapters
     )
 
     async with uow_factory() as uow:

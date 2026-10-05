@@ -84,22 +84,17 @@ async def test_the_inbox_says_which_attempt_is_running():
     assert inbox.inbox_attempt() is None
 
 
-async def test_a_quote_of_the_bots_message_is_filled_from_what_was_sent():
-    quoted = {"author": None, "text": "Your table is ready.", "is_bot": True}
-    lookup = AsyncMock(return_value=quoted)
-
-    class _Uows:
-        async def __aenter__(self):
-            return SimpleNamespace(session=None)
-
-        async def __aexit__(self, *_exc):
-            return False
-
-    starter = turn_starter.SurfaceTurnStarter(uow_factory=_Uows, quote_lookup=lookup)
+async def test_a_reply_to_the_bots_message_is_marked_as_one():
     metadata = {"reply_ref": {"id": "wamid.out-1", "from": "1555", "is_bot": True}}
-    context = SimpleNamespace(platform=SimpleNamespace(value="WHATSAPP"))
 
-    await starter._resolve_quote(context, metadata)
+    turn_starter.SurfaceTurnStarter._resolve_quote(metadata)
 
-    assert metadata["quoted_message"] == quoted
-    assert lookup.await_args.kwargs["external_message_id"] == "wamid.out-1"
+    assert metadata["quoted_message"]["is_bot"] is True
+
+
+async def test_a_reply_to_someone_elses_message_is_left_alone():
+    metadata = {"reply_ref": {"id": "wamid.in-1", "from": "1555", "is_bot": False}}
+
+    turn_starter.SurfaceTurnStarter._resolve_quote(metadata)
+
+    assert "quoted_message" not in metadata

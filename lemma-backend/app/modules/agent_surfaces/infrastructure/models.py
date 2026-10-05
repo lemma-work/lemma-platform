@@ -16,9 +16,6 @@ from app.modules.agent_surfaces.infrastructure.group_models import (  # noqa: F4
     AgentSurfaceGroupMessageModel,
     AgentSurfaceGroupModel,
 )
-from app.modules.agent_surfaces.infrastructure.outbound_models import (  # noqa: F401
-    AgentSurfaceOutboundMessageModel,
-)
 from datetime import datetime
 from uuid import UUID
 

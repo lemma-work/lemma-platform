@@ -1,24 +1,8 @@
-"""A message the bot sent, as a failed-delivery status or a quote finds it."""
+"""A platform's report that a message it accepted never arrived."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import UUID
-
-
-@dataclass(frozen=True, slots=True)
-class SurfaceOutboundMessage:
-    id: UUID
-    surface_id: UUID
-    conversation_id: UUID | None
-    notification_id: UUID | None
-    platform: str
-    external_message_id: str
-    recipient: str | None
-    kind: str
-    body: str | None
-    status: str
-    error: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,4 +19,4 @@ class FailedDeliveryStatus:
     sender_id: str | None = None
 
 
-__all__ = ["FailedDeliveryStatus", "SurfaceOutboundMessage"]
+__all__ = ["FailedDeliveryStatus"]
