@@ -3,6 +3,7 @@ import type { HttpClient } from "../http.js";
 import type { WorkflowCreateRequest } from "../openapi_client/models/WorkflowCreateRequest.js";
 import type { WorkflowGraphUpdateRequest } from "../openapi_client/models/WorkflowGraphUpdateRequest.js";
 import type { WorkflowRunFormSubmitRequest } from "../openapi_client/models/WorkflowRunFormSubmitRequest.js";
+import type { WorkflowRunStatus } from "../openapi_client/models/WorkflowRunStatus.js";
 import type { WorkflowUpdateRequest } from "../openapi_client/models/WorkflowUpdateRequest.js";
 import { WorkflowsService } from "../openapi_client/services/WorkflowsService.js";
 
@@ -54,6 +55,24 @@ export class WorkflowsNamespace {
     list: (workflowName: string, options: { limit?: number; pageToken?: string } = {}) =>
       this.client.request(() =>
         WorkflowsService.workflowRunList(this.podId(), workflowName, options.limit ?? 100, options.pageToken),
+      ),
+
+    /**
+     * Runs across every workflow in the pod, newest first. Filter by
+     * `status` (any of) and `workflowId`. Each run carries its `title` and,
+     * while it has one, its active wait as `waiting_on`.
+     */
+    listInPod: (
+      options: { status?: WorkflowRunStatus[]; workflowId?: string; limit?: number; pageToken?: string } = {},
+    ) =>
+      this.client.request(() =>
+        WorkflowsService.workflowRunListForPod(
+          this.podId(),
+          options.limit ?? 50,
+          options.status,
+          options.workflowId,
+          options.pageToken,
+        ),
       ),
 
     waitingAssignedToMe: (options: { limit?: number; pageToken?: string } = {}) =>

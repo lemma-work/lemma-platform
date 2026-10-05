@@ -74,9 +74,11 @@ class WorkflowModel(UUIDAuditBase):
         from app.modules.workflow.domain.workflow import WorkflowEntity
         from app.modules.workflow.domain.graph import WorkflowEdge
         from app.modules.workflow.domain.start import WorkflowStart
+        from app.modules.workflow.infrastructure.start_column import split_start
 
         nodes = [WORKFLOW_NODE_ADAPTER.validate_python(n) for n in self.nodes]
         edges = [WorkflowEdge(**e) for e in self.edges]
+        start, run_title = split_start(self.start)
         return WorkflowEntity(
             id=self.id,
             pod_id=self.pod_id,
@@ -87,7 +89,8 @@ class WorkflowModel(UUIDAuditBase):
             nodes=nodes,
             edges=edges,
             entry_node_id=self.entry_node_id,
-            start=WorkflowStart(**self.start) if self.start else None,
+            start=WorkflowStart(**start) if start else None,
+            run_title=run_title,
             mode=self.mode,
             is_active=self.is_active,
             visibility=self.visibility,

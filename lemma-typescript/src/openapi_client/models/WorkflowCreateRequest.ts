@@ -42,6 +42,10 @@ export type WorkflowCreateRequest = {
      */
     nodes?: Array<(FormNode | AgentNode | FunctionNode | DecisionNode | LoopNode | WaitUntilNode | EndNode)>;
     /**
+     * What each run is about, as up to four JMESPath expressions over the run context, joined with ' · '. Example: `["collect.candidate_name", "collect.role"]`. Evaluated whenever a run is read, so a part filled in by a later form appears once that form is answered; parts that resolve to nothing are skipped. Empty means runs carry no title.
+     */
+    run_title?: Array<string>;
+    /**
      * Start configuration. If omitted, the workflow can be started manually via `workflow.start`.
      */
     start?: ((ManualWorkflowStartInput | ScheduledWorkflowStartInput | EventWorkflowStartInput | DataStoreWorkflowStartInput) | null);

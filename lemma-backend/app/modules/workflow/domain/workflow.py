@@ -40,6 +40,8 @@ class WorkflowEntity(AggregateRoot):
     entry_node_id: str | None = None
 
     start: Optional[WorkflowStart] = None
+    # Expressions over the run context that name each run; see run_title.py.
+    run_title: list[str] = Field(default_factory=list)
 
     is_active: bool = True
     mode: WorkflowMode = WorkflowMode.GLOBAL
@@ -112,4 +114,5 @@ class WorkflowUpdateEntity(BaseModel):
     icon_url: str | None = None
     mode: WorkflowMode | None = None
     start: WorkflowStart | None = None
+    run_title: list[str] | None = None
     visibility: str | None = None

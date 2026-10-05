@@ -10,6 +10,7 @@ import { byNewest, readRun, readRuns, type RunRow } from "@/workflow/runs";
 import { readShape, type WorkflowShape } from "@/workflow/shape";
 import { Shape } from "@/workflow/workflows-view";
 import { RunRowButton } from "@/workflow/run-row";
+import { RunBoard } from "./run-board";
 import { useWorkflowGraph, workflowGraphQuery, useWorkflowList } from "@/workflow/use-run";
 import { automationOf, runsForOf, schedulesFor, turnOnOf, turnOnRequest, type Automation, type TurnOn } from "@/workflow/turn-on";
 import { useSchedules } from "@/schedule/queries";
@@ -84,6 +85,8 @@ export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, o
                     </div>
                 </header>
                 {problem && <p className="runpage__problem" role="alert">{problem}</p>}
+
+                <RunBoard pod={pod} workflowId={flow?.id ?? null} shape={shape.data ?? null} name={name} onOpenRun={onOpenRun} />
 
                 <div className="agentpage__grid wfpage__grid">
                     <div className="agentpage__main">
