@@ -131,15 +131,22 @@
 
   // ------------------------------------------------------------------- chat
 
-  var log, input, lastSequence = -1, poller = null, pollUntil = 0;
+  var log, slot, input, lastSequence = -1, poller = null, pollUntil = 0;
 
   function note(text) {
     log.appendChild(el("div", "lw-msg lw-note", text));
     log.scrollTop = log.scrollHeight;
   }
+  // What the visitor sent, drawn at once and confirmed when the server's copy
+  // arrives -- so it is never drawn twice.
+  var unconfirmed = [];
   function show(message) {
     if (message.sequence <= lastSequence) return;
     lastSequence = message.sequence;
+    if (message.role === "user" && unconfirmed.length && unconfirmed[0] === message.text) {
+      unconfirmed.shift();
+      return;
+    }
     log.appendChild(el("div", "lw-msg lw-" + message.role, message.text));
     log.scrollTop = log.scrollHeight;
   }
@@ -162,7 +169,9 @@
     if (!poller) poller = window.setInterval(poll, 2000);
   }
   function send(text) {
-    show({ role: "user", text: text, sequence: lastSequence + 0.5 });
+    unconfirmed.push(text);
+    log.appendChild(el("div", "lw-msg lw-user", text));
+    log.scrollTop = log.scrollHeight;
     withSession(function () {
       return call("/messages", { session: state.session, text: text });
     })
@@ -170,20 +179,27 @@
         keepPolling(120);
       })
       .catch(function (error) {
+        var at = unconfirmed.indexOf(text);
+        if (at >= 0) unconfirmed.splice(at, 1);
         note(error.message);
       });
   }
 
+  var codeRow = null;
   function askForCode(after) {
+    if (codeRow && codeRow.isConnected) {
+      codeRow.querySelector("input").focus();
+      return;
+    }
     var row = el("div", "lw-row");
+    codeRow = row;
     var field = el("input");
     field.type = "email";
     field.placeholder = "Your email";
     var go = el("button", null, "Send code");
     row.appendChild(field);
     row.appendChild(go);
-    var place = log || shell;
-    place.appendChild(row);
+    (slot || shell).appendChild(row);
     go.onclick = function () {
       var email = field.value.trim();
       withSession(function () {
@@ -231,6 +247,8 @@
     row.appendChild(input);
     row.appendChild(sendButton);
     panel.appendChild(log);
+    slot = el("div");
+    panel.appendChild(slot);
     panel.appendChild(verify);
     panel.appendChild(row);
     shell.appendChild(panel);
@@ -292,7 +310,7 @@
         }
         ensureSession().then(function () {
           if (state.requiresCode && !state.isContact) {
-            log = null;
+            slot = null;
             shell.style.cssText = "";
             form.parentNode.insertBefore(host, form.nextSibling);
             askForCode(deliver);
