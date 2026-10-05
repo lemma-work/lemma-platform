@@ -22,11 +22,16 @@ from app.modules.agent.domain.outsiders import (
     OUTSIDERS,
 )
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
+from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
     ConversationModel,
     MessageModel,
 )
+
+#: The message kinds a person outside the pod may have been shown. Thinking and
+#: tool traffic are the pod's working.
+_SEEN_KINDS = (MessageKind.TEXT.value, MessageKind.NOTIFICATION.value)
 
 #: The most conversations one export carries.
 MAX_EXPORTED_CONVERSATIONS = 500
@@ -115,8 +120,9 @@ async def visible_messages(
 ) -> tuple[ExportedMessage, ...]:
     """What the person outside the pod saw of a conversation, after a point.
 
-    Their words and the bot's answers, oldest first. Never a tool call, a
-    member's private note, or what a note's run said back.
+    Their words, the bot's answers and members' follow-ups, oldest first. Never
+    a tool call, the model's thinking, another notification, a member's private
+    note, or what a note's run said back.
     """
     rows = await uow.session.execute(
         select(MessageModel, AgentRunModel.run_metadata)
@@ -125,6 +131,7 @@ async def visible_messages(
             MessageModel.conversation_id == conversation_id,
             MessageModel.sequence > after,
             MessageModel.role.in_(("user", "assistant")),
+            MessageModel.kind.in_(_SEEN_KINDS),
             MessageModel.text.is_not(None),
             MessageModel.tool_name.is_(None),
         )
@@ -139,9 +146,17 @@ async def visible_messages(
             sequence=message.sequence,
         )
         for message, run_metadata in rows
-        if not is_private_note(message.message_metadata)
+        if _was_said_to_them(message)
+        and not is_private_note(message.message_metadata)
         and not run_is_private(run_metadata)
     )
+
+
+def _was_said_to_them(message: MessageModel) -> bool:
+    """Text, or a notification that is a member's follow-up -- never another."""
+    if message.kind == MessageKind.TEXT.value:
+        return True
+    return bool((message.message_metadata or {}).get("follow_up"))
 
 
 async def mark_conversation_contact(

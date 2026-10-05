@@ -45,6 +45,7 @@ from app.modules.agent_surfaces.tests.e2e.test_telegram_group_outsiders_e2e impo
     _table,
 )
 from app.modules.contacts.infrastructure.models import ContactIdentityModel
+from app.modules.test_support.e2e.scripted_model import script_thinking
 
 pytestmark = pytest.mark.e2e
 
@@ -171,7 +172,10 @@ async def test_an_anonymous_visitor_is_answered_from_what_is_public(
         pod_id=pod_id,
         script=[
             script_tool_call("pod_tables", {}, tool_call_id="tables-1"),
-            script_text("Here is our price list."),
+            # The model's thinking is the pod's working, never the visitor's.
+            script_thinking(
+                "A visitor; only Public tables apply.", "Here is our price list."
+            ),
         ],
     )
     assert (await _metadata(db_session, conversation_id)).get(AUDIENCE_KEY) == OUTSIDERS
