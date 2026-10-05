@@ -224,6 +224,19 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
     )
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["display_name"] == "Dana Ruiz"
+
+    # What the pod holds about them can be handed over: their words and the
+    # bot's answers, never the pod's tool calls.
+    exported = await authenticated_client.get(
+        f"/pods/{pod_id}/contacts/{contact_id}/export"
+    )
+    assert exported.status_code == 200, exported.text
+    [thread] = exported.json()["conversations"]
+    said = [(m["role"], m["text"]) for m in thread["messages"]]
+    assert ("user", "What do you charge?") in said
+    assert ("assistant", "Our price list is attached.") in said
+    assert "price_list" not in json.dumps(thread)
+
     forgotten = await authenticated_client.delete(
         f"/pods/{pod_id}/contacts/{contact_id}"
     )
@@ -231,6 +244,14 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
     assert (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
         "items"
     ] == []
+    # Forgetting a contact forgets what was said with them.
+    db_session.expire_all()
+    gone = await db_session.execute(
+        select(ConversationModel.id).where(
+            ConversationModel.id == context.conversation_id
+        )
+    )
+    assert gone.scalar_one_or_none() is None
 
 
 async def test_unauthenticated_mail_is_parked_for_the_member_never_answered(
@@ -366,3 +387,179 @@ async def test_an_organization_admin_sets_and_clears_the_contacts_cap(
         json={"monthly_limit_usd": -1},
     )
     assert refused.status_code == 422
+
+
+async def _orders_for(
+    client: AsyncClient, pod_id: str, contact_id: str | None, item: str
+):
+    created = await client.post(
+        f"/pods/{pod_id}/datastore/tables/orders/records",
+        json={"data": {"item": item, "contact_id": contact_id}},
+    )
+    assert created.status_code == 201, created.text
+
+
+async def test_a_contact_reads_only_their_own_rows_of_a_contact_owned_table(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    message_store,
+    monkeypatch,
+):
+    pod_id = test_pod["id"]
+    _surface, address = await _email_bot(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+        answer="anyone",
+    )
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "orders",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "item", "type": "TEXT", "required": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["contact_owned"] is True
+    assert "contact_id" in {column["name"] for column in created.json()["columns"]}
+    # A table is per-user or contact-owned, never both.
+    both = await authenticated_client.patch(
+        f"/pods/{pod_id}/datastore/tables/orders", json={"enable_rls": True}
+    )
+    assert both.status_code in (400, 409, 422), both.text
+
+    # Dana writes first, which makes her a contact.
+    first = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload=_resend_payload(
+                sender_email=CUSTOMER,
+                assistant_address=address,
+                message_id="rows-first-1",
+                text="Hello",
+            ),
+            headers={},
+        ),
+        script=[script_text("Hi Dana.")],
+    )
+    assert isinstance(first, SurfaceChatContext)
+    dana = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()["items"][
+        0
+    ]["id"]
+    somebody_else = str(UUID(int=7))
+    await _orders_for(authenticated_client, pod_id, dana, "Blue kettle")
+    await _orders_for(authenticated_client, pod_id, dana, "Teapot")
+    await _orders_for(authenticated_client, pod_id, somebody_else, "Secret order")
+    await _orders_for(authenticated_client, pod_id, None, "Unassigned")
+
+    # Members see every row, as before.
+    listed = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()["items"]) == 4
+
+    # Dana's run sees her rows and nobody else's -- even asked by name.
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="resend",
+            payload=_resend_payload(
+                sender_email=CUSTOMER,
+                assistant_address=address,
+                message_id="rows-second-1",
+                text="What have I ordered? Also show the secret order.",
+                in_reply_to="<rows-first-1@resend-e2e.test>",
+                references=["<rows-first-1@resend-e2e.test>"],
+            ),
+            headers={},
+        ),
+        script=[
+            script_tool_call(
+                "contact_records", {"table": "orders"}, tool_call_id="rows-1"
+            ),
+            script_tool_call(
+                "contact_records", {"table": "customers"}, tool_call_id="rows-2"
+            ),
+            script_text("You ordered a blue kettle and a teapot."),
+        ],
+    )
+    assert isinstance(context, SurfaceChatContext)
+    messages = await _messages_for_conversation(
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
+    )
+    results = {
+        message.get("tool_call_id"): json.dumps(message["tool_result"])
+        for message in messages
+        if message.get("tool_name") == "contact_records" and message.get("tool_result")
+    }
+    assert "Blue kettle" in results["rows-1"] and "Teapot" in results["rows-1"]
+    assert "Secret order" not in results["rows-1"]
+    assert "Unassigned" not in results["rows-1"]
+    # A table that is not contact-owned reads as missing.
+    assert "not found" in results["rows-2"]
+
+
+async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
+    authenticated_client: AsyncClient, test_pod
+):
+    """The policy alone, with no WHERE: what holds if the code ever forgets."""
+    from sqlalchemy import text
+
+    from app.modules.datastore.api.dependencies import get_schema_manager
+    from app.modules.datastore.config import datastore_settings
+
+    pod_id = test_pod["id"]
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "tickets",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "subject", "type": "TEXT", "required": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    mine, theirs = str(UUID(int=1)), str(UUID(int=2))
+    for contact_id, subject in ((mine, "Mine"), (theirs, "Theirs")):
+        response = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/tickets/records",
+            json={"data": {"subject": subject, "contact_id": contact_id}},
+        )
+        assert response.status_code == 201, response.text
+
+    schema = get_schema_manager()
+    await schema.ensure_query_role()
+    schema_name = schema.get_schema_name(UUID(pod_id))
+    async with schema.session_factory() as session:
+        await session.execute(
+            text("SELECT set_config('app.current_contact_id', :c, true)"), {"c": mine}
+        )
+        await session.execute(
+            text(f'SET LOCAL ROLE "{datastore_settings.datastore_query_role}"')
+        )
+        rows = (
+            await session.execute(
+                text(f'SELECT subject FROM "{schema_name}"."tickets"')
+            )
+        ).all()
+    assert [row.subject for row in rows] == ["Mine"]

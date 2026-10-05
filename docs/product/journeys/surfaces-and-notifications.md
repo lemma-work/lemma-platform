@@ -682,6 +682,28 @@ Public, the way a group's people from outside it are.
 
 **Contracts:** `surface.webhook.handle_platform`
 
+### PS-SURF-048 — A contact sees what is theirs, and only that
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`
+> and at unit level by `agent/tests/unit/test_contact_tools.py`.
+
+- Where a pod marks a table as its contacts' (contact-owned), the system shall
+  let every member read every row of it, and let a contact's conversation read
+  only the rows naming that contact.
+- The system shall never let a contact's conversation read a row naming
+  somebody else, however it asks, and shall report a table that is not
+  contact-owned as not there.
+- Where a pod opens a function to contacts, the system shall let a contact's
+  conversation call it, tell the function which contact is asking, and never
+  let the conversation tell it somebody else.
+- The system shall let a pod's admins export what it holds about a contact --
+  their handles, their words and the bot's answers -- and shall never include
+  the pod's tool calls or a member's private notes.
+
+**Contracts:** `table.create`, `table.update`, `function.contacts.update`,
+`contact.export`
+
 ### PS-SURF-047 — Contacts cost the organization, never a member
 **Status:** planned
 

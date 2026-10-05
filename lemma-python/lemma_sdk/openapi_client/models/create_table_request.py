@@ -32,6 +32,9 @@ class CreateTableRequest:
             and should not be user-created.
         config (CreateTableRequestConfigType0 | None | Unset): Optional table metadata/configuration. This updates table
             config metadata and does not directly alter physical columns.
+        contact_owned (bool | Unset): Rows the pod keeps about its contacts. Adds a `contact_id` column; every member
+            sees every row, and a contact's run reads only rows naming that contact. Not combinable with `enable_rls`.
+            Default: False.
         enable_rls (bool | Unset): Enable row-level security for this table. When enabled, API reads/writes are scoped
             by current user. Default: True.
         primary_key_column (str | Unset): Primary key column name. If not `id`, it must also be declared in `columns`.
@@ -42,6 +45,7 @@ class CreateTableRequest:
     columns: list[ColumnSchema]
     name: str
     config: CreateTableRequestConfigType0 | None | Unset = UNSET
+    contact_owned: bool | Unset = False
     enable_rls: bool | Unset = True
     primary_key_column: str | Unset = "id"
     visibility: None | str | Unset = UNSET
@@ -67,6 +71,8 @@ class CreateTableRequest:
         else:
             config = self.config
 
+        contact_owned = self.contact_owned
+
         enable_rls = self.enable_rls
 
         primary_key_column = self.primary_key_column
@@ -87,6 +93,8 @@ class CreateTableRequest:
         )
         if config is not UNSET:
             field_dict["config"] = config
+        if contact_owned is not UNSET:
+            field_dict["contact_owned"] = contact_owned
         if enable_rls is not UNSET:
             field_dict["enable_rls"] = enable_rls
         if primary_key_column is not UNSET:
@@ -130,6 +138,8 @@ class CreateTableRequest:
 
         config = _parse_config(d.pop("config", UNSET))
 
+        contact_owned = d.pop("contact_owned", UNSET)
+
         enable_rls = d.pop("enable_rls", UNSET)
 
         primary_key_column = d.pop("primary_key_column", UNSET)
@@ -147,6 +157,7 @@ class CreateTableRequest:
             columns=columns,
             name=name,
             config=config,
+            contact_owned=contact_owned,
             enable_rls=enable_rls,
             primary_key_column=primary_key_column,
             visibility=visibility,

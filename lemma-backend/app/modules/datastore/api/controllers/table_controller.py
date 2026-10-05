@@ -68,6 +68,7 @@ async def create_table(
         enable_rls=data.enable_rls,
         visibility=data.visibility,
         ctx=ctx,
+        contact_owned=data.contact_owned,
     )
     return await _table_detail_response(table)
 
@@ -201,6 +202,7 @@ async def update_table(
         ctx=ctx,
         visibility=data.visibility,
         enable_rls=data.enable_rls,
+        contact_owned=data.contact_owned,
     )
     return await _table_detail_response(updated_table)
 

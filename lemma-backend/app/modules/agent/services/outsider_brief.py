@@ -15,6 +15,7 @@ cached.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -22,6 +23,15 @@ from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
 )
 from app.modules.contacts.contracts import contact_by_id
+from app.modules.datastore.contracts.contact_rows import (
+    ContactTable,
+    contact_owned_tables,
+)
+from app.modules.function.contracts.contact_functions import (
+    CONTACT_INPUT_KEY,
+    ContactFunction,
+    contact_functions,
+)
 
 
 async def outsider_brief(
@@ -41,11 +51,15 @@ async def outsider_brief(
             if contact_id is not None
             else None
         )
+        tables = await contact_owned_tables(uow, pod_id=pod_id) if contact_id else []
+        functions = await contact_functions(uow, pod_id=pod_id) if contact_id else []
     if contact_id is not None:
         return render_contact_brief(
             pod_name=pod.name,
             owner_display_name=owner.display_name,
             contact_display_name=contact.display_name if contact else None,
+            tables=tables,
+            functions=functions,
         )
     return render_outsider_brief(
         pod_name=pod.name, owner_display_name=owner.display_name
@@ -83,6 +97,8 @@ def render_contact_brief(
     pod_name: str | None,
     owner_display_name: str | None,
     contact_display_name: str | None,
+    tables: Sequence[ContactTable] = (),
+    functions: Sequence[ContactFunction] = (),
 ) -> str:
     """The brief for a contact's private chat.
 
@@ -110,8 +126,28 @@ def render_contact_brief(
             "whatever you put in `to` -- and their reply comes back to you here."
         ),
         (
-            "- You can read only what the pod has marked Public. A refusal from "
-            "a tool is the answer, not an obstacle: say you can't share that here."
+            "- You can read only what the pod has marked Public, and what is "
+            "theirs below. A refusal from a tool is the answer, not an obstacle: "
+            "say you can't share that here."
         ),
     ]
+    if tables:
+        lines.append(
+            "- Their records (`contact_records`, only ever their own rows): "
+            + "; ".join(
+                f"{table.name} ({', '.join(table.columns)})" for table in tables
+            )
+        )
+    for function in functions:
+        properties = function.input_schema.get("properties")
+        fields = sorted(
+            str(key)
+            for key in (properties if isinstance(properties, dict) else {})
+            if key != CONTACT_INPUT_KEY
+        )
+        lines.append(
+            f"- `contact_function` name={function.name!r}"
+            + (f" -- {function.description}" if function.description else "")
+            + (f" (input: {', '.join(fields)})" if fields else "")
+        )
     return "\n".join(lines)

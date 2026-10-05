@@ -394,12 +394,7 @@ class DatastoreEntity(AggregateRoot):
     def mark_deleted(self, actor_id: UUID) -> None:
         from app.modules.datastore.domain.events import DatastoreDeletedEvent
 
-        self.add_event(
-            DatastoreDeletedEvent(
-                pod_id=self.pod_id,
-                actor_id=actor_id,
-            )
-        )
+        self.add_event(DatastoreDeletedEvent(pod_id=self.pod_id, actor_id=actor_id))
 
 
 class DatastoreTableEntity(AggregateRoot):
@@ -415,6 +410,7 @@ class DatastoreTableEntity(AggregateRoot):
     config: Optional[Dict[str, Any]] = None
     enable_rls: bool = True
     visibility: str = "POD"
+    contact_owned: bool = False
     allowed_actions: List[str] = Field(default_factory=list)
 
     @property

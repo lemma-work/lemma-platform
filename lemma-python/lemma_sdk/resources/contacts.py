@@ -5,10 +5,12 @@ from uuid import UUID
 
 from ..openapi_client.api.contacts import (
     contact_delete,
+    contact_export,
     contact_get,
     contact_list,
     contact_update,
 )
+from ..openapi_client.models.contact_export_response import ContactExportResponse
 from ..openapi_client.models.contact_list_response import ContactListResponse
 from ..openapi_client.models.contact_response import ContactResponse
 from ..openapi_client.models.contact_update_request import ContactUpdateRequest
@@ -53,6 +55,10 @@ class PodContacts(BoundResource):
             body_model=ContactUpdateRequest,
         )
 
+    def export(self, contact_id: str | UUID) -> ContactExportResponse:
+        """Everything the pod holds about a contact. Takes a pod admin."""
+        return self._call(contact_export, self._pod_uuid(), as_uuid(contact_id))
+
     def delete(self, contact_id: str | UUID) -> None:
-        """Forget a contact and their handles. Takes a pod admin."""
+        """Forget a contact, their handles and their conversations. Takes a pod admin."""
         self._call(contact_delete, self._pod_uuid(), as_uuid(contact_id))

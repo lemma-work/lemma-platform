@@ -36,7 +36,12 @@ export class ContactsNamespace {
     );
   }
 
-  /** Forget a contact and their handles. */
+  /** Everything the pod holds about a contact: handles and conversations. */
+  export(podId: string, contactId: string) {
+    return this.client.request(() => ContactsService.contactExport(podId, contactId));
+  }
+
+  /** Forget a contact, their handles and their conversations. */
   remove(podId: string, contactId: string) {
     return this.client.request(() => ContactsService.contactDelete(podId, contactId));
   }

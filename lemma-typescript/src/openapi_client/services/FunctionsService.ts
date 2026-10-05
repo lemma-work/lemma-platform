@@ -5,11 +5,13 @@
 import type { CreateFunctionRequest } from '../models/CreateFunctionRequest.js';
 import type { ExecuteFunctionRequest } from '../models/ExecuteFunctionRequest.js';
 import type { FunctionActionResponse } from '../models/FunctionActionResponse.js';
+import type { FunctionContactAccessRequest } from '../models/FunctionContactAccessRequest.js';
 import type { FunctionDetailResponse } from '../models/FunctionDetailResponse.js';
 import type { FunctionListResponse } from '../models/FunctionListResponse.js';
 import type { FunctionMessageResponse } from '../models/FunctionMessageResponse.js';
 import type { FunctionPermissionsReplaceRequest } from '../models/FunctionPermissionsReplaceRequest.js';
 import type { FunctionPermissionsResponse } from '../models/FunctionPermissionsResponse.js';
+import type { FunctionResponse } from '../models/FunctionResponse.js';
 import type { FunctionRevisionListResponse } from '../models/FunctionRevisionListResponse.js';
 import type { FunctionRevisionPromoteResponse } from '../models/FunctionRevisionPromoteResponse.js';
 import type { FunctionRevisionResponse } from '../models/FunctionRevisionResponse.js';
@@ -142,6 +144,34 @@ export class FunctionsService {
         return __request(OpenAPI, {
             method: 'PATCH',
             url: '/pods/{pod_id}/functions/{function_name}',
+            path: {
+                'pod_id': podId,
+                'function_name': functionName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Open a Function to Contacts
+     * Let a contact's conversation call this function, or stop it. A contact holds no grant: the function runs as its owner's runs do, held to its own grants, and is told the asking contact as `contact_id`.
+     * @param podId
+     * @param functionName
+     * @param requestBody
+     * @returns FunctionResponse Successful Response
+     * @throws ApiError
+     */
+    public static functionContactsUpdate(
+        podId: string,
+        functionName: string,
+        requestBody: FunctionContactAccessRequest,
+    ): CancelablePromise<FunctionResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/functions/{function_name}/contacts',
             path: {
                 'pod_id': podId,
                 'function_name': functionName,

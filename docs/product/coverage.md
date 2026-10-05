@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 170 |
 | `gap` | 2 |
 | `manual` | 21 |
-| `planned` | 14 |
+| `planned` | 15 |
 | `withdrawn` | 0 |
-| **total** | **207** |
+| **total** | **208** |
 
 Scenario tests declaring a promise: 425.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 243 | 282 |
+| OpenAPI operations | 243 | 284 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -294,6 +294,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-044` People in a group ask the bot by the name they see | `planned` | — |
 | `PS-SURF-045` A stranger writing to the pod's own bot is answered as a contact | `planned` | — |
 | `PS-SURF-046` Email nobody vouched for is never answered | `planned` | — |
+| `PS-SURF-048` A contact sees what is theirs, and only that | `planned` | — |
 | `PS-SURF-047` Contacts cost the organization, never a member | `planned` | — |
 
 ## [Working with data](journeys/working-with-data.md)

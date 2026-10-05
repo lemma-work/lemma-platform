@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ContactExportResponse } from '../models/ContactExportResponse.js';
 import type { ContactListResponse } from '../models/ContactListResponse.js';
 import type { ContactResponse } from '../models/ContactResponse.js';
 import type { ContactUpdateRequest } from '../models/ContactUpdateRequest.js';
@@ -40,7 +41,9 @@ export class ContactsService {
     }
     /**
      * Delete Contact
-     * Forget a contact: their handles go with them.
+     * Forget a contact: their handles and their conversations go with them.
+     *
+     * One transaction, so a contact is never half forgotten.
      * @param podId
      * @param contactId
      * @returns void
@@ -107,6 +110,33 @@ export class ContactsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Export Contact
+     * A contact's handles and what was said with them, for a request to see it.
+     *
+     * Takes a pod admin, as forgetting does: both answer the person the data is
+     * about, not the member reading it.
+     * @param podId
+     * @param contactId
+     * @returns ContactExportResponse Successful Response
+     * @throws ApiError
+     */
+    public static contactExport(
+        podId: string,
+        contactId: string,
+    ): CancelablePromise<ContactExportResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/contacts/{contact_id}/export',
+            path: {
+                'pod_id': podId,
+                'contact_id': contactId,
+            },
             errors: {
                 422: `Validation Error`,
             },

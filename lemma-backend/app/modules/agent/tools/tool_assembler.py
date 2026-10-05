@@ -14,7 +14,11 @@ from app.modules.agent.tools.context import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import (
+    answers_outsiders,
+    conversation_contact_id,
+)
+from app.modules.agent.tools.contact_tools import build_contact_toolset
 from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
@@ -231,6 +235,10 @@ class RunToolAssembler:
             )
         if not for_outsider:
             toolsets.extend(await self._surface_toolsets(conversation))
+        if conversation_contact_id(conversation) is not None and callable(
+            self.uow_factory
+        ):
+            toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
         toolsets.extend(
             self._final_answer_toolsets(
                 agent=agent,

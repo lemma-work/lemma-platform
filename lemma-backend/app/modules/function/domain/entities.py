@@ -181,6 +181,7 @@ class FunctionEntity(BaseModel):
     type: FunctionType = FunctionType.API
     status: FunctionStatus = FunctionStatus.DRAFT
     visibility: str = "POD"
+    contacts_invoke: bool = False
     pending_artifact: FunctionArtifact | None = Field(
         default=None, exclude=True, repr=False
     )

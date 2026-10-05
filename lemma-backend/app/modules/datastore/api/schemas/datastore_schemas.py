@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import List, Optional, Dict, Any, Union
 from uuid import UUID
 from pydantic import AliasChoices, BaseModel, Field, ConfigDict
+from app.modules.datastore.api.schemas import contact_owned
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.file_entities import SearchMethod
 from app.modules.datastore.infrastructure.sql_identifiers import (
@@ -28,7 +29,7 @@ MAX_RECORD_PAGE_SIZE = 1000
 MAX_BULK_RECORDS = 1000
 
 
-class CreateTableRequest(BaseModel):
+class CreateTableRequest(contact_owned.ContactOwnedOnCreate):
     """Schema for creating a new table."""
 
     name: str = Field(
@@ -81,7 +82,7 @@ class CreateTableRequest(BaseModel):
         return self.name
 
 
-class UpdateTableRequest(BaseModel):
+class UpdateTableRequest(contact_owned.ContactOwnedOnUpdate):
     """Schema for updating a table."""
 
     config: Dict[str, Any] | None = Field(
@@ -306,7 +307,7 @@ class DirectoryTreeResponse(BaseModel):
 DirectoryTreeNode.model_rebuild()
 
 
-class TableResponse(BaseModel):
+class TableResponse(contact_owned.ContactOwnedOnRead):
     """Schema for table response."""
 
     model_config = ConfigDict(from_attributes=True)

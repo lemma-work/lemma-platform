@@ -90,6 +90,7 @@ export type { ConnectorStatusResponse } from './models/ConnectorStatusResponse.j
 export type { ConnectRequestInitiateSchema } from './models/ConnectRequestInitiateSchema.js';
 export type { ConnectRequestResponseSchema } from './models/ConnectRequestResponseSchema.js';
 export { ContactAnswer } from './models/ContactAnswer.js';
+export type { ContactExportResponse } from './models/ContactExportResponse.js';
 export type { ContactIdentityResponse } from './models/ContactIdentityResponse.js';
 export type { ContactListResponse } from './models/ContactListResponse.js';
 export type { ContactResponse } from './models/ContactResponse.js';
@@ -142,6 +143,8 @@ export type { EventWorkflowStartConfigOutput } from './models/EventWorkflowStart
 export type { EventWorkflowStartInput } from './models/EventWorkflowStartInput.js';
 export type { EventWorkflowStartOutput } from './models/EventWorkflowStartOutput.js';
 export type { ExecuteFunctionRequest } from './models/ExecuteFunctionRequest.js';
+export type { ExportedConversation } from './models/ExportedConversation.js';
+export type { ExportedMessage } from './models/ExportedMessage.js';
 export type { ExportProgressResponse } from './models/ExportProgressResponse.js';
 export type { ExportStartRequest } from './models/ExportStartRequest.js';
 export { ExportStatus } from './models/ExportStatus.js';
@@ -169,6 +172,7 @@ export type { FormNode } from './models/FormNode.js';
 export type { FormNodeConfig } from './models/FormNodeConfig.js';
 export type { FormNodeResponse } from './models/FormNodeResponse.js';
 export type { FunctionActionResponse } from './models/FunctionActionResponse.js';
+export type { FunctionContactAccessRequest } from './models/FunctionContactAccessRequest.js';
 export type { FunctionDetailResponse } from './models/FunctionDetailResponse.js';
 export type { FunctionListResponse } from './models/FunctionListResponse.js';
 export type { FunctionMessageResponse } from './models/FunctionMessageResponse.js';
@@ -179,6 +183,7 @@ export type { FunctionPermissionsReplaceRequest } from './models/FunctionPermiss
 export type { FunctionPermissionsResponse } from './models/FunctionPermissionsResponse.js';
 export type { FunctionResourcePermissionRequest } from './models/FunctionResourcePermissionRequest.js';
 export type { FunctionResourcePermissionResponse } from './models/FunctionResourcePermissionResponse.js';
+export type { FunctionResponse } from './models/FunctionResponse.js';
 export type { FunctionRevisionListResponse } from './models/FunctionRevisionListResponse.js';
 export type { FunctionRevisionPromoteResponse } from './models/FunctionRevisionPromoteResponse.js';
 export type { FunctionRevisionResponse } from './models/FunctionRevisionResponse.js';

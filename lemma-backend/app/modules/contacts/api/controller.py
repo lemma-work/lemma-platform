@@ -17,6 +17,11 @@ from pydantic import BaseModel, Field
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
+from app.modules.agent.contracts.contact_conversations import (
+    ExportedConversation,
+    export_contact_conversations,
+    forget_contact_conversations,
+)
 from app.modules.contacts.domain.entities import (
     Contact,
     IdentityKind,
@@ -50,6 +55,13 @@ class ContactListResponse(BaseModel):
         default=None,
         description="Pass as `before` for the next page; absent on the last.",
     )
+
+
+class ContactExportResponse(BaseModel):
+    """Everything the pod holds about one contact, for a request to see it."""
+
+    contact: ContactResponse
+    conversations: list[ExportedConversation]
 
 
 class ContactUpdateRequest(BaseModel):
@@ -132,6 +144,29 @@ async def update_contact(
     return _response(await _found(uow, pod_id=pod_id, contact_id=contact_id))
 
 
+@router.get(
+    "/{contact_id}/export",
+    operation_id="contact.export",
+    response_model=ContactExportResponse,
+    dependencies=[require_action(Permissions.POD_MEMBER_MANAGE)],
+)
+async def export_contact(
+    pod_id: UUID, contact_id: UUID, uow: UoWDep
+) -> ContactExportResponse:
+    """A contact's handles and what was said with them, for a request to see it.
+
+    Takes a pod admin, as forgetting does: both answer the person the data is
+    about, not the member reading it.
+    """
+    contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
+    return ContactExportResponse(
+        contact=_response(contact),
+        conversations=await export_contact_conversations(
+            uow, pod_id=pod_id, contact_id=contact_id
+        ),
+    )
+
+
 @router.delete(
     "/{contact_id}",
     operation_id="contact.delete",
@@ -139,9 +174,11 @@ async def update_contact(
     dependencies=[require_action(Permissions.POD_MEMBER_MANAGE)],
 )
 async def delete_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> None:
-    """Forget a contact: their handles go with them."""
-    if not await ContactRepository(uow.session).delete(
-        pod_id=pod_id, contact_id=contact_id
-    ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
+    """Forget a contact: their handles and their conversations go with them.
+
+    One transaction, so a contact is never half forgotten.
+    """
+    await _found(uow, pod_id=pod_id, contact_id=contact_id)
+    await forget_contact_conversations(uow, pod_id=pod_id, contact_id=contact_id)
+    await ContactRepository(uow.session).delete(pod_id=pod_id, contact_id=contact_id)
     await uow.commit()

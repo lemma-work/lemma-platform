@@ -144,6 +144,9 @@ class FunctionResponse(BaseModel):
     type: FunctionType
     status: FunctionStatus
     visibility: str = "POD"
+    contacts_invoke: bool = Field(
+        default=False, description="Callable from a contact's conversation."
+    )
     code_path: str | None = None
     revision_hash: str | None = None
     code: str | None = (
@@ -183,6 +186,9 @@ class FunctionSummaryResponse(BaseModel):
     type: FunctionType
     status: FunctionStatus
     visibility: str = "POD"
+    contacts_invoke: bool = Field(
+        default=False, description="Callable from a contact's conversation."
+    )
     code_path: str | None = None
     revision_hash: str | None = None
     created_at: datetime | None
@@ -298,3 +304,15 @@ class FunctionMessageResponse(BaseModel):
     """Simple function action response."""
 
     message: str
+
+
+class FunctionContactAccessRequest(BaseModel):
+    """Open a function to contacts, or close it."""
+
+    contacts_invoke: bool = Field(
+        description=(
+            "Let a contact's conversation call this function. It runs as the "
+            "function owner's runs do, held to the function's own grants, and "
+            "the platform puts the asking contact's `contact_id` in its input."
+        )
+    )

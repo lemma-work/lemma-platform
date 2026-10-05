@@ -19,7 +19,14 @@ contacts in a month, set by an organization admin. Contacts are never billed;
 this is the ceiling on what they can cost. No row means no cap of the
 organization's own.
 
-All three are new and nothing is backfilled: a contact becomes known the first
+**`datastore_tables.contact_owned`** marks a table whose rows the pod keeps about
+its contacts: it carries a `contact_id`, every member sees every row, and a
+contact's run reads only rows naming that contact, under a row-level policy
+installed when the flag is set. **`functions.contacts_invoke`** marks a function
+a contact's conversation may call. Both default to false, so nothing existing
+changes.
+
+The tables are new and nothing is backfilled: a contact becomes known the first
 time they write to a bot that answers contacts.
 
 Revision ID: 0044_contacts
@@ -97,8 +104,29 @@ def upgrade() -> None:
         unique=True,
     )
 
+    op.add_column(
+        "datastore_tables",
+        sa.Column(
+            "contact_owned",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+    )
+    op.add_column(
+        "functions",
+        sa.Column(
+            "contacts_invoke",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+    )
+
 
 def downgrade() -> None:
+    op.drop_column("functions", "contacts_invoke")
+    op.drop_column("datastore_tables", "contact_owned")
     op.drop_index("uq_usage_contacts_cap_org", table_name="usage_contacts_caps")
     op.drop_table("usage_contacts_caps")
     op.drop_index("ix_contact_identities_contact", table_name="contact_identities")

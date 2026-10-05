@@ -64,7 +64,9 @@ def sync_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Delete Contact
 
-     Forget a contact: their handles go with them.
+     Forget a contact: their handles and their conversations go with them.
+
+    One transaction, so a contact is never half forgotten.
 
     Args:
         pod_id (UUID):
@@ -98,7 +100,9 @@ def sync(
 ) -> Any | ErrorResponse | None:
     """Delete Contact
 
-     Forget a contact: their handles go with them.
+     Forget a contact: their handles and their conversations go with them.
+
+    One transaction, so a contact is never half forgotten.
 
     Args:
         pod_id (UUID):
@@ -127,7 +131,9 @@ async def asyncio_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Delete Contact
 
-     Forget a contact: their handles go with them.
+     Forget a contact: their handles and their conversations go with them.
+
+    One transaction, so a contact is never half forgotten.
 
     Args:
         pod_id (UUID):
@@ -159,7 +165,9 @@ async def asyncio(
 ) -> Any | ErrorResponse | None:
     """Delete Contact
 
-     Forget a contact: their handles go with them.
+     Forget a contact: their handles and their conversations go with them.
+
+    One transaction, so a contact is never half forgotten.
 
     Args:
         pod_id (UUID):

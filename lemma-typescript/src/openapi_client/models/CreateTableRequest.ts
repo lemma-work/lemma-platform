@@ -16,6 +16,10 @@ export type CreateTableRequest = {
      */
     config?: (Record<string, any> | null);
     /**
+     * Rows the pod keeps about its contacts. Adds a `contact_id` column; every member sees every row, and a contact's run reads only rows naming that contact. Not combinable with `enable_rls`.
+     */
+    contact_owned?: boolean;
+    /**
      * Enable row-level security for this table. When enabled, API reads/writes are scoped by current user.
      */
     enable_rls?: boolean;

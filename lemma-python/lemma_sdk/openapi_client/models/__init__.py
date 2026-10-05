@@ -130,6 +130,7 @@ _NAME_TO_MODULE = {
     'ConnectorSkillResponse': 'connector_skill_response',
     'ConnectorStatusResponse': 'connector_status_response',
     'ContactAnswer': 'contact_answer',
+    'ContactExportResponse': 'contact_export_response',
     'ContactIdentityResponse': 'contact_identity_response',
     'ContactListResponse': 'contact_list_response',
     'ContactResponse': 'contact_response',
@@ -207,6 +208,8 @@ _NAME_TO_MODULE = {
     'ExportStartRequest': 'export_start_request',
     'ExportStatus': 'export_status',
     'ExportStatusResponse': 'export_status_response',
+    'ExportedConversation': 'exported_conversation',
+    'ExportedMessage': 'exported_message',
     'ExpressionInputBinding': 'expression_input_binding',
     'FastapiCompatV2BodyPodBundleUpload': 'fastapi_compat_v2_body_pod_bundle_upload',
     'FeedbackCategory': 'feedback_category',
@@ -237,6 +240,7 @@ _NAME_TO_MODULE = {
     'FormNodeResponse': 'form_node_response',
     'FormNodeResponsePositionType0': 'form_node_response_position_type_0',
     'FunctionActionResponse': 'function_action_response',
+    'FunctionContactAccessRequest': 'function_contact_access_request',
     'FunctionDetailResponse': 'function_detail_response',
     'FunctionListResponse': 'function_list_response',
     'FunctionMessageResponse': 'function_message_response',
@@ -250,6 +254,7 @@ _NAME_TO_MODULE = {
     'FunctionPermissionsResponse': 'function_permissions_response',
     'FunctionResourcePermissionRequest': 'function_resource_permission_request',
     'FunctionResourcePermissionResponse': 'function_resource_permission_response',
+    'FunctionResponse': 'function_response',
     'FunctionRevisionListResponse': 'function_revision_list_response',
     'FunctionRevisionPromoteResponse': 'function_revision_promote_response',
     'FunctionRevisionResponse': 'function_revision_response',
@@ -693,6 +698,7 @@ if TYPE_CHECKING:
     from .connector_skill_response import ConnectorSkillResponse
     from .connector_status_response import ConnectorStatusResponse
     from .contact_answer import ContactAnswer
+    from .contact_export_response import ContactExportResponse
     from .contact_identity_response import ContactIdentityResponse
     from .contact_list_response import ContactListResponse
     from .contact_response import ContactResponse
@@ -770,6 +776,8 @@ if TYPE_CHECKING:
     from .export_start_request import ExportStartRequest
     from .export_status import ExportStatus
     from .export_status_response import ExportStatusResponse
+    from .exported_conversation import ExportedConversation
+    from .exported_message import ExportedMessage
     from .expression_input_binding import ExpressionInputBinding
     from .fastapi_compat_v2_body_pod_bundle_upload import FastapiCompatV2BodyPodBundleUpload
     from .feedback_category import FeedbackCategory
@@ -800,6 +808,7 @@ if TYPE_CHECKING:
     from .form_node_response import FormNodeResponse
     from .form_node_response_position_type_0 import FormNodeResponsePositionType0
     from .function_action_response import FunctionActionResponse
+    from .function_contact_access_request import FunctionContactAccessRequest
     from .function_detail_response import FunctionDetailResponse
     from .function_list_response import FunctionListResponse
     from .function_message_response import FunctionMessageResponse
@@ -813,6 +822,7 @@ if TYPE_CHECKING:
     from .function_permissions_response import FunctionPermissionsResponse
     from .function_resource_permission_request import FunctionResourcePermissionRequest
     from .function_resource_permission_response import FunctionResourcePermissionResponse
+    from .function_response import FunctionResponse
     from .function_revision_list_response import FunctionRevisionListResponse
     from .function_revision_promote_response import FunctionRevisionPromoteResponse
     from .function_revision_response import FunctionRevisionResponse
@@ -1269,6 +1279,7 @@ __all__ = [
     'ConnectorSkillResponse',
     'ConnectorStatusResponse',
     'ContactAnswer',
+    'ContactExportResponse',
     'ContactIdentityResponse',
     'ContactListResponse',
     'ContactResponse',
@@ -1346,6 +1357,8 @@ __all__ = [
     'ExportStartRequest',
     'ExportStatus',
     'ExportStatusResponse',
+    'ExportedConversation',
+    'ExportedMessage',
     'ExpressionInputBinding',
     'FastapiCompatV2BodyPodBundleUpload',
     'FeedbackCategory',
@@ -1376,6 +1389,7 @@ __all__ = [
     'FormNodeResponse',
     'FormNodeResponsePositionType0',
     'FunctionActionResponse',
+    'FunctionContactAccessRequest',
     'FunctionDetailResponse',
     'FunctionListResponse',
     'FunctionMessageResponse',
@@ -1389,6 +1403,7 @@ __all__ = [
     'FunctionPermissionsResponse',
     'FunctionResourcePermissionRequest',
     'FunctionResourcePermissionResponse',
+    'FunctionResponse',
     'FunctionRevisionListResponse',
     'FunctionRevisionPromoteResponse',
     'FunctionRevisionResponse',

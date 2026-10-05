@@ -15,6 +15,7 @@ from app.core.authorization.context import (
 )
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
+    DatastoreDataType,
     DatastoreTableEntity,
     DatastoreTableSummaryEntity,
     ensure_table_name_available,
@@ -25,10 +26,15 @@ from app.modules.datastore.domain.errors import (
     DatastoreDomainError,
     DatastoreInfrastructureError,
     DatastoreTableNotFoundError,
+    DatastoreValidationError,
 )
 from app.modules.datastore.domain.ports import (
     DatastoreSchemaPort,
     DatastoreTableRepositoryPort,
+)
+from app.modules.datastore.infrastructure.contact_rows import (
+    CONTACT_COLUMN,
+    set_contact_owned,
 )
 from app.modules.datastore.infrastructure.sql_identifiers import (
     ensure_identifier_fits,
@@ -37,6 +43,21 @@ from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.table_context import TableHydration
 
 logger = get_logger(__name__)
+
+_CONTACT_OWNED_AND_RLS = (
+    "A table is either per-user (each member sees their own rows) or "
+    "contact-owned (every member sees every contact's rows), not both"
+)
+
+
+def _refuse_per_user_and_contact_owned(
+    table: DatastoreTableEntity, enable_rls: bool | None, contact_owned: bool | None
+) -> None:
+    """Refuse an update that would leave a table both per-user and contact-owned."""
+    per_user = table.enable_rls if enable_rls is None else enable_rls
+    owned = table.contact_owned if contact_owned is None else contact_owned
+    if per_user and owned:
+        raise DatastoreValidationError(_CONTACT_OWNED_AND_RLS)
 
 
 class TableService:
@@ -90,8 +111,11 @@ class TableService:
         visibility: str | None = None,
         *,
         ctx: Context,
+        contact_owned: bool = False,
     ) -> DatastoreTableEntity:
         ensure_table_name_available(table_name)
+        if contact_owned and enable_rls:
+            raise DatastoreValidationError(_CONTACT_OWNED_AND_RLS)
         # Before the metadata row, not after: the 409 the truncation produces
         # names a table the caller cannot find, and by then a row exists.
         ensure_identifier_fits(table_name, kind="Table name")
@@ -161,6 +185,11 @@ class TableService:
                 f"Failed to create table '{table_name}'"
             ) from exc
 
+        if contact_owned:
+            await self._set_contact_owned(table, True)
+            table = await self.table_repository.update(table)
+            await self.table_repository.commit()
+
         if ctx is not None:
             refreshed = await self.table_repository.get_by_datastore_and_name(
                 entity.pod_id,
@@ -178,6 +207,7 @@ class TableService:
         ctx: Context,
         visibility: str | None = None,
         enable_rls: bool | None = None,
+        contact_owned: bool | None = None,
     ) -> DatastoreTableEntity:
         requester_user_id = ctx.user_id
         table = await self.table_repository.get_by_datastore_and_name(
@@ -200,6 +230,7 @@ class TableService:
             table.update_config(config, actor_id=requester_user_id)
         if visibility is not None:
             table.visibility = self._normalize_visibility_value(visibility).value
+        _refuse_per_user_and_contact_owned(table, enable_rls, contact_owned)
         if enable_rls is not None and enable_rls != table.enable_rls:
             try:
                 await self.schema_manager.set_table_rls(
@@ -221,6 +252,7 @@ class TableService:
                 [column for column in table.columns if not column.system],
                 enable_rls=enable_rls,
             )
+        await self._set_contact_owned(table, contact_owned)
         updated = await self.table_repository.update(table)
         if ctx is not None:
             refreshed = await self.table_repository.get_by_datastore_and_name(
@@ -230,6 +262,46 @@ class TableService:
             )
             return refreshed or updated
         return updated
+
+    async def _set_contact_owned(
+        self, table: DatastoreTableEntity, enable: bool | None
+    ) -> None:
+        """Turn the contact policy on or off, and keep the stored columns true.
+
+        Enabling declares ``contact_id`` (a plain, writable UUID column -- the
+        pod fills it) unless the table already has one, which must be a UUID.
+        ``None``, or what the table already is, changes nothing.
+        """
+        if enable is None or enable == table.contact_owned:
+            return
+        existing = next(
+            (column for column in table.columns if column.name == CONTACT_COLUMN),
+            None,
+        )
+        if (
+            enable
+            and existing is not None
+            and existing.type is not DatastoreDataType.UUID
+        ):
+            raise DatastoreValidationError(
+                f"A contact-owned table's '{CONTACT_COLUMN}' column must be a UUID"
+            )
+        try:
+            await set_contact_owned(
+                self.schema_manager, table.pod_id, table.table_name, enable=enable
+            )
+        except DatastoreDomainError:
+            raise
+        except Exception as exc:
+            raise DatastoreInfrastructureError(
+                "Failed to change whether the table is contact-owned"
+            ) from exc
+        if enable and existing is None:
+            table.columns = [
+                *table.columns,
+                ColumnSchema(name=CONTACT_COLUMN, type=DatastoreDataType.UUID),
+            ]
+        table.contact_owned = enable
 
     async def get_table(
         self,

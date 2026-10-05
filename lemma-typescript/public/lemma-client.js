@@ -12997,6 +12997,30 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Open a Function to Contacts
+     * Let a contact's conversation call this function, or stop it. A contact holds no grant: the function runs as its owner's runs do, held to its own grants, and is told the asking contact as `contact_id`.
+     * @param podId
+     * @param functionName
+     * @param requestBody
+     * @returns FunctionResponse Successful Response
+     * @throws ApiError
+     */
+    static functionContactsUpdate(podId, functionName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/functions/{function_name}/contacts",
+        path: {
+          "pod_id": podId,
+          "function_name": functionName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Function Resource Permissions
      * Get explicit resource grants assigned to a function.
      * @param podId
@@ -13270,6 +13294,14 @@ var LemmaClient = (() => {
     }
     delete(name) {
       return this.client.request(() => FunctionsService.functionDelete(this.podId(), name));
+    }
+    /** Let a contact's conversation call this function, or stop it. It runs as its
+     *  owner's runs do, held to its own grants, and is told the asking contact as
+     *  `contact_id` in its input. */
+    setContactsInvoke(name, enabled) {
+      return this.client.request(
+        () => FunctionsService.functionContactsUpdate(this.podId(), name, { contacts_invoke: enabled })
+      );
     }
     /** Run a function — convenience alias for `functions.runs.create`, matching the
      *  Python SDK's `functions.run(name, input)` and the unified `.run` verb. */
@@ -16039,7 +16071,9 @@ var LemmaClient = (() => {
     }
     /**
      * Delete Contact
-     * Forget a contact: their handles go with them.
+     * Forget a contact: their handles and their conversations go with them.
+     *
+     * One transaction, so a contact is never half forgotten.
      * @param podId
      * @param contactId
      * @returns void
@@ -16096,6 +16130,30 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Export Contact
+     * A contact's handles and what was said with them, for a request to see it.
+     *
+     * Takes a pod admin, as forgetting does: both answer the person the data is
+     * about, not the member reading it.
+     * @param podId
+     * @param contactId
+     * @returns ContactExportResponse Successful Response
+     * @throws ApiError
+     */
+    static contactExport(podId, contactId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/contacts/{contact_id}/export",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
         errors: {
           422: `Validation Error`
         }
@@ -16506,7 +16564,11 @@ var LemmaClient = (() => {
         () => ContactsService.contactUpdate(podId, contactId, { display_name: displayName })
       );
     }
-    /** Forget a contact and their handles. */
+    /** Everything the pod holds about a contact: handles and conversations. */
+    export(podId, contactId) {
+      return this.client.request(() => ContactsService.contactExport(podId, contactId));
+    }
+    /** Forget a contact, their handles and their conversations. */
     remove(podId, contactId) {
       return this.client.request(() => ContactsService.contactDelete(podId, contactId));
     }

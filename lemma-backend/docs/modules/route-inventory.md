@@ -142,6 +142,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/contacts/{contact_id}` | `contact.delete` | Delete Contact |
 | GET | `/pods/{pod_id}/contacts` | `contact.list` | List Contacts |
 | GET | `/pods/{pod_id}/contacts/{contact_id}` | `contact.get` | Get Contact |
+| GET | `/pods/{pod_id}/contacts/{contact_id}/export` | `contact.export` | Export Contact |
 | PATCH | `/pods/{pod_id}/contacts/{contact_id}` | `contact.update` | Update Contact |
 
 ## datastore
@@ -200,6 +201,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/functions` | `function.create` | Create Function |
 | POST | `/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote` | `function.revision.promote` | Promote Function Revision |
 | POST | `/pods/{pod_id}/functions/{function_name}/runs` | `function.run` | Execute Function |
+| PUT | `/pods/{pod_id}/functions/{function_name}/contacts` | `function.contacts.update` | Open a Function to Contacts |
 | PUT | `/pods/{pod_id}/functions/{function_name}/permissions` | `function.permissions.replace` | Replace Function Resource Permissions |
 
 ## icon

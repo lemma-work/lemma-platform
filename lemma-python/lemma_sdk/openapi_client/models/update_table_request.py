@@ -23,6 +23,8 @@ class UpdateTableRequest:
 
     Attributes:
         config (None | Unset | UpdateTableRequestConfigType0): Replacement metadata/config payload for the table.
+        contact_owned (bool | None | Unset): Make the table contact-owned, or stop it being. Enabling adds a
+            `contact_id` column if there is none; rows without one are seen by members only. Omit to leave it unchanged.
         enable_rls (bool | None | Unset): Toggle per-user row-level security. Only allowed on an empty table: enabling
             adds the user_id ownership column and isolation policy, disabling removes the policy. Omit to leave RLS
             unchanged.
@@ -30,6 +32,7 @@ class UpdateTableRequest:
     """
 
     config: None | Unset | UpdateTableRequestConfigType0 = UNSET
+    contact_owned: bool | None | Unset = UNSET
     enable_rls: bool | None | Unset = UNSET
     visibility: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -46,6 +49,12 @@ class UpdateTableRequest:
             config = self.config.to_dict()
         else:
             config = self.config
+
+        contact_owned: bool | None | Unset
+        if isinstance(self.contact_owned, Unset):
+            contact_owned = UNSET
+        else:
+            contact_owned = self.contact_owned
 
         enable_rls: bool | None | Unset
         if isinstance(self.enable_rls, Unset):
@@ -64,6 +73,8 @@ class UpdateTableRequest:
         field_dict.update({})
         if config is not UNSET:
             field_dict["config"] = config
+        if contact_owned is not UNSET:
+            field_dict["contact_owned"] = contact_owned
         if enable_rls is not UNSET:
             field_dict["enable_rls"] = enable_rls
         if visibility is not UNSET:
@@ -96,6 +107,15 @@ class UpdateTableRequest:
 
         config = _parse_config(d.pop("config", UNSET))
 
+        def _parse_contact_owned(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        contact_owned = _parse_contact_owned(d.pop("contact_owned", UNSET))
+
         def _parse_enable_rls(data: object) -> bool | None | Unset:
             if data is None:
                 return data
@@ -116,6 +136,7 @@ class UpdateTableRequest:
 
         update_table_request = cls(
             config=config,
+            contact_owned=contact_owned,
             enable_rls=enable_rls,
             visibility=visibility,
         )

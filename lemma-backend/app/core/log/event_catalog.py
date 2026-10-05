@@ -51,6 +51,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_runner_service.agent_run_s.failed': EventSpec('error', frozenset()),
     'agent.agent_runner_service.finalize_agent_run_run_s.propagated': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.approval.executed': EventSpec('info', frozenset({'agent_id', 'conversation_id', 'outcome', 'tool_name', 'user_id'})),
+    'agent.contact_tools.function_not_completed.observed': EventSpec('info', frozenset({'function_name', 'status'})),
     'agent.context_brief.file_inventory_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
     'agent.context_brief.member_directory_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
     'agent.context_budget.invalid_declared_window.degraded': EventSpec('warning', frozenset({'configured_value'})),

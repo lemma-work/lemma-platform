@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -52,6 +53,10 @@ class FunctionModel(UUIDAuditBase):
     type: Mapped[FunctionType] = mapped_column(String, default=FunctionType.API)
     status: Mapped[FunctionStatus] = mapped_column(String, default=FunctionStatus.DRAFT)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
+    #: Callable from a contact's run (see docs/design/contacts.md).
+    contacts_invoke: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
     def __str__(self) -> str:
         return self.name or str(self.id)

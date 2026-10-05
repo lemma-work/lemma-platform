@@ -3873,6 +3873,27 @@
         "title": "ContactAnswer",
         "type": "string"
       },
+      "ContactExportResponse": {
+        "description": "Everything the pod holds about one contact, for a request to see it.",
+        "properties": {
+          "contact": {
+            "$ref": "#/components/schemas/ContactResponse"
+          },
+          "conversations": {
+            "items": {
+              "$ref": "#/components/schemas/ExportedConversation"
+            },
+            "title": "Conversations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "contact",
+          "conversations"
+        ],
+        "title": "ContactExportResponse",
+        "type": "object"
+      },
       "ContactIdentityResponse": {
         "properties": {
           "kind": {
@@ -5170,6 +5191,12 @@
             "description": "Optional table metadata/configuration. This updates table config metadata and does not directly alter physical columns.",
             "title": "Config"
           },
+          "contact_owned": {
+            "default": false,
+            "description": "Rows the pod keeps about its contacts. Adds a `contact_id` column; every member sees every row, and a contact's run reads only rows naming that contact. Not combinable with `enable_rls`.",
+            "title": "Contact Owned",
+            "type": "boolean"
+          },
           "enable_rls": {
             "default": true,
             "description": "Enable row-level security for this table. When enabled, API reads/writes are scoped by current user.",
@@ -6179,6 +6206,70 @@
         "title": "ExportStatusResponse",
         "type": "object"
       },
+      "ExportedConversation": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ExportedMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "created_at",
+          "messages"
+        ],
+        "title": "ExportedConversation",
+        "type": "object"
+      },
+      "ExportedMessage": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "text",
+          "created_at"
+        ],
+        "title": "ExportedMessage",
+        "type": "object"
+      },
       "ExpressionInputBinding": {
         "description": "Resolve a value from the run context using a JMESPath expression.",
         "properties": {
@@ -7179,6 +7270,12 @@
             ],
             "description": "Optional configuration schema derived from the function code."
           },
+          "contacts_invoke": {
+            "default": false,
+            "description": "Callable from a contact's conversation.",
+            "title": "Contacts Invoke",
+            "type": "boolean"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -7290,6 +7387,21 @@
         "title": "FunctionActionResponse",
         "type": "object"
       },
+      "FunctionContactAccessRequest": {
+        "description": "Open a function to contacts, or close it.",
+        "properties": {
+          "contacts_invoke": {
+            "description": "Let a contact's conversation call this function. It runs as the function owner's runs do, held to the function's own grants, and the platform puts the asking contact's `contact_id` in its input.",
+            "title": "Contacts Invoke",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "contacts_invoke"
+        ],
+        "title": "FunctionContactAccessRequest",
+        "type": "object"
+      },
       "FunctionDetailResponse": {
         "properties": {
           "allowed_actions": {
@@ -7341,6 +7453,12 @@
               }
             ],
             "description": "Optional configuration schema derived from the function code."
+          },
+          "contacts_invoke": {
+            "default": false,
+            "description": "Callable from a contact's conversation.",
+            "title": "Contacts Invoke",
+            "type": "boolean"
           },
           "created_at": {
             "anyOf": [
@@ -7737,6 +7855,169 @@
           "resource_name"
         ],
         "title": "FunctionResourcePermissionResponse",
+        "type": "object"
+      },
+      "FunctionResponse": {
+        "description": "Function response.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "code_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Path"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional configuration schema derived from the function code."
+          },
+          "contacts_invoke": {
+            "default": false,
+            "description": "Callable from a contact's conversation.",
+            "title": "Contacts Invoke",
+            "type": "boolean"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_schema": {
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Input JSON schema derived from the function code."
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "output_schema": {
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Output JSON schema derived from the function code."
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "revision_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Hash"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FunctionStatus"
+          },
+          "type": {
+            "$ref": "#/components/schemas/FunctionType"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          },
+          "visibility": {
+            "default": "POD",
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pod_id",
+          "user_id",
+          "name",
+          "input_schema",
+          "output_schema",
+          "type",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "FunctionResponse",
         "type": "object"
       },
       "FunctionRevisionListResponse": {
@@ -8212,6 +8493,12 @@
                 "type": "null"
               }
             ]
+          },
+          "contacts_invoke": {
+            "default": false,
+            "description": "Callable from a contact's conversation.",
+            "title": "Contacts Invoke",
+            "type": "boolean"
           },
           "created_at": {
             "anyOf": [
@@ -15503,6 +15790,11 @@
             ],
             "title": "Config"
           },
+          "contact_owned": {
+            "default": false,
+            "title": "Contact Owned",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -16547,6 +16839,18 @@
             ],
             "description": "Replacement metadata/config payload for the table.",
             "title": "Config"
+          },
+          "contact_owned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Make the table contact-owned, or stop it being. Enabling adds a `contact_id` column if there is none; rows without one are seen by members only. Omit to leave it unchanged.",
+            "title": "Contact Owned"
           },
           "enable_rls": {
             "anyOf": [
@@ -26146,7 +26450,7 @@
     },
     "/pods/{pod_id}/contacts/{contact_id}": {
       "delete": {
-        "description": "Forget a contact: their handles go with them.",
+        "description": "Forget a contact: their handles and their conversations go with them.\n\nOne transaction, so a contact is never half forgotten.",
         "operationId": "contact.delete",
         "parameters": [
           {
@@ -26327,6 +26631,67 @@
           "resource": "contact",
           "result": "entity",
           "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/contacts/{contact_id}/export": {
+      "get": {
+        "description": "A contact's handles and what was said with them, for a request to see it.\n\nTakes a pod admin, as forgetting does: both answer the person the data is\nabout, not the member reading it.",
+        "operationId": "contact.export",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Contact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactExportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Contact",
+        "tags": [
+          "Contacts"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "contact",
+          "result": "entity",
+          "verb": "export"
         }
       }
     },
@@ -30374,6 +30739,79 @@
           "kind": "mutation",
           "paginates": false,
           "resource": "function",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/functions/{function_name}/contacts": {
+      "put": {
+        "description": "Let a contact's conversation call this function, or stop it. A contact holds no grant: the function runs as its owner's runs do, held to its own grants, and is told the asking contact as `contact_id`.",
+        "operationId": "function.contacts.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "function_name",
+            "required": true,
+            "schema": {
+              "title": "Function Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FunctionContactAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open a Function to Contacts",
+        "tags": [
+          "Functions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "function.contacts"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "function.contacts",
           "result": "entity",
           "verb": "update"
         }

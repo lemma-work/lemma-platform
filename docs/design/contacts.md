@@ -121,10 +121,38 @@ Contact authority applies only where the conversation is theirs alone.
 |---|---|---|---|
 | WhatsApp, Telegram | Direct message to the bot | Contact (`channel`) | Converse, own rows, functions |
 | Email | Mail to the bot's address | Contact (`channel`) if authentication passes | Converse, own rows, functions |
-| Web chat, embedded | Widget in the customer's product, with a host token | Contact (`host`) | Converse, own rows, functions |
+| Web chat, embedded | Widget in the customer's product: public key + host token | Contact (`host`) | Converse, own rows, functions |
 | Web chat, public | Widget on a public site, no token | Outsider until they verify a code, then a contact | Public reads, then upgrade |
-| Forms | Public app posting to a function | Anonymous, or a contact (`code`) | One function call |
+| Forms | Public key posting to the widget's function | Anonymous, or a contact (`code`) | One function call |
 | Blogs, public sites | Public app pages | Readers are anonymous | Read; ask through web chat; comment or subscribe through a form |
+
+### Web widgets and public keys
+
+Web chat and forms are **web widgets**: one row per chat bubble or form, owned
+by a pod and answering as one of its bots. A widget carries:
+
+- **A public key** (`pk_…`). It goes in the page, so anyone can copy it and
+  call the endpoint from a script. It names the widget and nothing else: it
+  never identifies a person, and whatever it allows, the internet gets. A
+  public key allows starting an anonymous chat with the widget's bot, and
+  submitting the widget's one form.
+- **A signing secret** (`sk_…`), for a widget embedded in the customer's own
+  product. It stays on their server, which signs a short-lived token naming its
+  signed-in user (HS256, `aud` = the public key, `sub` = their user id,
+  `exp` ≤ 10 minutes). The widget passes the token along, and that token -- not
+  the key -- makes the visitor a contact (`host` strength). Shown once, stored
+  encrypted, rotatable.
+- **Allowed origins.** The browser's `Origin` must be one of them. This stops
+  other sites embedding the widget, not scripts, so it is a courtesy, not
+  security.
+- The same `answer` and `looked_after_by` as any bot surface.
+
+Abuse controls from day one: limits per widget, per session and per address,
+failing closed; a per-form submission cap; email codes limited per address and
+expiring in 10 minutes; and the organization's contacts cap.
+
+Member credentials are never usable from a browser, and a widget's keys are
+never a member's.
 
 Notes per channel:
 
@@ -241,9 +269,11 @@ one:
 ## Built so far
 
 - **Contacts and identities.** The `contacts` module owns `contacts` and
-  `contact_identities`, with `GET`/`PATCH`/`DELETE /pods/{pod_id}/contacts`.
-  Strengths `channel` and `member` exist; `host` and `code` come with web chat
-  and codes.
+  `contact_identities`, with `GET`/`PATCH`/`DELETE /pods/{pod_id}/contacts` and
+  `GET .../contacts/{id}/export`. Forgetting a contact deletes their
+  conversations in the same transaction; export returns their words and the
+  bot's answers, never tool calls or members' private notes. Strengths
+  `channel` and `member` exist; `host` and `code` come with web widgets.
 - **Who the bot answers.** `config.contacts` on every surface, `answer`
   defaulting to `off`, `looked_after_by` defaulting to whoever turns it on and
   required to be a pod member. Only the pod's own bots answer contacts:
@@ -252,20 +282,32 @@ one:
   contact's id; `answers_outsiders` is true of it, so the outsider rules hold
   unchanged (anonymous, Public reads, the tool allowlist and gate, in-process
   runtime only). The routing link `~contact:{id}` is the second, independent
-  record of it. The brief and platform guidance say the chat is private and
-  name the contact as a quoted name. Audited as `contact:{id}`.
+  record of it. The brief and platform guidance say the chat is private, name
+  the contact as a quoted name, and list what is theirs. Audited as
+  `contact:{id}`.
+- **Their own rows.** `contact_owned` on a datastore table adds `contact_id`
+  and a row policy (`app.current_contact_id`): sessions naming no contact see
+  every row, a session naming one sees only that contact's. A contact's run
+  reads through `contact_records`, which sets the contact from the run, runs as
+  the NOBYPASSRLS query role and filters by contact as well. Not combinable
+  with per-user `enable_rls`.
+- **Functions for contacts.** `PUT /pods/{pod_id}/functions/{name}/contacts`
+  opens a function. A contact's run calls it through `contact_function`; it runs
+  as its owner's runs do (owner's authority narrowed by the function's grants)
+  with the contact's id written into `contact_id` in its input, replacing
+  anything the model put there.
 - **Unverified email** is parked as an inbox note to the member who looks after
   contacts, once an hour per sender.
 - **Cost.** Runs for contacts and group outsiders are recorded as `contact_run`
   and `outsider_run`, skip the member's personal windows, and count towards a
   `contacts_month` window held to `usage_contacts_caps`
   (`GET`/`PUT /usage/organizations/{id}/contacts-cap`, owners and editors).
-- **SDKs.** `pod.contacts` in Python, `client.contacts` in TypeScript.
+- **SDKs.** `pod.contacts` and `pod.functions.set_contacts_invoke` in Python;
+  `client.contacts` and `functions.setContactsInvoke` in TypeScript.
 
-Not yet built from the steps above: deleting a contact's conversations when the
-contact is deleted (the handles go; the conversations stay), export, a hand-off
-control beyond what `message_user` gives, and the settings and contacts pages
-in the app.
+Not built yet: step-up codes for contact functions (the `requires` strength),
+pod bundles carrying `contact_owned` and `contacts_invoke`, and a hand-off
+control beyond what `message_user` gives.
 
 ## Build order
 

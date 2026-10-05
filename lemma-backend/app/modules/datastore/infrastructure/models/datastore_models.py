@@ -47,6 +47,10 @@ class DatastoreTable(UUIDAuditBase):
     config: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
     enable_rls: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
+    #: Rows the pod keeps about its contacts, each readable by its own contact.
+    contact_owned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
     __table_args__ = (
         Index(
@@ -70,6 +74,7 @@ class DatastoreTable(UUIDAuditBase):
             config=self.config,
             enable_rls=self.enable_rls,
             visibility=self.visibility,
+            contact_owned=self.contact_owned,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
