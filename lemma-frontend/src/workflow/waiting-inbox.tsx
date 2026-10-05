@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
 import { source } from "@/data";
 import type { Pod } from "@/data";
@@ -50,11 +50,15 @@ export function WaitingInbox({ pods }: {
     const podKey = pods.map((pod) => pod.id).join(",");
     const queue = useQuery({
         queryKey: ["workflow-waiting", podKey],
-        queryFn: () => gather(pods, sample),
+        queryFn: () => gather(pods, sample, cache),
         enabled: pods.length > 0,
         staleTime: 60_000,
-        refetchOnWindowFocus: true,
     });
+    /* Read again on opening rather than on every return to the window: the
+       queue is a request per teammate, and a focus is not somebody asking. */
+    useEffect(() => {
+        if (open) void cache.refetchQueries({ queryKey: ["workflow-waiting", podKey], stale: true });
+    }, [open, cache, podKey]);
 
     useEffect(() => {
         if (!open) { setAt(null); return; }
@@ -233,7 +237,7 @@ export interface WaitingRow {
  *  whole queue. The backend learned the same lesson inside this endpoint:
  *  authorizing per wait means one denial fails the entire request.
  */
-export async function gather(pods: Pod[], sample: boolean): Promise<{ rows: WaitingRow[]; unreadable: number }> {
+export async function gather(pods: Pod[], sample: boolean, cache?: QueryClient): Promise<{ rows: WaitingRow[]; unreadable: number }> {
     if (sample) {
         const { SAMPLE_WAITING, SAMPLE_WORKFLOWS } = await samples();
         const named = new Map(readWorkflows({ items: SAMPLE_WORKFLOWS }).map((one) => [one.id, one.name]));
@@ -267,8 +271,14 @@ export async function gather(pods: Pod[], sample: boolean): Promise<{ rows: Wait
        normal day is none of them and on a bad day is one. */
     const names = new Map<string, string>();
     await Promise.allSettled(owed.map(async ({ pod }) => {
-        const listed = await lemma(pod.id).workflows.list({ limit: 100 });
-        for (const flow of readWorkflows(listed)) names.set(flow.id, flow.name);
+        /* Through the Workflows page's own list when there is a cache to
+           share, so the space that owes something does not read its
+           workflows twice. */
+        const read = async () => readWorkflows(await lemma(pod.id).workflows.list({ limit: 100 }));
+        const flows = cache
+            ? await cache.fetchQuery({ queryKey: ["workflows", pod.id, "names"], queryFn: read, staleTime: 5 * 60_000 })
+            : await read();
+        for (const flow of flows) names.set(flow.id, flow.name);
     }));
 
     const rows: WaitingRow[] = [];

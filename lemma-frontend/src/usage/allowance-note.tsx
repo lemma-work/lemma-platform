@@ -7,15 +7,23 @@ import { useMyPlan, usePlans } from "@/billing/queries";
 import { UpgradeIcon } from "@/ui/icons";
 import { isLocalDeployment } from "@/site/config";
 
-export function AllowanceNote({
-    orgId,
-    compact = false,
-    onOpenPlan,
-}: {
+type AllowanceNoteProps = {
     orgId?: string | null;
     compact?: boolean;
     onOpenPlan: () => void;
-}) {
+};
+
+/* A local installation has no plans to open and no limits to near — its
+   settings do not have that section — so it asks for none of the three. */
+export function AllowanceNote(props: AllowanceNoteProps) {
+    return isLocalDeployment() ? null : <Allowance {...props} />;
+}
+
+function Allowance({
+    orgId,
+    compact = false,
+    onOpenPlan,
+}: AllowanceNoteProps) {
     /* A failure here is not worth a word. The allowance is a courtesy ahead of
        an error the run itself will give properly; an app that cannot read it
        should say nothing rather than claim a limit it does not know. */
@@ -32,9 +40,8 @@ export function AllowanceNote({
     const canUpgrade = !theirsToPay && !paying(mine.data) && somethingToSell;
 
     /* Nothing to say: paying already, or covered by an organization, and not
-       near a limit. A local installation has no plans to open either -- its
-       settings do not have that section. */
-    if (isLocalDeployment() || (!warning && !canUpgrade)) return null;
+       near a limit. */
+    if (!warning && !canUpgrade) return null;
 
     const window = state.kind === "uncapped" ? null : state.window;
     const tone = blocked ? "bad" : warning ? "warn" : "quiet";

@@ -6,7 +6,8 @@ import { NEW_CONVERSATION, saidAboutSending, source } from "@/data";
 import { initialsOf } from "@/data/agent-names";
 import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
-import { buildTurns, openInteraction, openSignIn } from "./turns";
+import { buildTurns, openInteraction, openSignIn, type RawMessage } from "./turns";
+import { messageIds, runTouched } from "./run-touched";
 import { InteractionDock } from "./interaction-dock";
 import type { AnswerWith } from "./interaction-card";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
@@ -312,13 +313,25 @@ export function LiveConversation({
        runs out. A list that stays empty while the chat beside it says "done"
        reads as the work having failed. Once per run, as it stops. */
     const ranBefore = useRef(false);
+    const runMessages = useRef(session.messages as readonly RawMessage[]);
+    runMessages.current = session.messages as readonly RawMessage[];
+    const startedBeside = useRef<ReadonlySet<string>>(new Set());
     useEffect(() => {
-        if (running) { ranBefore.current = true; return; }
+        if (running) {
+            if (!ranBefore.current) startedBeside.current = messageIds(runMessages.current);
+            ranBefore.current = true;
+            return;
+        }
         if (!ranBefore.current) return;
         ranBefore.current = false;
-        for (const touched of [["library", pod.id], ["tabs", pod.id], ["workflows", pod.id], ["schedules", pod.id], ["table", pod.id]]) {
-            void queryClient.invalidateQueries({ queryKey: touched });
-        }
+        /* Only what the run could have changed. An answer, or a run that only
+           read, leaves every list as it was — and a refresh of an open table
+           is every page of rows it has loaded. */
+        const touched = runTouched(runMessages.current, startedBeside.current);
+        if (touched === "nothing") return;
+        const keys = touched === "files" ? [["library", pod.id]]
+            : [["library", pod.id], ["tabs", pod.id], ["workflows", pod.id], ["schedules", pod.id], ["table", pod.id]];
+        for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });
     }, [running, pod.id, queryClient]);
     /* Taken back here, and hidden until the server's list agrees. The session
        has no way to drop a message it holds, and a reload reads the list the

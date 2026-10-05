@@ -486,15 +486,21 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
     const mayInstall = useMayInstall(orgId);
     const invalidate = useConnectorRefresh(orgId);
 
-    const refresh = () => {
-        invalidate();
+    /* Installs, every organization's accounts and the catalogue — once each.
+       `invalidate` already covers all three; asking again for two of them on
+       top cancelled the first refetch and sent a second. */
+    const refresh = invalidate;
+    /* What a sign-in round trip can change: this organization's installs and
+       accounts. Not the catalogue — two hundred entries that no connection
+       adds to or takes from. */
+    const refreshAfterSignIn = () => {
+        void queryClient.invalidateQueries({ queryKey: ["installs", orgId] });
         void queryClient.invalidateQueries({ queryKey: ["accounts", orgId] });
-        void queryClient.invalidateQueries({ queryKey: ["connectors"] });
     };
 
     useConnectOutcome(
-        (outcome) => { setHeard(outcome); setReturned((n) => n + 1); refresh(); },
-        refresh,
+        (outcome) => { setHeard(outcome); setReturned((n) => n + 1); refreshAfterSignIn(); },
+        refreshAfterSignIn,
     );
 
     const byInstall = useMemo(() => {

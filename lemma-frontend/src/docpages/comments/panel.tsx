@@ -8,6 +8,7 @@ import { useMe } from "@/session/use-me";
 import { useSession } from "@/session/session";
 import { isForbidden } from "@/session/auth-state";
 import { Mark } from "@/shell/mark";
+import { usePaneVisible } from "@/shell/pane-visible";
 import { docTitle } from "@/library/doc-title";
 import { sayWhen } from "@/workflow/runs";
 import { useSchedules } from "@/schedule/queries";
@@ -195,9 +196,20 @@ function Message({ podId, row, members, bots }: { podId: string; row: CommentRow
     );
 }
 
+/* A firing still on its way to an answer. Everything else the ledger can say
+   — done, failed, filtered, cancelled — is where that firing stays. */
+const MOVING = new Set(["RECEIVED", "PROCESSING", "DISPATCHED"]);
+
 /** What the named bot is doing about a comment, read off its wake-up's own
  *  ledger: the firing whose row is this comment, and the conversation that
- *  firing started. Watched every few seconds until the bot answers. */
+ *  firing started. Watched every few seconds until the bot answers.
+ *
+ *  The ledger is the bot's, not the comment's, so it is one query per bot —
+ *  the same key Standing work reads — and five threads asking Kit share one
+ *  watch. Each thread stops asking once its own firing has settled; while
+ *  none has turned up the bot may be slow or may never come, so after the
+ *  first minute and a half it is asked twice a minute rather than every four
+ *  seconds. Nothing is asked behind a hidden pane. */
 function BotStatus({ podId, ask, bots, onOpenConversation }: {
     podId: string;
     ask: CommentRow;
@@ -210,11 +222,18 @@ function BotStatus({ podId, ask, bots, onOpenConversation }: {
     const name = bot?.label ?? key;
     const schedules = useSchedules(podId);
     const job = wakeFor(schedules.data ?? [], key);
+    const visible = usePaneVisible();
     const runs = useQuery({
-        queryKey: ["schedules", podId, job?.id ?? null, "runs", "comment", ask.id],
+        queryKey: ["schedules", podId, job?.id ?? null, "runs"],
         enabled: Boolean(job) && source.label === "live",
         queryFn: () => source.listScheduleRuns(podId, job!.id),
-        refetchInterval: 4000,
+        refetchInterval: (query) => {
+            if (!visible) return false;
+            const mine = query.state.data?.find((one) => one.subjectId === ask.id);
+            if (mine) return MOVING.has(mine.status) ? 4000 : false;
+            const asked = ask.createdAt ? Date.parse(ask.createdAt) : NaN;
+            return Date.now() - asked <= 90_000 ? 4000 : 30_000;
+        },
     });
     const run = (runs.data ?? []).find((one) => one.subjectId === ask.id) ?? null;
     const turnOn = useMutation({

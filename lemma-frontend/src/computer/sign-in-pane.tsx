@@ -9,6 +9,7 @@ import { LiveScreen } from "./live-screen";
 import { outcomeSay, whereabouts } from "./sign-in";
 import { useAnswerSignIn, useCurrentPage, useOpenBrowserTab, usePendingSignIn } from "./queries";
 import { type LiveState } from "./live";
+import { usePaneVisible } from "@/shell/pane-visible";
 
 /** One paused `browser_sign_in`, answerable.
  *
@@ -56,10 +57,12 @@ export function SignInPane({ conversationId, toolCallId, onDone, compact = false
     const tab = useOpenBrowserTab();
 
     const origin = request.data?.origin ?? null;
-    /* Only while the picture is up and the pause is open. It is a poll, and a
-       poll against a sandbox behind a pane nobody is looking at is a round trip
-       spent on nothing. */
-    const page = useCurrentPage(origin, picture === "live" && !answer.data);
+    /* Only while the picture is up, the pause is open and this pane is in
+       front. It is a poll, and a poll against a sandbox behind a pane nobody
+       is looking at is a round trip spent on nothing — a sign-in tab stays
+       mounted when another is opened over it. */
+    const visible = usePaneVisible();
+    const page = useCurrentPage(origin, picture === "live" && !answer.data && visible);
 
     if (sample) {
         return (

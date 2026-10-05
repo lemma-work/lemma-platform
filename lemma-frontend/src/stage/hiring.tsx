@@ -192,16 +192,15 @@ export function HiringView({
             });
             setDone(["made", "face"]);
 
-            /* Refetch rather than invalidate, and do not wait on it. Awaiting
-               held the reveal behind a list nobody is looking at yet; and
-               invalidation only marks a query stale, which a list already
-               holding fresh-looking data can sit on. */
             /* Put them in the rail directly rather than asking the list to go
                and look again. The new teammate is already in hand — a whole
                `Pod` — so writing it in is instant and cannot miss, where a
                refetch has to match a key, beat a stale time, and win a race
-               with the reveal. The background refetch still runs, to pick up
-               anything the server decided that this does not know. */
+               with the reveal. The background refetch still runs, not awaited,
+               to pick up anything the server decided that this does not know —
+               for this organization's list only. The pod was made in it; no
+               other organization's cached list changed, and refetching them
+               all was a request per organization ever opened. */
             /* With the face it was just given: `createPod` answered before the
                face was saved, so the pod in hand still has no picture, and the
                rail drew the id's default face until the refetch landed. */
@@ -209,7 +208,7 @@ export function HiringView({
             queryClient.setQueryData(["pods", orgId], (old: Pod[] | undefined) =>
                 old ? (old.some((entry) => entry.id === pod.id) ? old : [...old, faced]) : old,
             );
-            void queryClient.refetchQueries({ queryKey: ["pods"] });
+            void queryClient.invalidateQueries({ queryKey: ["pods", orgId] });
             created.current = null;
             setMade({ id: pod.id, name: pod.name, variant, faceSaved });
             setStage("met");

@@ -13,7 +13,9 @@ import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
 import { MinimizeIcon, ChevronUpIcon, SidebarIcon, MenuIcon, PlusIcon, SearchIcon, LinkIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
+import { PaneVisibleContext } from "./pane-visible";
+import { recalled, useRemember } from "./remembered";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, NEW_CONVERSATION } from "@/data";
 import { DocSpace, isDoc } from "@/docs/doc-space";
@@ -41,7 +43,7 @@ import { owedFrom } from "@/space/teammates";
 import { byAge, gatherAsked } from "@/thread/waiting-on-you";
 import type { SpaceView } from "@/data";
 import { FloatingChat, moveDocThread, useFloatingChat, type ChatResource } from "@/chat/floating-chat";
-import type { FileContent, LibraryItem, Tab } from "@/data";
+import type { ConversationRef, FileContent, LibraryItem, Org, Pod, Tab } from "@/data";
 import { AppsPane } from "@/stage/apps";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
@@ -138,6 +140,14 @@ function readJson<T>(key: string, fallback: T): T {
     } catch {
         return fallback;
     }
+}
+
+/** One pane of the stage. Hidden while another is in front, and saying so
+ *  to what is inside it, so nothing behind it keeps a clock running. The
+ *  stage itself can be hidden too — hiring, an expanded call, the team page —
+ *  and then even the pane in front is out of sight. */
+function Pane({ hidden, onStage, children, ...rest }: HTMLAttributes<HTMLDivElement> & { inert?: boolean; "data-side"?: string; onStage: boolean }) {
+    return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden && onStage}>{children}</PaneVisibleContext.Provider></div>;
 }
 
 const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
@@ -339,7 +349,15 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         for (const frame of Object.values(appFrames.current)) frame?.contentWindow?.postMessage({ type: "lemma-tour:step", step: demoStep }, window.location.origin);
     }, [demoStep, demoRevision, preview]);
 
-    const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000 });
+    const queryClient = useQueryClient();
+    /* The frame of the app — the organizations, the teammate, its list and
+       its chats — starts from what this browser last saw and is asked for
+       again at once; see `remembered.ts`. */
+    const orgs = useQuery({ queryKey: ["orgs"], queryFn: () => source.listOrgs(), staleTime: 10 * 60_000,
+        /* Not an empty list: that is the arrival screen, and somebody who has
+           since joined an organization would see it flash past. */
+        initialData: () => recalled<Org[]>(["orgs"])?.length ? recalled<Org[]>(["orgs"]) : undefined, initialDataUpdatedAt: 0 });
+    useRemember(["orgs"], orgs.data, orgs.dataUpdatedAt);
 
     /* Who is signed in, for the arrival screen: their email domain decides
        what it may offer. The same key `HumanProfile` reads, so the two share
@@ -366,7 +384,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         enabled: Boolean(podId),
         staleTime: 0,
         retry: false,
+        /* Painted from memory, but still checked: a teammate you have lost
+           access to turns into the "no access" screen when this answers. */
+        initialData: () => podId ? recalled<Pod | null>(["pod-access", podId]) : undefined,
+        initialDataUpdatedAt: 0,
     });
+    useRemember(["pod-access", podId], linkedPod.data, linkedPod.dataUpdatedAt);
     const remembered = orgs.data?.some((candidate) => candidate.id === orgId) ? orgId : null;
     const activeOrgId = linkedPod.data?.orgId ?? remembered ?? orgs.data?.[0]?.id ?? null;
     useEffect(() => {
@@ -388,7 +411,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         queryFn: () => source.listPods(activeOrgId as string),
         enabled: Boolean(activeOrgId),
         staleTime: 5 * 60_000,
+        initialData: () => activeOrgId ? recalled<Pod[]>(["pods", activeOrgId]) : undefined,
+        initialDataUpdatedAt: 0,
     });
+    useRemember(["pods", activeOrgId], pods.data, pods.dataUpdatedAt);
 
     /* What each teammate is waiting on you for: the queue the inbox beside
        the bell reads, under the same key, so the rail's badges and the
@@ -396,7 +422,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        tour, whose teammates say what they are waiting on in their own words. */
     const waiting = useQuery({
         queryKey: ["workflow-waiting", (pods.data ?? []).map((one) => one.id).join(",")],
-        queryFn: () => gather(pods.data ?? [], source.label === "sample"),
+        queryFn: () => gather(pods.data ?? [], source.label === "sample", queryClient),
         enabled: !preview && (pods.data?.length ?? 0) > 0,
         staleTime: 60_000,
     });
@@ -454,7 +480,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         queryKey: ["conversations", pod?.id],
         queryFn: () => source.listConversations(pod!.id),
         enabled: Boolean(pod),
+        initialData: () => pod ? recalled<ConversationRef[]>(["conversations", pod.id]) : undefined,
+        initialDataUpdatedAt: 0,
     });
+    useRemember(["conversations", pod?.id], history.data, history.dataUpdatedAt);
 
     /* `useAssistantSession` loads nothing without an id — it has no notion of
        "the latest one". So the newest conversation is resolved here and named
@@ -474,7 +503,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         teammate: callIn.teammate,
         conversationId: openConversationId,
     });
-    const queryClient = useQueryClient();
     const callConversationId = huddle.callConversationId;
     useEffect(() => {
         if (!callConversationId || callIn.id !== pod?.id) return;
@@ -580,6 +608,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const docAsk = useMemo(() => chatResource && pod ? { label: pod.name, ask: chat.ask } : null, [chatResource !== null, pod?.name, chat.ask]);  
     const paneProps = (id: string) => ({
         hidden: !isVisible(id),
+        onStage: !(hiring || huddle.expanded || stranger || atTeam),
         "data-side": id === layout.right ? "right" : "left",
         inert: sheetLowered && id === layout.right,
     });
@@ -1087,8 +1116,19 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
     const selectedTabRef = useRef<HTMLButtonElement | null>(null);
     useEffect(() => { selectedTabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [activeTab?.id]);
-    const [visitedLibraries, setVisitedLibraries] = useState<Record<string, boolean>>({});
-    useEffect(() => { if (pod && (activeTab?.kind === "library" || rightTab?.kind === "library")) setVisitedLibraries(previous => previous[pod.id] ? previous : { ...previous, [pod.id]: true }); }, [pod?.id, activeTab?.kind, rightTab?.kind]);
+    /* Panes you have been to in each space. A pane is built the first time it
+       comes on screen and kept from then on, so it holds its place and its
+       draft — but one you never opened costs nothing. Built eagerly, every
+       list in the space asked the server for itself each time the space
+       opened, whichever one was in front. */
+    const [visitedPanes, setVisitedPanes] = useState<Record<string, true>>({});
+    useEffect(() => {
+        if (!pod) return;
+        const seen = [layout.main, layout.right].filter((id): id is string => Boolean(id)).map(id => pod.id + "|" + id);
+        setVisitedPanes(previous => seen.every(id => previous[id]) ? previous
+            : { ...previous, ...Object.fromEntries(seen.map(id => [id, true as const])) });
+    }, [pod?.id, layout.main, layout.right]);
+    const built = (id: string) => Boolean(pod && (isVisible(id) || visitedPanes[pod.id + "|" + id]));
 
     /* Zooming in: the space grows out of the card that was pressed, and its
        sidebar slides in beside it. Once, on arrival — not on every change of
@@ -1500,6 +1540,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         ["--field" as string]: pressSlot(identityGenes(pod.id).tone).field,
                         ["--field-ink" as string]: pressSlot(identityGenes(pod.id).tone).ink,
                     } : undefined}
+                    /* The same test the panes read as `onStage`. */
                     hidden={Boolean(hiring || huddle.expanded || stranger || atTeam)}
                 >
                 {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
@@ -1724,7 +1765,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 }}
                             />}
                             {Object.entries(openedApps).map(([key, url]) => (
-                                <div className="pane app-pane" key={key} {...paneProps(key.startsWith(pod.id + "|") ? key.slice(pod.id.length + 1) : "")}>
+                                <Pane className="pane app-pane" key={key} {...paneProps(key.startsWith(pod.id + "|") ? key.slice(pod.id.length + 1) : "")}>
                                 <AppFrameView
                                     url={url}
                                     hidden={key !== activeKey && key !== pod.id + "|" + rightTab?.id}
@@ -1738,10 +1779,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         appFrameGuests.current[key] = registerFrame(view);
                                     }}
                                 />
-                                </div>
+                                </Pane>
                             ))}
 
-                            <div className="split" {...paneProps("conversation")}>
+                            <Pane className="split" {...paneProps("conversation")}>
+                                {built("conversation") && <>
                                     <div className="convo-host">
                                         {source.label === "live" ? (
                                             <LiveConversation
@@ -1782,10 +1824,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         onPick={setConversationId}
                                         onSeeAll={openHistory}
                                     />
-                            </div>
+                                </>}
+                            </Pane>
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "space"}> => tab.kind === "space").map(tab => (
-                                <div className="pane space-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
-                                    {tab.view === "home" ? (
+                                <Pane className="pane space-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    {!built(tab.id) ? null : tab.view === "home" ? (
                                         <Home
                                             pod={pod}
                                             pods={pods.data ?? []}
@@ -1852,10 +1895,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         onAsk={chat.prompt}
                                         onLearn={() => setGuideOpen(true)}
                                     />}
-                                </div>
+                                </Pane>
                             ))}
-                            {isVisible("apps") && <div className="pane" {...paneProps("apps")}><AppsPane name={pod.name} tabs={allTabs} onOpen={pickTab} onAsk={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }} /></div>}
-                            {isVisible("history") && (<div className="pane" {...paneProps("history")}>
+                            {isVisible("apps") && <Pane className="pane" {...paneProps("apps")}><AppsPane name={pod.name} tabs={allTabs} onOpen={pickTab} onAsk={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }} /></Pane>}
+                            {isVisible("history") && (<Pane className="pane" {...paneProps("history")}>
                                 <AllConversations
                                     pod={pod}
                                     conversationId={conversationId}
@@ -1864,9 +1907,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         pickTab("conversation");
                                     }}
                                 />
-                            </div>)}
+                            </Pane>)}
                             {allTabs.some((tab) => tab.kind === "computer") && (
-                                <div className="pane library-pane" {...paneProps("computer")}>
+                                <Pane className="pane library-pane" {...paneProps("computer")}>
                                     {/* The sentinel is a conversation that does not
                                         exist yet, so there is no directory to ask
                                         about — the view opens on the whole machine
@@ -1877,20 +1920,20 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         conversationId={openConversationId === NEW_CONVERSATION ? null : openConversationId}
                                         visible={isVisible("computer")}
                                     />
-                                </div>
+                                </Pane>
                             )}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "run"}> => tab.kind === "run").map(tab => (
-                                <div className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                <Pane className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <div className="run-page">
                                         <RunPage pod={pod} runId={tab.runId} label={tab.label} onBack={() => pickTab(lastList[pod.id] ?? "space:workflows")}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onOpenRun={openRun} onOpenWorkflow={openWorkflow}
                                             onNamed={(name) => renameTab(tab.id, name + " · run")} />
                                     </div>
-                                </div>
+                                </Pane>
                             ))}
                             {groupsOn && allTabs.filter((tab): tab is Extract<Tab, {kind: "group"}> => tab.kind === "group").map(tab => (
-                                <div className="pane group-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                <Pane className="pane group-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <GroupPage
                                         pod={pod}
                                         groupId={tab.groupId}
@@ -1899,10 +1942,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         onOpenGroups={() => pickTab("space:groups")}
                                         onInvite={() => { setShareAdding(true); setShareOpen(true); }}
                                     />
-                                </div>
+                                </Pane>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "workflow"}> => tab.kind === "workflow").map(tab => (
-                                <div className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                <Pane className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <div className="run-page">
                                         <WorkflowPage pod={pod} orgId={activeOrgId} name={tab.name}
                                             onBack={() => pickTab("space:workflows")}
@@ -1915,10 +1958,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                                 })();
                                             }} />
                                     </div>
-                                </div>
+                                </Pane>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "bot"}> => tab.kind === "bot").map(tab => (
-                                <div className="pane bot-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                <Pane className="pane bot-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <AgentPage
                                         pod={pod}
                                         name={tab.name}
@@ -1929,26 +1972,26 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         onOpenSchedules={() => openAbout("schedules")}
                                         onOpenWorkflows={() => pickTab("space:workflows")}
                                     />
-                                </div>
+                                </Pane>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "signin"}> => tab.kind === "signin").map(tab => (
-                                <div className="pane signin-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                <Pane className="pane signin-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <SignInPane compact conversationId={tab.conversationId} toolCallId={tab.toolCallId} onDone={() => closeTab(tab.id)} />
-                                </div>
+                                </Pane>
                             ))}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "file"}> => tab.kind === "file").map(tab => (
-                                <div className={"pane file-tab-pane" + (isDoc(tab.path) ? " doc-tab-pane" : "")} key={tab.pane ?? tab.id} {...paneProps(tab.id)}>
+                                <Pane className={"pane file-tab-pane" + (isDoc(tab.path) ? " doc-tab-pane" : "")} key={tab.pane ?? tab.id} {...paneProps(tab.id)}>
                                     {isDoc(tab.path)
                                         ? <DocAskContext.Provider value={docAsk}><DocSpace pod={pod} path={tab.path} renamePage={renamePageAt} openFile={openFile} openTable={(name) => openTable(name)} openConversation={(id) => { setConversationId(id); pickTab("conversation"); }} sendToBot={chatResource ? chat.send : null} /></DocAskContext.Provider>
                                         : <div className="pane__inner"><FileView podId={pod.id} path={tab.path} full /></div>}
-                                </div>
+                                </Pane>
                             ))}
-                            <div className="pane library-pane" {...paneProps("library")} key={pod.id + ":library"}>
-                                {(isVisible("library") || visitedLibraries[pod.id]) && <Library podId={pod.id} onFile={path => openFile(path, "library")} onTable={name => openTab({ id: "table:" + name, kind: "table", label: readableName(name), name }, "library")}/>}
-                            </div>
-                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "table"}> => tab.kind === "table").map(tab => <div className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}><TableView podId={pod.id} name={tab.name} teammate={pod.teammate?.name || pod.name} onOpenRecord={(table, recordId) => openRecord(table, recordId, tab.id)} onAsk={chat.prompt}/></div>)}
+                            <Pane className="pane library-pane" {...paneProps("library")} key={pod.id + ":library"}>
+                                {built("library") && <Library podId={pod.id} onFile={path => openFile(path, "library")} onTable={name => openTab({ id: "table:" + name, kind: "table", label: readableName(name), name }, "library")}/>}
+                            </Pane>
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "table"}> => tab.kind === "table").map(tab => <Pane className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}><TableView podId={pod.id} name={tab.name} teammate={pod.teammate?.name || pod.name} onOpenRecord={(table, recordId) => openRecord(table, recordId, tab.id)} onAsk={chat.prompt}/></Pane>)}
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "record"}> => tab.kind === "record").map(tab => (
-                                <div className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                <Pane className="pane library-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <RecordView
                                         podId={pod.id}
                                         tableName={tab.table}
@@ -1956,7 +1999,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         onOpenTable={openTable}
                                         onOpenRecord={openRecord}
                                     />
-                                </div>
+                                </Pane>
                             ))}
                             {/* Mounted only while it is in front, the way the
                                 profile is: the list is a request per pod, and
