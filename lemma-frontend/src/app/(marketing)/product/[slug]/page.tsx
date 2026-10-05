@@ -77,10 +77,10 @@ export default async function ProductPage({ params }: Props) {
 
 /** The four sample teammates' apps, for a section that shows them together. */
 const GALLERY: { title: string; who: Who; picture: Capture }[] = [
-    { title: "Launch studio", who: "Kit", picture: { kind: "still", src: "/landing/app-kit.webp", width: 2880, height: 1120, alt: "Launch studio: every launch asset, its owner and what it still needs." } },
-    { title: "Customer launchpad", who: "June", picture: { kind: "still", src: "/landing/app-june.webp", width: 2880, height: 1640, alt: "Customer launchpad: a customer’s file checked before it imports." } },
-    { title: "Deal desk", who: "Remy", picture: { kind: "still", src: "/landing/app-remy.webp", width: 2880, height: 1560, alt: "Deal desk: every buyer’s next step, with the reply drafted for review." } },
-    { title: "Evidence notebook", who: "Scout", picture: { kind: "still", src: "/landing/app-scout.webp", width: 2880, height: 1520, alt: "Evidence notebook: a research question with the evidence and the doubts beside it." } },
+    { title: "Feedback loop", who: "Kit", picture: { kind: "still", src: "/landing/app-kit.webp", width: 2560, height: 1440, alt: "Feedback loop: every theme users report, its fix, and who still needs to hear back." } },
+    { title: "Customer launchpad", who: "June", picture: { kind: "still", src: "/landing/app-june.webp", width: 2560, height: 1440, alt: "Customer launchpad: a customer’s file checked before it imports." } },
+    { title: "Deal desk", who: "Remy", picture: { kind: "still", src: "/landing/app-remy.webp", width: 2560, height: 1440, alt: "Deal desk: every buyer’s next step, with the reply drafted for review." } },
+    { title: "Evidence notebook", who: "Scout", picture: { kind: "still", src: "/landing/app-scout.webp", width: 2560, height: 1440, alt: "Evidence notebook: a research question with the evidence and the doubts beside it." } },
 ];
 
 /** Paragraphs split on blank lines, so the copy can breathe. */

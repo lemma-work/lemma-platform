@@ -1,5 +1,5 @@
-/* A Slack thread in #launch, beat by beat. Base styles are the opening
-   frame, Priya's question on its own; each `.root[data-bN]` rule is what
+/* A Slack thread in #feedback, beat by beat. Base styles are the opening
+   frame, Sam's question on its own; each `.root[data-bN]` rule is what
    changes from beat N on, written in beat order so a later beat wins. With
    reduced motion every beat is on: the question, the reply and its preview,
    and no reaction left on the message. */

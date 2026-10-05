@@ -1,5 +1,5 @@
 /* Asking around, beat by beat. Base styles are the opening frame: Sam's ask
-   in the #launch thread on the left, and the three people's apps on the
+   in the #feedback thread on the left, and the three people's apps on the
    right, nothing in them yet. Each `.root[data-bN]` rule is what changes
    from beat N on, written in beat order so a later beat wins over an
    earlier one. With reduced motion every beat is on, so the last rules here
@@ -9,7 +9,7 @@
 /* The desk the thread and the three apps sit on. */
 .stage { position: absolute; inset: 0; background: var(--cream) }
 
-/* ── The thread in #launch ──────────────────────────────────────────── */
+/* ── The thread in #feedback ────────────────────────────────────────── */
 .left { position: absolute; top: 24px; left: 22px; width: 356px }
 .thread { height: 354px; overflow: hidden }
 .logo { width: 14px; height: 14px; flex: none }
@@ -72,21 +72,21 @@
 .root[data-b1] .replies, .root[data-b1] .reply { opacity: 1; transform: none }
 .root[data-b1] .ask { opacity: 1; transform: none; transition-delay: calc(var(--v-move) + var(--n) * var(--v-step)) }
 .root[data-b1] .count { opacity: 1; transition-delay: calc(var(--v-move) + 4 * var(--v-step)) }
-/* 2 · Rohan answers by email: 1 of 3, and the thread stays as it was */
-.root[data-b2] .rohan .answer, .root[data-b2] .rohan time { opacity: 1; transform: none }
-.root[data-b2] .rohan { animation: pulse var(--v-slow) var(--ease) both }
+/* 2 · Sam answers by email: 1 of 3, and the thread stays as it was */
+.root[data-b2] .sam .answer, .root[data-b2] .sam time { opacity: 1; transform: none }
+.root[data-b2] .sam { animation: pulse var(--v-slow) var(--ease) both }
 .root[data-b2] .count i:nth-of-type(1) { background: var(--ok) }
 .root[data-b2] .n b:nth-child(1) { opacity: 0 }
 .root[data-b2] .n b:nth-child(2) { opacity: 1 }
-/* 3 · Priya answers in Slack: 2 of 3 */
-.root[data-b3] .priya .answer, .root[data-b3] .priya time { opacity: 1; transform: none }
-.root[data-b3] .priya { animation: pulse var(--v-slow) var(--ease) both }
+/* 3 · Dev answers in Slack: 2 of 3 */
+.root[data-b3] .dev .answer, .root[data-b3] .dev time { opacity: 1; transform: none }
+.root[data-b3] .dev { animation: pulse var(--v-slow) var(--ease) both }
 .root[data-b3] .count i:nth-of-type(2) { background: var(--ok) }
 .root[data-b3] .n b:nth-child(2) { opacity: 0 }
 .root[data-b3] .n b:nth-child(3) { opacity: 1 }
-/* 4 · Aditi answers on WhatsApp: 3 of 3 */
-.root[data-b4] .aditi .answer, .root[data-b4] .aditi time { opacity: 1; transform: none }
-.root[data-b4] .aditi { animation: pulse var(--v-slow) var(--ease) both }
+/* 4 · Alex answers on WhatsApp: 3 of 3 */
+.root[data-b4] .alex .answer, .root[data-b4] .alex time { opacity: 1; transform: none }
+.root[data-b4] .alex { animation: pulse var(--v-slow) var(--ease) both }
 .root[data-b4] .count i:nth-of-type(3) { background: var(--ok) }
 .root[data-b4] .n b:nth-child(3) { opacity: 0 }
 .root[data-b4] .n b:nth-child(4) { opacity: 1 }
