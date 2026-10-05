@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -9,6 +9,10 @@ from attrs import field as _attrs_field
 
 from ..models.widget_answer import WidgetAnswer
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.form_request import FormRequest
+
 
 T = TypeVar("T", bound="WebWidgetUpdateRequest")
 
@@ -19,6 +23,7 @@ class WebWidgetUpdateRequest:
     Attributes:
         allowed_origins (list[str] | None | Unset):
         answer (None | Unset | WidgetAnswer):
+        form (FormRequest | None | Unset):
         form_function (None | str | Unset):
         form_requires_code (bool | None | Unset):
         looked_after_by (None | Unset | UUID):
@@ -26,12 +31,15 @@ class WebWidgetUpdateRequest:
 
     allowed_origins: list[str] | None | Unset = UNSET
     answer: None | Unset | WidgetAnswer = UNSET
+    form: FormRequest | None | Unset = UNSET
     form_function: None | str | Unset = UNSET
     form_requires_code: bool | None | Unset = UNSET
     looked_after_by: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.form_request import FormRequest
+
         allowed_origins: list[str] | None | Unset
         if isinstance(self.allowed_origins, Unset):
             allowed_origins = UNSET
@@ -48,6 +56,14 @@ class WebWidgetUpdateRequest:
             answer = self.answer.value
         else:
             answer = self.answer
+
+        form: dict[str, Any] | None | Unset
+        if isinstance(self.form, Unset):
+            form = UNSET
+        elif isinstance(self.form, FormRequest):
+            form = self.form.to_dict()
+        else:
+            form = self.form
 
         form_function: None | str | Unset
         if isinstance(self.form_function, Unset):
@@ -76,6 +92,8 @@ class WebWidgetUpdateRequest:
             field_dict["allowed_origins"] = allowed_origins
         if answer is not UNSET:
             field_dict["answer"] = answer
+        if form is not UNSET:
+            field_dict["form"] = form
         if form_function is not UNSET:
             field_dict["form_function"] = form_function
         if form_requires_code is not UNSET:
@@ -87,6 +105,8 @@ class WebWidgetUpdateRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.form_request import FormRequest
+
         d = dict(src_dict)
 
         def _parse_allowed_origins(data: object) -> list[str] | None | Unset:
@@ -122,6 +142,23 @@ class WebWidgetUpdateRequest:
             return cast(None | Unset | WidgetAnswer, data)
 
         answer = _parse_answer(d.pop("answer", UNSET))
+
+        def _parse_form(data: object) -> FormRequest | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                form_type_0 = FormRequest.from_dict(data)
+
+                return form_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(FormRequest | None | Unset, data)
+
+        form = _parse_form(d.pop("form", UNSET))
 
         def _parse_form_function(data: object) -> None | str | Unset:
             if data is None:
@@ -163,6 +200,7 @@ class WebWidgetUpdateRequest:
         web_widget_update_request = cls(
             allowed_origins=allowed_origins,
             answer=answer,
+            form=form,
             form_function=form_function,
             form_requires_code=form_requires_code,
             looked_after_by=looked_after_by,

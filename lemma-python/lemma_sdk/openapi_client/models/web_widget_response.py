@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -11,6 +11,11 @@ from dateutil.parser import isoparse
 
 from ..models.widget_answer import WidgetAnswer
 from ..models.widget_kind import WidgetKind
+from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.form_spec import FormSpec
+
 
 T = TypeVar("T", bound="WebWidgetResponse")
 
@@ -30,7 +35,9 @@ class WebWidgetResponse:
         kind (WidgetKind):
         looked_after_by (None | UUID):
         name (str):
+        page_url (str): A page Lemma hosts with the form or chat on it, to share as a link.
         public_key (str):
+        form (FormSpec | None | Unset):
     """
 
     agent_id: UUID
@@ -44,10 +51,14 @@ class WebWidgetResponse:
     kind: WidgetKind
     looked_after_by: None | UUID
     name: str
+    page_url: str
     public_key: str
+    form: FormSpec | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.form_spec import FormSpec
+
         agent_id = str(self.agent_id)
 
         allowed_origins = self.allowed_origins
@@ -75,7 +86,17 @@ class WebWidgetResponse:
 
         name = self.name
 
+        page_url = self.page_url
+
         public_key = self.public_key
+
+        form: dict[str, Any] | None | Unset
+        if isinstance(self.form, Unset):
+            form = UNSET
+        elif isinstance(self.form, FormSpec):
+            form = self.form.to_dict()
+        else:
+            form = self.form
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -92,14 +113,19 @@ class WebWidgetResponse:
                 "kind": kind,
                 "looked_after_by": looked_after_by,
                 "name": name,
+                "page_url": page_url,
                 "public_key": public_key,
             }
         )
+        if form is not UNSET:
+            field_dict["form"] = form
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.form_spec import FormSpec
+
         d = dict(src_dict)
         agent_id = UUID(d.pop("agent_id"))
 
@@ -141,7 +167,26 @@ class WebWidgetResponse:
 
         name = d.pop("name")
 
+        page_url = d.pop("page_url")
+
         public_key = d.pop("public_key")
+
+        def _parse_form(data: object) -> FormSpec | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                form_type_0 = FormSpec.from_dict(data)
+
+                return form_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(FormSpec | None | Unset, data)
+
+        form = _parse_form(d.pop("form", UNSET))
 
         web_widget_response = cls(
             agent_id=agent_id,
@@ -155,7 +200,9 @@ class WebWidgetResponse:
             kind=kind,
             looked_after_by=looked_after_by,
             name=name,
+            page_url=page_url,
             public_key=public_key,
+            form=form,
         )
 
         web_widget_response.additional_properties = d

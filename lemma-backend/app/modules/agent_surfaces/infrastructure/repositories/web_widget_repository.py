@@ -9,6 +9,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto.factory import get_secret_cipher
+from app.modules.agent_surfaces.domain.web_forms import FormSpec
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebSession,
     WebWidget,
@@ -39,6 +40,7 @@ def _widget(row: WebWidgetModel) -> WebWidget:
         looked_after_by=row.looked_after_by,
         form_function=row.form_function,
         form_requires_code=row.form_requires_code,
+        form=FormSpec.model_validate(row.form_spec) if row.form_spec else None,
         created_at=row.created_at,
     )
 
@@ -74,6 +76,7 @@ class WebWidgetRepository:
         looked_after_by: UUID | None,
         form_function: str | None,
         form_requires_code: bool,
+        form: FormSpec | None = None,
     ) -> WebWidget:
         row = WebWidgetModel(
             pod_id=pod_id,
@@ -87,6 +90,7 @@ class WebWidgetRepository:
             looked_after_by=looked_after_by,
             form_function=form_function,
             form_requires_code=form_requires_code,
+            form_spec=form.model_dump(mode="json") if form else None,
         )
         self.session.add(row)
         await self.session.flush()

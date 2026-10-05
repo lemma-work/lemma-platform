@@ -7,7 +7,7 @@ import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
-import { readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
+import { formRequest, readCap, readContact, readContacts, readFormColumns, readOrigins, readWidget } from "./contacts";
 import type { WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
@@ -667,8 +667,8 @@ export const liveSource: PodSource = {
             kind: draft.kind as WebWidgetCreateRequest["kind"],
             allowed_origins: readOrigins(draft.origins),
             answer: draft.answer as WebWidgetCreateRequest["answer"],
-            form_function: draft.kind === "form" ? draft.formFunction.trim() : null,
             form_requires_code: draft.kind === "form" && draft.formRequiresCode,
+            form: draft.kind === "form" ? (formRequest(draft) as WebWidgetCreateRequest["form"]) : null,
         });
         return { ...readWidget(made), signingSecret: made.signing_secret };
     },
@@ -683,6 +683,9 @@ export const liveSource: PodSource = {
     },
     async deleteWidget(podId, widgetId) {
         await lemma(podId).contacts.widgets.remove(podId, widgetId);
+    },
+    async formColumns(podId, table) {
+        return readFormColumns(await lemma(podId).contacts.widgets.formColumns(podId, table));
     },
     async contactReach(podId) {
         const client = lemma(podId);

@@ -16,6 +16,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from app.modules.agent_surfaces.domain.web_forms import FormSpec
+
 PUBLIC_KEY_PREFIX = "pk_"
 SECRET_PREFIX = "sk_"
 
@@ -52,6 +54,7 @@ class WebWidget(BaseModel):
     looked_after_by: UUID | None
     form_function: str | None
     form_requires_code: bool
+    form: FormSpec | None = None
     created_at: datetime
 
     def allows_origin(self, origin: str | None) -> bool:

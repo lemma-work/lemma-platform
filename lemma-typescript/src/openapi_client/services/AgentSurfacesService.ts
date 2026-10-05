@@ -6,6 +6,7 @@ import type { AgentSurfaceListResponse } from '../models/AgentSurfaceListRespons
 import type { AgentSurfaceResponse } from '../models/AgentSurfaceResponse.js';
 import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfaceChannelsResponse.js';
 import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
+import type { FormColumnsResponse } from '../models/FormColumnsResponse.js';
 import type { GroupDetailResponse } from '../models/GroupDetailResponse.js';
 import type { GroupLinkRequest } from '../models/GroupLinkRequest.js';
 import type { GroupLinkResponse } from '../models/GroupLinkResponse.js';
@@ -566,6 +567,32 @@ export class AgentSurfacesService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Form Columns
+     * The columns of a table a form may ask for, and how each can be asked.
+     * @param podId
+     * @param table
+     * @returns FormColumnsResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentWebWidgetFormColumns(
+        podId: string,
+        table: string,
+    ): CancelablePromise<FormColumnsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/web-widgets/form-columns',
+            path: {
+                'pod_id': podId,
+            },
+            query: {
+                'table': table,
+            },
             errors: {
                 422: `Validation Error`,
             },

@@ -52,7 +52,12 @@ from app.modules.agent_surfaces.domain.web_widgets import (
 from app.modules.agent_surfaces.infrastructure.repositories.web_widget_repository import (  # noqa: E501
     WebWidgetRepository,
 )
+from app.modules.agent_surfaces.domain.web_forms import FormAnswerRefused
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
+from app.modules.agent_surfaces.services.web_form_submit import (
+    FormClosed,
+    add_form_row,
+)
 from app.modules.contacts.contracts import (
     ContactRef,
     IdentityKind,
@@ -436,8 +441,19 @@ class WebChat:
         input_data: dict[str, object],
         address: str,
     ) -> object:
-        if widget.kind is not WidgetKind.FORM or not widget.form_function:
+        if widget.kind is not WidgetKind.FORM or not (
+            widget.form or widget.form_function
+        ):
             raise _refused("This widget is not a form", 400, "not_a_form")
+        contact_id = await self._form_sender(widget, token=token, address=address)
+        if widget.form is not None:
+            return await self._add_form_row(widget, contact_id, input_data)
+        return await self._run_form_function(widget, contact_id, input_data)
+
+    async def _form_sender(
+        self, widget: WebWidget, *, token: str | None, address: str
+    ) -> UUID | None:
+        """Who is sending, once they are let send at all: their contact, if known."""
         session = await self._visitor_session(widget, token) if token else None
         contact_id = session.contact_id if session else None
         if widget.form_requires_code and contact_id is None:
@@ -452,11 +468,19 @@ class WebChat:
             raise _refused(
                 "Too many submissions. Try again later.", 429, "rate_limited"
             )
+        return contact_id
+
+    async def _run_form_function(
+        self, widget: WebWidget, contact_id: UUID | None, input_data: dict[str, object]
+    ) -> object:
+        function_name = widget.form_function
+        if not function_name:
+            raise _refused("This widget is not a form", 400, "not_a_form")
         try:
             outcome = await run_function_for_contact(
                 self.uow_factory,
                 pod_id=widget.pod_id,
-                name=widget.form_function,
+                name=function_name,
                 contact_id=contact_id,
                 input_data=input_data,
             )
@@ -472,3 +496,25 @@ class WebChat:
             )
             raise _refused("That did not go through. Try again.", 502, "form_failed")
         return (outcome.output or {}).get(PUBLIC_OUTPUT_KEY)
+
+    async def _add_form_row(
+        self, widget: WebWidget, contact_id: UUID | None, answers: dict[str, object]
+    ) -> object:
+        assert widget.form is not None
+        try:
+            said = await add_form_row(
+                self.uow_factory,
+                pod_id=widget.pod_id,
+                widget_id=widget.id,
+                form=widget.form,
+                owner=widget.looked_after_by,
+                contact_id=contact_id,
+                answers=answers,
+            )
+        except FormAnswerRefused as exc:
+            raise _refused(exc.message, 422, "bad_answer") from exc
+        except FormClosed as exc:
+            raise _refused(
+                "This form can't take answers right now", 503, "form_closed"
+            ) from exc
+        return {"message": said}

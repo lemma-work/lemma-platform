@@ -1,5 +1,5 @@
 import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, GroupUpdateRequest, SurfaceUpdateRequest, ContactExportResponse } from "lemma-sdk";
-import type { Contact, ContactReach, ContactsCap, NewWebWidget, WebWidget, WidgetAnswer, WidgetDraft } from "./contacts";
+import type { Contact, ContactReach, ContactsCap, FormColumn, NewWebWidget, WebWidget, WidgetAnswer, WidgetDraft } from "./contacts";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
@@ -625,6 +625,8 @@ export interface PodSource {
     /** A new signing secret, shown this once. */
     rotateWidgetSecret(podId: string, widgetId: string): Promise<string>;
     deleteWidget(podId: string, widgetId: string): Promise<void>;
+    /** The columns of a table a form may ask for. */
+    formColumns(podId: string, table: string): Promise<FormColumn[]>;
     /** The space's tables and functions, with which ones contacts can reach. */
     contactReach(podId: string): Promise<ContactReach>;
     setTableContactOwned(podId: string, table: string, on: boolean): Promise<void>;

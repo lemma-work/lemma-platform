@@ -9,7 +9,9 @@
  *                                    (or call LemmaChat.identify(token) later)
  *   data-lemma-color="#5a3fd4"       the accent colour
  *   data-lemma-greeting="Hi!"        the first thing the chat says
- * For a form widget, mark the form: <form data-lemma-form>.
+ * A form widget draws its own form where the script tag is. A page that marks
+ * its own <form data-lemma-form> keeps its markup and the widget only submits it.
+ * data-lemma-page is set by Lemma's hosted page: the form, or the chat, fills it.
  *
  * Everything the server says is built into the page as DOM nodes -- markdown
  * included -- and never parsed as markup. Requests are JSON sent as text/plain
@@ -31,7 +33,8 @@
     : "#5a3fd4";
   var greeting = script.getAttribute("data-lemma-greeting") || "Hi! How can we help?";
   var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var state = { session: null, isContact: false, kind: "chat", requiresCode: false, title: "" };
+  var pageMode = script.hasAttribute("data-lemma-page");
+  var state = { session: null, isContact: false, kind: "chat", requiresCode: false, title: "", form: null };
 
   function remember(saved) {
     try {
@@ -78,14 +81,16 @@
       state.kind = data.kind;
       state.requiresCode = data.requires_code;
       state.title = data.title || "";
-      remember(hostToken ? null : state);
+      state.form = data.form || null;
+      remember(hostToken ? null : { session: state.session, isContact: state.isContact,
+        kind: state.kind, requiresCode: state.requiresCode, title: state.title });
       return data;
     });
   }
   function ensureSession() {
     if (state.session) return Promise.resolve();
     var saved = hostToken ? null : recalled();
-    if (saved) {
+    if (saved && saved.kind !== "form") {
       state.session = saved.session;
       state.isContact = !!saved.isContact;
       state.kind = saved.kind || "chat";
@@ -187,11 +192,41 @@
     ".lw-card button{border:0;border-radius:10px;padding:8px 12px;background:var(--a);color:#fff;",
     "cursor:pointer;font:inherit}",
     ".lw-inline{position:static!important}.lw-inline .lw-card{margin:12px 0 0}",
+    ".lw-page .lw-launch,.lw-page .lw-close{display:none}",
+    ".lw-page .lw-panel{position:relative;right:auto;bottom:auto;width:100%;max-width:720px;height:100vh;",
+    "max-height:none;margin:0 auto;border-radius:0;opacity:1;visibility:visible;transform:none;box-shadow:none;",
+    "border-left:1px solid var(--line);border-right:1px solid var(--line)}",
+    ".lw-fc{max-width:560px;margin:0 auto;background:var(--bg);border-radius:18px;padding:28px 28px 24px;",
+    "box-shadow:0 1px 2px rgba(20,16,10,.06),0 8px 28px rgba(20,16,10,.08);animation:lw-in .25s ease both}",
+    ".lw-pagewrap{padding:48px 16px 0}.lw-inlinewrap .lw-fc{box-shadow:none;border:1px solid var(--line)}",
+    ".lw-fc h1{font-size:22px;font-weight:500;margin:0 0 6px;letter-spacing:-.01em}",
+    ".lw-fc .lw-intro{margin:0 0 20px;color:var(--ink2);white-space:pre-wrap}",
+    ".lw-field{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}",
+    ".lw-field label{font-weight:500;font-size:13.5px}.lw-field .lw-req{color:var(--ink2);font-weight:400}",
+    ".lw-field small{color:var(--ink2);font-size:12px}",
+    ".lw-field input,.lw-field textarea,.lw-field select{width:100%;border:1px solid var(--line);background:var(--bg);",
+    "color:inherit;border-radius:10px;padding:10px 12px;font:inherit;outline:0;transition:border-color .15s,box-shadow .15s}",
+    ".lw-field textarea{min-height:110px;resize:vertical}",
+    ".lw-field input:focus,.lw-field textarea:focus,.lw-field select:focus{border-color:var(--a);",
+    "box-shadow:0 0 0 3px color-mix(in srgb,var(--a) 18%,transparent)}",
+    ".lw-field.lw-bad input,.lw-field.lw-bad textarea,.lw-field.lw-bad select{border-color:#e5484d}",
+    ".lw-check{flex-direction:row;align-items:center;gap:10px}.lw-check input{width:18px;height:18px;accent-color:var(--a)}",
+    ".lw-err{color:#e5484d;font-size:12.5px;min-height:0}",
+    ".lw-submit{width:100%;border:0;border-radius:12px;padding:12px;background:var(--a);color:#fff;font:inherit;",
+    "font-weight:500;cursor:pointer;transition:opacity .15s,transform .15s;margin-top:4px}",
+    ".lw-submit:disabled{opacity:.6;cursor:default}.lw-submit:not(:disabled):active{transform:scale(.98)}",
+    ".lw-done{text-align:center;padding:24px 8px 12px}",
+    ".lw-tick{width:56px;height:56px;border-radius:50%;background:var(--a);color:#fff;display:grid;place-items:center;",
+    "margin:0 auto 16px;animation:lw-pop .4s cubic-bezier(.2,.9,.3,1.3) both}",
+    ".lw-done p{margin:0 0 16px;font-size:15px;color:var(--ink);white-space:pre-wrap}",
+    ".lw-fc .lw-card{margin:0 0 16px}",
+    "@keyframes lw-pop{from{transform:scale(.4);opacity:0}}",
     "@keyframes lw-in{from{opacity:0;transform:translateY(6px)}}",
     "@keyframes lw-blink{50%{opacity:0}}",
     "@keyframes lw-bounce{0%,80%,100%{transform:translateY(0);opacity:.4}40%{transform:translateY(-4px);opacity:1}}",
     "@media (max-width:480px){.lw-panel{right:0;bottom:0;width:100vw;max-width:none;height:100%;",
-    "max-height:none;border-radius:0}.lw-open .lw-launch{display:none}}",
+    "max-height:none;border-radius:0}.lw-open .lw-launch{display:none}",
+    ".lw-pagewrap{padding:0}.lw-pagewrap .lw-fc{border-radius:0;box-shadow:none;min-height:100vh;padding:24px 16px}}",
     "@media (prefers-reduced-motion:reduce){.lw *{animation:none!important;transition:none!important}}",
   ].join("");
 
@@ -341,6 +376,7 @@
   // ------------------------------------------------------------------- chat
 
   var log, input, sendButton, foot, verifyLink;
+  var launchOpen = function () {};
   var lastSequence = -1, busy = false, typingRow = null, live = null;
   var streaming = false, noStream = !window.ReadableStream || !window.TextDecoder;
   var poller = null, pollUntil = 0, slowPoller = null;
@@ -675,6 +711,7 @@
 
     var loaded = false;
     function toggle(open) {
+      if (pageMode && !open) return;
       shell.classList.toggle("lw-open", open);
       launch.setAttribute("aria-label", open ? "Close chat" : "Open chat");
       if (!open) {
@@ -695,6 +732,9 @@
         if (!busy) poll();
       }, 20000);
     }
+    launchOpen = function () {
+      toggle(true);
+    };
     launch.onclick = function () {
       toggle(!isOpen());
     };
@@ -738,6 +778,176 @@
   }
 
   // ------------------------------------------------------------------- forms
+
+  var ICON_TICK =
+    '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+  function fieldInput(field) {
+    var control;
+    if (field.input === "long") {
+      control = el("textarea");
+    } else if (field.input === "choice") {
+      control = el("select");
+      var blank = el("option", null, "Choose…");
+      blank.value = "";
+      control.appendChild(blank);
+      field.options.forEach(function (option) {
+        var item = el("option", null, option);
+        item.value = option;
+        control.appendChild(item);
+      });
+    } else {
+      control = el("input");
+      control.type = {
+        email: "email", phone: "tel", number: "number", date: "date",
+        datetime: "datetime-local", checkbox: "checkbox",
+      }[field.input] || "text";
+      if (field.input === "number") control.step = "any";
+      if (field.input === "email") control.autocomplete = "email";
+      if (field.input === "phone") control.autocomplete = "tel";
+    }
+    control.name = field.name;
+    control.id = "lw-f-" + field.name;
+    if (field.required && field.input !== "checkbox") control.required = true;
+    return control;
+  }
+
+  function renderForm(into) {
+    var spec = state.form;
+    var card = el("div", "lw-fc");
+    into.appendChild(card);
+    card.appendChild(el("h1", null, spec.title));
+    if (spec.intro) card.appendChild(el("p", "lw-intro", spec.intro));
+    var form = el("form");
+    form.noValidate = true;
+    var rows = {};
+    spec.fields.forEach(function (field) {
+      var row = el("div", "lw-field" + (field.input === "checkbox" ? " lw-check" : ""));
+      var control = fieldInput(field);
+      var label = el("label", null, field.label);
+      label.htmlFor = control.id;
+      if (!field.required && field.input !== "checkbox") label.appendChild(el("span", "lw-req", " (optional)"));
+      if (field.input === "checkbox") {
+        row.appendChild(control);
+        row.appendChild(label);
+      } else {
+        row.appendChild(label);
+        row.appendChild(control);
+      }
+      if (field.hint) row.appendChild(el("small", null, field.hint));
+      var error = el("div", "lw-err");
+      row.appendChild(error);
+      rows[field.name] = { row: row, control: control, error: error, field: field };
+      form.appendChild(row);
+    });
+    var problem = el("div", "lw-err");
+    var submit = el("button", "lw-submit", "Send");
+    submit.type = "submit";
+    form.appendChild(problem);
+    form.appendChild(submit);
+    card.appendChild(form);
+
+    function clearErrors() {
+      problem.textContent = "";
+      Object.keys(rows).forEach(function (name) {
+        rows[name].row.classList.remove("lw-bad");
+        rows[name].error.textContent = "";
+      });
+    }
+    function mark(name, message) {
+      var hit = rows[name];
+      if (!hit) {
+        problem.textContent = message;
+        return;
+      }
+      hit.row.classList.add("lw-bad");
+      hit.error.textContent = message;
+      hit.control.focus();
+    }
+    function values() {
+      var out = {};
+      Object.keys(rows).forEach(function (name) {
+        var control = rows[name].control;
+        out[name] = control.type === "checkbox" ? control.checked : control.value;
+      });
+      return out;
+    }
+    function localProblem() {
+      var names = Object.keys(rows);
+      for (var i = 0; i < names.length; i++) {
+        var hit = rows[names[i]];
+        var control = hit.control;
+        if (hit.field.required && (control.type === "checkbox" ? !control.checked : !control.value.trim())) {
+          return [names[i], hit.field.label + " is required"];
+        }
+        if (control.value && control.validity && !control.validity.valid) {
+          return [names[i], "Check " + hit.field.label.toLowerCase()];
+        }
+      }
+      return null;
+    }
+    function done(message) {
+      card.textContent = "";
+      var box = el("div", "lw-done");
+      var tick = el("div", "lw-tick");
+      tick.appendChild(icon(ICON_TICK));
+      box.appendChild(tick);
+      box.appendChild(el("p", null, message || spec.confirmation));
+      var again = el("button", "lw-link", "Send another response");
+      again.onclick = function () {
+        into.textContent = "";
+        renderForm(into);
+      };
+      box.appendChild(again);
+      card.appendChild(box);
+    }
+    function deliver() {
+      submit.disabled = true;
+      submit.textContent = "Sending…";
+      return call("/submit", { session: state.session, input: values() })
+        .then(function (data) {
+          done(data.result && data.result.message);
+        })
+        .catch(function (error) {
+          submit.disabled = false;
+          submit.textContent = "Send";
+          var named = Object.keys(rows).filter(function (name) {
+            return error.message.indexOf(rows[name].field.label) === 0;
+          })[0];
+          mark(named, error.message);
+        });
+    }
+    form.onsubmit = function (event) {
+      event.preventDefault();
+      clearErrors();
+      var local = localProblem();
+      if (local) {
+        mark(local[0], local[1]);
+        return;
+      }
+      if (state.requiresCode && !state.isContact) {
+        submit.disabled = true;
+        askForCode(function (box) {
+          card.insertBefore(box, form);
+        }, function () {
+          deliver();
+        });
+        submit.disabled = false;
+        return;
+      }
+      deliver();
+    };
+  }
+
+  function placeForm() {
+    var wrap = el("div", pageMode ? "lw-pagewrap" : "lw-inlinewrap");
+    shell.appendChild(wrap);
+    var target = pageMode && document.getElementById("lemma-page");
+    if (target) target.appendChild(host);
+    else script.parentNode.insertBefore(host, script.nextSibling);
+    renderForm(wrap);
+  }
 
   function bindForms() {
     var forms = document.querySelectorAll("form[data-lemma-form]");
@@ -787,11 +997,16 @@
     ensureSession()
       .then(function () {
         if (state.kind === "form") {
-          bindForms();
+          var own = document.querySelector("form[data-lemma-form]");
+          if (state.form && (pageMode || !own)) placeForm();
+          else bindForms();
           return;
         }
-        document.body.appendChild(host);
+        var target = pageMode && document.getElementById("lemma-page");
+        (target || document.body).appendChild(host);
+        if (pageMode) shell.classList.add("lw-page");
         buildChat();
+        if (pageMode) launchOpen();
       })
       .catch(function () {
         /* the widget is off, or not allowed on this page */

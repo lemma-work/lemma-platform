@@ -34,6 +34,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.update` | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | Update Surface |
 | `agent.web_widget.create` | POST | `/pods/{pod_id}/web-widgets` | Create Widget |
 | `agent.web_widget.delete` | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | Delete Widget |
+| `agent.web_widget.form_columns` | GET | `/pods/{pod_id}/web-widgets/form-columns` | List Form Columns |
 | `agent.web_widget.list` | GET | `/pods/{pod_id}/web-widgets` | List Widgets |
 | `agent.web_widget.rotate_secret` | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | Rotate Secret |
 | `agent.web_widget.update` | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | Update Widget |

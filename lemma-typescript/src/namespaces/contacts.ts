@@ -94,5 +94,8 @@ export class ContactsNamespace {
       ),
     remove: (podId: string, widgetId: string) =>
       this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId)),
+    /** The columns of a table a form may ask for, and how each can be asked. */
+    formColumns: (podId: string, table: string) =>
+      this.client.request(() => AgentSurfacesService.agentWebWidgetFormColumns(podId, table)),
   };
 }

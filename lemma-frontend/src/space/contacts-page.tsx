@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { source, type Pod } from "@/data";
 import {
+    EMPTY_WIDGET_DRAFT,
     answerChoices,
     contactName,
     contactSubline,
@@ -11,6 +12,7 @@ import {
     handleText,
     readOrigins,
     vouchedBy,
+    widgetKindLine,
     widgetProblem,
     type Contact,
     type NewWebWidget,
@@ -32,6 +34,7 @@ import {
     useWidgetChange,
     useWidgets,
 } from "./contact-queries";
+import { FormBuilder, WidgetPlaces } from "./form-builder";
 
 /** A space's contacts: the people its bots answer who are not in it.
  *
@@ -196,6 +199,13 @@ function ContactSheet({ pod, contact, onClose }: { pod: Pod; contact: Contact; o
 
 /* ── widgets ───────────────────────────────────────────────────────── */
 
+/** Whether a form takes answers, said as a form would say it. */
+const FORM_STATES = [
+    { value: "anyone", label: "Yes, from anyone" },
+    { value: "known", label: "Only from existing contacts" },
+    { value: "off", label: "No, it’s closed" },
+] as const;
+
 function Widgets({ pod }: { pod: Pod }) {
     const widgets = useWidgets(pod.id);
     const change = useWidgetChange(pod.id);
@@ -232,27 +242,26 @@ function Widgets({ pod }: { pod: Pod }) {
                         <li key={widget.id} className="cwidget">
                             <div className="cwidget__top">
                                 <span className="cwidget__name">{widget.name}</span>
-                                <span className="cwidget__kind">{widget.kind === "form" ? "Form · runs " + widget.formFunction : "Chat"}</span>
+                                <span className="cwidget__kind">{widgetKindLine(widget)}</span>
                             </div>
                             <label className="record-form__field">
-                                <span className="smanage__label">Answers</span>
+                                <span className="smanage__label">{widget.kind === "form" ? "Taking answers" : "Answers"}</span>
                                 <select
                                     value={widget.answer}
                                     disabled={change.isPending}
                                     onChange={(event) => change.mutate({ widgetId: widget.id, change: { answer: event.target.value as WebWidget["answer"] } })}
                                 >
-                                    {choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.value === "off" ? "Nobody (switched off)" : choice.label}</option>)}
+                                    {widget.kind === "form"
+                                        ? FORM_STATES.map((state) => <option key={state.value} value={state.value}>{state.label}</option>)
+                                        : choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.value === "off" ? "Nobody (switched off)" : choice.label}</option>)}
                                 </select>
                             </label>
                             <p className="cwidget__origins">
                                 {widget.allowedOrigins.length ? "Only on " + widget.allowedOrigins.join(", ") : "On any website"}
                             </p>
-                            <div className="cwidget__embed">
-                                <code>{widget.kind === "form" ? formSnippet(widget) : widget.embed}</code>
-                                <CopyButton text={widget.kind === "form" ? formSnippet(widget) : widget.embed} label="Copy the code" />
-                            </div>
+                            <WidgetPlaces widget={widget} embed={widget.kind === "form" ? formSnippet(widget) : widget.embed} />
                             <div className="cwidget__actions">
-                                <button type="button" className="linkish" onClick={() => void rotate(widget)}>New signing secret</button>
+                                {widget.kind === "chat" && <button type="button" className="linkish" onClick={() => void rotate(widget)}>New signing secret</button>}
                                 <button type="button" className="linkish" disabled={remove.isPending} onClick={() => remove.mutate(widget.id)}>Remove</button>
                             </div>
                         </li>
@@ -274,14 +283,13 @@ function Widgets({ pod }: { pod: Pod }) {
 
 function WidgetSheet({ pod, onClose, onMade }: { pod: Pod; onClose: () => void; onMade: (made: NewWebWidget) => void }) {
     const create = useCreateWidget(pod.id);
-    const reach = useReach(pod.id);
-    const [draft, setDraft] = useState<WidgetDraft>({ name: "", kind: "chat", origins: "", answer: "anyone", formFunction: "", formRequiresCode: false });
+    const [draft, setDraft] = useState<WidgetDraft>(EMPTY_WIDGET_DRAFT);
     const [problem, setProblem] = useState<string | null>(null);
-    const opened = (reach.data?.functions ?? []).filter((fn) => fn.contactsInvoke);
-    const set = (change: Partial<WidgetDraft>) => setDraft((was) => ({ ...was, ...change }));
+    const set = useCallback((change: Partial<WidgetDraft>) => setDraft((was) => ({ ...was, ...change })), []);
+    const isForm = draft.kind === "form";
 
     return (
-        <Modal title="New chat or form" subtitle={"Answered by " + pod.name} onClose={onClose}>
+        <Modal title={isForm ? "New form" : "New chat"} subtitle={isForm ? "Each answer adds a row to a table in " + pod.name : "Answered by " + pod.name} onClose={onClose}>
             <form
                 className="record-form csheet"
                 onSubmit={(event) => {
@@ -289,53 +297,51 @@ function WidgetSheet({ pod, onClose, onMade }: { pod: Pod; onClose: () => void; 
                     const wrong = widgetProblem(draft);
                     setProblem(wrong);
                     if (wrong) return;
-                    create.mutate(draft, { onSuccess: onMade, onError: () => setProblem("Couldn’t make it. Try again.") });
+                    create.mutate(draft, {
+                        onSuccess: onMade,
+                        onError: (error) => setProblem(error instanceof Error && error.message ? error.message : "Couldn’t make it. Try again."),
+                    });
                 }}
             >
                 <fieldset disabled={create.isPending}>
-                    <label className="record-form__field">
-                        <span className="smanage__label">Name</span>
-                        <input value={draft.name} maxLength={255} onChange={(event) => set({ name: event.target.value })} placeholder="Shop chat" />
-                    </label>
                     <div className="theme__modes" role="radiogroup" aria-label="Kind">
-                        {(["chat", "form"] as const).map((kind) => (
+                        {(["form", "chat"] as const).map((kind) => (
                             <label key={kind} className="cradio">
                                 <input type="radio" name="kind" checked={draft.kind === kind} onChange={() => set({ kind })} />
-                                <span>{kind === "chat" ? "A chat bubble" : "A form"}</span>
+                                <span>{kind === "chat" ? "A chat" : "A form"}</span>
                             </label>
                         ))}
                     </div>
-                    {draft.kind === "form" && (
+                    <label className="record-form__field">
+                        <span className="smanage__label">Name</span>
+                        <input value={draft.name} maxLength={255} onChange={(event) => set({ name: event.target.value })} placeholder={isForm ? "Workshop sign-up" : "Shop chat"} />
+                        {isForm && <small>The title people see at the top of the form.</small>}
+                    </label>
+                    {isForm ? (
                         <>
-                            <label className="record-form__field">
-                                <span className="smanage__label">Runs</span>
-                                <select value={draft.formFunction} onChange={(event) => set({ formFunction: event.target.value })}>
-                                    <option value="">Choose a function</option>
-                                    {opened.map((fn) => <option key={fn.name} value={fn.name}>{fn.name}</option>)}
-                                </select>
-                                <small>{opened.length ? "Only functions opened to contacts, below." : "Open a function to contacts first, below."}</small>
-                            </label>
+                            <FormBuilder pod={pod} draft={draft} set={set} />
                             <label className="smanage__check">
                                 <input type="checkbox" role="switch" checked={draft.formRequiresCode} onChange={(event) => set({ formRequiresCode: event.target.checked })} />
-                                <span><span className="smanage__label">Confirm their email first</span><small>For anything you will reply to.</small></span>
+                                <span><span className="smanage__label">Confirm their email first</span><small>They become a contact, so you can write back.</small></span>
                             </label>
                         </>
+                    ) : (
+                        <label className="record-form__field">
+                            <span className="smanage__label">Answers</span>
+                            <select value={draft.answer} onChange={(event) => set({ answer: event.target.value as WidgetDraft["answer"] })}>
+                                {answerChoices(pod.name).filter((choice) => choice.value !== "off").map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                            </select>
+                        </label>
                     )}
                     <label className="record-form__field">
-                        <span className="smanage__label">Answers</span>
-                        <select value={draft.answer} onChange={(event) => set({ answer: event.target.value as WidgetDraft["answer"] })}>
-                            {answerChoices(pod.name).filter((choice) => choice.value !== "off").map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
-                        </select>
-                    </label>
-                    <label className="record-form__field">
-                        <span className="smanage__label">Websites it may run on</span>
+                        <span className="smanage__label">Websites it may be embedded on</span>
                         <textarea rows={2} value={draft.origins} onChange={(event) => set({ origins: event.target.value })} placeholder="https://shop.example" />
-                        <small>{readOrigins(draft.origins).length ? "One per line." : "Leave empty to allow any website."}</small>
+                        <small>{readOrigins(draft.origins).length ? "One per line." : "Leave empty for any website. The link works either way."}</small>
                     </label>
                 </fieldset>
                 {problem && <p role="alert">{problem}</p>}
                 <div className="csheet__actions">
-                    <button type="submit" className="pill-button" disabled={create.isPending}>{create.isPending ? "Making…" : "Make it"}</button>
+                    <button type="submit" className="pill-button" disabled={create.isPending}>{create.isPending ? "Making…" : isForm ? "Make the form" : "Make the chat"}</button>
                     <button type="button" className="ghost-pill" onClick={onClose}>Cancel</button>
                 </div>
             </form>
@@ -344,6 +350,19 @@ function WidgetSheet({ pod, onClose, onMade }: { pod: Pod; onClose: () => void; 
 }
 
 function SecretSheet({ widget, secret, onClose }: { widget: WebWidget; secret: string; onClose: () => void }) {
+    if (widget.form) {
+        return (
+            <Modal title={widget.name} subtitle="Your form is ready" onClose={onClose}>
+                <div className="csheet">
+                    <p>Share the link, or put it on your website. Every answer adds a row to {widget.form.table}.</p>
+                    <WidgetPlaces widget={widget} embed={formSnippet(widget)} />
+                    <div className="csheet__actions">
+                        <button type="button" className="pill-button" onClick={onClose}>Done</button>
+                    </div>
+                </div>
+            </Modal>
+        );
+    }
     return (
         <Modal title={widget.name} subtitle="Copy the signing secret now" onClose={onClose}>
             <div className="csheet">

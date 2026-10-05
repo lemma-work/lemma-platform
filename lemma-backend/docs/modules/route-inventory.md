@@ -63,6 +63,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | `agent.surface.setup` | Get Surface Setup |
 | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
 | GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
+| GET | `/pods/{pod_id}/web-widgets/form-columns` | `agent.web_widget.form_columns` | List Form Columns |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |

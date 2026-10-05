@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { FormRequest } from './FormRequest.js';
 import type { WidgetAnswer } from './WidgetAnswer.js';
 import type { WidgetKind } from './WidgetKind.js';
 export type WebWidgetCreateRequest = {
@@ -11,6 +12,10 @@ export type WebWidgetCreateRequest = {
     agent_name?: (string | null);
     allowed_origins?: Array<string>;
     answer?: WidgetAnswer;
+    /**
+     * A form built from a table: submitting it adds one row. Takes the place of form_function.
+     */
+    form?: (FormRequest | null);
     form_function?: (string | null);
     form_requires_code?: boolean;
     kind?: WidgetKind;

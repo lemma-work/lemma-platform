@@ -1,5 +1,5 @@
 import { key } from "@/session/storage";
-import { readOrigins, type Contact, type ContactReach, type ContactsCap, type WebWidget, type WidgetAnswer, type WidgetDraft } from "./contacts";
+import { formRequest, readOrigins, type Contact, type ContactReach, type ContactsCap, type FormColumn, type WebWidget, type WidgetAnswer, type WidgetDraft } from "./contacts";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
 import type { Conversation, FileContent, Invitation, LibraryItem, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
@@ -2517,6 +2517,21 @@ function sampleContacts(podId: string): Contact[] {
     return CONTACTS.get(podId) ?? [];
 }
 
+/** What each sample table offers a form. */
+const SAMPLE_FORM_COLUMNS: Record<string, FormColumn[]> = {
+    orders: [
+        { name: "customer_name", required: true, description: null, suggested: "text", inputs: ["text", "long", "email", "phone"] },
+        { name: "email", required: true, description: null, suggested: "email", inputs: ["text", "long", "email", "phone"] },
+        { name: "item", required: false, description: null, suggested: "text", inputs: ["text", "long", "email", "phone"] },
+        { name: "quantity", required: false, description: null, suggested: "number", inputs: ["number"] },
+        { name: "notes", required: false, description: null, suggested: "long", inputs: ["text", "long", "email", "phone"] },
+    ],
+    price_list: [
+        { name: "product", required: true, description: null, suggested: "text", inputs: ["text", "long", "email", "phone"] },
+        { name: "price", required: false, description: null, suggested: "number", inputs: ["number"] },
+    ],
+};
+
 function sampleReach(podId: string): ContactReach {
     if (!REACH.has(podId)) {
         REACH.set(podId, {
@@ -2950,9 +2965,11 @@ export const fixtureSource: PodSource = {
         const key = "pk_sample" + id.slice(-6);
         const widget: WebWidget = {
             id, name: draft.name.trim(), kind: draft.kind, publicKey: key, allowedOrigins: readOrigins(draft.origins),
-            answer: draft.answer, lookedAfterBy: "sample-user", formFunction: draft.kind === "form" ? draft.formFunction : null,
+            answer: draft.answer, lookedAfterBy: "sample-user", formFunction: null,
             formRequiresCode: draft.kind === "form" && draft.formRequiresCode,
+            form: draft.kind === "form" ? formRequest(draft) : null,
             embed: `<script src="https://api.example.invalid/public/web/widget.js" data-lemma-key="${key}" async></script>`,
+            pageUrl: `https://api.example.invalid/public/web/${key}/page`,
         };
         WIDGETS.set(podId, [...(WIDGETS.get(podId) ?? []), widget]);
         return { ...widget, signingSecret: "sk_sample_" + Math.random().toString(16).slice(2) };
@@ -2972,6 +2989,12 @@ export const fixtureSource: PodSource = {
     async deleteWidget(podId: string, widgetId: string) {
         await wait(300);
         WIDGETS.set(podId, (WIDGETS.get(podId) ?? []).filter((entry) => entry.id !== widgetId));
+    },
+    async formColumns(_podId: string, table: string) {
+        await wait(160);
+        const columns = SAMPLE_FORM_COLUMNS[table];
+        if (!columns) throw Object.assign(new Error("There is no table called " + table), { statusCode: 404 });
+        return columns;
     },
     async contactReach(podId: string) {
         await wait(160);

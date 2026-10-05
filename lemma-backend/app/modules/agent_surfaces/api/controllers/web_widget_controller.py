@@ -10,14 +10,19 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, UoWDep
-from app.core.authorization.dependencies import require_action
+from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
 from app.modules.agent.contracts.agents import agent_id_for_name
+from app.modules.agent_surfaces.domain.web_forms import (
+    INPUTS_FOR_TYPE,
+    FieldInput,
+    FormSpec,
+)
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
     WidgetAnswer,
@@ -29,6 +34,13 @@ from app.modules.agent_surfaces.domain.web_widgets import (
 from app.modules.agent_surfaces.infrastructure.repositories.web_widget_repository import (  # noqa: E501
     WebWidgetRepository,
 )
+from app.modules.agent_surfaces.services.web_form_builder import (
+    FormNotBuildable,
+    FormRequest,
+    build_form,
+    guessed_input,
+)
+from app.modules.datastore.contracts.forms import FormTableUnavailable, form_table
 from app.modules.pod.contracts.members import pod_member_id
 
 router = APIRouter(prefix="/pods/{pod_id}/web-widgets", tags=["Agent Surfaces"])
@@ -48,8 +60,12 @@ class WebWidgetResponse(BaseModel):
     looked_after_by: UUID | None
     form_function: str | None
     form_requires_code: bool
+    form: FormSpec | None = None
     created_at: datetime
     embed: str = Field(description="The script tag that puts the widget on a page.")
+    page_url: str = Field(
+        description="A page Lemma hosts with the form or chat on it, to share as a link."
+    )
 
 
 class WebWidgetCreatedResponse(WebWidgetResponse):
@@ -77,6 +93,13 @@ class WebWidgetCreateRequest(BaseModel):
     looked_after_by: UUID | None = None
     form_function: str | None = Field(default=None, max_length=255)
     form_requires_code: bool = False
+    form: FormRequest | None = Field(
+        default=None,
+        description=(
+            "A form built from a table: submitting it adds one row. Takes the "
+            "place of form_function."
+        ),
+    )
 
 
 class WebWidgetUpdateRequest(BaseModel):
@@ -85,10 +108,27 @@ class WebWidgetUpdateRequest(BaseModel):
     looked_after_by: UUID | None = None
     form_function: str | None = Field(default=None, max_length=255)
     form_requires_code: bool | None = None
+    form: FormRequest | None = None
 
 
 class WebWidgetSecretResponse(BaseModel):
     signing_secret: str
+
+
+class FormColumnResponse(BaseModel):
+    name: str
+    type: str
+    required: bool
+    options: list[str]
+    description: str | None
+    suggested_input: FieldInput
+    inputs: list[FieldInput]
+
+
+class FormColumnsResponse(BaseModel):
+    table: str
+    contact_owned: bool
+    columns: list[FormColumnResponse]
 
 
 def _embed(widget: WebWidget) -> str:
@@ -97,6 +137,10 @@ def _embed(widget: WebWidget) -> str:
         f'<script src="{base}/public/web/widget.js" '
         f'data-lemma-key="{widget.public_key}" async></script>'
     )
+
+
+def _page_url(widget: WebWidget) -> str:
+    return f"{str(settings.api_url).rstrip('/')}/public/web/{widget.public_key}/page"
 
 
 def _response(widget: WebWidget) -> WebWidgetResponse:
@@ -111,9 +155,20 @@ def _response(widget: WebWidget) -> WebWidgetResponse:
         looked_after_by=widget.looked_after_by,
         form_function=widget.form_function,
         form_requires_code=widget.form_requires_code,
+        form=widget.form,
         created_at=widget.created_at,
         embed=_embed(widget),
+        page_url=_page_url(widget),
     )
+
+
+async def _built_form(
+    uow: UoWDep, pod_id: UUID, request: FormRequest, ctx: PodContextDep
+) -> FormSpec:
+    try:
+        return await build_form(uow, pod_id=pod_id, request=request, ctx=ctx)
+    except FormNotBuildable as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
 
 async def _require_member(uow: UoWDep, pod_id: UUID, user_id: UUID | None) -> None:
@@ -146,6 +201,41 @@ async def list_widgets(pod_id: UUID, uow: UoWDep) -> WebWidgetListResponse:
     return WebWidgetListResponse(items=[_response(widget) for widget in widgets])
 
 
+@router.get(
+    "/form-columns",
+    operation_id="agent.web_widget.form_columns",
+    response_model=FormColumnsResponse,
+    dependencies=[require_action(Permissions.POD_READ)],
+)
+async def list_form_columns(
+    pod_id: UUID,
+    uow: UoWDep,
+    pod_ctx: PodContextDep,
+    table: str = Query(max_length=255),
+) -> FormColumnsResponse:
+    """The columns of a table a form may ask for, and how each can be asked."""
+    try:
+        found = await form_table(uow, pod_id=pod_id, table_name=table, ctx=pod_ctx)
+    except FormTableUnavailable as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return FormColumnsResponse(
+        table=found.name,
+        contact_owned=found.contact_owned,
+        columns=[
+            FormColumnResponse(
+                name=column.name,
+                type=column.type,
+                required=column.required,
+                options=list(column.options),
+                description=column.description,
+                suggested_input=guessed_input(column),
+                inputs=list(INPUTS_FOR_TYPE[column.type]),
+            )
+            for column in found.columns
+        ],
+    )
+
+
 @router.post(
     "",
     operation_id="agent.web_widget.create",
@@ -154,12 +244,21 @@ async def list_widgets(pod_id: UUID, uow: UoWDep) -> WebWidgetListResponse:
     dependencies=[require_action(Permissions.POD_UPDATE)],
 )
 async def create_widget(
-    pod_id: UUID, request: WebWidgetCreateRequest, user: CurrentUser, uow: UoWDep
+    pod_id: UUID,
+    request: WebWidgetCreateRequest,
+    user: CurrentUser,
+    uow: UoWDep,
+    pod_ctx: PodContextDep,
 ) -> WebWidgetCreatedResponse:
-    if request.kind is WidgetKind.FORM and not request.form_function:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A form needs a function"
-        )
+    form = None
+    if request.kind is WidgetKind.FORM:
+        if request.form is None and not request.form_function:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="A form needs a table to save to",
+            )
+        if request.form is not None:
+            form = await _built_form(uow, pod_id, request.form, pod_ctx)
     looked_after_by = request.looked_after_by or user.id
     await _require_member(uow, pod_id, looked_after_by)
     agent_id = (
@@ -178,8 +277,9 @@ async def create_widget(
         allowed_origins=_origins(request.allowed_origins),
         answer=request.answer,
         looked_after_by=looked_after_by,
-        form_function=request.form_function,
+        form_function=None if form else request.form_function,
         form_requires_code=request.form_requires_code,
+        form=form,
     )
     await uow.commit()
     return WebWidgetCreatedResponse(
@@ -194,7 +294,11 @@ async def create_widget(
     dependencies=[require_action(Permissions.POD_UPDATE)],
 )
 async def update_widget(
-    pod_id: UUID, widget_id: UUID, request: WebWidgetUpdateRequest, uow: UoWDep
+    pod_id: UUID,
+    widget_id: UUID,
+    request: WebWidgetUpdateRequest,
+    uow: UoWDep,
+    pod_ctx: PodContextDep,
 ) -> WebWidgetResponse:
     values: dict[str, object] = {}
     fields = request.model_fields_set
@@ -209,6 +313,10 @@ async def update_widget(
         values["form_function"] = request.form_function
     if "form_requires_code" in fields and request.form_requires_code is not None:
         values["form_requires_code"] = request.form_requires_code
+    if "form" in fields and request.form is not None:
+        built = await _built_form(uow, pod_id, request.form, pod_ctx)
+        values["form_spec"] = built.model_dump(mode="json")
+        values["form_function"] = None
     widget = await WebWidgetRepository(uow.session).update(
         pod_id=pod_id, widget_id=widget_id, values=values
     )

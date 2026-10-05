@@ -12,20 +12,23 @@ response then names the page's origin itself -- only when the widget allows it.
 
 from __future__ import annotations
 
+import html
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.api.dependencies import get_uow_factory
+from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frames
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.web_widgets import WebWidget
+from app.modules.agent_surfaces.domain.web_forms import public_form
+from app.modules.agent_surfaces.domain.web_widgets import WebWidget, normalize_origin
 from app.modules.agent_surfaces.services.web_chat import WebChat, WebChatRefused
 
 router = APIRouter(prefix="/public/web", tags=["Agent Surfaces (Web)"])
@@ -70,9 +73,20 @@ def _chat(uow_factory: UnitOfWorkFactory = Depends(get_uow_factory)) -> WebChat:
     return WebChat(uow_factory)
 
 
+def _own_origin() -> str:
+    """Where Lemma serves a widget's hosted page, which every widget allows."""
+    url = str(settings.api_url)
+    scheme, _, rest = url.partition("://")
+    return normalize_origin(f"{scheme}://{rest.split('/', 1)[0]}")
+
+
+def _allowed(widget: WebWidget, origin: str) -> bool:
+    return normalize_origin(origin) == _own_origin() or widget.allows_origin(origin)
+
+
 def _cors(request: Request, widget: WebWidget | None) -> dict[str, str]:
     origin = request.headers.get("origin")
-    if not origin or widget is None or not widget.allows_origin(origin):
+    if not origin or widget is None or not _allowed(widget, origin):
         return {}
     return {"Access-Control-Allow-Origin": origin, "Vary": "Origin"}
 
@@ -100,7 +114,7 @@ async def _body[T: BaseModel](request: Request, model: type[T]) -> T:
 async def _widget_for(request: Request, chat: WebChat, public_key: str) -> WebWidget:
     widget = await chat.widget_for_key(public_key)
     origin = request.headers.get("origin")
-    if origin and not widget.allows_origin(origin):
+    if origin and not _allowed(widget, origin):
         raise WebChatRefused(
             "This widget is not allowed on this site", status_code=403, code="origin"
         )
@@ -128,6 +142,74 @@ async def web_widget_script() -> Response:
     )
 
 
+_PAGE_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'none'; script-src 'self'; connect-src 'self'; "
+        "style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; "
+        "form-action 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "public, max-age=60",
+}
+
+
+def _page(title: str, public_key: str, *, embedded: bool) -> str:
+    safe_title = html.escape(title)
+    safe_key = html.escape(public_key, quote=True)
+    chrome = (
+        ""
+        if embedded
+        else (
+            '<footer>Made with <a href="https://lemma.work" rel="noopener">Lemma</a>'
+            " &middot; Don't share passwords or card numbers here.</footer>"
+        )
+    )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{safe_title}</title>
+<style>
+:root{{color-scheme:light dark}}
+html,body{{margin:0;min-height:100%;background:#f6f4f1;
+font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#6f6a62}}
+@media (prefers-color-scheme:dark){{html,body{{background:#141312;color:#a29d95}}}}
+footer{{text-align:center;font-size:12px;padding:20px 16px 28px}}
+footer a{{color:inherit}}
+</style></head>
+<body><main id="lemma-page"></main>{chrome}
+<script src="/public/web/widget.js" data-lemma-key="{safe_key}" data-lemma-page></script>
+</body></html>"""
+
+
+@router.get(
+    "/{public_key}/page", operation_id="public.web.page", include_in_schema=False
+)
+async def web_hosted_page(
+    public_key: str, request: Request, chat: WebChat = Depends(_chat)
+) -> Response:
+    """The form or chat on a page of its own, for a link rather than a website.
+
+    Rendered by Lemma only: the page carries the widget and nothing a member
+    can write markup into, so one widget's page can never script another's.
+    """
+    try:
+        widget = await chat.widget_for_key(public_key)
+        title = await chat.widget_title(widget)
+    except WebChatRefused:
+        return HTMLResponse(
+            "<!doctype html><title>Not available</title><p>This page is not available.</p>",
+            status_code=404,
+            headers=_PAGE_HEADERS,
+        )
+    page_title = widget.name if widget.form else title
+    embedded = request.query_params.get("embed") == "1"
+    return HTMLResponse(
+        _page(page_title, widget.public_key, embedded=embedded), headers=_PAGE_HEADERS
+    )
+
+
 @router.post("/{public_key}/session", operation_id="public.web.session.start")
 async def web_start_session(
     public_key: str, request: Request, chat: WebChat = Depends(_chat)
@@ -139,6 +221,7 @@ async def web_start_session(
         started = await chat.start_visitor_session(
             widget, host_token=body.host_token, address=_address(request)
         )
+        title = await chat.widget_title(widget)
     except WebChatRefused as exc:
         return _refusal(request, widget, exc)
     return JSONResponse(
@@ -148,7 +231,10 @@ async def web_start_session(
             "display_name": started.display_name,
             "kind": widget.kind.value,
             "requires_code": widget.form_requires_code,
-            "title": await chat.widget_title(widget),
+            "title": title,
+            "form": public_form(widget.form, title=widget.name)
+            if widget.form
+            else None,
         },
         headers=_cors(request, widget),
     )

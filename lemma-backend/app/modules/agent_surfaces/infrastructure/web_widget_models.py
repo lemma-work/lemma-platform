@@ -47,6 +47,10 @@ class WebWidgetModel(UUIDAuditBase):
     form_requires_code: Mapped[bool] = mapped_column(
         default=False, server_default="false", nullable=False
     )
+    #: A form built from a table: which table, which of its columns to ask
+    #: for, and what to say. See ``domain/web_forms``. Null for a chat, and
+    #: for a form that runs ``form_function`` instead.
+    form_spec: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
 
 
 class WebSessionModel(UUIDAuditBase):

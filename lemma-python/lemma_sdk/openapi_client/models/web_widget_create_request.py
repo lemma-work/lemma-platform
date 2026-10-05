@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -10,6 +10,10 @@ from attrs import field as _attrs_field
 from ..models.widget_answer import WidgetAnswer
 from ..models.widget_kind import WidgetKind
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.form_request import FormRequest
+
 
 T = TypeVar("T", bound="WebWidgetCreateRequest")
 
@@ -22,6 +26,8 @@ class WebWidgetCreateRequest:
         agent_name (None | str | Unset): The agent that answers. The pod's assistant if omitted.
         allowed_origins (list[str] | Unset):
         answer (WidgetAnswer | Unset): Whom a widget answers. Mirrors a bot's ``contacts.answer``.
+        form (FormRequest | None | Unset): A form built from a table: submitting it adds one row. Takes the place of
+            form_function.
         form_function (None | str | Unset):
         form_requires_code (bool | Unset):  Default: False.
         kind (WidgetKind | Unset):
@@ -32,6 +38,7 @@ class WebWidgetCreateRequest:
     agent_name: None | str | Unset = UNSET
     allowed_origins: list[str] | Unset = UNSET
     answer: WidgetAnswer | Unset = UNSET
+    form: FormRequest | None | Unset = UNSET
     form_function: None | str | Unset = UNSET
     form_requires_code: bool | Unset = False
     kind: WidgetKind | Unset = UNSET
@@ -39,6 +46,8 @@ class WebWidgetCreateRequest:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.form_request import FormRequest
+
         name = self.name
 
         agent_name: None | str | Unset
@@ -54,6 +63,14 @@ class WebWidgetCreateRequest:
         answer: str | Unset = UNSET
         if not isinstance(self.answer, Unset):
             answer = self.answer.value
+
+        form: dict[str, Any] | None | Unset
+        if isinstance(self.form, Unset):
+            form = UNSET
+        elif isinstance(self.form, FormRequest):
+            form = self.form.to_dict()
+        else:
+            form = self.form
 
         form_function: None | str | Unset
         if isinstance(self.form_function, Unset):
@@ -88,6 +105,8 @@ class WebWidgetCreateRequest:
             field_dict["allowed_origins"] = allowed_origins
         if answer is not UNSET:
             field_dict["answer"] = answer
+        if form is not UNSET:
+            field_dict["form"] = form
         if form_function is not UNSET:
             field_dict["form_function"] = form_function
         if form_requires_code is not UNSET:
@@ -101,6 +120,8 @@ class WebWidgetCreateRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.form_request import FormRequest
+
         d = dict(src_dict)
         name = d.pop("name")
 
@@ -121,6 +142,23 @@ class WebWidgetCreateRequest:
             answer = UNSET
         else:
             answer = WidgetAnswer(_answer)
+
+        def _parse_form(data: object) -> FormRequest | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                form_type_0 = FormRequest.from_dict(data)
+
+                return form_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(FormRequest | None | Unset, data)
+
+        form = _parse_form(d.pop("form", UNSET))
 
         def _parse_form_function(data: object) -> None | str | Unset:
             if data is None:
@@ -162,6 +200,7 @@ class WebWidgetCreateRequest:
             agent_name=agent_name,
             allowed_origins=allowed_origins,
             answer=answer,
+            form=form,
             form_function=form_function,
             form_requires_code=form_requires_code,
             kind=kind,

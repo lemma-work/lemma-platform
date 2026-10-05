@@ -15906,6 +15906,29 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Form Columns
+     * The columns of a table a form may ask for, and how each can be asked.
+     * @param podId
+     * @param table
+     * @returns FormColumnsResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetFormColumns(podId, table) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/web-widgets/form-columns",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "table": table
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Delete Widget
      * @param podId
      * @param widgetId
@@ -16688,7 +16711,9 @@ var LemmaClient = (() => {
         rotateSecret: (podId, widgetId) => this.client.request(
           () => AgentSurfacesService.agentWebWidgetRotateSecret(podId, widgetId)
         ),
-        remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId))
+        remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId)),
+        /** The columns of a table a form may ask for, and how each can be asked. */
+        formColumns: (podId, table) => this.client.request(() => AgentSurfacesService.agentWebWidgetFormColumns(podId, table))
       });
     }
     /** The pod's contacts, newest first. Page with `next_before`. */

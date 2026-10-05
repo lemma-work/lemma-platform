@@ -6319,6 +6319,22 @@
         "title": "FeedbackCategory",
         "type": "string"
       },
+      "FieldInput": {
+        "description": "What a visitor types into a field. Chosen from the column, adjustable.",
+        "enum": [
+          "text",
+          "long",
+          "email",
+          "phone",
+          "number",
+          "date",
+          "datetime",
+          "checkbox",
+          "choice"
+        ],
+        "title": "FieldInput",
+        "type": "string"
+      },
       "FileChildSchema": {
         "description": "A derived child artifact of a processed document (converted markdown,\nan extracted figure, or a renderable page). Fetch its bytes from\n``GET …/files/children/content?path=<child path>``.",
         "properties": {
@@ -7112,6 +7128,193 @@
         "title": "ForgetResponse",
         "type": "object"
       },
+      "FormColumnResponse": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/FieldInput"
+            },
+            "title": "Inputs",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "suggested_input": {
+            "$ref": "#/components/schemas/FieldInput"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "required",
+          "options",
+          "description",
+          "suggested_input",
+          "inputs"
+        ],
+        "title": "FormColumnResponse",
+        "type": "object"
+      },
+      "FormColumnsResponse": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/FormColumnResponse"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "contact_owned": {
+            "title": "Contact Owned",
+            "type": "boolean"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "contact_owned",
+          "columns"
+        ],
+        "title": "FormColumnsResponse",
+        "type": "object"
+      },
+      "FormField": {
+        "properties": {
+          "column": {
+            "title": "Column",
+            "type": "string"
+          },
+          "column_type": {
+            "title": "Column Type",
+            "type": "string"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          },
+          "input": {
+            "$ref": "#/components/schemas/FieldInput"
+          },
+          "label": {
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "options": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "column",
+          "label",
+          "input",
+          "column_type"
+        ],
+        "title": "FormField",
+        "type": "object"
+      },
+      "FormFieldRequest": {
+        "properties": {
+          "column": {
+            "maxLength": 255,
+            "title": "Column",
+            "type": "string"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          },
+          "input": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FieldInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "column"
+        ],
+        "title": "FormFieldRequest",
+        "type": "object"
+      },
       "FormNode": {
         "description": "Form node for user input. The run waits on it until the form is\nsubmitted via the form-submit endpoint.",
         "properties": {
@@ -7261,6 +7464,103 @@
           "config"
         ],
         "title": "FormNodeResponse",
+        "type": "object"
+      },
+      "FormRequest": {
+        "description": "A form on one table: the columns to ask for, in order.",
+        "properties": {
+          "confirmation": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/FormFieldRequest"
+            },
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Fields",
+            "type": "array"
+          },
+          "intro": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intro"
+          },
+          "table": {
+            "maxLength": 255,
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "fields"
+        ],
+        "title": "FormRequest",
+        "type": "object"
+      },
+      "FormSpec": {
+        "description": "What a form asks for, and what it says before and after.",
+        "properties": {
+          "confirmation": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/FormField"
+            },
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Fields",
+            "type": "array"
+          },
+          "intro": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intro"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "fields"
+        ],
+        "title": "FormSpec",
         "type": "object"
       },
       "FunctionActionResponse": {
@@ -18424,6 +18724,17 @@
             "$ref": "#/components/schemas/WidgetAnswer",
             "default": "anyone"
           },
+          "form": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FormRequest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A form built from a table: submitting it adds one row. Takes the place of form_function."
+          },
           "form_function": {
             "anyOf": [
               {
@@ -18497,6 +18808,16 @@
             "title": "Embed",
             "type": "string"
           },
+          "form": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FormSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "form_function": {
             "anyOf": [
               {
@@ -18536,6 +18857,11 @@
             "title": "Name",
             "type": "string"
           },
+          "page_url": {
+            "description": "A page Lemma hosts with the form or chat on it, to share as a link.",
+            "title": "Page Url",
+            "type": "string"
+          },
           "public_key": {
             "title": "Public Key",
             "type": "string"
@@ -18559,6 +18885,7 @@
           "form_requires_code",
           "created_at",
           "embed",
+          "page_url",
           "signing_secret"
         ],
         "title": "WebWidgetCreatedResponse",
@@ -18607,6 +18934,16 @@
             "title": "Embed",
             "type": "string"
           },
+          "form": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FormSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "form_function": {
             "anyOf": [
               {
@@ -18646,6 +18983,11 @@
             "title": "Name",
             "type": "string"
           },
+          "page_url": {
+            "description": "A page Lemma hosts with the form or chat on it, to share as a link.",
+            "title": "Page Url",
+            "type": "string"
+          },
           "public_key": {
             "title": "Public Key",
             "type": "string"
@@ -18663,7 +19005,8 @@
           "form_function",
           "form_requires_code",
           "created_at",
-          "embed"
+          "embed",
+          "page_url"
         ],
         "title": "WebWidgetResponse",
         "type": "object"
@@ -18702,6 +19045,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/WidgetAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "form": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FormRequest"
               },
               {
                 "type": "null"
@@ -35737,6 +36090,67 @@
         }
       }
     },
+    "/pods/{pod_id}/web-widgets/form-columns": {
+      "get": {
+        "description": "The columns of a table a form may ask for, and how each can be asked.",
+        "operationId": "agent.web_widget.form_columns",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "title": "Table",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FormColumnsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Form Columns",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.web_widget",
+          "result": "entity",
+          "verb": "form_columns"
+        }
+      }
+    },
     "/pods/{pod_id}/web-widgets/{widget_id}": {
       "delete": {
         "operationId": "agent.web_widget.delete",
@@ -37392,6 +37806,57 @@
           "resource": "public.web.session",
           "result": "entity",
           "verb": "start"
+        }
+      }
+    },
+    "/public/web/{public_key}/stream": {
+      "post": {
+        "description": "The bot's answer as it is written, one JSON object per line.\n\nRead with ``fetch`` rather than ``EventSource`` so the session stays in the\nbody and the request stays simple. Only what a visitor may see is sent:\nsee ``agent.contracts.visitor_stream``. The page reconnects when it closes.",
+        "operationId": "public.web.stream.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Stream Answers",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.stream"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.stream",
+          "result": "entity",
+          "verb": "read"
         }
       }
     },
