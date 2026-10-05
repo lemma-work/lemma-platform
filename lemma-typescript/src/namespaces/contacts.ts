@@ -1,4 +1,7 @@
 import type { GeneratedClientAdapter } from "../generated.js";
+import type { WebWidgetCreateRequest } from "../openapi_client/models/WebWidgetCreateRequest.js";
+import type { WebWidgetUpdateRequest } from "../openapi_client/models/WebWidgetUpdateRequest.js";
+import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 import { ContactsService } from "../openapi_client/services/ContactsService.js";
 import { UsageService } from "../openapi_client/services/UsageService.js";
 
@@ -61,4 +64,26 @@ export class ContactsNamespace {
       }),
     );
   }
+
+  /**
+   * Web widgets: chat bubbles and forms for other people's pages. The public key
+   * goes in the page and names the widget only; the signing secret, returned by
+   * `create` and `rotateWidgetSecret` once, stays on the customer's server.
+   */
+  readonly widgets = {
+    list: (podId: string) =>
+      this.client.request(() => AgentSurfacesService.agentWebWidgetList(podId)),
+    create: (podId: string, payload: WebWidgetCreateRequest) =>
+      this.client.request(() => AgentSurfacesService.agentWebWidgetCreate(podId, payload)),
+    update: (podId: string, widgetId: string, payload: WebWidgetUpdateRequest) =>
+      this.client.request(() =>
+        AgentSurfacesService.agentWebWidgetUpdate(podId, widgetId, payload),
+      ),
+    rotateSecret: (podId: string, widgetId: string) =>
+      this.client.request(() =>
+        AgentSurfacesService.agentWebWidgetRotateSecret(podId, widgetId),
+      ),
+    remove: (podId: string, widgetId: string) =>
+      this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId)),
+  };
 }

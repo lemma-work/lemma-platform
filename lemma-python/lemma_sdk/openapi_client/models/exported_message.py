@@ -17,11 +17,13 @@ class ExportedMessage:
     Attributes:
         created_at (datetime.datetime):
         role (str):
+        sequence (int):
         text (str):
     """
 
     created_at: datetime.datetime
     role: str
+    sequence: int
     text: str
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -29,6 +31,8 @@ class ExportedMessage:
         created_at = self.created_at.isoformat()
 
         role = self.role
+
+        sequence = self.sequence
 
         text = self.text
 
@@ -38,6 +42,7 @@ class ExportedMessage:
             {
                 "created_at": created_at,
                 "role": role,
+                "sequence": sequence,
                 "text": text,
             }
         )
@@ -51,11 +56,14 @@ class ExportedMessage:
 
         role = d.pop("role")
 
+        sequence = d.pop("sequence")
+
         text = d.pop("text")
 
         exported_message = cls(
             created_at=created_at,
             role=role,
+            sequence=sequence,
             text=text,
         )
 

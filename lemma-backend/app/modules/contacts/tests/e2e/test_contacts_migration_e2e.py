@@ -14,7 +14,14 @@ pytestmark = pytest.mark.e2e
 BACKEND = Path(__file__).resolve().parents[5]
 BEFORE = "0043_surface_groups"
 AFTER = "0044_contacts"
-TABLES = ("contacts", "contact_identities", "usage_contacts_caps")
+TABLES = (
+    "contacts",
+    "contact_identities",
+    "usage_contacts_caps",
+    "agent_surface_web_widgets",
+    "agent_surface_web_sessions",
+    "agent_surface_web_codes",
+)
 
 
 def test_the_contact_tables_upgrade_and_roll_back_cleanly() -> None:
@@ -42,7 +49,7 @@ def test_the_contact_tables_upgrade_and_roll_back_cleanly() -> None:
                 assert row is not None
                 return tuple(row)
 
-        absent = (None, None, None)
+        absent = (None,) * len(TABLES)
 
         migrate("upgrade", BEFORE)
         assert present() == absent

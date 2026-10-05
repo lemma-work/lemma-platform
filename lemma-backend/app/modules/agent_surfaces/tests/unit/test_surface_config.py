@@ -89,6 +89,16 @@ EXPECTED = [
         1000,
     ),
     (
+        "surface_web_sessions_per_widget_per_day",
+        "SURFACE_WEB_SESSIONS_PER_WIDGET_PER_DAY",
+        2000,
+    ),
+    (
+        "surface_web_submissions_per_widget_per_day",
+        "SURFACE_WEB_SUBMISSIONS_PER_WIDGET_PER_DAY",
+        500,
+    ),
+    (
         "surface_new_contacts_per_surface_per_day",
         "SURFACE_NEW_CONTACTS_PER_SURFACE_PER_DAY",
         200,

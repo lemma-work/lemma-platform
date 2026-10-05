@@ -22,6 +22,12 @@ import type { SurfaceSetupResponse } from '../models/SurfaceSetupResponse.js';
 import type { SurfaceUpdateRequest } from '../models/SurfaceUpdateRequest.js';
 import type { TelegramManagedBotSetupRequest } from '../models/TelegramManagedBotSetupRequest.js';
 import type { TelegramManagedBotSetupResponse } from '../models/TelegramManagedBotSetupResponse.js';
+import type { WebWidgetCreatedResponse } from '../models/WebWidgetCreatedResponse.js';
+import type { WebWidgetCreateRequest } from '../models/WebWidgetCreateRequest.js';
+import type { WebWidgetListResponse } from '../models/WebWidgetListResponse.js';
+import type { WebWidgetResponse } from '../models/WebWidgetResponse.js';
+import type { WebWidgetSecretResponse } from '../models/WebWidgetSecretResponse.js';
+import type { WebWidgetUpdateRequest } from '../models/WebWidgetUpdateRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -515,6 +521,124 @@ export class AgentSurfacesService {
             path: {
                 'pod_id': podId,
                 'setup_id': setupId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Widgets
+     * @param podId
+     * @returns WebWidgetListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentWebWidgetList(
+        podId: string,
+    ): CancelablePromise<WebWidgetListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/web-widgets',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create Widget
+     * @param podId
+     * @param requestBody
+     * @returns WebWidgetCreatedResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentWebWidgetCreate(
+        podId: string,
+        requestBody: WebWidgetCreateRequest,
+    ): CancelablePromise<WebWidgetCreatedResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/web-widgets',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Delete Widget
+     * @param podId
+     * @param widgetId
+     * @returns void
+     * @throws ApiError
+     */
+    public static agentWebWidgetDelete(
+        podId: string,
+        widgetId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/web-widgets/{widget_id}',
+            path: {
+                'pod_id': podId,
+                'widget_id': widgetId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Widget
+     * @param podId
+     * @param widgetId
+     * @param requestBody
+     * @returns WebWidgetResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentWebWidgetUpdate(
+        podId: string,
+        widgetId: string,
+        requestBody: WebWidgetUpdateRequest,
+    ): CancelablePromise<WebWidgetResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/pods/{pod_id}/web-widgets/{widget_id}',
+            path: {
+                'pod_id': podId,
+                'widget_id': widgetId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Rotate Secret
+     * Mint a new signing secret. Tokens signed with the old one stop working.
+     * @param podId
+     * @param widgetId
+     * @returns WebWidgetSecretResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentWebWidgetRotateSecret(
+        podId: string,
+        widgetId: string,
+    ): CancelablePromise<WebWidgetSecretResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/web-widgets/{widget_id}/secret',
+            path: {
+                'pod_id': podId,
+                'widget_id': widgetId,
             },
             errors: {
                 422: `Validation Error`,

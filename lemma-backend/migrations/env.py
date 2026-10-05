@@ -55,6 +55,11 @@ from app.modules.mcp_access.infrastructure import models as mcp_access_models  #
 # Contacts (contacts, contact_identities)
 from app.modules.contacts.infrastructure import models as contact_models  # noqa: F401
 
+# Web widgets (agent_surface_web_widgets, _web_sessions, _web_codes)
+from app.modules.agent_surfaces.infrastructure import (  # noqa: F401
+    web_widget_models,
+)
+
 
 # Every import above exists for its side effect: importing a models module is
 # what registers its tables on Base.metadata, which is the whole input to
@@ -80,6 +85,7 @@ REGISTERED_MODEL_MODULES = (
     workspace_models,
     mcp_access_models,
     contact_models,
+    web_widget_models,
 )
 
 config = context.config

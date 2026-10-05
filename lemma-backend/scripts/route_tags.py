@@ -18,6 +18,7 @@ TAG_MODULES = {
     "Agent Surfaces": "agent_surfaces",
     "Agent Surfaces (Ingress)": "agent_surfaces",
     "Agent Surfaces (Me)": "agent_surfaces",
+    "Agent Surfaces (Web)": "agent_surfaces",
     "Apps": "apps",
     "Auth": "identity",
     "Connectors": "connectors",

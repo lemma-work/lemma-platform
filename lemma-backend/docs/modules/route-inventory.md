@@ -49,6 +49,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
+| DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.delete` | Delete Widget |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
 | GET | `/pods/{pod_id}/groups` | `agent.group.list` | List Groups |
 | GET | `/pods/{pod_id}/groups/{group_id}` | `agent.group.get` | Get Group |
@@ -61,6 +62,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | `agent.surface.channels` | List Surface Channels |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | `agent.surface.setup` | Get Surface Setup |
 | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
+| GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
@@ -69,6 +71,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/surfaces/{surface_id}/webhook` | `surface.webhook.verify_surface` | Verify surface webhook using a surface-level callback URL |
 | PATCH | `/pods/{pod_id}/groups/{group_id}` | `agent.group.update` | Update Group |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
+| PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.update` | Update Widget |
 | POST | `/pods/{pod_id}/groups` | `agent.group.start` | Start Group |
 | POST | `/pods/{pod_id}/groups/links` | `agent.group.link` | Group Link |
 | POST | `/pods/{pod_id}/notifications` | `notification.send` | Notify A Pod Member |
@@ -79,6 +82,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
+| POST | `/pods/{pod_id}/web-widgets` | `agent.web_widget.create` | Create Widget |
+| POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | `agent.web_widget.rotate_secret` | Rotate Secret |
+| POST | `/public/web/{public_key}/code` | `public.web.code.send` | Web Send Code |
+| POST | `/public/web/{public_key}/code/verify` | `public.web.code.verify` | Web Verify Code |
+| POST | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
+| POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
+| POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
+| POST | `/public/web/{public_key}/submit` | `public.web.form.submit` | Web Submit Form |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |

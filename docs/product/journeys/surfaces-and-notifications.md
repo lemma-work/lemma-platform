@@ -704,6 +704,32 @@ Public, the way a group's people from outside it are.
 **Contracts:** `table.create`, `table.update`, `function.contacts.update`,
 `contact.export`
 
+### PS-SURF-049 — A web widget answers visitors on the pod's behalf
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_web_widgets_e2e.py`
+> and at unit level by `agent_surfaces/tests/unit/test_web_widgets.py`.
+
+- The system shall let a pod's editors put a chat bubble or a form on a web
+  page with a public key, and shall show its signing secret once, when it is
+  made or rotated.
+- The system shall answer an anonymous visitor from what the pod made Public,
+  and shall answer a visitor named by a token the page's server signed with the
+  widget's secret, or who entered a code sent to their email, as a contact --
+  keeping a conversation they had already started.
+- The system shall refuse a token signed with anything else, meant for another
+  widget, or living longer than ten minutes, and shall stop accepting tokens
+  signed with a secret once it is rotated.
+- The system shall answer only pages on the widget's allowed origins, and shall
+  refuse strangers at a widget that answers known contacts only.
+- The system shall run a form's function only when the pod opened it to
+  contacts, and only for a verified contact when the form says so, and shall
+  show the visitor only the function's public result.
+
+**Contracts:** `agent.web_widget.create`, `agent.web_widget.update`,
+`agent.web_widget.rotate_secret`, `public.web.session.start`,
+`public.web.message.send`, `public.web.code.verify`, `public.web.form.submit`
+
 ### PS-SURF-047 — Contacts cost the organization, never a member
 **Status:** planned
 

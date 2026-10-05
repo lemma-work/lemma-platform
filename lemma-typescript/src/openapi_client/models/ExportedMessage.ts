@@ -5,5 +5,6 @@
 export type ExportedMessage = {
     created_at: string;
     role: string;
+    sequence: number;
     text: string;
 };

@@ -6257,6 +6257,10 @@
             "title": "Role",
             "type": "string"
           },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
           "text": {
             "title": "Text",
             "type": "string"
@@ -6265,7 +6269,8 @@
         "required": [
           "role",
           "text",
-          "created_at"
+          "created_at",
+          "sequence"
         ],
         "title": "ExportedMessage",
         "type": "object"
@@ -9438,16 +9443,19 @@
         "enum": [
           "PHONE",
           "EMAIL",
-          "TELEGRAM"
+          "TELEGRAM",
+          "HOST"
         ],
         "title": "IdentityKind",
         "type": "string"
       },
       "IdentityStrength": {
-        "description": "Who vouched for a handle.\n\n``CHANNEL``: the platform the message came through, in a payload whose\nsignature was checked (WhatsApp, Telegram), or the receiving mail service's\nauthentication verdict (email). ``MEMBER``: a pod member added it by hand,\nwhich says who the member believes it is and nothing about who writes from\nit -- so it never makes a message count as that contact on its own.",
+        "description": "Who vouched for a handle.\n\n``CHANNEL``: the platform the message came through, in a payload whose\nsignature was checked (WhatsApp, Telegram), or the receiving mail service's\nauthentication verdict (email). ``HOST`` and ``CODE``: see their values.\n``MEMBER``: a pod member added it by hand,\nwhich says who the member believes it is and nothing about who writes from\nit -- so it never makes a message count as that contact on its own.",
         "enum": [
           "CHANNEL",
-          "MEMBER"
+          "MEMBER",
+          "HOST",
+          "CODE"
         ],
         "title": "IdentityStrength",
         "type": "string"
@@ -18345,6 +18353,365 @@
         "title": "WebSearchResponse",
         "type": "object"
       },
+      "WebWidgetCreateRequest": {
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent that answers. The pod's assistant if omitted.",
+            "title": "Agent Name"
+          },
+          "allowed_origins": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Allowed Origins",
+            "type": "array"
+          },
+          "answer": {
+            "$ref": "#/components/schemas/WidgetAnswer",
+            "default": "anyone"
+          },
+          "form_function": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Form Function"
+          },
+          "form_requires_code": {
+            "default": false,
+            "title": "Form Requires Code",
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WidgetKind",
+            "default": "chat"
+          },
+          "looked_after_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Looked After By"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WebWidgetCreateRequest",
+        "type": "object"
+      },
+      "WebWidgetCreatedResponse": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "allowed_origins": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Origins",
+            "type": "array"
+          },
+          "answer": {
+            "$ref": "#/components/schemas/WidgetAnswer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "embed": {
+            "description": "The script tag that puts the widget on a page.",
+            "title": "Embed",
+            "type": "string"
+          },
+          "form_function": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Form Function"
+          },
+          "form_requires_code": {
+            "title": "Form Requires Code",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WidgetKind"
+          },
+          "looked_after_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Looked After By"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "public_key": {
+            "title": "Public Key",
+            "type": "string"
+          },
+          "signing_secret": {
+            "description": "Signs host tokens on the customer's server. Shown this once; keep it off web pages.",
+            "title": "Signing Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "agent_id",
+          "kind",
+          "public_key",
+          "allowed_origins",
+          "answer",
+          "looked_after_by",
+          "form_function",
+          "form_requires_code",
+          "created_at",
+          "embed",
+          "signing_secret"
+        ],
+        "title": "WebWidgetCreatedResponse",
+        "type": "object"
+      },
+      "WebWidgetListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebWidgetResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "WebWidgetListResponse",
+        "type": "object"
+      },
+      "WebWidgetResponse": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "allowed_origins": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Origins",
+            "type": "array"
+          },
+          "answer": {
+            "$ref": "#/components/schemas/WidgetAnswer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "embed": {
+            "description": "The script tag that puts the widget on a page.",
+            "title": "Embed",
+            "type": "string"
+          },
+          "form_function": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Form Function"
+          },
+          "form_requires_code": {
+            "title": "Form Requires Code",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WidgetKind"
+          },
+          "looked_after_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Looked After By"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "public_key": {
+            "title": "Public Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "agent_id",
+          "kind",
+          "public_key",
+          "allowed_origins",
+          "answer",
+          "looked_after_by",
+          "form_function",
+          "form_requires_code",
+          "created_at",
+          "embed"
+        ],
+        "title": "WebWidgetResponse",
+        "type": "object"
+      },
+      "WebWidgetSecretResponse": {
+        "properties": {
+          "signing_secret": {
+            "title": "Signing Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signing_secret"
+        ],
+        "title": "WebWidgetSecretResponse",
+        "type": "object"
+      },
+      "WebWidgetUpdateRequest": {
+        "properties": {
+          "allowed_origins": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Origins"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WidgetAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "form_function": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Form Function"
+          },
+          "form_requires_code": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Form Requires Code"
+          },
+          "looked_after_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Looked After By"
+          }
+        },
+        "title": "WebWidgetUpdateRequest",
+        "type": "object"
+      },
+      "WidgetAnswer": {
+        "description": "Whom a widget answers. Mirrors a bot's ``contacts.answer``.",
+        "enum": [
+          "off",
+          "known",
+          "anyone"
+        ],
+        "title": "WidgetAnswer",
+        "type": "string"
+      },
       "WidgetEmbedUrlResponse": {
         "properties": {
           "url": {
@@ -18357,6 +18724,14 @@
         ],
         "title": "WidgetEmbedUrlResponse",
         "type": "object"
+      },
+      "WidgetKind": {
+        "enum": [
+          "chat",
+          "form"
+        ],
+        "title": "WidgetKind",
+        "type": "string"
       },
       "WorkflowCreateRequest": {
         "properties": {
@@ -35132,6 +35507,308 @@
         }
       }
     },
+    "/pods/{pod_id}/web-widgets": {
+      "get": {
+        "operationId": "agent.web_widget.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebWidgetListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Widgets",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.web_widget",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "operationId": "agent.web_widget.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebWidgetCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebWidgetCreatedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Widget",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.web_widget"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.web_widget",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/web-widgets/{widget_id}": {
+      "delete": {
+        "operationId": "agent.web_widget.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "widget_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Widget Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Widget",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.web_widget"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.web_widget",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "patch": {
+        "operationId": "agent.web_widget.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "widget_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Widget Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebWidgetUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebWidgetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Widget",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.web_widget"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.web_widget",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/web-widgets/{widget_id}/secret": {
+      "post": {
+        "description": "Mint a new signing secret. Tokens signed with the old one stop working.",
+        "operationId": "agent.web_widget.rotate_secret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "widget_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Widget Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebWidgetSecretResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rotate Secret",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.web_widget"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.web_widget",
+          "result": "entity",
+          "verb": "rotate_secret"
+        }
+      }
+    },
     "/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token": {
       "post": {
         "description": "Mint a short-lived, signed embed URL for a widget the caller may view.\n\nPer-view (not baked into the persisted tool result) so the token stays\nephemeral and membership is re-checked each time the widget is opened.",
@@ -36346,6 +37023,306 @@
           "resource": "icon.public",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/public/web/{public_key}/code": {
+      "post": {
+        "operationId": "public.web.code.send",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Send Code",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.code"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.code",
+          "result": "entity",
+          "verb": "send"
+        }
+      }
+    },
+    "/public/web/{public_key}/code/verify": {
+      "post": {
+        "operationId": "public.web.code.verify",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Verify Code",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.code"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.code",
+          "result": "entity",
+          "verb": "verify"
+        }
+      }
+    },
+    "/public/web/{public_key}/history": {
+      "post": {
+        "operationId": "public.web.history.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Read History",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.history"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.history",
+          "result": "entity",
+          "verb": "read"
+        }
+      }
+    },
+    "/public/web/{public_key}/messages": {
+      "post": {
+        "operationId": "public.web.message.send",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Send Message",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.message"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.message",
+          "result": "entity",
+          "verb": "send"
+        }
+      }
+    },
+    "/public/web/{public_key}/session": {
+      "post": {
+        "operationId": "public.web.session.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Start Session",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.session"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.session",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/public/web/{public_key}/submit": {
+      "post": {
+        "operationId": "public.web.form.submit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Submit Form",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.form"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.form",
+          "result": "entity",
+          "verb": "submit"
         }
       }
     },

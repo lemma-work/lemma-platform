@@ -111,10 +111,13 @@ async def run_function_for_contact(
     *,
     pod_id: UUID,
     name: str,
-    contact_id: UUID,
+    contact_id: UUID | None,
     input_data: dict[str, object],
 ) -> ContactFunctionOutcome:
     """Run one opted-in function for this contact and wait for it to finish.
+
+    ``contact_id`` is ``None`` for an anonymous form submission: the function
+    is then told ``contact_id: null``, whatever the input said.
 
     A function that is not opted in is reported as not found: which of the
     pod's functions exist is not the contact's to learn.
@@ -138,7 +141,10 @@ async def run_function_for_contact(
         ).dispatch_function_for_workflow(
             pod_id=pod_id,
             name=name,
-            input_data={**input_data, CONTACT_INPUT_KEY: str(contact_id)},
+            input_data={
+                **input_data,
+                CONTACT_INPUT_KEY: str(contact_id) if contact_id else None,
+            },
             user_id=owner,
         )
     except FunctionDomainError as exc:

@@ -15867,6 +15867,109 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Widgets
+     * @param podId
+     * @returns WebWidgetListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/web-widgets",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Widget
+     * @param podId
+     * @param requestBody
+     * @returns WebWidgetCreatedResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/web-widgets",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete Widget
+     * @param podId
+     * @param widgetId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentWebWidgetDelete(podId, widgetId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Widget
+     * @param podId
+     * @param widgetId
+     * @param requestBody
+     * @returns WebWidgetResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetUpdate(podId, widgetId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Rotate Secret
+     * Mint a new signing secret. Tokens signed with the old one stop working.
+     * @param podId
+     * @param widgetId
+     * @returns WebWidgetSecretResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetRotateSecret(podId, widgetId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}/secret",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -16544,6 +16647,22 @@ var LemmaClient = (() => {
   var ContactsNamespace = class {
     constructor(client) {
       __publicField(this, "client", client);
+      /**
+       * Web widgets: chat bubbles and forms for other people's pages. The public key
+       * goes in the page and names the widget only; the signing secret, returned by
+       * `create` and `rotateWidgetSecret` once, stays on the customer's server.
+       */
+      __publicField(this, "widgets", {
+        list: (podId) => this.client.request(() => AgentSurfacesService.agentWebWidgetList(podId)),
+        create: (podId, payload) => this.client.request(() => AgentSurfacesService.agentWebWidgetCreate(podId, payload)),
+        update: (podId, widgetId, payload) => this.client.request(
+          () => AgentSurfacesService.agentWebWidgetUpdate(podId, widgetId, payload)
+        ),
+        rotateSecret: (podId, widgetId) => this.client.request(
+          () => AgentSurfacesService.agentWebWidgetRotateSecret(podId, widgetId)
+        ),
+        remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId))
+      });
     }
     /** The pod's contacts, newest first. Page with `next_before`. */
     list(podId, options = {}) {

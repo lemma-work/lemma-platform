@@ -1,7 +1,7 @@
 # Contacts
 
-Status: in progress. Steps 1 and 2 of the [build order](#build-order) are built
-(see [Built so far](#built-so-far)); the rest is design.
+Status: in progress. Steps 1 to 6 of the [build order](#build-order) are built,
+with the gaps listed under [Built so far](#built-so-far).
 
 A pod's bot can answer two kinds of people today: **members**, who act as
 themselves, and **outsiders** in a group, who act as nobody. Customer support,
@@ -296,16 +296,29 @@ one:
   as its owner's runs do (owner's authority narrowed by the function's grants)
   with the contact's id written into `contact_id` in its input, replacing
   anything the model put there.
+- **Web widgets.** `/pods/{pod_id}/web-widgets` (chat or form; public key,
+  encrypted signing secret shown once and rotatable, allowed origins, answer,
+  looked-after-by). Public endpoints under `/public/web/{public_key}`: session
+  (optionally with a host token, HS256, `aud` = public key, ≤ 10 minutes),
+  messages, history, email code and verify, form submit; bodies are JSON as
+  `text/plain` so no CORS pre-flight, and responses name the origin only when
+  the widget allows it. An anonymous visitor is an outsider; a host token
+  (`host`) or a code (`code`) makes them a contact, upgrading their
+  conversation in place. A form runs its `contacts: invoke` function with the
+  contact, or none; only the function's `public` output reaches the page.
+  `/public/web/widget.js` is the bubble and form handler. Limits per widget,
+  session, address and email, failing closed.
 - **Unverified email** is parked as an inbox note to the member who looks after
   contacts, once an hour per sender.
 - **Cost.** Runs for contacts and group outsiders are recorded as `contact_run`
   and `outsider_run`, skip the member's personal windows, and count towards a
   `contacts_month` window held to `usage_contacts_caps`
   (`GET`/`PUT /usage/organizations/{id}/contacts-cap`, owners and editors).
-- **SDKs.** `pod.contacts` and `pod.functions.set_contacts_invoke` in Python;
-  `client.contacts` and `functions.setContactsInvoke` in TypeScript.
+- **SDKs.** `pod.contacts`, `pod.web_widgets` and
+  `pod.functions.set_contacts_invoke` in Python; `client.contacts` (with
+  `.widgets`) and `functions.setContactsInvoke` in TypeScript.
 
-Not built yet: step-up codes for contact functions (the `requires` strength),
+Not built yet: bot protection on a widget's first message, step-up codes for contact functions (the `requires` strength),
 pod bundles carrying `contact_owned` and `contacts_invoke`, and a hand-off
 control beyond what `message_user` gives.
 

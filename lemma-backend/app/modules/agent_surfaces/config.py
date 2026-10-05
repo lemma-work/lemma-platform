@@ -266,6 +266,18 @@ class SurfaceSettings(BaseSettings):
             "ceiling on money."
         ),
     )
+    surface_web_sessions_per_widget_per_day: int = Field(
+        default=2000,
+        description=(
+            "How many chats one web widget may start in a day. Its public key "
+            "is on a web page for anybody to copy, so this is the ceiling on "
+            "what copying it can cost."
+        ),
+    )
+    surface_web_submissions_per_widget_per_day: int = Field(
+        default=500,
+        description="How many times one web form may be submitted in a day.",
+    )
     surface_new_contacts_per_surface_per_day: int = Field(
         default=200,
         description=(

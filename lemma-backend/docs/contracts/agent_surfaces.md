@@ -32,6 +32,11 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.telegram_managed.get` | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | Get Telegram Managed Bot Setup |
 | `agent.surface.telegram_managed.start` | POST | `/pods/{pod_id}/telegram-bot-setups` | Start Telegram Managed Bot Setup |
 | `agent.surface.update` | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | Update Surface |
+| `agent.web_widget.create` | POST | `/pods/{pod_id}/web-widgets` | Create Widget |
+| `agent.web_widget.delete` | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | Delete Widget |
+| `agent.web_widget.list` | GET | `/pods/{pod_id}/web-widgets` | List Widgets |
+| `agent.web_widget.rotate_secret` | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | Rotate Secret |
+| `agent.web_widget.update` | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | Update Widget |
 | `notification.acknowledge` | POST | `/pods/{pod_id}/notifications/{notification_id}/acknowledge` | Acknowledge A Notification |
 | `notification.list` | GET | `/pods/{pod_id}/notifications` | List My Notifications |
 | `notification.mark_all_read` | POST | `/pods/{pod_id}/notifications/read-all` | Mark All My Notifications Read |
@@ -39,6 +44,12 @@ The table below is generated from the committed OpenAPI specification by `script
 | `notification.respond` | POST | `/pods/{pod_id}/notifications/{notification_id}/respond` | Respond To A Notification |
 | `notification.send` | POST | `/pods/{pod_id}/notifications` | Notify A Pod Member |
 | `notification.unread_count` | GET | `/pods/{pod_id}/notifications/unread-count` | Count My Unread Notifications |
+| `public.web.code.send` | POST | `/public/web/{public_key}/code` | Send Code |
+| `public.web.code.verify` | POST | `/public/web/{public_key}/code/verify` | Verify Code |
+| `public.web.form.submit` | POST | `/public/web/{public_key}/submit` | Submit Form |
+| `public.web.history.read` | POST | `/public/web/{public_key}/history` | Read History |
+| `public.web.message.send` | POST | `/public/web/{public_key}/messages` | Send Message |
+| `public.web.session.start` | POST | `/public/web/{public_key}/session` | Start Session |
 | `surface.webhook.handle_platform` | POST | `/surfaces/webhooks/{platform}` | Handle platform-level surface webhook |
 | `surface.webhook.handle_surface` | POST | `/surfaces/{surface_id}/webhook` | Handle surface-level webhook |
 | `surface.webhook.handle_telegram_manager` | POST | `/surfaces/webhooks/telegram-manager` | Handle Telegram manager-bot webhook |

@@ -30,6 +30,12 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.webhook_controller import (
         router as surface_public,
     )
+    from app.modules.agent_surfaces.api.controllers.web_widget_controller import (
+        router as web_widgets,
+    )
+    from app.modules.agent_surfaces.api.controllers.public_web_controller import (
+        router as public_web,
+    )
 
     return [
         surface,
@@ -41,6 +47,8 @@ def _routers():
         user_surfaces,
         notifications,
         surface_public,
+        web_widgets,
+        public_web,
     ]
 
 

@@ -138,3 +138,88 @@ class ContactTurnLimiter:
             surface_id=str(surface_id),
             per_person=per_person,
         )
+
+
+#: What one browser address may do with web widgets, whatever the widget.
+_SESSIONS_PER_ADDRESS_PER_10_MINUTES = 30
+_CODES_PER_ADDRESS_PER_HOUR = 20
+_CODES_PER_EMAIL_PER_HOUR = 5
+_HOUR = 3600
+
+
+class WebWidgetLimiter:
+    """How fast a public key can be used, by anybody holding it.
+
+    Everything here is reachable with nothing but a key copied off a web page,
+    so every count fails closed: a visitor refused while Redis is away can try
+    again, and a widget nobody can flood is the point.
+    """
+
+    def __init__(self, *, redis=None) -> None:
+        self._redis = redis
+
+    async def allow_session(self, *, widget_id: UUID, address: str) -> bool:
+        return await self._within(
+            (
+                f"web:sessions:{widget_id}",
+                _DAY,
+                surface_settings.surface_web_sessions_per_widget_per_day,
+            ),
+            (
+                f"web:sessions:addr:{address}",
+                _TEN_MINUTES,
+                _SESSIONS_PER_ADDRESS_PER_10_MINUTES,
+            ),
+        )
+
+    async def allow_turn(self, *, widget_id: UUID, session_id: UUID) -> bool:
+        return await self._within(
+            (
+                f"web:turns:{widget_id}:{session_id}",
+                _TEN_MINUTES,
+                surface_settings.surface_contact_turns_per_person_per_10_minutes,
+            ),
+            (
+                f"web:turns:{widget_id}",
+                _DAY,
+                surface_settings.surface_contact_turns_per_surface_per_day,
+            ),
+        )
+
+    async def allow_code(self, *, widget_id: UUID, email: str, address: str) -> bool:
+        return await self._within(
+            (f"web:codes:email:{widget_id}:{email}", _HOUR, _CODES_PER_EMAIL_PER_HOUR),
+            (f"web:codes:addr:{address}", _HOUR, _CODES_PER_ADDRESS_PER_HOUR),
+        )
+
+    async def allow_submission(self, *, widget_id: UUID, address: str) -> bool:
+        return await self._within(
+            (
+                f"web:submissions:{widget_id}",
+                _DAY,
+                surface_settings.surface_web_submissions_per_widget_per_day,
+            ),
+            (
+                f"web:submissions:addr:{address}",
+                _TEN_MINUTES,
+                _SESSIONS_PER_ADDRESS_PER_10_MINUTES,
+            ),
+        )
+
+    async def _within(self, *windows: tuple[str, int, int]) -> bool:
+        client = self._redis or get_redis()
+        try:
+            for key, ttl, limit in windows:
+                if await incr_with_ttl(client, key, ttl) > limit:
+                    logger.info(
+                        "agent_surfaces.web_limits.exceeded.observed",
+                        window=key.split(":")[1],
+                    )
+                    return False
+        except (RedisError, OSError) as exc:
+            logger.warning(
+                "agent_surfaces.web_limits.unavailable.degraded",
+                error_type=type(exc).__name__,
+            )
+            return False
+        return True

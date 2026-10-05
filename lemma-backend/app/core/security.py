@@ -214,6 +214,9 @@ EXCLUDED_PATHS = (
     "/public/icons",
     "/public/apps",
     "/public/sdk",  # browser SDK bundle for no-build apps
+    # Web widgets: the public key names the widget, and the handler decides
+    # what a visitor may do with it (services/web_chat.py).
+    "/public/web",
     "/widgets/serve",  # widget HTML; handler self-validates session-or-signed-token
     "/public/datastore",  # signed-token file serving validates its own token
     # Short signed-URL file serving; validates its own Redis-backed code.

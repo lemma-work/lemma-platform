@@ -545,7 +545,15 @@ _NAME_TO_MODULE = {
     'WebLoginResponse': 'web_login_response',
     'WebSearchRequest': 'web_search_request',
     'WebSearchResponse': 'web_search_response',
+    'WebWidgetCreateRequest': 'web_widget_create_request',
+    'WebWidgetCreatedResponse': 'web_widget_created_response',
+    'WebWidgetListResponse': 'web_widget_list_response',
+    'WebWidgetResponse': 'web_widget_response',
+    'WebWidgetSecretResponse': 'web_widget_secret_response',
+    'WebWidgetUpdateRequest': 'web_widget_update_request',
+    'WidgetAnswer': 'widget_answer',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
+    'WidgetKind': 'widget_kind',
     'WorkflowCreateRequest': 'workflow_create_request',
     'WorkflowDetailResponse': 'workflow_detail_response',
     'WorkflowEdge': 'workflow_edge',
@@ -1113,7 +1121,15 @@ if TYPE_CHECKING:
     from .web_login_response import WebLoginResponse
     from .web_search_request import WebSearchRequest
     from .web_search_response import WebSearchResponse
+    from .web_widget_create_request import WebWidgetCreateRequest
+    from .web_widget_created_response import WebWidgetCreatedResponse
+    from .web_widget_list_response import WebWidgetListResponse
+    from .web_widget_response import WebWidgetResponse
+    from .web_widget_secret_response import WebWidgetSecretResponse
+    from .web_widget_update_request import WebWidgetUpdateRequest
+    from .widget_answer import WidgetAnswer
     from .widget_embed_url_response import WidgetEmbedUrlResponse
+    from .widget_kind import WidgetKind
     from .workflow_create_request import WorkflowCreateRequest
     from .workflow_detail_response import WorkflowDetailResponse
     from .workflow_edge import WorkflowEdge
@@ -1694,7 +1710,15 @@ __all__ = [
     'WebLoginResponse',
     'WebSearchRequest',
     'WebSearchResponse',
+    'WebWidgetCreateRequest',
+    'WebWidgetCreatedResponse',
+    'WebWidgetListResponse',
+    'WebWidgetResponse',
+    'WebWidgetSecretResponse',
+    'WebWidgetUpdateRequest',
+    'WidgetAnswer',
     'WidgetEmbedUrlResponse',
+    'WidgetKind',
     'WorkflowCreateRequest',
     'WorkflowDetailResponse',
     'WorkflowEdge',
