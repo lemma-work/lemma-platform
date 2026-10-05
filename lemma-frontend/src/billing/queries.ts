@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiUrl, lemma } from "@/session/client";
 import { isMissing } from "@/session/auth-state";
@@ -92,6 +93,29 @@ export function usePlans(enabled = true) {
     });
 }
 
+/** How often a checkout is asked about, by how long it has been watched.
+ *
+ *  Every three seconds for the first two minutes, which is when a payment
+ *  that went through actually lands. Then every fifteen, for somebody who
+ *  stopped to find a card. After a quarter of an hour nobody is still at the
+ *  provider's page and the tab has simply been left open, so it stops; coming
+ *  back to the window asks once more on focus. The clock starts the first
+ *  time the poll is asked for and is put away when `watch` goes off. */
+function useCheckoutPoll(watch: boolean): () => number | false {
+    const since = useRef<number | null>(null);
+    return () => {
+        if (!watch) {
+            since.current = null;
+            return false;
+        }
+        since.current ??= Date.now();
+        const watched = Date.now() - since.current;
+        if (watched < 2 * 60_000) return 3_000;
+        if (watched < 15 * 60_000) return 15_000;
+        return false;
+    };
+}
+
 /** What the caller is on.
  *
  *  `watch` is the checkout poll. Nothing about a plan changes until the
@@ -105,6 +129,7 @@ export function usePlans(enabled = true) {
  *  would report success the instant it started. The plan's price is what moves.
  */
 export function useMyPlan(watch = false) {
+    const poll = useCheckoutPoll(watch);
     return useQuery({
         queryKey: ["billing", "my-plan"],
         queryFn: async (): Promise<Subscription | null> => live()
@@ -112,7 +137,7 @@ export function useMyPlan(watch = false) {
             : sample((module) => module.sampleSubscription),
         enabled: true,
         staleTime: watch ? 0 : 60_000,
-        refetchInterval: watch ? 3_000 : false,
+        refetchInterval: poll,
         refetchOnWindowFocus: true,
         retry: false,
     });
@@ -121,12 +146,13 @@ export function useMyPlan(watch = false) {
 /** What the organization is on. 403 rather than 404 for somebody outside it,
  *  which the caller says out loud instead of retrying. */
 export function useOrgPlan(orgId: string | undefined, watch = false) {
+    const poll = useCheckoutPoll(watch);
     return useQuery({
         queryKey: ["billing", "org-plan", orgId ?? null],
         queryFn: () => orNone(lemma().request<Subscription>("GET", org(orgId!) + "/subscription")),
         enabled: live() && Boolean(orgId),
         staleTime: watch ? 0 : 60_000,
-        refetchInterval: watch ? 3_000 : false,
+        refetchInterval: poll,
         refetchOnWindowFocus: true,
         retry: false,
     });

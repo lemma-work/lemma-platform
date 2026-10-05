@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { parseSSEJson, readSSE } from "lemma-sdk";
 import { source } from "@/data";
@@ -8,6 +8,7 @@ import { lemma } from "@/session/client";
 import { readRunDetail, readRuns, readWorkflows, stillGoing, type RunDetail, type RunRow } from "./runs";
 import { readGraph } from "./run-tree";
 import { samples } from "@/data/samples";
+import { usePaneVisible } from "@/shell/pane-visible";
 
 /** How often to look again, when nothing is pushed.
  *
@@ -20,11 +21,32 @@ function pollEvery(detail: RunDetail | null | undefined): number | false {
     return detail.wait?.type === "HUMAN" ? 15_000 : 6_000;
 }
 
+/** How often a list of runs is looked at again.
+ *
+ *  Often while something in it is moving. A run waiting on a person can wait
+ *  for days, and a list held at the fast rate by one unanswered form is a
+ *  list that asks every quarter-minute for a week, so waiting alone gets a
+ *  minute. Nothing going, nothing asked. Whether the pane is on screen is the
+ *  caller's to add — this only reads the rows. */
+export function runsPollEvery(runs: readonly RunRow[] | undefined, moving: number): number | false {
+    if (runs?.some((run) => run.status === "PENDING" || run.status === "RUNNING")) return moving;
+    if (runs?.some((run) => run.status === "WAITING")) return 60_000;
+    return false;
+}
+
 /** One run, kept current: the server pushes the whole run on every change
- *  (`GET …/workflow-runs/{id}/stream`), and polling covers a dropped stream. */
+ *  (`GET …/workflow-runs/{id}/stream`), and polling covers a dropped stream.
+ *
+ *  Polling only covers it — it does not run beside it. While frames are
+ *  arriving the stream already is the current run, and a poll on top asks
+ *  for what was just pushed. Behind a hidden pane neither runs: the stream's
+ *  first frame is the whole run as it stands, so reopening it on the way back
+ *  is the catch-up. */
 export function useRun(podId: string, runId: string) {
     const cache = useQueryClient();
     const sample = source.label === "sample";
+    const visible = usePaneVisible();
+    const [streaming, setStreaming] = useState(false);
     const key = ["workflow-run", podId, runId] as const;
     const run = useQuery({
         queryKey: key,
@@ -36,12 +58,12 @@ export function useRun(podId: string, runId: string) {
             return readRunDetail(await lemma(podId).workflows.runs.get(runId, podId));
         },
         staleTime: 5_000,
-        refetchInterval: (query) => pollEvery(query.state.data),
+        refetchInterval: (query) => (visible && !streaming ? pollEvery(query.state.data) : false),
     });
 
     const going = Boolean(run.data && stillGoing(run.data.status));
     useEffect(() => {
-        if (sample || !going) return;
+        if (sample || !going || !visible) return;
         const controller = new AbortController();
         void (async () => {
             try {
@@ -50,15 +72,26 @@ export function useRun(podId: string, runId: string) {
                     if (controller.signal.aborted) return;
                     const parsed = parseSSEJson<{ type?: string; data?: unknown }>(frame);
                     const detail = readRunDetail(parsed?.data);
-                    if (detail) cache.setQueryData(key, detail);
+                    if (detail) {
+                        cache.setQueryData(key, detail);
+                        setStreaming(true);
+                    }
                     if (parsed?.type === "completed") break;
                 }
             } catch {
                 /* The stream is a nicety; polling carries on without it. */
+            } finally {
+                /* An abort is this effect being replaced or torn down, and
+                   the cleanup has already said so — a late `false` from the
+                   old stream would land after the new one's `true`. */
+                if (!controller.signal.aborted) setStreaming(false);
             }
         })();
-        return () => controller.abort();
-    }, [podId, runId, going, sample, cache]);
+        return () => {
+            controller.abort();
+            setStreaming(false);
+        };
+    }, [podId, runId, going, sample, cache, visible]);
 
     return run;
 }
@@ -106,6 +139,7 @@ export function useWorkflowGraph(podId: string, name: string | null) {
 /** Recent runs across every workflow in the space, newest first — one
  *  request (`GET /pods/{id}/workflow-runs`) rather than one per workflow. */
 export function useSpaceRuns(podId: string) {
+    const visible = usePaneVisible();
     return useQuery({
         queryKey: ["workflow-runs", podId, "all"],
         staleTime: 15_000,
@@ -116,6 +150,6 @@ export function useSpaceRuns(podId: string) {
             }
             return readRuns(await lemma(podId).request("GET", "/pods/" + podId + "/workflow-runs", { params: { limit: 100 } }));
         },
-        refetchInterval: (query) => (query.state.data?.some((run) => stillGoing(run.status)) ? 15_000 : false),
+        refetchInterval: (query) => (visible ? runsPollEvery(query.state.data, 15_000) : false),
     });
 }

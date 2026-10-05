@@ -3195,6 +3195,9 @@ export const fixtureSource: PodSource = {
         if (path.endsWith(".pdf")) return (await fetch("/sample-document.pdf")).blob();
         return new Blob(["Sample file content"], { type: "text/plain" });
     },
+    async fileAppUrl() {
+        return "https://example.invalid/file";
+    },
     async readFile(_podId: string, path: string) {
         const file = await sampleFile(path);
         const edited = SAMPLE_EDITS.get(path);

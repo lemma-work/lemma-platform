@@ -371,6 +371,7 @@ export function Transcript({
                                                     <ToolCardView
                                                         key={item.id}
                                                         card={item.card}
+                                                        podId={podId}
                                                         conversationId={conversationId}
                                                         toolCallId={item.toolCallId}
                                                     />

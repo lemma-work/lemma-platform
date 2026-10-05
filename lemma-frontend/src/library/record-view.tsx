@@ -76,7 +76,8 @@ export function RecordView({
      *  both strings. Fifty rows can, and it is the same reading the table view
      *  makes, so the two agree about what a column is. Cheap, cached, and not
      *  worth blocking on: while it is in flight the page shows the row in the
-     *  order it arrived, which is what it always did. */
+     *  order it arrived, which is what it always did. The data card in a
+     *  conversation reads its preview under this same key and request. */
     const sample = useQuery({
         queryKey: ["table", podId, tableName, "sample"],
         queryFn: () => source.tableRows(podId, tableName),

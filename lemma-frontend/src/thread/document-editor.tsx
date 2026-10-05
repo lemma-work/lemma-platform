@@ -30,6 +30,7 @@ import { joinFrontmatter, splitFrontmatter } from "@/skills/skill-frontmatter";
 import { SAVE_AFTER_MS, describeSave, sayLocked, type SaveState } from "./document-save";
 import { useDocAsk } from "@/docs/doc-ask";
 import { ChatIcon } from "@/ui/icons";
+import { usePaneVisible } from "@/shell/pane-visible";
 
 type Pick = { top: number; left: number; text: string };
 
@@ -86,6 +87,7 @@ function titleOf(editor: Editor): string | null {
 
 export function DocumentEditor({ podId, path, text }: { podId: string; path: string; text: string }) {
     const cache = useQueryClient();
+    const visible = usePaneVisible();
 
     /** What this app believes is on disk. Everything else is measured from it. */
     const [saved, setSaved] = useState(text);
@@ -233,6 +235,10 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     const target = useRef(path);
     useEffect(() => { target.current = path; }, [path]);
     const renaming = useRef(false);
+    /* How many of our own writes have landed. The change check below reads
+       it, so the stamp a save of ours puts on the file is taken as known
+       rather than as somebody else's edit to be fetched back. */
+    const wrote = useRef(0);
     const persist = useCallback(async (next: string) => {
         /* Held while the file moves; the autosave comes back round once the
            new path is in. */
@@ -242,6 +248,7 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
         setState("saving");
         try {
             await source.writeFile(podId, at, next);
+            wrote.current += 1;
             if (attempt.current !== mine) return;
             setSaved(next);
             setState("saved");
@@ -438,19 +445,35 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     /* An agent writing into this page is seen while it writes: the file's
        fingerprint is checked every few seconds while the page is on screen,
        and a change is read in — unless you have unsaved words of your own,
-       which the adopt-effect below already refuses to overwrite. */
+       which the adopt-effect below already refuses to overwrite.
+
+       On screen means this pane in front as well as the browser tab: a page
+       left open behind another stops asking, and asks at once on the way
+       back. The last stamp outlives the pause in a ref, so that first ask
+       can still tell an edit made while it was hidden.
+
+       A change that follows one of our own saves is our own save. The editor
+       and the file cache already hold those words, and reading them back
+       costs three requests for every pause in typing. A check that was
+       already asking when the save landed cannot tell, and refetches once —
+       the harmless way round. */
+    const lastStamp = useRef<{ path: string; stamp: string | null } | null>(null);
     useEffect(() => {
-        if (!asPage || source.label !== "live") return;
-        let last: string | null = null;
+        if (!asPage || source.label !== "live" || !visible) return;
         let stopped = false;
+        let seen = wrote.current;
         const tick = async () => {
             if (document.hidden) return;
+            const writes = wrote.current;
             try {
                 const meta = (await lemma(podId).files.get(path)) as { content_sha256?: string | null; updated_at?: string | null };
                 if (stopped) return;
                 const stamp = meta.content_sha256 ?? meta.updated_at ?? null;
-                if (last !== null && stamp !== last) void cache.invalidateQueries({ queryKey: ["file", podId, path] });
-                last = stamp;
+                const last = lastStamp.current?.path === path ? lastStamp.current.stamp : null;
+                const ours = writes !== seen;
+                seen = writes;
+                if (last !== null && stamp !== last && !ours) void cache.invalidateQueries({ queryKey: ["file", podId, path] });
+                lastStamp.current = { path, stamp };
             } catch {
                 /* The next tick asks again. */
             }
@@ -458,7 +481,7 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
         void tick();
         const timer = setInterval(() => void tick(), 4000);
         return () => { stopped = true; clearInterval(timer); };
-    }, [asPage, cache, path, podId]);
+    }, [asPage, cache, path, podId, visible]);
 
     /* Typing stops, the file is written. No button, because a button on a
        paragraph is a chore and losing the paragraph to a closed tab is worse. */

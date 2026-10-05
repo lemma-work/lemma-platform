@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { source, type Org, type Pod } from "@/data";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { initialsOf, source, type Org, type Pod, type PodDetail } from "@/data";
+import { lemma } from "@/session/client";
 import { AI_MATE, MATES, NEW_MATE } from "@/copy";
 import { Mark, markTint } from "@/shell/mark";
 import { unbound } from "@/thread/conversation-list";
@@ -138,21 +139,58 @@ export function TeammatesPage({ pods, pending, failed, onRetry, owed, orgName, o
     );
 }
 
+/** The faces on a card: who is in the pod, and nothing else.
+ *
+ *  Not `getPodDetail`, which reads the pod's agents as well, to find the
+ *  teammate's picture — a picture the card already has from the listed pod.
+ *  That was a second request per card on screen for nothing the card draws.
+ *  Under the detail's key, one level down, so everything that invalidates a
+ *  pod's detail after a membership change reaches this too. The sample has no
+ *  client to ask, so it reads its own detail. */
+async function cardMembers(pod: Pod): Promise<{ id: string; name: string; initials: string }[]> {
+    if (source.label === "sample") return peopleIn((await source.getPodDetail(pod.id, pod.name, pod.iconUrl)).members);
+    try {
+        const listed = (await lemma(pod.id).podMembers.list(pod.id)) as { items?: unknown[] } | unknown[];
+        const items = Array.isArray(listed) ? listed : listed.items ?? [];
+        return items.map((raw) => {
+            const m = raw as { pod_member_id?: string; user_id?: string; user_name?: string | null; email?: string; user_email?: string };
+            const name = m.user_name?.trim() || m.email || m.user_email || "Member";
+            return { id: m.pod_member_id ?? m.user_id ?? name, name, initials: initialsOf(name) };
+        });
+    } catch {
+        /* As the detail does: a pod whose members you may not list still
+           has a card. */
+        return [];
+    }
+}
+
+/** The people in a detail's roster — the bots in it are drawn elsewhere. */
+function peopleIn(members: PodDetail["members"]) {
+    return members.filter((member) => member.kind === "person");
+}
+
 /** One teammate on the floor.
  *
- *  Its roster and its latest conversation are the two reads the space itself
- *  makes on the way in, under the same keys — so a card that has been seen
- *  opens its space already filled. Neither is read until the card is on
+ *  Its people and its latest conversation, each read once the card is on
  *  screen: an owner sees every pod in the organization, and a request per pod
- *  up front is the cost `listPods` was written to avoid. */
+ *  up front is the cost `listPods` was written to avoid. The conversations are
+ *  the space's own list under its key, so a card that has been seen opens its
+ *  space with the history already filled; the people come from the space's
+ *  detail when that was read first. */
 function Card({ pod, owed, onOpen }: { pod: Pod; owed: Owed | undefined; onOpen: (podId: string, from: DOMRect) => void }) {
     const node = useRef<HTMLButtonElement>(null);
     const seen = useSeen(node);
-    const detail = useQuery({
-        queryKey: ["pod-detail", pod.id],
-        queryFn: () => source.getPodDetail(pod.id, pod.name, pod.iconUrl),
+    const cache = useQueryClient();
+    const members = useQuery({
+        queryKey: ["pod-detail", pod.id, "members"],
+        queryFn: () => cardMembers(pod),
         enabled: seen,
         staleTime: 5 * 60_000,
+        initialData: () => {
+            const known = cache.getQueryData<PodDetail>(["pod-detail", pod.id]);
+            return known ? peopleIn(known.members) : undefined;
+        },
+        initialDataUpdatedAt: () => cache.getQueryState(["pod-detail", pod.id])?.dataUpdatedAt,
     });
     const handWritten = pod.waiting.trim();
     const chats = useQuery({
@@ -162,7 +200,7 @@ function Card({ pod, owed, onOpen }: { pod: Pod; owed: Owed | undefined; onOpen:
         staleTime: 60_000,
     });
     const latest = unbound(chats.data)[0];
-    const people = (detail.data?.members ?? []).filter((member) => member.kind === "person");
+    const people = members.data ?? [];
 
     const status = owed ? { tone: "needs", text: sayOwed(owed) }
         : handWritten ? { tone: "needs", text: handWritten }

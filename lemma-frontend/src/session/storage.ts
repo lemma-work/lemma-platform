@@ -83,7 +83,7 @@ export function retainWorkspaceOwner(store: KeyValueStore, owner: string | null)
     const ownerKey = key("workspace-owner");
     const changed = store.getItem(ownerKey) !== owner;
     if (changed || owner === null) {
-        for (const name of ["org", "tabs", "last-pod"]) {
+        for (const name of ["org", "tabs", "last-pod", "remembered"]) {
             store.removeItem(key(name));
             store.removeItem(WAS + ":" + name);
         }
