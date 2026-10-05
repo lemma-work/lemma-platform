@@ -119,6 +119,7 @@ async def list_tables(
                 column_count=table.column_count,
                 enable_rls=table.enable_rls,
                 visibility=table.visibility,
+                contact_owned=table.contact_owned,
                 created_at=table.created_at,
                 updated_at=table.updated_at,
                 allowed_actions=table.allowed_actions,

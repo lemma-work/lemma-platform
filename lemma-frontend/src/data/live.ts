@@ -7,6 +7,8 @@ import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
+import { readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
+import type { WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
     agentRows,
@@ -639,6 +641,76 @@ export const liveSource: PodSource = {
        answered on the pod-scoped client the way the inbox answers one. */
     async answerGroupQuestion(podId, notificationId, answer) {
         await lemma(podId).notifications.respond(notificationId, { summary: answer });
+    },
+    async listContacts(podId) {
+        return readContacts(await lemma(podId).contacts.list(podId, { limit: 200 })).items;
+    },
+    async renameContact(podId, contactId, name) {
+        return readContact(await lemma(podId).contacts.rename(podId, contactId, name));
+    },
+    async forgetContact(podId, contactId) {
+        await lemma(podId).contacts.remove(podId, contactId);
+    },
+    async exportContact(podId, contactId) {
+        return lemma(podId).contacts.export(podId, contactId);
+    },
+    async followUpContact(podId, contactId, message) {
+        const sent = await lemma(podId).contacts.followUp(podId, contactId, message);
+        return { delivered: sent.delivered, platform: sent.platform };
+    },
+    async listWidgets(podId) {
+        return ((await lemma(podId).contacts.widgets.list(podId)).items ?? []).map(readWidget);
+    },
+    async createWidget(podId, draft) {
+        const made = await lemma(podId).contacts.widgets.create(podId, {
+            name: draft.name.trim(),
+            kind: draft.kind as WebWidgetCreateRequest["kind"],
+            allowed_origins: readOrigins(draft.origins),
+            answer: draft.answer as WebWidgetCreateRequest["answer"],
+            form_function: draft.kind === "form" ? draft.formFunction.trim() : null,
+            form_requires_code: draft.kind === "form" && draft.formRequiresCode,
+        });
+        return { ...readWidget(made), signingSecret: made.signing_secret };
+    },
+    async updateWidget(podId, widgetId, change) {
+        return readWidget(await lemma(podId).contacts.widgets.update(podId, widgetId, {
+            ...(change.answer ? { answer: change.answer as WebWidgetUpdateRequest["answer"] } : {}),
+            ...(change.origins ? { allowed_origins: change.origins } : {}),
+        }));
+    },
+    async rotateWidgetSecret(podId, widgetId) {
+        return (await lemma(podId).contacts.widgets.rotateSecret(podId, widgetId)).signing_secret;
+    },
+    async deleteWidget(podId, widgetId) {
+        await lemma(podId).contacts.widgets.remove(podId, widgetId);
+    },
+    async contactReach(podId) {
+        const client = lemma(podId);
+        const [tables, functions] = await Promise.all([client.tables.list({ limit: 100 }), client.functions.list({ limit: 100 })]);
+        return {
+            tables: (tables.items ?? []).map((table) => ({
+                name: table.name,
+                contactOwned: Boolean(table.contact_owned),
+                perPerson: Boolean(table.enable_rls),
+            })),
+            functions: (functions.items ?? []).map((fn) => ({
+                name: fn.name,
+                description: fn.description ?? null,
+                contactsInvoke: Boolean(fn.contacts_invoke),
+            })),
+        };
+    },
+    async setTableContactOwned(podId, table, on) {
+        await lemma(podId).tables.update(table, { contact_owned: on });
+    },
+    async setFunctionContactsInvoke(podId, fn, on) {
+        await lemma(podId).functions.setContactsInvoke(fn, on);
+    },
+    async contactsCap(orgId) {
+        return readCap(await lemma().contacts.cap(orgId));
+    },
+    async setContactsCap(orgId, limit) {
+        return readCap(await lemma().contacts.setCap(orgId, limit));
     },
     async createSurfaceAccount(orgId, entry, credentials) {
         const client = lemma();

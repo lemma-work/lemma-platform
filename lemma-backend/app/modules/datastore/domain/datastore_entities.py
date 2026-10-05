@@ -554,6 +554,7 @@ class DatastoreTableSummaryEntity(BaseModel):
     column_count: int = 0
     enable_rls: bool = True
     visibility: str = "POD"
+    contact_owned: bool = False
     allowed_actions: List[str] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None

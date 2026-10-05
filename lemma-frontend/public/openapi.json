@@ -15954,6 +15954,11 @@
             "title": "Column Count",
             "type": "integer"
           },
+          "contact_owned": {
+            "default": false,
+            "title": "Contact Owned",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",

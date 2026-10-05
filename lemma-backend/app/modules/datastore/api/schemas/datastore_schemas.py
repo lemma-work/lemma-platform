@@ -330,7 +330,7 @@ class TableDetailResponse(TableResponse):
     allowed_actions: List[str] = Field(default_factory=list)
 
 
-class TableSummaryResponse(BaseModel):
+class TableSummaryResponse(contact_owned.ContactOwnedOnRead):
     """Lean table shape for list responses.
 
     Omits the full `columns` definitions and `config` — fetch those from

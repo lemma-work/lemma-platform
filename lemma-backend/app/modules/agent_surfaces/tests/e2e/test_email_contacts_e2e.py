@@ -435,6 +435,10 @@ async def test_a_contact_reads_only_their_own_rows_of_a_contact_owned_table(
     assert created.status_code == 201, created.text
     assert created.json()["contact_owned"] is True
     assert "contact_id" in {column["name"] for column in created.json()["columns"]}
+    listed_tables = await authenticated_client.get(f"/pods/{pod_id}/datastore/tables")
+    assert {t["name"]: t["contact_owned"] for t in listed_tables.json()["items"]} == {
+        "orders": True
+    }
     # A table is per-user or contact-owned, never both.
     both = await authenticated_client.patch(
         f"/pods/{pod_id}/datastore/tables/orders", json={"enable_rls": True}

@@ -30,6 +30,7 @@ import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
 import { SettingsPage, type SettingsSection as SpaceSettingsSection } from "@/space/settings-page";
 import { WorkflowsPage } from "@/space/workflows-page";
 import { GroupsPage } from "@/space/groups-page";
+import { ContactsPage } from "@/space/contacts-page";
 import { GroupPage } from "@/space/group-page";
 import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
@@ -140,12 +141,13 @@ function readJson<T>(key: string, fallback: T): T {
     }
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["contacts", "Contacts"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
     const groupsOn = useFeature("groups");
+    const contactsOn = useFeature("contacts");
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
     const incoming = useSearchParams();
@@ -1819,6 +1821,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
                                     ) : tab.view === "groups" ? (
                                         groupsOn && <GroupsPage pod={pod} onOpenGroup={openGroup} onConnect={() => setReaching(true)} />
+                                    ) : tab.view === "contacts" ? (
+                                        contactsOn && <ContactsPage pod={pod} />
                                     ) : tab.view === "settings" ? (
                                         <SettingsPage
                                             pod={pod}

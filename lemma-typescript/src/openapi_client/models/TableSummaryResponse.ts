@@ -11,6 +11,7 @@
 export type TableSummaryResponse = {
     allowed_actions?: Array<string>;
     column_count?: number;
+    contact_owned?: boolean;
     created_at: string;
     enable_rls: boolean;
     id: string;

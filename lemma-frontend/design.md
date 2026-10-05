@@ -190,6 +190,27 @@ any of its bots is in, from `podGroups`.
 - Only the sample's Marketing has groups; every other sample space opens on
   the first run.
 
+## Contacts
+
+The people a space's bots answer who are not in it are a place in it:
+`/t/{pod}/contacts`, behind the `contacts` flag. Styles in
+`src/styles/contacts.css`; words in `src/data/contacts.ts`.
+
+- Three parts, each a thing a member does: **People** (who has written; one
+  opens in a sheet with how they are known, a name, a box to write back, and
+  Export / Forget), **On your website** (chat bubbles and forms with their
+  code to paste), **What contacts can use** (switches for contact-owned
+  tables and for functions opened to contacts).
+- A host id is never shown — "Signed in on your site". Every handle says who
+  vouched for it in plain words.
+- A signing secret is shown once, in its own sheet, with the code to paste
+  after it; New signing secret shows the new one the same way.
+- A follow-up that cannot go says why (unsubscribed, WhatsApp's day has
+  passed, never wrote) — never a generic failure when the API gave a reason.
+- A bot's setting is one select in its settings, "Private messages from
+  people outside {space}", disabled with a reason on a bot that is not the
+  space's own. The organization's cap sits in its Usage.
+
 ## Empty places
 
 An empty list is most people's first sight of every place in a new space, so

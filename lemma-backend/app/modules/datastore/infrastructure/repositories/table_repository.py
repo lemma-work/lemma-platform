@@ -201,6 +201,7 @@ class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepository
             column_count=len(model.columns or []),
             enable_rls=model.enable_rls,
             visibility=model.visibility,
+            contact_owned=model.contact_owned,
             allowed_actions=list(allowed),
             created_at=model.created_at,
             updated_at=model.updated_at,

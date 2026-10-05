@@ -1,4 +1,5 @@
-import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, GroupUpdateRequest, SurfaceUpdateRequest } from "lemma-sdk";
+import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, GroupUpdateRequest, SurfaceUpdateRequest, ContactExportResponse } from "lemma-sdk";
+import type { Contact, ContactReach, ContactsCap, NewWebWidget, WebWidget, WidgetAnswer, WidgetDraft } from "./contacts";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
@@ -335,7 +336,7 @@ export interface SharedLink {
 
 /** A view of the space's own contents, filtered by kind — and `about`, the
  *  teammate the space belongs to. */
-export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "settings" | "about";
+export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "contacts" | "settings" | "about";
 
 export type Tab =
     | { id: string; kind: "space"; label: string; view: SpaceView }
@@ -608,6 +609,29 @@ export interface PodSource {
     /** Answer a question a group's people outside the space are waiting on
      *  you for. The bot passes the answer on in the group. */
     answerGroupQuestion(podId: string, notificationId: string, answer: string): Promise<void>;
+    /** The people the space's bots answer who are not in it, newest first. */
+    listContacts(podId: string): Promise<Contact[]>;
+    renameContact(podId: string, contactId: string, name: string | null): Promise<Contact>;
+    /** Forget a contact: their handles and every conversation with them. */
+    forgetContact(podId: string, contactId: string): Promise<void>;
+    /** What the space holds about a contact, as the API gives it, to hand over. */
+    exportContact(podId: string, contactId: string): Promise<ContactExportResponse>;
+    /** Write to a contact in their latest conversation, where its channel
+     *  allows. Throws with the API's `code` when it does not. */
+    followUpContact(podId: string, contactId: string, message: string): Promise<{ delivered: boolean; platform: string }>;
+    listWidgets(podId: string): Promise<WebWidget[]>;
+    createWidget(podId: string, draft: WidgetDraft): Promise<NewWebWidget>;
+    updateWidget(podId: string, widgetId: string, change: { answer?: WidgetAnswer; origins?: string[] }): Promise<WebWidget>;
+    /** A new signing secret, shown this once. */
+    rotateWidgetSecret(podId: string, widgetId: string): Promise<string>;
+    deleteWidget(podId: string, widgetId: string): Promise<void>;
+    /** The space's tables and functions, with which ones contacts can reach. */
+    contactReach(podId: string): Promise<ContactReach>;
+    setTableContactOwned(podId: string, table: string, on: boolean): Promise<void>;
+    setFunctionContactsInvoke(podId: string, fn: string, on: boolean): Promise<void>;
+    /** What answering contacts may cost the organization a month. */
+    contactsCap(orgId: string): Promise<ContactsCap>;
+    setContactsCap(orgId: string, limit: number | null): Promise<ContactsCap>;
     createSurfaceAccount(orgId: string, entry: Connectable, credentials: Record<string, unknown>): Promise<string>;
     /** The one-click path: a Lemma-run identity answers, with no account of
      *  yours. Returns the surface, which already carries the address. */
