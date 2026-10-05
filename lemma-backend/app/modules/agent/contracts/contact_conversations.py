@@ -163,3 +163,30 @@ async def mark_conversation_contact(
         .values(conversation_metadata=metadata)
     )
     return True
+
+
+async def append_follow_up(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    message: str,
+    sent_by_user_id: UUID,
+) -> None:
+    """Write a member's follow-up into a contact's conversation.
+
+    Belongs to no run, like a notification: it is so the agent, and the
+    contact reading the thread, see what was sent and can answer it.
+    """
+    from app.modules.agent.domain.value_objects import MessageDraft
+    from app.modules.agent.infrastructure.repositories.conversation_repository import (
+        ConversationRepository,
+    )
+
+    await ConversationRepository(uow).append_message(
+        conversation_id=conversation_id,
+        agent_run_id=None,
+        draft=MessageDraft.of_notification(
+            message,
+            metadata={"follow_up": True, "sent_by_user_id": str(sent_by_user_id)},
+        ),
+    )

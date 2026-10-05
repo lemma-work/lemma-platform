@@ -80,6 +80,8 @@ class ContactIdentity(BaseModel):
     value: str
     strength: IdentityStrength
     verified_at: datetime
+    last_inbound_at: datetime | None = None
+    unsubscribed_at: datetime | None = None
 
 
 class Contact(BaseModel):

@@ -1,6 +1,6 @@
 # Contacts
 
-Status: in progress. Steps 1 to 6 of the [build order](#build-order) are built,
+Status: in progress. Steps 1 to 7 of the [build order](#build-order) are built,
 with the gaps listed under [Built so far](#built-so-far).
 
 A pod's bot can answer two kinds of people today: **members**, who act as
@@ -308,6 +308,13 @@ one:
   contact, or none; only the function's `public` output reaches the page.
   `/public/web/widget.js` is the bubble and form handler. Limits per widget,
   session, address and email, failing closed.
+- **Follow-ups.** `POST /pods/{pod_id}/contacts/{id}/messages` writes to a
+  contact in their most recent conversation: WhatsApp within 24 hours of their
+  last message (`contact_identities.last_inbound_at`), Telegram any time, email
+  with an unsubscribe line and a signed link (`/public/contacts/unsubscribe`,
+  a confirmation page whose button does it), a web chat by leaving it for
+  their next visit. Never to a handle they unsubscribed
+  (`unsubscribed_at`); writing again opts them back in.
 - **Unverified email** is parked as an inbox note to the member who looks after
   contacts, once an hour per sender.
 - **Cost.** Runs for contacts and group outsiders are recorded as `contact_run`
@@ -318,7 +325,9 @@ one:
   `pod.functions.set_contacts_invoke` in Python; `client.contacts` (with
   `.widgets`) and `functions.setContactsInvoke` in TypeScript.
 
-Not built yet: bot protection on a widget's first message, step-up codes for contact functions (the `requires` strength),
+Not built yet: WhatsApp templates (follow-ups past the 24-hour window), a
+`List-Unsubscribe` header on follow-up email, newsletters to subscribers, bot
+protection on a widget's first message, step-up codes for contact functions (the `requires` strength),
 pod bundles carrying `contact_owned` and `contacts_invoke`, and a hand-off
 control beyond what `message_user` gives.
 

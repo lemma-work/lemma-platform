@@ -143,9 +143,13 @@ class _Book:
     def __init__(self) -> None:
         self.known: dict[tuple[IdentityKind, str], ContactRef] = {}
         self.opened: list[tuple[IdentityKind, str, IdentityStrength]] = []
+        self.noted: list[tuple[IdentityKind, str]] = []
 
     async def find(self, *, pod_id, kind, value):
         return self.known.get((kind, value))
+
+    async def note_inbound(self, *, pod_id, kind, value):
+        self.noted.append((kind, value))
 
     async def open(self, *, pod_id, kind, value, strength, display_name):
         ref = ContactRef(id=uuid4(), pod_id=pod_id, display_name=display_name)
@@ -279,6 +283,8 @@ async def test_a_strangers_first_message_makes_them_a_contact(directory):
     assert [(kind, value) for kind, value, _ in directory.book.opened] == [
         (IdentityKind.PHONE, "447700900123")
     ]
+    # And their writing is noted: it is what lets the pod write back.
+    assert directory.book.noted == [(IdentityKind.PHONE, "447700900123")]
 
 
 async def test_a_bot_answering_known_contacts_only_ignores_strangers(directory):

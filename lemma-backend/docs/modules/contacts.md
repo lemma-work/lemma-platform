@@ -13,7 +13,7 @@ user id, an email address the receiving mail service authenticated.
 | Table | Meaning |
 | --- | --- |
 | `contacts` | One person per pod, and the name to address them by. Cascades from the pod |
-| `contact_identities` | The handles a contact is known by (`PHONE`, `EMAIL`, `TELEGRAM`) and who vouched for each (`strength`). Unique per pod and handle, so one number is one contact whichever bot it writes to |
+| `contact_identities` | The handles a contact is known by (`PHONE`, `EMAIL`, `TELEGRAM`, `HOST`) and who vouched for each (`strength`: `CHANNEL`, `HOST`, `CODE`, `MEMBER`). Unique per pod and handle, so one number is one contact whichever bot it writes to. `last_inbound_at` is when they last wrote from it; `unsubscribed_at` when they asked not to be written to there |
 
 - `GET /pods/{pod_id}/contacts` and `GET /pods/{pod_id}/contacts/{id}`: any
   member who can read the pod.

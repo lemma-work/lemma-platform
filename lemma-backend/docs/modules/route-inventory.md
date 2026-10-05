@@ -155,6 +155,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/contacts/{contact_id}` | `contact.get` | Get Contact |
 | GET | `/pods/{pod_id}/contacts/{contact_id}/export` | `contact.export` | Export Contact |
 | PATCH | `/pods/{pod_id}/contacts/{contact_id}` | `contact.update` | Update Contact |
+| POST | `/pods/{pod_id}/contacts/{contact_id}/messages` | `contact.follow_up` | Follow Up Contact |
 
 ## datastore
 

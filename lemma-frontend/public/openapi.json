@@ -7038,6 +7038,46 @@
         "title": "FirstWorkspaceResponse",
         "type": "object"
       },
+      "FollowUpRequest": {
+        "properties": {
+          "message": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "FollowUpRequest",
+        "type": "object"
+      },
+      "FollowUpResponse": {
+        "properties": {
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "delivered": {
+            "description": "Handed to the platform now. False for a web chat, where the message waits for the contact's next visit.",
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "platform",
+          "delivered"
+        ],
+        "title": "FollowUpResponse",
+        "type": "object"
+      },
       "ForeignKeySpec": {
         "description": "Specification for a foreign key constraint.",
         "properties": {
@@ -27067,6 +27107,80 @@
           "resource": "contact",
           "result": "entity",
           "verb": "export"
+        }
+      }
+    },
+    "/pods/{pod_id}/contacts/{contact_id}/messages": {
+      "post": {
+        "description": "Write to a contact in their most recent conversation, where the channel allows.\n\nRefused (409) when they unsubscribed there, when WhatsApp's 24-hour window\nhas closed, or when they have never written to the pod.",
+        "operationId": "contact.follow_up",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Contact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FollowUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowUpResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Follow Up Contact",
+        "tags": [
+          "Contacts"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "contact"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "contact",
+          "result": "entity",
+          "verb": "follow_up"
         }
       }
     },

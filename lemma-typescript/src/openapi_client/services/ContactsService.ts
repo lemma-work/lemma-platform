@@ -6,6 +6,8 @@ import type { ContactExportResponse } from '../models/ContactExportResponse.js';
 import type { ContactListResponse } from '../models/ContactListResponse.js';
 import type { ContactResponse } from '../models/ContactResponse.js';
 import type { ContactUpdateRequest } from '../models/ContactUpdateRequest.js';
+import type { FollowUpRequest } from '../models/FollowUpRequest.js';
+import type { FollowUpResponse } from '../models/FollowUpResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -137,6 +139,37 @@ export class ContactsService {
                 'pod_id': podId,
                 'contact_id': contactId,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Follow Up Contact
+     * Write to a contact in their most recent conversation, where the channel allows.
+     *
+     * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
+     * has closed, or when they have never written to the pod.
+     * @param podId
+     * @param contactId
+     * @param requestBody
+     * @returns FollowUpResponse Successful Response
+     * @throws ApiError
+     */
+    public static contactFollowUp(
+        podId: string,
+        contactId: string,
+        requestBody: FollowUpRequest,
+    ): CancelablePromise<FollowUpResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/contacts/{contact_id}/messages',
+            path: {
+                'pod_id': podId,
+                'contact_id': contactId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

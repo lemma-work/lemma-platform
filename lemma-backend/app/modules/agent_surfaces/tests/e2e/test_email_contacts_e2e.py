@@ -14,6 +14,7 @@ for the member, and a bot with contacts off answers no stranger.
 from __future__ import annotations
 
 import json
+import re
 from uuid import UUID
 
 import pytest
@@ -563,3 +564,92 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
             )
         ).all()
     assert [row.subject for row in rows] == ["Mine"]
+
+
+async def test_a_member_follows_up_by_email_until_the_contact_unsubscribes(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_resend,
+    message_store,
+    monkeypatch,
+):
+    from urllib.parse import parse_qs, urlparse
+
+    pod_id = test_pod["id"]
+    _surface, address = await _email_bot(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+        answer="anyone",
+    )
+
+    async def dana_writes(message_id: str) -> None:
+        context = await process_ingress_and_run_scripted(
+            db_session,
+            SurfacePlatformWebhookIngress(
+                source="resend",
+                payload=_resend_payload(
+                    sender_email=CUSTOMER,
+                    assistant_address=address,
+                    message_id=message_id,
+                    text="Order 1182?",
+                ),
+                headers={},
+            ),
+            script=[script_text("On its way.")],
+        )
+        assert isinstance(context, SurfaceChatContext)
+
+    await dana_writes("follow-1")
+    dana = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()["items"][
+        0
+    ]["id"]
+
+    sent = await authenticated_client.post(
+        f"/pods/{pod_id}/contacts/{dana}/messages",
+        json={"message": "Your order shipped today."},
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["delivered"] is True
+    mail = json.dumps(
+        (await wait_for_messages(message_store, "RESEND", min_count=1))[-1]
+    )
+    assert "Your order shipped today." in mail
+    link = re.search(
+        r"https?://\S+/public/contacts/unsubscribe\?token=[^\s\"\\\\]+", mail
+    )
+    assert link is not None, mail
+    token = parse_qs(urlparse(link.group(0)).query)["token"][0]
+
+    # Opening the link only asks; the button unsubscribes.
+    page = await authenticated_client.get(
+        "/public/contacts/unsubscribe", params={"token": token}
+    )
+    assert page.status_code == 200 and "Unsubscribe" in page.text
+    forged = await authenticated_client.post(
+        "/public/contacts/unsubscribe", data={"token": token + "x"}
+    )
+    assert "This link doesn" in forged.text
+    done = await authenticated_client.post(
+        "/public/contacts/unsubscribe", data={"token": token}
+    )
+    assert done.status_code == 200 and "unsubscribed" in done.text
+
+    refused = await authenticated_client.post(
+        f"/pods/{pod_id}/contacts/{dana}/messages",
+        json={"message": "A second note."},
+    )
+    assert refused.status_code == 409, refused.text
+
+    # Writing again is how a contact opts back in.
+    await dana_writes("follow-2")
+    again = await authenticated_client.post(
+        f"/pods/{pod_id}/contacts/{dana}/messages",
+        json={"message": "Thanks for writing back."},
+    )
+    assert again.status_code == 200, again.text

@@ -730,6 +730,24 @@ Public, the way a group's people from outside it are.
 `agent.web_widget.rotate_secret`, `public.web.session.start`,
 `public.web.message.send`, `public.web.code.verify`, `public.web.form.submit`
 
+### PS-SURF-050 — A member writes first to a contact only where the contact wants it
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`
+> and `test_web_widgets_e2e.py`, and at unit level by
+> `agent_surfaces/tests/unit/test_contact_follow_ups.py`.
+
+- The system shall let a member write to a contact in the contact's most recent
+  conversation, on the channel it lives on.
+- The system shall write on WhatsApp only within 24 hours of the contact's last
+  message there, and shall leave a web visitor's message for their next visit.
+- The system shall end every email follow-up with a way to stop, and once the
+  contact uses it, shall write to that address no more until they write again.
+- The system shall not unsubscribe anybody for opening the link; only the
+  button on the page it opens does.
+
+**Contracts:** `contact.follow_up`
+
 ### PS-SURF-047 — Contacts cost the organization, never a member
 **Status:** planned
 

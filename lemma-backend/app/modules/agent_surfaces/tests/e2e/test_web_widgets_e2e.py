@@ -387,3 +387,47 @@ async def test_the_widget_script_is_served_without_a_session(async_client: Async
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("text/javascript")
     assert "data-lemma-key" in script.text
+
+
+async def test_a_follow_up_waits_in_a_web_contacts_chat(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    pod_id = test_pod["id"]
+    widget = await _widget(authenticated_client, pod_id, name="Follow-ups")
+    key, secret = widget["public_key"], widget["signing_secret"]
+    session = await _session(
+        authenticated_client, key, host_token=_host_token(secret, key, subject="cust-7")
+    )
+    await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        session=session["session"],
+        text="Is the blue one back in stock?",
+        owner=UUID(fixed_test_user["id"]),
+        pod_id=pod_id,
+        script=[script_text("I'll check.")],
+    )
+    contact = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
+        "items"
+    ][0]["id"]
+
+    sent = await authenticated_client.post(
+        f"/pods/{pod_id}/contacts/{contact}/messages",
+        json={"message": "It's back in stock."},
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json() | {"conversation_id": None} == {
+        "conversation_id": None,
+        "platform": "WEB",
+        "delivered": False,
+    }
+    history = await authenticated_client.post(
+        f"/public/web/{key}/history", **_text({"session": session["session"]})
+    )
+    assert ("assistant", "It's back in stock.") in [
+        (m["role"], m["text"]) for m in history.json()["messages"]
+    ]

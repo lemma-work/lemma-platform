@@ -16262,6 +16262,33 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Follow Up Contact
+     * Write to a contact in their most recent conversation, where the channel allows.
+     *
+     * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
+     * has closed, or when they have never written to the pod.
+     * @param podId
+     * @param contactId
+     * @param requestBody
+     * @returns FollowUpResponse Successful Response
+     * @throws ApiError
+     */
+    static contactFollowUp(podId, contactId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/contacts/{contact_id}/messages",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/openapi_client/services/UsageService.ts
@@ -16681,6 +16708,14 @@ var LemmaClient = (() => {
     rename(podId, contactId, displayName) {
       return this.client.request(
         () => ContactsService.contactUpdate(podId, contactId, { display_name: displayName })
+      );
+    }
+    /** Write to a contact in their latest conversation, where the channel allows:
+     *  never where they unsubscribed, and on WhatsApp only within 24 hours of
+     *  their last message. */
+    followUp(podId, contactId, message) {
+      return this.client.request(
+        () => ContactsService.contactFollowUp(podId, contactId, { message })
       );
     }
     /** Everything the pod holds about a contact: handles and conversations. */

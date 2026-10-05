@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.agent_surfaces.domain.groups import (
     CONTACT_LINK_USER_PREFIX,
     OUTSIDERS_LINK_USER,
+    contact_link_user,
 )
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceConversationLinkModel,
@@ -23,6 +24,10 @@ from app.modules.agent_surfaces.infrastructure.models import (
 from app.modules.agent_surfaces.infrastructure.web_widget_models import (
     WebSessionModel,
 )
+
+
+#: How a web widget's conversations are named where a platform would be.
+WEB_PLATFORM = "WEB"
 
 
 async def links_to_people_outside(session: AsyncSession, conversation_id: UUID) -> bool:
@@ -52,3 +57,38 @@ async def links_to_people_outside(session: AsyncSession, conversation_id: UUID) 
     )
     statement = select(or_(linked, from_the_web))
     return bool((await session.execute(statement)).scalar())
+
+
+async def latest_contact_thread(
+    session: AsyncSession, contact_id: UUID
+) -> tuple[UUID, str] | None:
+    """The contact's most recent conversation, and the platform it lives on.
+
+    A chat platform's thread (``~contact:{id}`` link), or a web widget session
+    (platform ``WEB``), whichever was active last.
+    """
+    link = AgentSurfaceConversationLinkModel
+    linked = (
+        await session.execute(
+            select(link.conversation_id, link.platform, link.updated_at)
+            .where(link.external_user_id == contact_link_user(contact_id))
+            .order_by(link.updated_at.desc())
+            .limit(1)
+        )
+    ).first()
+    web = (
+        await session.execute(
+            select(WebSessionModel.conversation_id, WebSessionModel.last_seen_at)
+            .where(
+                WebSessionModel.contact_id == contact_id,
+                WebSessionModel.conversation_id.is_not(None),
+            )
+            .order_by(WebSessionModel.last_seen_at.desc())
+            .limit(1)
+        )
+    ).first()
+    if web is not None and (linked is None or web.last_seen_at > linked.updated_at):
+        return web.conversation_id, WEB_PLATFORM
+    if linked is not None:
+        return linked.conversation_id, linked.platform
+    return None

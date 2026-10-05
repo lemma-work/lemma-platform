@@ -39,6 +39,15 @@ export class ContactsNamespace {
     );
   }
 
+  /** Write to a contact in their latest conversation, where the channel allows:
+   *  never where they unsubscribed, and on WhatsApp only within 24 hours of
+   *  their last message. */
+  followUp(podId: string, contactId: string, message: string) {
+    return this.client.request(() =>
+      ContactsService.contactFollowUp(podId, contactId, { message }),
+    );
+  }
+
   /** Everything the pod holds about a contact: handles and conversations. */
   export(podId: string, contactId: string) {
     return this.client.request(() => ContactsService.contactExport(podId, contactId));

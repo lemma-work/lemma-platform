@@ -34,6 +34,8 @@ def _identity(row: ContactIdentityModel) -> ContactIdentity:
         value=row.value,
         strength=IdentityStrength(row.strength),
         verified_at=row.verified_at,
+        last_inbound_at=row.last_inbound_at,
+        unsubscribed_at=row.unsubscribed_at,
     )
 
 
@@ -167,6 +169,30 @@ class ContactRepository:
             )
         )
         return bool(result.rowcount)
+
+    async def note_inbound(
+        self, *, pod_id: UUID, kind: IdentityKind, value: str
+    ) -> None:
+        """The contact just wrote from this handle: they want an answer here.
+
+        Writing again is also how a contact who unsubscribed opts back in.
+        """
+        await self.session.execute(
+            update(ContactIdentityModel)
+            .where(
+                ContactIdentityModel.pod_id == pod_id,
+                ContactIdentityModel.kind == kind.value,
+                ContactIdentityModel.value == normalize_handle(kind, value),
+            )
+            .values(last_inbound_at=datetime.now(timezone.utc), unsubscribed_at=None)
+        )
+
+    async def unsubscribe(self, *, identity_id: UUID) -> None:
+        await self.session.execute(
+            update(ContactIdentityModel)
+            .where(ContactIdentityModel.id == identity_id)
+            .values(unsubscribed_at=datetime.now(timezone.utc))
+        )
 
     async def _identities_of(
         self, contact_ids: list[UUID]

@@ -6,12 +6,15 @@ from uuid import UUID
 from ..openapi_client.api.contacts import (
     contact_delete,
     contact_export,
+    contact_follow_up,
     contact_get,
     contact_list,
     contact_update,
 )
 from ..openapi_client.models.contact_export_response import ContactExportResponse
 from ..openapi_client.models.contact_list_response import ContactListResponse
+from ..openapi_client.models.follow_up_request import FollowUpRequest
+from ..openapi_client.models.follow_up_response import FollowUpResponse
 from ..openapi_client.models.contact_response import ContactResponse
 from ..openapi_client.models.contact_update_request import ContactUpdateRequest
 from ..openapi_client.types import UNSET
@@ -53,6 +56,20 @@ class PodContacts(BoundResource):
             as_uuid(contact_id),
             body={"display_name": display_name},
             body_model=ContactUpdateRequest,
+        )
+
+    def follow_up(self, contact_id: str | UUID, message: str) -> FollowUpResponse:
+        """Write to a contact in their latest conversation, where the channel allows.
+
+        Refused when they unsubscribed there, when WhatsApp's 24-hour window
+        has closed, or when they never wrote to the pod.
+        """
+        return self._call(
+            contact_follow_up,
+            self._pod_uuid(),
+            as_uuid(contact_id),
+            body={"message": message},
+            body_model=FollowUpRequest,
         )
 
     def export(self, contact_id: str | UUID) -> ContactExportResponse:

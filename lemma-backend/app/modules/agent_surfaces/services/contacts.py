@@ -68,6 +68,7 @@ from app.modules.contacts.contracts import (
     IdentityKind,
     IdentityStrength,
     find_contact,
+    note_inbound,
     open_contact,
 )
 from app.modules.pod.contracts.members import pod_member_id
@@ -149,6 +150,10 @@ class ContactBook(Protocol):
         display_name: str | None,
     ) -> ContactRef: ...
 
+    async def note_inbound(
+        self, *, pod_id: UUID, kind: IdentityKind, value: str
+    ) -> None: ...
+
 
 class ParkedMail(Protocol):
     """Telling the member who looks after contacts about mail nobody answered."""
@@ -190,6 +195,11 @@ class PodContactBook:
             strength=strength,
             display_name=display_name,
         )
+
+    async def note_inbound(
+        self, *, pod_id: UUID, kind: IdentityKind, value: str
+    ) -> None:
+        await note_inbound(self.uow, pod_id=pod_id, kind=kind, value=value)
 
 
 class InboxParkedMail:
@@ -359,6 +369,9 @@ class ContactDoor:
             return None
         if not await self.limiter.allow(surface_id=surface.id, contact_id=contact.id):
             return None
+        await self.book.note_inbound(
+            pod_id=surface.pod_id, kind=handle.kind, value=handle.value
+        )
         # Only the contact. On an email thread a reply would otherwise copy
         # everybody else on it, and a contact's conversation is theirs.
         parsed = to_sender_alone(parsed)

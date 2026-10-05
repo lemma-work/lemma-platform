@@ -11,7 +11,10 @@ joins the pod and holds no grant, so the row is only a name to address them by.
 **`contact_identities`** is the handles a contact is known by -- a phone number,
 an email address, a Telegram user id -- and how each was vouched for
 (`strength`). `(pod_id, kind, value)` is unique: one number is one contact in a
-pod, whichever of its bots it writes to. Both tables cascade from the pod, and
+pod, whichever of its bots it writes to. `last_inbound_at` is when they last
+wrote from it (WhatsApp lets a business write freely only within a day of it),
+and `unsubscribed_at` when they asked not to be written to there. Both tables
+cascade from the pod, and
 identities from their contact, so forgetting a contact forgets their handles.
 
 **`usage_contacts_caps`** is what an organization lets its bots spend answering
@@ -90,6 +93,8 @@ def upgrade() -> None:
         sa.Column("value", sa.String(320), nullable=False),
         sa.Column("strength", sa.String(20), nullable=False),
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("last_inbound_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("unsubscribed_at", sa.DateTime(timezone=True), nullable=True),
         sa.UniqueConstraint(
             "pod_id", "kind", "value", name="uq_contact_identities_pod_handle"
         ),

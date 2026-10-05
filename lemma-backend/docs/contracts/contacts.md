@@ -12,6 +12,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | --- | --- | --- | --- |
 | `contact.delete` | DELETE | `/pods/{pod_id}/contacts/{contact_id}` | Delete Contact |
 | `contact.export` | GET | `/pods/{pod_id}/contacts/{contact_id}/export` | Export Contact |
+| `contact.follow_up` | POST | `/pods/{pod_id}/contacts/{contact_id}/messages` | Follow Up Contact |
 | `contact.get` | GET | `/pods/{pod_id}/contacts/{contact_id}` | Get Contact |
 | `contact.list` | GET | `/pods/{pod_id}/contacts` | List Contacts |
 | `contact.update` | PATCH | `/pods/{pod_id}/contacts/{contact_id}` | Update Contact |

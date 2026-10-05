@@ -230,6 +230,8 @@ _NAME_TO_MODULE = {
     'FirstWorkspaceRequest': 'first_workspace_request',
     'FirstWorkspaceResponse': 'first_workspace_response',
     'FirstWorkspaceResponseEntry': 'first_workspace_response_entry',
+    'FollowUpRequest': 'follow_up_request',
+    'FollowUpResponse': 'follow_up_response',
     'ForeignKeySpec': 'foreign_key_spec',
     'ForgetResponse': 'forget_response',
     'FormNode': 'form_node',
@@ -806,6 +808,8 @@ if TYPE_CHECKING:
     from .first_workspace_request import FirstWorkspaceRequest
     from .first_workspace_response import FirstWorkspaceResponse
     from .first_workspace_response_entry import FirstWorkspaceResponseEntry
+    from .follow_up_request import FollowUpRequest
+    from .follow_up_response import FollowUpResponse
     from .foreign_key_spec import ForeignKeySpec
     from .forget_response import ForgetResponse
     from .form_node import FormNode
@@ -1395,6 +1399,8 @@ __all__ = [
     'FirstWorkspaceRequest',
     'FirstWorkspaceResponse',
     'FirstWorkspaceResponseEntry',
+    'FollowUpRequest',
+    'FollowUpResponse',
     'ForeignKeySpec',
     'ForgetResponse',
     'FormNode',

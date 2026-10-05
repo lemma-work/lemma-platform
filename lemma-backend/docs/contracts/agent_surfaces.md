@@ -44,12 +44,12 @@ The table below is generated from the committed OpenAPI specification by `script
 | `notification.respond` | POST | `/pods/{pod_id}/notifications/{notification_id}/respond` | Respond To A Notification |
 | `notification.send` | POST | `/pods/{pod_id}/notifications` | Notify A Pod Member |
 | `notification.unread_count` | GET | `/pods/{pod_id}/notifications/unread-count` | Count My Unread Notifications |
-| `public.web.code.send` | POST | `/public/web/{public_key}/code` | Send Code |
-| `public.web.code.verify` | POST | `/public/web/{public_key}/code/verify` | Verify Code |
-| `public.web.form.submit` | POST | `/public/web/{public_key}/submit` | Submit Form |
-| `public.web.history.read` | POST | `/public/web/{public_key}/history` | Read History |
-| `public.web.message.send` | POST | `/public/web/{public_key}/messages` | Send Message |
-| `public.web.session.start` | POST | `/public/web/{public_key}/session` | Start Session |
+| `public.web.code.send` | POST | `/public/web/{public_key}/code` | Web Send Code |
+| `public.web.code.verify` | POST | `/public/web/{public_key}/code/verify` | Web Verify Code |
+| `public.web.form.submit` | POST | `/public/web/{public_key}/submit` | Web Submit Form |
+| `public.web.history.read` | POST | `/public/web/{public_key}/history` | Web Read History |
+| `public.web.message.send` | POST | `/public/web/{public_key}/messages` | Web Send Message |
+| `public.web.session.start` | POST | `/public/web/{public_key}/session` | Web Start Session |
 | `surface.webhook.handle_platform` | POST | `/surfaces/webhooks/{platform}` | Handle platform-level surface webhook |
 | `surface.webhook.handle_surface` | POST | `/surfaces/{surface_id}/webhook` | Handle surface-level webhook |
 | `surface.webhook.handle_telegram_manager` | POST | `/surfaces/webhooks/telegram-manager` | Handle Telegram manager-bot webhook |

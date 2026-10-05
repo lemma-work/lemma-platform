@@ -8,6 +8,7 @@ member's action, through this module's own API.
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -21,7 +22,11 @@ from app.modules.contacts.domain.entities import (
 from app.modules.contacts.infrastructure.repository import ContactRepository
 
 __all__ = [
+    "ContactHandleRef",
     "ContactRef",
+    "contact_handles",
+    "unsubscribe_handle",
+    "note_inbound",
     "IdentityKind",
     "IdentityStrength",
     "contact_by_id",
@@ -38,6 +43,18 @@ class ContactRef(BaseModel):
     id: UUID
     pod_id: UUID
     display_name: str | None
+
+
+class ContactHandleRef(BaseModel):
+    """One handle of a contact, with what decides whether the pod may write to it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    kind: IdentityKind
+    value: str
+    last_inbound_at: datetime | None
+    unsubscribed_at: datetime | None
 
 
 def _ref(contact: Contact | None) -> ContactRef | None:
@@ -92,3 +109,38 @@ async def contact_by_id(
     return _ref(
         await ContactRepository(uow.session).get(pod_id=pod_id, contact_id=contact_id)
     )
+
+
+async def note_inbound(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, kind: IdentityKind, value: str
+) -> None:
+    """Record that a contact just wrote from this handle."""
+    await ContactRepository(uow.session).note_inbound(
+        pod_id=pod_id, kind=kind, value=value
+    )
+
+
+async def contact_handles(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
+) -> list[ContactHandleRef]:
+    """Every handle this contact is known by, or none once they are forgotten."""
+    contact = await ContactRepository(uow.session).get(
+        pod_id=pod_id, contact_id=contact_id
+    )
+    if contact is None:
+        return []
+    return [
+        ContactHandleRef(
+            id=identity.id,
+            kind=identity.kind,
+            value=identity.value,
+            last_inbound_at=identity.last_inbound_at,
+            unsubscribed_at=identity.unsubscribed_at,
+        )
+        for identity in contact.identities
+    ]
+
+
+async def unsubscribe_handle(uow: SqlAlchemyUnitOfWork, *, handle_id: UUID) -> None:
+    """The contact asked not to be written to at this handle."""
+    await ContactRepository(uow.session).unsubscribe(identity_id=handle_id)

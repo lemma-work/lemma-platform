@@ -217,6 +217,8 @@ EXCLUDED_PATHS = (
     # Web widgets: the public key names the widget, and the handler decides
     # what a visitor may do with it (services/web_chat.py).
     "/public/web",
+    # A contact's unsubscribe link: its signed token is the credential.
+    "/public/contacts",
     "/widgets/serve",  # widget HTML; handler self-validates session-or-signed-token
     "/public/datastore",  # signed-token file serving validates its own token
     # Short signed-URL file serving; validates its own Redis-backed code.

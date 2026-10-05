@@ -233,6 +233,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.consent.cache_read_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
     'agent_surfaces.consent.graph_probe_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
     'agent_surfaces.consent.token_request_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
+    'agent_surfaces.contact_follow_ups.sent.observed': EventSpec('info', frozenset({'delivered', 'platform'})),
     'agent_surfaces.contact_limits.exceeded.observed': EventSpec('info', frozenset({'per_person', 'surface_id'})),
     'agent_surfaces.contact_limits.new_contacts_exceeded.observed': EventSpec('info', frozenset({'surface_id'})),
     'agent_surfaces.contact_limits.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),

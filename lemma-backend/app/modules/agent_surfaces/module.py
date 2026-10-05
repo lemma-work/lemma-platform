@@ -36,6 +36,10 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.public_web_controller import (
         router as public_web,
     )
+    from app.modules.agent_surfaces.api.controllers.contact_follow_up_controller import (
+        public_router as public_contacts,
+        router as contact_follow_ups,
+    )
 
     return [
         surface,
@@ -49,6 +53,8 @@ def _routers():
         surface_public,
         web_widgets,
         public_web,
+        contact_follow_ups,
+        public_contacts,
     ]
 
 
