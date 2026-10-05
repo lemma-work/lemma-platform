@@ -5,14 +5,15 @@ import { Vignette } from "./vignette";
 import k from "./kit.module.css";
 import v from "./channels-who-is-asking.module.css";
 
-/* Kit's launch_assets as the sample space seeds them, a few of its rows:
-   [asset, owner, status]. The press release is the one asked about. */
-const ASSETS: [string, string, string][] = [
-    ["Launch post", "Priya", "In review"],
-    ["Pricing page copy", "Aditi", "Drafting"],
-    ["Demo video, 90s", "Rohan", "Drafting"],
-    ["Press release", "Priya", "In review"],
-    ["Changelog entry", "Kit", "Ready"],
+/* Kit's feedback_themes as the sample space seeds them, a few of its rows:
+   [theme, owner, where its fix is]. Dates import as text is the one asked
+   about: #482 has merged, and only Dev, who shipped it, can say it's live. */
+const THEMES: [string, string, string][] = [
+    ["Large imports time out", "Dev", "No fix"],
+    ["Notifications on mobile", "Dev", "In review"],
+    ["Dates import as text", "Dev", "Merged"],
+    ["Login link expired", "Dev", "Live"],
+    ["Column mapping resets", "Alex", "Live"],
 ];
 
 /** One message in the thread: who, when, what they may do, what they said. */
@@ -29,56 +30,56 @@ function Post({ className, who, at, access, children }: { className?: string; wh
     );
 }
 
-/** Same thread, same teammate, two people. Sam asks Kit in #launch to mark
- *  the press release Ready; he can view the launch assets but not edit them,
- *  so the request runs as Sam and nothing moves, though Kit itself could.
- *  Priya, who can edit them, says yes in the same thread, and the same
- *  change goes through as her.
+/** Same thread, same teammate, two people. Sam asks Kit in #feedback to
+ *  mark #482 live and send the retry replies; Sam can view the themes, but
+ *  only the engineer who shipped a fix can say it's live, so the request
+ *  runs as Sam and nothing moves, though Kit itself could. Dev, who shipped
+ *  it, says yes in the same thread, and the same change goes through as Dev.
  *
- *  Beats: 1 Sam's message, and under his name what he may do; 2 the row
- *  nudges toward Ready and stops, a lock settles on it, and the note says
- *  it ran as Sam; 3 Priya's reply, and what she may do; 4 the row flips to
- *  Ready, noted as run as Priya; 5 Kit's short done reply under hers.
+ *  Beats: 1 Sam's message, and under the name what Sam may do; 2 the row
+ *  nudges toward Live and stops, a lock settles on it, and the note says
+ *  it ran as Sam; 3 Dev's reply, and what Dev may do; 4 the row flips to
+ *  Live, noted as run as Dev; 5 Kit's short done reply under Dev's.
  *
  *  On a phone it shows Kit's space alone, where the outcome lands: the
  *  notes under the table say whose request each change ran as. */
 export function ChannelsWhoIsAsking() {
     return (
         <Vignette className={v.root} beats={[1300, 1500, 2400, 1500, 1700]} hold={3400} height={420} phone={{ x: 324, width: 308 }}
-            label="A Slack thread in #launch. Sam, who can view Kit's launch assets but not edit them, writes: @Kit mark the press release Ready, Priya's fine with it. Beside the thread, in Kit's space, the press release row reads In review. It starts toward Ready and stops, a lock settles on it, and a note says it ran as Sam: can view, can't change, nothing moved. Priya, who can edit the launch assets, replies in the same thread: @Kit yes, mark it Ready. The row turns Ready, noted as run as Priya, and Kit replies under her message that it's done.">
+            label="A Slack thread in #feedback. Sam, who can view Kit's feedback themes but can't confirm a fix, writes: @Kit #482 is live, send the dates replies. Dev's fine with it. Beside the thread, in Kit's space, the row for Dates import as text reads Merged. It starts toward Live and stops, a lock settles on it, and a note says it ran as Sam: can view, can't confirm, nothing moved. Dev, who shipped #482, replies in the same thread: @Kit yes, it's live. The row turns Live, noted as run as Dev, and Kit replies under Dev's message that it's done: 19 replies are going out.">
             <div className={v.stage} />
 
             {/* The thread, drawn plainly: Slack's mark, no one's chrome. */}
             <section className={`${k.card} ${v.thread}`}>
-                <div className={`${k.bar} ${v.head}`}><img className={v.logo} src="/connector-logos/slack.svg" alt="" /><b>#launch</b><span>· Thread</span></div>
+                <div className={`${k.bar} ${v.head}`}><img className={v.logo} src="/connector-logos/slack.svg" alt="" /><b>#feedback</b><span>· Thread</span></div>
                 <div className={v.feed}>
-                    <Post who="Aditi" at="9:48">Pricing page draft is up for comments.</Post>
+                    <Post who="Alex" at="9:48">Digest times look right now.</Post>
                     <Post className={v.sam} who="Sam" at="10:02"
-                        access={<span className={`${k.chip} ${v.access}`}><Eye size={12} />can view Launch assets</span>}>
-                        <span className={v.at}>@Kit</span> mark the press release Ready, Priya’s fine with it.
+                        access={<span className={`${k.chip} ${v.access}`}><Eye size={12} />can view Feedback themes</span>}>
+                        <span className={v.at}>@Kit</span> #482 is live, send the dates replies. Dev’s fine with it.
                     </Post>
-                    <Post className={v.priya} who="Priya" at="10:05"
-                        access={<span className={`${k.chip} ${v.access}`}><PencilSimple size={12} />can edit Launch assets</span>}>
-                        <span className={v.at}>@Kit</span> yes, mark it Ready.
+                    <Post className={v.dev} who="Dev" at="10:05"
+                        access={<span className={`${k.chip} ${v.access}`}><PencilSimple size={12} />shipped #482</span>}>
+                        <span className={v.at}>@Kit</span> yes, it’s live.
                     </Post>
-                    <Post className={v.kit} who="Kit" at="10:05">Done. The press release is Ready.</Post>
+                    <Post className={v.kit} who="Kit" at="10:05">Done. 19 replies are going out.</Post>
                 </div>
                 <div className={v.composer}>Reply…</div>
             </section>
 
-            {/* Kit's space: the launch assets everyone works from. */}
+            {/* Kit's space: the themes everyone works from. */}
             <section className={`${k.card} ${v.panel}`}>
-                <div className={k.bar}><img className={k.face} src={FACES.Kit} alt="" /><b>Kit’s space</b><span>· Launch assets</span><i /><i /><i /></div>
+                <div className={k.bar}><img className={k.face} src={FACES.Kit} alt="" /><b>Kit’s space</b><span>· Feedback themes</span><i /><i /><i /></div>
                 <div className={v.sheet}>
-                    <p className={v.cols}><span>Asset</span><span>Owner</span><span>Status</span></p>
-                    {ASSETS.map(([asset, owner, status]) => {
-                        const asked = asset === "Press release";
+                    <p className={v.cols}><span>Theme</span><span>Owner</span><span>Fix</span></p>
+                    {THEMES.map(([theme, owner, status]) => {
+                        const asked = theme === "Dates import as text";
                         return (
-                            <div key={asset} className={`${v.row} ${asked ? v.asked : ""}`}>
-                                <span className={v.asset}>{asset}</span>
+                            <div key={theme} className={`${v.row} ${asked ? v.asked : ""}`}>
+                                <span className={v.asset}>{theme}</span>
                                 <span className={v.owner}>{owner}</span>
                                 {asked
-                                    ? <span className={`${v.pill} ${v.slot}`}><span className={v.track}><span>In review</span><span>Ready</span></span></span>
+                                    ? <span className={`${v.pill} ${v.slot}`}><span className={v.track}><span>Merged</span><span>Live</span></span></span>
                                     : <span className={v.pill}>{status}</span>}
                                 {asked ? <span className={v.lock}><LockSimple size={11} weight="fill" /></span> : <span />}
                             </div>
@@ -88,8 +89,8 @@ export function ChannelsWhoIsAsking() {
             </section>
 
             {/* Who each request ran as, set apart from the chat. */}
-            <p className={`${v.note} ${v.noteSam}`}><span className={v.glyph}><LockSimple size={11} weight="fill" /></span><span><b>Ran as Sam:</b> can view, can’t change.<br />Nothing moved.</span></p>
-            <p className={`${v.note} ${v.notePriya}`}><span className={`${v.glyph} ${v.glyphOk}`}><Check size={11} weight="bold" /></span><span><b>Ran as Priya:</b> can edit. Now Ready.</span></p>
+            <p className={`${v.note} ${v.noteSam}`}><span className={v.glyph}><LockSimple size={11} weight="fill" /></span><span><b>Ran as Sam:</b> can view, can’t confirm.<br />Nothing moved.</span></p>
+            <p className={`${v.note} ${v.noteDev}`}><span className={`${v.glyph} ${v.glyphOk}`}><Check size={11} weight="bold" /></span><span><b>Ran as Dev:</b> shipped it. Now Live.</span></p>
         </Vignette>
     );
 }

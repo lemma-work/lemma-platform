@@ -145,7 +145,7 @@ Large imports are the biggest unsolved problem: 41 reports, up every day this we
 ## Still open
 
 \`\`\`lemma-view
--- Themes without a fix that has shipped
+-- Themes still open
 SELECT "theme", "reports", "stage", "owner" FROM "feedback_themes" WHERE "stage" != 'Closed' ORDER BY "reports" DESC LIMIT 50
 \`\`\`
 

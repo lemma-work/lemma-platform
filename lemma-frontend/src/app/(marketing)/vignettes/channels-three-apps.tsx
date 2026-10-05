@@ -30,9 +30,9 @@ function Message({ className, from, who, children }: { className: string; from: 
     );
 }
 
-/** A row of Kit's launch assets whose status changes, and the tag naming
- *  whose access the change was made with. */
-function Asset({ className, name, owner, was, now, as }: { className: string; name: string; owner: string; was: string; now: string; as: string }) {
+/** A row of Kit's feedback themes whose fix changes state, and the tag
+ *  naming whose access the change was made with. */
+function Theme({ className, name, owner, was, now, as }: { className: string; name: string; owner: string; was: string; now: string; as: string }) {
     return (
         <div className={`${v.row} ${className}`}>
             <span className={v.asset}>{name}<small>{owner}</small></span>
@@ -43,48 +43,47 @@ function Asset({ className, name, owner, was, now, as }: { className: string; na
 }
 
 /** Ask from Slack, WhatsApp or email, and the work lands in the teammate's
- *  space. Priya, Aditi and Rohan each ask Kit from a different app; each
- *  change is made on the same launch list, with the access of whoever asked.
+ *  space. Dev, Alex and Sam each tell Kit from a different app; each change
+ *  is made on the same themes list, with the access of whoever said it.
  *
- *  Beats: 1 a line from Priya's Slack message into Kit's space, and the
- *  press release turns Ready, as Priya; 2 Aditi's WhatsApp arrives; 3 its
- *  line, and the pricing page copy turns In review, as Aditi; 4 Rohan's
- *  forwarded email arrives; 5 its line, and the readiness check ticks, as
- *  Rohan.
+ *  Beats: 1 a line from Dev's Slack message into Kit's space, and #482
+ *  turns Live, as Dev, who shipped it; 2 Alex's WhatsApp arrives; 3 its
+ *  line, and #478 turns Live, as Alex; 4 Sam's forwarded email arrives;
+ *  5 its line, and Northfield's retry reply is ticked over to Sam, as Sam.
  *
  *  On a phone it shows Kit's space alone, where the work lands: each line
  *  comes in from the edge, and the tag on the row says who asked. */
 export function ChannelsThreeApps() {
     return (
         <Vignette className={v.root} beats={[1700, 1700, 1300, 1700, 1300]} hold={3600} height={384} phone={{ x: 274, width: 352 }}
-            label="Three people ask Kit from three apps. In Slack, in #launch, Priya writes: @Kit the press release is signed off, mark it Ready. In Kit's space, on the launch assets list, the press release changes from In review to Ready, made as Priya. On WhatsApp, Aditi writes: pricing copy is with finance now, can you move it to In review? The pricing page copy changes from Drafting to In review, made as Aditi. By email, Rohan forwards: Northfield, quote cleared in writing. The readiness check Customer names cleared in writing is ticked, made as Rohan. Three messages from three apps, and three changes in one place, each made with the access of the person who asked.">
+            label="Three people tell Kit from three apps. In Slack, in #feedback, Dev writes: @Kit #482 is live. Send the replies. In Kit's space, on the feedback themes, Dates import as text goes from Merged to Live, made as Dev, who shipped it. On WhatsApp, Alex writes: #478 is out, the digest times are right now. Wrong timezone in emails goes from Merged to Live, made as Alex. By email, Sam forwards: Northfield, call me before you email. The retry reply to Northfield is ticked over to Sam, made as Sam. Three messages from three apps, and three changes in one place, each made with the access of the person who sent it.">
             <div className={v.stage} />
 
-            <Message className={v.slack} who="Priya"
-                from={<><img src="/connector-logos/slack.svg" alt="" />Slack<em>· #launch</em></>}>
-                <span className={v.mention}>@Kit</span> the press release is signed off, mark it Ready.
+            <Message className={v.slack} who="Dev"
+                from={<><img src="/connector-logos/slack.svg" alt="" />Slack<em>· #feedback</em></>}>
+                <span className={v.mention}>@Kit</span> #482 is live. Send the replies.
             </Message>
-            <Message className={v.whatsapp} who="Aditi"
+            <Message className={v.whatsapp} who="Alex"
                 from={<><img src="/connector-logos/whatsapp.svg" alt="" />WhatsApp</>}>
-                pricing copy is with finance now, can you move it to In review?
+                #478 is out, the digest times are right now.
             </Message>
-            <Message className={v.email} who="Rohan"
+            <Message className={v.email} who="Sam"
                 from={<><span className={v.at} aria-hidden="true">@</span>Email<em>· to Kit</em></>}>
-                Fwd: Northfield, quote cleared in writing
+                Fwd: Northfield, “call me before you email”
             </Message>
 
             <div className={`${k.card} ${v.panel}`}>
-                <div className={k.bar}><img className={k.face} src={FACES.Kit} alt="" /><b>Kit’s space</b><span>· Launch assets</span><i /><i /><i /></div>
+                <div className={k.bar}><img className={k.face} src={FACES.Kit} alt="" /><b>Kit’s space</b><span>· Feedback themes</span><i /><i /><i /></div>
                 <div className={v.sheet}>
-                    <p className={v.head}><span>Asset</span><span>Status</span></p>
-                    <Asset className={v.press} name="Press release" owner="Priya" was="In review" now="Ready" as="Priya" />
-                    <Asset className={v.pricing} name="Pricing page copy" owner="Aditi" was="Drafting" now="In review" as="Aditi" />
+                    <p className={v.head}><span>Theme</span><span>Fix</span></p>
+                    <Theme className={v.dates} name="Dates import as text" owner="Dev · #482" was="Merged" now="Live" as="Dev" />
+                    <Theme className={v.zones} name="Wrong timezone in emails" owner="Alex · #478" was="Merged" now="Live" as="Alex" />
 
-                    <p className={`${v.head} ${v.checksHead}`}><span>Readiness checks</span></p>
+                    <p className={`${v.head} ${v.checksHead}`}><span>Retry replies</span></p>
                     <div className={`${v.row} ${v.check}`}>
                         <i className={`${k.check} ${v.box}`} />
-                        <span className={v.asset}><span className={v.checkName}>Customer names cleared in writing</span><small>in 3 days</small></span>
-                        <span className={v.tag}>as Rohan</span>
+                        <span className={v.asset}><span className={v.checkName}>Northfield hears from Sam first</span><small>Enterprise · #482</small></span>
+                        <span className={v.tag}>as Sam</span>
                     </div>
                 </div>
             </div>

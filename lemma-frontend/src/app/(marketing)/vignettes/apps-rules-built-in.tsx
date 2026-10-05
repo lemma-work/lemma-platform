@@ -4,27 +4,28 @@ import { Vignette } from "./vignette";
 import k from "./kit.module.css";
 import v from "./apps-rules-built-in.module.css";
 
-type Row = { name: string; format: string; owner: string; notes?: string; glyph: string; thumb: string; status: string; next: string; blocked?: boolean };
+type Row = { name: string; format: string; owner: string; pr: string; notes?: string; glyph: string; thumb: string; status: string; next: string; blocked?: boolean };
 
-/* Launch studio's release plan, row for row as the app draws it with the
-   landing page approved (marketing/kit/model.ts: nextStep, the table cells). */
+/* Feedback loop's retry replies for this week's fixes, one row per theme,
+   once Dev has confirmed #482 is live (marketing/kit/model.ts: the themes,
+   their PRs and the replies for #482). */
 const ROWS: Row[] = [
-    { name: "Landing page", format: "Web · Product launch", owner: "Priya", notes: "1 open note", glyph: "▤", thumb: v.thumbLanding, status: "Approved", next: "Ready to ship" },
-    { name: "Customer announcement", format: "Email · Existing customers", owner: "Priya", glyph: "✉︎", thumb: v.thumbEmail, status: "Needs review", next: "Ready for your review" },
-    { name: "Product walkthrough", format: "Storyboard · 3 frames", owner: "Dev", glyph: "▷", thumb: v.thumbFilm, status: "Needs review", next: "3 of 3 frames to update", blocked: true },
-    { name: "Customer story", format: "Web · Customer proof", owner: "Priya", glyph: "¶", thumb: v.thumbStory, status: "Needs review", next: "Customer permission needed", blocked: true },
+    { name: "Dates import as text", format: "22 people · 3 via Sam", owner: "Dev", pr: "#482", notes: "Merged", glyph: "▦", thumb: v.thumbDates, status: "Live", next: "Ready to send" },
+    { name: "Notifications on mobile", format: "31 people · mostly in app", owner: "Dev", pr: "#490", notes: "In review", glyph: "▯", thumb: v.thumbMobile, status: "Not live", next: "Waits for #490 to merge", blocked: true },
+    { name: "Large imports time out", format: "41 people · P0", owner: "Dev", pr: "—", notes: "LIN-251", glyph: "⇪", thumb: v.thumbImports, status: "No fix", next: "Nothing to promise yet", blocked: true },
+    { name: "Wrong timezone in emails", format: "14 asked · 4 say it works", owner: "Alex", pr: "#478", notes: "Live Mon", glyph: "◷", thumb: v.thumbZones, status: "Sent", next: "Ask the rest Friday" },
 ];
-const TYPED = "faster";
+const TYPED = "#490";
 
-/** The rules are in the screen: Launch studio knows that editing approved
- *  copy cancels the approval, so the plan undoes itself without anyone
- *  remembering to.
+/** The rules are in the screen: Feedback loop knows a retry reply can only
+ *  promise a fix that is live, so a reply that names the wrong PR holds
+ *  itself without anyone remembering to check.
  *
- *  Beats: 1 the landing page row is clicked and its Edit copy rises over the
- *  plan, the row still in view; 2 the pointer double-clicks "better" in the
- *  headline; 3 "faster" typed over it, the draft now unsaved; 4 the row's
- *  status flips to Needs review and its next step to Save the edited draft;
- *  5 the plan's one approval drains away: 0 of 4.
+ *  Beats: 1 the dates row is clicked and its Edit reply rises over the
+ *  list, the row still in view; 2 the pointer double-clicks "#482" in the
+ *  reply; 3 "#490" typed over it, the draft now unsaved; 4 the row's status
+ *  flips to Not live and its next step to Waits for Dev on #490; 5 the
+ *  list's one ready reply drains away: 0 of 4.
  *
  *  On a phone it shows the plan up to its Status column: the edit, the
  *  status that flips and the count all sit there, so only Next step is
@@ -32,27 +33,27 @@ const TYPED = "faster";
 export function AppsRulesBuiltIn() {
     return (
         <Vignette className={v.root} phone={{ x: 8, width: 438 }} beats={[1400, 1100, 1400, 1300, 1200]} hold={2800}
-            label="In Launch studio, the app Kit built for Acme's launches, the release plan shows the landing page approved, one of four assets. Someone opens the landing page in Edit copy and changes one word of its headline. The landing page goes straight back to Needs review, its next step reads Save the edited draft, and the plan drops to none of four approved.">
-            <div className={k.bar}><img className={k.face} src={FACES.Kit} alt="" /><b>Launch studio</b><span>· an app</span><i /><i /><i /></div>
+            label="In Feedback loop, the app Kit built for Acme's product team, this week's retry replies show the reply for Dates import as text ready to send, one of four, because Dev confirmed #482 is live. Someone opens that reply in Edit reply and changes #482 to #490, a fix still in review. The reply goes straight to Not live, its next step reads Waits for Dev on #490, and the list drops to none of four ready to send.">
+            <div className={k.bar}><img className={k.face} src={FACES.Kit} alt="" /><b>Feedback loop</b><span>· an app</span><i /><i /><i /></div>
 
             <div className={v.studio}>
                 <nav className={v.views}>
-                    <span className={v.viewOn}>Release plan <em className={v.flip}><span className={v.one}>1/4</span><span className={v.zero}>0/4</span></em></span>
-                    <span>Assets</span>
+                    <span className={v.viewOn}>Retry replies <em className={v.flip}><span className={v.one}>1/4</span><span className={v.zero}>0/4</span></em></span>
+                    <span>Themes</span>
                 </nav>
 
                 <header className={v.head}>
                     <div>
-                        <span className={v.kicker}>Release plan</span>
-                        <p className={v.title}>Import flow launch</p>
-                        <p className={v.sub}>Target Thu, Oct 8 · <span className={v.flip}><span className={v.one}>1</span><span className={v.zero}>0</span></span> of 4 approved</p>
+                        <span className={v.kicker}>Retry replies</span>
+                        <p className={v.title}>This week’s fixes</p>
+                        <p className={v.sub}>Week 40 · <span className={v.flip}><span className={v.one}>1</span><span className={v.zero}>0</span></span> of 4 ready to send</p>
                     </div>
                 </header>
 
                 <div className={v.progress} aria-hidden="true"><span><i className={v.fill} /></span><span /><span /><span /></div>
 
                 <div className={v.table}>
-                    <div className={v.thead}><span>Asset</span><span>Owner</span><span>Revision</span><span>Status</span><span>Next step</span></div>
+                    <div className={v.thead}><span>Theme</span><span>Owner</span><span>PR</span><span>Fix</span><span>Next step</span></div>
                     {ROWS.map((row, index) => (
                         <div key={row.name} className={index === 0 ? `${v.row} ${v.picked}` : v.row}>
                             <span className={v.asset}>
@@ -60,16 +61,16 @@ export function AppsRulesBuiltIn() {
                                 <span className={v.name}><b>{row.name}</b><small>{row.format}</small></span>
                             </span>
                             <span className={v.owner}><i>{row.owner[0]}</i>{row.owner}</span>
-                            <span className={v.rev}>v3{row.notes && <small>{row.notes}</small>}</span>
+                            <span className={v.rev}>{row.pr}{row.notes && <small>{row.notes}</small>}</span>
                             {index === 0 ? (
                                 <>
                                     <span className={v.flip}>
-                                        <span className={`${v.status} ${v.statusOk} ${v.approved}`}>Approved</span>
-                                        <span className={`${v.status} ${v.review}`}>Needs review</span>
+                                        <span className={`${v.status} ${v.statusOk} ${v.live}`}>Live</span>
+                                        <span className={`${v.status} ${v.held}`}>Not live</span>
                                     </span>
                                     <span className={v.flip}>
-                                        <span className={`${v.next} ${v.ready}`}>Ready to ship</span>
-                                        <span className={`${v.next} ${v.blocked} ${v.save}`}>Save the edited draft</span>
+                                        <span className={`${v.next} ${v.ready}`}>Ready to send</span>
+                                        <span className={`${v.next} ${v.blocked} ${v.save}`}>Waits for Dev on #490</span>
                                     </span>
                                 </>
                             ) : (
@@ -82,31 +83,31 @@ export function AppsRulesBuiltIn() {
                     ))}
                 </div>
 
-                <p className={v.history}><span>02</span>You approved Landing page v3.</p>
+                <p className={v.history}><span>08:41</span>Dev confirmed #482 is live.</p>
 
-                {/* The landing page's own screen, in Edit copy, cropped to its headline. */}
+                {/* The dates reply's own screen, in Edit reply, cropped to its text. */}
                 <div className={v.sheet}>
                     <div className={v.sheetHead}>
-                        <b>Landing page</b>
-                        <span className={v.modes}><span>Preview</span><span className={v.modeOn}>Edit copy</span><span>Compare</span></span>
-                        <span className={`${v.flip} ${v.state}`}><span className={v.clean}>Saved · v3</span><span className={v.dirty}>Unsaved changes</span></span>
+                        <b>Dates import as text</b>
+                        <span className={v.modes}><span>Preview</span><span className={v.modeOn}>Edit reply</span><span>Who gets it</span></span>
+                        <span className={`${v.flip} ${v.state}`}><span className={v.clean}>Saved</span><span className={v.dirty}>Unsaved changes</span></span>
                     </div>
                     <div className={v.editor}>
-                        <span className={v.label}>Headline</span>
+                        <span className={v.label}>Reply</span>
                         <div className={v.field}>
-                            Your first import.<br />
-                            The start of{" "}
+                            Hi {"{name}"}, your dates import as dates now.<br />
+                            It’s fixed in{" "}
                             <span className={v.word}>
-                                <span className={v.old}>better</span>
+                                <span className={v.old}>#482</span>
                                 {TYPED.split("").map((letter, index) => (
                                     <span key={index} className={v.typed} style={{ "--n": index } as CSSProperties}>{letter}</span>
                                 ))}
                                 <span className={`${k.caret} ${v.caret}`} />
-                            </span>{" "}work.
+                            </span>, live for everyone. Try again?
                         </div>
                         <div className={v.actions}>
-                            <span className={v.saveBtn}>Save new revision</span>
-                            <span className={v.discardBtn}>Discard unsaved copy</span>
+                            <span className={v.saveBtn}>Save reply</span>
+                            <span className={v.discardBtn}>Discard changes</span>
                         </div>
                     </div>
                 </div>

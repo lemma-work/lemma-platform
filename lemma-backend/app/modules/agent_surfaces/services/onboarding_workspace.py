@@ -9,6 +9,7 @@ from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 
 from datetime import datetime, timezone
 
+from pydantic import JsonValue
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -73,6 +74,23 @@ class SharedSurfaceUnavailable(ChallengeRejected):
         self.pod_id = pod_id
 
 
+class NoRoomForWorkspace(ChallengeRejected):
+    """Their plan has no room for the personal workspace signup would make.
+
+    Provisioning comes back without a pod when the person owns none that is
+    theirs alone and the plan refuses another. That used to be an assert, so
+    the webhook was retried and dead-lettered and the person heard nothing.
+    It is a question when they can reach some other workspace, and a refusal
+    when they cannot.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Your plan has no room for another workspace. Delete one, or "
+            "upgrade to make more."
+        )
+
+
 class WorkspaceChoiceAsked(ChallengeRejected):
     """A refusal that has already moved the signup onto its own next question.
 
@@ -108,16 +126,50 @@ async def complete_onboarding_workspace(
         # Raised from inside a unit of work, so the park has to happen after it
         # has rolled back -- and `_step` turns what comes out of here into the
         # reply, so the offer travels on the message.
+        pods = await _other_workspaces(uows, transport, state, conflict.pod_id)
         raise WorkspaceChoiceAsked(
-            await _park_on_another_workspace(uows, transport, state, conflict)
+            await _park_on_another_workspace(uows, state, conflict.message, pods)
         ) from conflict
+    except NoRoomForWorkspace as no_room:
+        # With nothing else to offer, the question would be "reply `new`" --
+        # which the same plan limit refuses. So that case stays a refusal.
+        pods = await _other_workspaces(uows, transport, state, None)
+        if not pods:
+            raise
+        raise WorkspaceChoiceAsked(
+            await _park_on_another_workspace(uows, state, no_room.message, pods)
+        ) from no_room
+
+
+async def _other_workspaces(
+    uows: UnitOfWorkFactory,
+    transport: OnboardingTransport,
+    state: PendingState,
+    refused_pod_id: UUID | None,
+) -> list[dict[str, JsonValue]]:
+    """The workspaces to offer instead, less the one that just refused.
+
+    The refused pod is still re-checked if they name it some other way, but
+    offering it back is offering the failure.
+    """
+    assert state.user_id is not None
+    async with uows() as uow:
+        return [
+            pod
+            for pod in await candidate_pods(
+                uow,
+                user_id=state.user_id,
+                organization_id=transport.organization_id,
+            )
+            if UUID(str(pod["id"])) != refused_pod_id
+        ]
 
 
 async def _park_on_another_workspace(
     uows: UnitOfWorkFactory,
-    transport: OnboardingTransport,
     state: PendingState,
-    conflict: SharedSurfaceUnavailable,
+    message: str,
+    pods: list[dict[str, JsonValue]],
 ) -> str:
     """Move a stuck signup onto the workspace question, and ask it.
 
@@ -125,28 +177,14 @@ async def _park_on_another_workspace(
     stayed on VERIFIED, so the next message -- `new Personal`, or anything --
     re-ran provisioning against the same pod and was refused again in the same
     words. Nothing was reading the answer, because nothing had asked a question.
-
-    The pod that just refused is left off the list. It is still re-checked if
-    they name it some other way, but offering it back is offering the failure.
     """
-    assert state.user_id is not None
-    async with uows() as uow:
-        pods = [
-            pod
-            for pod in await candidate_pods(
-                uow,
-                user_id=state.user_id,
-                organization_id=transport.organization_id,
-            )
-            if UUID(str(pod["id"])) != conflict.pod_id
-        ]
     async with uows() as uow:
         row = await uow.session.get(PendingChatOnboarding, state.id)
         assert row is not None
         row.step = OnboardingStep.AWAITING_POD
         row.user_id = state.user_id
         row.offered_pods = pods
-    return f"{conflict.message}\n\n{offer_text(pods)}"
+    return f"{message}\n\n{offer_text(pods)}"
 
 
 async def _provision_and_bind(
@@ -167,7 +205,8 @@ async def _provision_and_bind(
         if workspace.status == "organization_access_required":
             pending.step = OnboardingStep.ORGANIZATION_ACCESS_REQUIRED
             return OnboardingOutcome(waiting_on_an_admin=True)
-        assert workspace.pod_id is not None and workspace.assistant_id is not None
+        if workspace.pod_id is None or workspace.assistant_id is None:
+            raise NoRoomForWorkspace()
         if transport.surface is not None:
             # The destination goes on the identity row, which by now exists:
             # one write, and nothing that can outlive a revocation.
