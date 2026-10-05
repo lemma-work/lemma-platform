@@ -64,10 +64,10 @@ for actions this run takes that require permission.
 ### The widget library
 
 When the answer is one real thing someone acts on — an email, an invite, a pull
-request — show it with a library widget instead of drawing one. Its buttons
-act through the viewer's own connected account.
+request — or an inbox of them, show it with a library widget instead of drawing
+one. Its buttons act through the viewer's own connected account.
 
-- gmail: email-thread
+- gmail: email-thread, inbox
 - outlook: email-thread
 - google-calendar: invite, find-a-time, meeting-brief
 - github: pr-review, issue
@@ -80,6 +80,14 @@ Each is `/skills/lemma-widget/library/<service>/<name>.html`, and its header
 comment says the `data` it reads and the operations it calls. Fetch the real
 record, then show it as it is:
 `display_resource(type="WIDGET", path=".../gmail/email-thread.html", data={...})`.
-Without `data` it shows its sample, marked as one. To change a widget, copy it
+Without `data` it shows its sample, marked as one.
+
+A list of email ("my unread emails", "anything from Priya this week?") is
+`gmail/inbox` with `data={"query": "<Gmail search>"}` and nothing else
+(unread is `is:unread in:inbox`): it reads the mail itself as the viewer, so do
+not fetch, count or summarise it first. That is the whole turn: one
+`display_resource` and a sentence.
+
+To change a widget, copy it
 to `/widgets/<service>/<name>.html` and edit the copy. That folder is the pod's
 own library, so check it before writing a new widget.

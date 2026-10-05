@@ -1405,3 +1405,77 @@ async def test_execute_python_is_visible_to_the_idle_sweep(
     # And it does not stay busy once it has returned.
     state, _exit_code = buffer.states[tracked]
     assert state in {ProcessState.SUCCEEDED, ProcessState.FAILED}
+
+
+async def test_an_exception_in_the_agents_code_is_a_failed_result_not_an_outage(
+    provider: E2BSandboxProvider, world: FakeE2B, monkeypatch
+) -> None:
+    """A `KeyError` in one line of agent code cost a minute, twice in one turn.
+
+    E2B raises a non-zero exit as an exception, and `classify` sorted it by
+    sniffing the message -- the traceback. One named the runner's UUID path,
+    which contained "403", so it came back as "e2b rejected the credentials";
+    the next matched nothing and became `SandboxUnavailable`, which the session
+    retried, re-running the broken code, until the deadline. The exit is the
+    answer: a FAILED result carrying the traceback, at once.
+    """
+    from sandbox_runtime.protocol import ExecutePythonRequest, PythonExecutionState
+
+    from app.modules.workspace.services.local_sandbox_files import (
+        LocalPythonSessionRef,
+    )
+    from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+
+    buffer = InMemoryOutputBuffer()
+    monkeypatch.setattr(provider, "_output", buffer)
+    monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
+    monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
+
+    instance = await provider.create(_spec(uuid4()))
+    traceback = (
+        "Traceback (most recent call last):\n"
+        '  File "/tmp/lemma-python-792b51a8-7395-403e-9761-65282caf112b.py", '
+        "line 46, in <module>\nKeyError: 't'\n"
+    )
+    world.python_raises = traceback
+
+    result = await provider.execute_python(
+        instance,
+        LocalPythonSessionRef(session_id=uuid4(), cwd=f"{WORKSPACE_ROOT}/c"),
+        ExecutePythonRequest(
+            operation_id=uuid4(),
+            code="print(rows[0]['t'])",
+            environment=(),
+            output_limit_bytes=64 * 1024,
+            deadline_at=_deadline(),
+        ),
+    )
+
+    assert result.state == PythonExecutionState.FAILED
+    assert "KeyError: 't'" in (result.error_message or "")
+    assert "credentials" not in (result.error_message or "")
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "KeyError: 'p'",
+        "File \"/tmp/lemma-python-792b51a8-7395-403e-9761.py\"\nKeyError: 't'",
+        "TimeoutError: the agent's own request timed out",
+    ],
+)
+async def test_a_command_exit_is_classified_by_type_not_by_its_stderr(
+    stderr: str,
+) -> None:
+    """Whatever the stderr says, a command that exited is not an outage."""
+    from app.modules.workspace.providers.e2b_common import CommandExited, classify
+    from app.modules.workspace.testing.fake_e2b import CommandExitException
+
+    exc = CommandExitException(exit_code=1, stdout="", stderr=stderr)
+
+    classified = classify(exc)
+
+    assert isinstance(classified, CommandExited)
+    assert isinstance(classified, ProviderRejected)
+    assert not isinstance(classified, SandboxUnavailable)
+    assert classified.result is exc
