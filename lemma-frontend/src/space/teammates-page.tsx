@@ -8,7 +8,7 @@ import { isForbidden } from "@/session/auth-state";
 import { AI_MATE, MATES, NEW_MATE } from "@/copy";
 import { Mark, markTint } from "@/shell/mark";
 import { unbound } from "@/thread/conversation-list";
-import { CheckIcon, ChevronDownIcon, PlusIcon } from "@/ui/icons";
+import { CheckIcon, ChevronDownIcon, ConnectorIcon, PeopleIcon, PlusIcon } from "@/ui/icons";
 import { byNeed, sayOwed, type Owed } from "./teammates";
 
 /* Layout effects run on the client only; on the server this is the plain
@@ -39,7 +39,7 @@ function useSeen(node: RefObject<HTMLElement | null>): boolean {
  *  back to. A card is the teammate's face, its job and one line of news —
  *  waiting on you, or what it did last — with the people who share its
  *  space. Pressing one goes into that space. */
-export function TeammatesPage({ pods, pending, failed, onRetry, owed, orgName, orgs, orgId, cameFrom, lead, tools, onOpen, onHire, onPickOrg }: {
+export function TeammatesPage({ pods, pending, failed, onRetry, owed, orgName, orgs, orgId, cameFrom, lead, tools, onOpen, onHire, onPickOrg, onNewOrg, onOrgSettings }: {
     pods: Pod[];
     pending: boolean;
     failed: boolean;
@@ -57,6 +57,10 @@ export function TeammatesPage({ pods, pending, failed, onRetry, owed, orgName, o
     onOpen: (podId: string, from: DOMRect) => void;
     onHire: (() => void) | null;
     onPickOrg: (orgId: string) => void;
+    /** Make another organization. Null in the sample, which cannot. */
+    onNewOrg: (() => void) | null;
+    /** The organization's own settings, at a section. */
+    onOrgSettings: (section: OrgSettingsSection) => void;
 }) {
     const page = useRef<HTMLDivElement>(null);
     const { needs, rest } = byNeed(pods, owed);
@@ -81,7 +85,7 @@ export function TeammatesPage({ pods, pending, failed, onRetry, owed, orgName, o
         <div className="team" ref={page}>
             <div className="workspace-toolbar team__bar">
                 {lead}
-                <OrgMenu name={orgName} orgs={orgs} orgId={orgId} onPick={onPickOrg} />
+                <OrgMenu name={orgName} orgs={orgs} orgId={orgId} onPick={onPickOrg} onNew={onNewOrg} onSettings={onOrgSettings} />
                 <span className="team__tools">{tools}</span>
             </div>
             <div className="team__scroll">
@@ -240,9 +244,25 @@ function Card({ pod, owed, onOpen }: { pod: Pod; owed: Owed | undefined; onOpen:
     );
 }
 
-/** The organization's name, and — with more than one — the way to another.
- *  The only place that asks, now that no space switcher holds the list. */
-function OrgMenu({ name, orgs, orgId, onPick }: { name: string; orgs: Org[]; orgId: string | null; onPick: (orgId: string) => void }) {
+/** The sections of Settings this menu opens straight to. */
+export type OrgSettingsSection = "people" | "connectors";
+
+/** The organization's name, and everything that is about the organization
+ *  rather than a teammate: another one to switch to, a new one to make, and
+ *  the two settings people come here looking for — who is in it, and what it
+ *  is connected to. The only place that holds the list, now that no space
+ *  switcher does.
+ *
+ *  A menu even with one organization. It used to be plain text until there
+ *  were two, and the way to have two is in it — so nobody could get there. */
+function OrgMenu({ name, orgs, orgId, onPick, onNew, onSettings }: {
+    name: string;
+    orgs: Org[];
+    orgId: string | null;
+    onPick: (orgId: string) => void;
+    onNew: (() => void) | null;
+    onSettings: (section: OrgSettingsSection) => void;
+}) {
     const [open, setOpen] = useState(false);
     const box = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -254,7 +274,7 @@ function OrgMenu({ name, orgs, orgId, onPick }: { name: string; orgs: Org[]; org
         return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", escape); };
     }, [open]);
 
-    if (orgs.length < 2) return <span className="crumb"><span className="crumb__here">{name}</span></span>;
+    const act = (run: () => void) => () => { setOpen(false); run(); };
     return (
         <div className="orgmenu" ref={box}>
             <button className="orgmenu__button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
@@ -264,12 +284,28 @@ function OrgMenu({ name, orgs, orgId, onPick }: { name: string; orgs: Org[]; org
                 <div className="orgmenu__list" role="menu">
                     {orgs.map((org) => (
                         <button key={org.id} role="menuitem" className="orgmenu__item" aria-current={org.id === orgId}
-                            onClick={() => { setOpen(false); if (org.id !== orgId) onPick(org.id); }}>
+                            onClick={act(() => { if (org.id !== orgId) onPick(org.id); })}>
                             <span className="orgmenu__avatar">{org.name.slice(0, 1).toUpperCase()}</span>
                             <span>{org.name}</span>
                             {org.id === orgId && <CheckIcon size={15} />}
                         </button>
                     ))}
+                    <span className="orgmenu__rule" role="separator" />
+                    <button role="menuitem" className="orgmenu__item" onClick={act(() => onSettings("connectors"))}>
+                        <span className="orgmenu__glyph"><ConnectorIcon size={16} /></span>
+                        <span>Connectors</span>
+                    </button>
+                    <button role="menuitem" className="orgmenu__item" onClick={act(() => onSettings("people"))}>
+                        <span className="orgmenu__glyph"><PeopleIcon size={16} /></span>
+                        <span>People</span>
+                    </button>
+                    {onNew && <>
+                        <span className="orgmenu__rule" role="separator" />
+                        <button role="menuitem" className="orgmenu__item" onClick={act(onNew)}>
+                            <span className="orgmenu__glyph"><PlusIcon size={16} /></span>
+                            <span>New organization</span>
+                        </button>
+                    </>}
                 </div>
             )}
         </div>

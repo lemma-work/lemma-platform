@@ -126,6 +126,52 @@ export function useMakeDefaultInstall(orgId: string) {
     });
 }
 
+/** One install read on its own, for the form that edits it. */
+export function useInstall(orgId: string, install: Install) {
+    return useQuery({
+        queryKey: ["install", orgId, install.id],
+        queryFn: async () => (await lemma().connectors.authConfigs.get(orgId, install.name || install.id)) as unknown as Install,
+        enabled: live(),
+        staleTime: 0,
+        retry: false,
+    });
+}
+
+/** What changing an install did beyond saving it. */
+export interface InstallUpdate {
+    install: Install;
+    discovery: { status?: string; operation_count?: number; reason?: string | null } | null;
+    /** Accounts now asked to sign in again, because the change pointed the
+     *  install somewhere their credential is not for. */
+    reauth: number;
+}
+
+/** Change an install in place — its name, its address, its own app.
+ *
+ *  Deleting and re-adding was the only way before, and an install's accounts
+ *  cascade with it: everybody signed out, every schedule and grant pinned to
+ *  an account left pointing at nothing. The server keeps the accounts and
+ *  marks only the ones the change actually invalidates. */
+export function useUpdateInstall(orgId: string) {
+    return useMutation({
+        mutationFn: async (input: { install: Install; name?: string; config?: Record<string, unknown> }): Promise<InstallUpdate> => {
+            const answer = (await lemma().connectors.authConfigs.update(orgId, input.install.name || input.install.id, {
+                ...(input.name !== undefined ? { name: input.name } : {}),
+                ...(input.config !== undefined ? { config: input.config } : {}),
+            })) as unknown as {
+                auth_config?: Install;
+                operations_discovery?: InstallUpdate["discovery"];
+                accounts_marked_for_reauth?: number | null;
+            };
+            return {
+                install: answer.auth_config ?? input.install,
+                discovery: answer.operations_discovery ?? null,
+                reauth: answer.accounts_marked_for_reauth ?? 0,
+            };
+        },
+    });
+}
+
 export function useDeleteInstall(orgId: string) {
     return useMutation({
         mutationFn: (install: Install) => lemma().connectors.authConfigs.delete(orgId, install.name || install.id),

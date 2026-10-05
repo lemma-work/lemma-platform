@@ -2,6 +2,23 @@ import { useState } from "react";
 import { CloseIcon, PlusIcon } from "@/ui/icons";
 import { REDACTED, unchangedSecret, type Field, type Values } from "./schema";
 
+/** What every field here tells a browser and a password manager: this is
+ *  not a sign-in to Lemma.
+ *
+ *  It is a service's settings, but a password box with a text box above it
+ *  is a login form to Chrome, which filled a database's name and password
+ *  with the person's own email and saved Lemma password. `off` on a text
+ *  field and `new-password` on a secret are the two values Chrome does not
+ *  fill a saved login into (it may offer to generate a password instead,
+ *  which is harmless); the data attributes are the opt-outs 1Password,
+ *  LastPass, Bitwarden and Dashlane read. */
+export const NOT_A_LOGIN = {
+    "data-1p-ignore": "true",
+    "data-lpignore": "true",
+    "data-bwignore": "true",
+    "data-form-type": "other",
+} as const;
+
 /** A server-described form, drawn.
  *
  *  Borrows the record editor's shape, because it is the same thing wearing a
@@ -88,7 +105,8 @@ function One({ field, value, disabled, onChange }: {
             value={String(value ?? "")}
             placeholder={masked ? "" : field.placeholder}
             disabled={disabled}
-            autoComplete={field.kind === "secret" ? "off" : undefined}
+            autoComplete={field.kind === "secret" ? "new-password" : "off"}
+            {...NOT_A_LOGIN}
             spellCheck={field.kind === "secret" ? false : undefined}
             onFocus={() => { if (masked) onChange(field.name, ""); }}
             onBlur={(event) => { if (stored && field.kind === "secret" && !event.target.value) onChange(field.name, REDACTED); }}
@@ -113,6 +131,12 @@ function Headers({ field, value, disabled, onChange }: {
 }) {
     const pairs = Object.entries((value ?? {}) as Record<string, unknown>);
     const write = (next: [string, unknown][]) => onChange(field.name, Object.fromEntries(next));
+    /* The headers that were set, masked, when the form opened — by name,
+       because the server restores a mask from what it holds under that name.
+       A value left empty after focusing one of them means "keep it", the same
+       rule a single secret box follows; without it a click in and out of the
+       box blanked a real Authorization header. */
+    const [stored] = useState(() => new Set(pairs.filter(([, held]) => unchangedSecret(held)).map(([key]) => key)));
     return (
         <div className="connect-pairs">
             {pairs.map(([key, held], at) => (
@@ -120,16 +144,24 @@ function Headers({ field, value, disabled, onChange }: {
                     <input
                         aria-label="Header name"
                         placeholder="X-Example"
+                        autoComplete="off"
+                        {...NOT_A_LOGIN}
                         value={key}
                         disabled={disabled}
-                        onChange={(event) => write(pairs.map((pair, i) => (i === at ? [event.target.value, pair[1]] : pair)))}
+                        /* A mask cannot follow a header to a new name — the
+                           server would find nothing under it and store the
+                           asterisks — so renaming one asks for its value again. */
+                        onChange={(event) => write(pairs.map((pair, i) => (i === at ? [event.target.value, unchangedSecret(pair[1]) ? "" : pair[1]] : pair)))}
                     />
                     <input
                         aria-label={"Value for " + (key || "this header")}
                         type={unchangedSecret(held) ? "text" : "password"}
+                        autoComplete="new-password"
+                        {...NOT_A_LOGIN}
                         value={String(held ?? "")}
                         disabled={disabled}
                         onFocus={() => { if (unchangedSecret(held)) write(pairs.map((pair, i) => (i === at ? [pair[0], ""] : pair))); }}
+                        onBlur={(event) => { if (!event.target.value && stored.has(key)) write(pairs.map((pair, i) => (i === at ? [pair[0], REDACTED] : pair))); }}
                         onChange={(event) => write(pairs.map((pair, i) => (i === at ? [pair[0], event.target.value] : pair)))}
                     />
                     <button type="button" aria-label={"Remove " + (key || "this header")} disabled={disabled}

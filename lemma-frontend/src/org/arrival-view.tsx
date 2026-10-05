@@ -7,7 +7,7 @@ import type { Invitation, Org } from "@/data";
 import { ArrowRightIcon, GlobeIcon, LockIcon, OrgIcon, RefreshIcon, UserIcon, WarningIcon } from "@/ui/icons";
 import { LemmaLogo } from "@/ui/icons";
 import { AI_MATES, ORG } from "@/copy";
-import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, personalNameFor, teamNameFor } from "./arrival";
+import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, personalNameFor } from "./arrival";
 import { isLocalDeployment } from "@/site/config";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
 
@@ -230,28 +230,42 @@ function MatchRow({ org, domain, busy, onJoin }: { org: Org; domain: string; bus
  *  What is chosen here is what makes the *next* person's arrival work. A team
  *  workspace left open to its own domain is what puts the rung above this one
  *  on their screen instead of this one. */
-function MakeOne({
+export function MakeOne({
     email,
     name,
     secondary,
     busy,
+    initialKind,
+    inviteOnly = false,
+    taken = [],
     onMake,
 }: {
     email: string | null;
     name: string | null;
     secondary: boolean;
     busy: boolean;
+    /** Which card starts chosen. Read from the email when absent — right on a
+     *  first morning, and wrong for somebody who already has a place of their
+     *  own and came looking for a second one. */
+    initialKind?: "personal" | "team";
+    /** Never open the team to its email domain. Only one organization may
+     *  hold a domain, and for somebody making a second one it is usually held
+     *  already — by their first. Who can join is changed later, in People. */
+    inviteOnly?: boolean;
+    /** Names already in use by this person's organizations, so the one read
+     *  off their email domain is not offered twice. */
+    taken?: readonly string[];
     onMake: (wanted: { name: string; emailDomain?: string; derived?: boolean }) => void;
 }) {
     const domain = domainOf(email);
-    const canOpen = canOpenToDomain(email);
+    const canOpen = !inviteOnly && canOpenToDomain(email);
     const local = isLocalDeployment();
     const machine = capitalised(useThisComputer());
-    const suggestion = useMemo(() => teamNameFor(email), [email]);
+    const suggestion = useMemo(() => freshTeamNameFor(email, taken), [email, taken]);
     /* A company address is a reason to expect colleagues; a Gmail one is not.
        It is a preselection, not an answer — and on a local install, where
        nobody else can reach this server yet, it is "just me". */
-    const [kind, setKind] = useState<"personal" | "team">(() => defaultOrgKind(email, local));
+    const [kind, setKind] = useState<"personal" | "team">(() => initialKind ?? defaultOrgKind(email, local));
     const [called, setCalled] = useState(suggestion);
     const [open, setOpen] = useState(!secondary);
 
@@ -324,7 +338,9 @@ function MakeOne({
                                    is a decision nobody asked about, in three
                                    lines, on somebody's first screen. */
                                 ? <>Anyone with an <code>@{domain}</code> address can join without being invited.</>
-                                : <>You add people by inviting them.</>}
+                                : inviteOnly
+                                    ? <>You add people by inviting them. You can open it to your email domain later, in People.</>
+                                    : <>You add people by inviting them.</>}
                         </span>
                     </p>
                 </>

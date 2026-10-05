@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { REDACTED, blank, fields, isSecretName, payload, problems, unchangedSecret } from "../src/connect/schema.ts";
 import {
     canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName,
-    connectorProblem, installSchema, isBringYourOwn, isStaleDefault, isTenantConfigured, kindFor, kindNamed, needsOwnApp, oauthAppMissing, primaryKind, urlRefusal,
+    connectorProblem, installSchema, installTarget, isBringYourOwn, isStaleDefault, isTenantConfigured, kindFor, kindNamed, needsOwnApp, oauthAppMissing,
+    ownAppKinds, ownKinds, primaryKind, registersLemmaRedirect, urlRefusal,
     type CatalogEntry, type ConnectorKind,
 } from "../src/connect/install.ts";
 
@@ -93,6 +94,46 @@ test("header maps keep the keys the tenant chose, and drop masked values", () =>
     assert.deepEqual(sent.extra_headers, { "X-Signature-Key": "abc", "X-Trim": "yes" });
 });
 
+test("an edit sends untouched secrets back masked, for the server to restore", () => {
+    // The server validates an edit before merging it, so a required secret
+    // left out is refused; and it replaces a header map whole, so a pair left
+    // out is a header deleted — an MCP server's Authorization, silently. A
+    // mask passes validation and is swapped for what the server holds.
+    const list = fields(mcpSchema);
+    const held = blank(list, {
+        server_url: "https://x.test/sse",
+        auth_token: REDACTED,
+        extra_headers: { Authorization: REDACTED, "X-New": "abc" },
+    });
+    const sent = payload(list, held, { editing: true });
+
+    assert.equal(sent.auth_token, REDACTED);
+    assert.deepEqual(sent.extra_headers, { Authorization: REDACTED, "X-New": "abc" });
+});
+
+test("an edit that removes every header sends an empty map, not nothing", () => {
+    // Left out, the map would be kept as it was: the last header could never
+    // be removed.
+    const list = fields(mcpSchema);
+    const held = blank(list, { server_url: "https://x.test/sse", extra_headers: {} });
+
+    assert.deepEqual(payload(list, held, { editing: true }).extra_headers, {});
+    assert.equal("extra_headers" in payload(list, held), false);
+});
+
+test("an install the organization pointed is named by where it points", () => {
+    const install = (config: Record<string, unknown>) => ({ id: "i", connector_id: "x", kind: "mcp", name: "n", config });
+
+    assert.equal(installTarget(install({ server_url: "https://mcp.example.com/mcp" })), "mcp.example.com/mcp");
+    assert.equal(installTarget(install({ server_url: "https://mcp.example.com/" })), "mcp.example.com");
+    assert.equal(installTarget(install({ spec_url: "https://api.example.com/openapi.json" })), "api.example.com/openapi.json");
+    assert.equal(installTarget(install({ host: "db.example.com", database: "sales" })), "db.example.com / sales");
+    assert.equal(installTarget(install({ host: "db.example.com" })), "db.example.com");
+    assert.equal(installTarget(install({ server_url: "not a url" })), "not a url");
+    assert.equal(installTarget(install({})), null);
+    assert.equal(installTarget({ id: "i", connector_id: "x", kind: "mcp", name: "n" }), null);
+});
+
 test("only what is required is checked here", () => {
     const list = fields(mcpSchema);
 
@@ -164,6 +205,43 @@ test("what an organization points at itself is told apart by kind, not by id", (
     assert.equal(isBringYourOwn(gmail), false);
     assert.equal(isBringYourOwn(mcp), true);
     assert.equal(isBringYourOwn({ id: "x", title: "X" }), false);
+});
+
+test("bring-your-own is offered once per kind, whatever the catalogue calls it", () => {
+    const gmail: CatalogEntry = { id: "gmail", title: "Gmail", kinds: [composioManaged] };
+    const mcp: CatalogEntry = { id: "mcp", title: "MCP server", kinds: [mcpKind] };
+    const another: CatalogEntry = { id: "mcp-two", title: "Another MCP", kinds: [mcpKind] };
+
+    assert.deepEqual(ownKinds([gmail, mcp, another]).map((one) => [one.kind, one.entry.id]), [["mcp", "mcp"]]);
+    assert.deepEqual(ownKinds([gmail]), []);
+});
+
+test("an organization's own app is found on any kind, not only the default one", () => {
+    // Where Composio sits beside a native kind, Composio is the default and
+    // never takes an organization's app. Asking only of the default hid
+    // "Use your own app" exactly where the native kind supports one.
+    const native: ConnectorKind = {
+        kind: "http", auth_scheme: "OAUTH2", supports_org_custom_oauth: true,
+        oauth2_defaults: { authorization_endpoint: "https://accounts.example.com/o/oauth2/auth" },
+    };
+    const both: CatalogEntry = { id: "gmail", title: "Gmail", kinds: [composioManaged, native] };
+
+    assert.equal(primaryKind(both)?.kind, "composio");
+    assert.equal(canBringOwnApp(primaryKind(both)), false);
+    assert.deepEqual(ownAppKinds(both), [native]);
+    assert.deepEqual(ownAppKinds({ id: "mcp", title: "MCP", kinds: [mcpKind] }), []);
+});
+
+test("only a natively brokered app is told to allow Lemma's redirect URL", () => {
+    // Composio runs its own round trip: the URL to register is Composio's, and
+    // it arrives in the toolkit's own form. Lemma's beside it made two.
+    const native: ConnectorKind = { kind: "http", auth_scheme: "OAUTH2", supports_org_custom_oauth: true };
+    const unmanaged: ConnectorKind = { ...composioManaged, auth_scheme: "OAUTH2", system_default_available: false };
+
+    assert.equal(registersLemmaRedirect(native), true);
+    assert.equal(registersLemmaRedirect(unmanaged), false);
+    assert.equal(registersLemmaRedirect(mcpKind), false);
+    assert.equal(registersLemmaRedirect(null), false);
 });
 
 test("http is not always an address somebody supplies", () => {

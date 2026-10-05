@@ -204,6 +204,20 @@
 .connectors__top .connectors__find{flex:1;margin:0}
 .connectors__top .btn{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 
+/* Your own server, database, API or OAuth app: one quiet row of tiles above
+   the catalogue, so each is named where somebody looks for it rather than
+   folded behind a single "Add your own". */
+.byo{margin:14px 0 4px}
+.byo__head{margin:0 0 8px;font-size:12px;font-weight:500;color:var(--ink-3)}
+.byo__tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.byo__tile{display:flex;align-items:flex-start;gap:10px;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.byo__tile:hover{border-color:var(--accent-line);background:var(--accent-soft)}
+.byo__tile:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.byo__glyph{display:grid;place-items:center;width:30px;height:30px;flex-shrink:0;margin-top:1px;border-radius:8px;border:1px solid var(--line);color:var(--ink-3)}
+.byo__said{display:flex;flex-direction:column;min-width:0}
+.byo__name{font-size:13px;font-weight:500;color:var(--ink)}
+.byo__said small{font-size:11.5px;line-height:1.4;color:var(--ink-3)}
+
 .connect-lead{margin:0 0 16px;font-size:13px;line-height:1.6;color:var(--ink-3)}
 
 /* A connect dialog, laid out as one. The record form it borrows was built to
@@ -250,6 +264,8 @@
 
 @media(max-width:600px){
   .connectors__top{flex-wrap:wrap}
+  .byo__tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .byo__glyph{display:none}
   .connect-pair{grid-template-columns:minmax(0,1fr) 30px}
   .connect-pair input:nth-child(2){grid-column:1 / -1}
 }
