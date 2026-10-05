@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Pod } from "@/data";
 import {
     MCP_CLIENTS,
@@ -107,45 +108,47 @@ export function AgentAccess({ pod }: { pod: Pod }) {
 function McpAccess({ pod }: { pod: Pod }) {
     const apiUrl = configuredApiUrl();
     const [clientId, setClientId] = useState("claude");
-    /* Undefined while asking, null when this deployment does not serve spaces
-       over MCP — then the section is not shown at all. A request that failed
-       is neither: it says so, with a way to try again. */
-    const [url, setUrl] = useState<string | null | undefined>(undefined);
-    const [urlProblem, setUrlProblem] = useState<string | null>(null);
-    const [attempt, setAttempt] = useState(0);
-    const [connected, setConnected] = useState<ConnectedClient[] | null>(null);
-    const [everyone, setEveryone] = useState(false);
+    /* A failed disconnect. A failed read of the list is the query's own. */
     const [problem, setProblem] = useState<string | null>(null);
     /* Someone else's connection, asked about once before it is ended. */
     const [confirming, setConfirming] = useState<string | null>(null);
     const me = useMe();
+    const cache = useQueryClient();
 
-    useEffect(() => {
-        if (!apiUrl) return;
-        let cancelled = false;
-        void (async () => {
-            let stated: string | null;
-            try {
-                stated = await fetchMcpUrl(apiUrl, pod.id);
-            } catch (error) {
-                if (!cancelled) setUrlProblem(error instanceof Error ? error.message : "The link could not be loaded.");
-                return;
-            }
-            if (cancelled) return;
-            setUrlProblem(null);
-            setUrl(stated);
-            if (!stated) return;
-            try {
-                const loaded = await loadConnections(apiUrl, pod.id);
-                if (cancelled) return;
-                setConnected(loaded.items);
-                setEveryone(loaded.everyone);
-            } catch (error) {
-                if (!cancelled) setProblem(error instanceof Error ? error.message : null);
-            }
-        })();
-        return () => { cancelled = true; };
-    }, [apiUrl, pod.id, attempt]);
+    /* Queries rather than an effect, so opening this tab again reads the
+       cache instead of asking twice more. Neither changes behind the
+       person's back often enough to need more than five minutes: the link is
+       a deployment setting, and the list changes when somebody connects an
+       app — which this page cannot see happen anyway — or disconnects one
+       here, which reads it back. No retries: a failure is said, with a way
+       to try again, as it always was.
+
+       The link is undefined while asking, null when this deployment does
+       not serve spaces over MCP — then the section is not shown at all. A
+       request that failed is neither: it says so, with a way to try again. */
+    const endpoint = useQuery({
+        queryKey: ["mcp-endpoint", pod.id],
+        queryFn: () => fetchMcpUrl(apiUrl as string, pod.id),
+        enabled: Boolean(apiUrl),
+        staleTime: 5 * 60_000,
+        retry: false,
+    });
+    const url = endpoint.data;
+    const urlProblem = endpoint.isError
+        ? (endpoint.error instanceof Error ? endpoint.error.message : "The link could not be loaded.")
+        : null;
+    /* `loadConnections` keeps its own fallback: everyone's connections, or —
+       on a 403 — just the viewer's, and says which it got. */
+    const grants = useQuery({
+        queryKey: ["mcp-grants", pod.id],
+        queryFn: () => loadConnections(apiUrl as string, pod.id),
+        enabled: Boolean(apiUrl && url),
+        staleTime: 5 * 60_000,
+        retry: false,
+    });
+    const connected: ConnectedClient[] | null = grants.data?.items ?? null;
+    const everyone = grants.data?.everyone ?? false;
+    const shownProblem = problem ?? (grants.isError && grants.error instanceof Error ? grants.error.message : null);
 
     if (apiUrl && urlProblem) {
         return (
@@ -155,7 +158,7 @@ function McpAccess({ pod }: { pod: Pod }) {
                         <b>Connect with a link</b>
                         <small role="alert">{urlProblem}</small>
                     </span>
-                    <button className="access__copy" onClick={() => { setUrlProblem(null); setAttempt(count => count + 1); }}>Try again</button>
+                    <button className="access__copy" disabled={endpoint.isFetching} onClick={() => void endpoint.refetch()}>Try again</button>
                 </div>
             </div>
         );
@@ -177,10 +180,8 @@ function McpAccess({ pod }: { pod: Pod }) {
             await disconnectClient(apiUrl, grantId);
             // Read back rather than dropped locally: a 404 does not prove the
             // connection is gone, and a row removed here would return on reload.
-            const loaded = await loadConnections(apiUrl, pod.id);
-            setConnected(loaded.items);
-            setEveryone(loaded.everyone);
             setProblem(null);
+            await cache.invalidateQueries({ queryKey: ["mcp-grants", pod.id] });
         } catch (error) {
             setProblem(error instanceof Error ? error.message : null);
         }
@@ -221,7 +222,7 @@ function McpAccess({ pod }: { pod: Pod }) {
             </div>
 
             <div className="access__label">{everyone ? "Connected to " + pod.name : "Connected by you"}</div>
-            {problem && <div className="access__head"><small role="alert">{problem}</small></div>}
+            {shownProblem && <div className="access__head"><small role="alert">{shownProblem}</small></div>}
             {connected !== null && connected.length === 0 && (
                 <div className="access__head"><small>Nothing is connected to {pod.name} yet.</small></div>
             )}

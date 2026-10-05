@@ -1,0 +1,87 @@
+<!--
+widget: google-calendar/find-a-time
+description: Open slots that suit everyone, by day; picking one books the meeting and sends the invites.
+connector: google_calendar
+kind: composio
+operations: GOOGLECALENDAR_CREATE_EVENT
+data: { title, timezone?, description?, attendees: [{ name?, email }], slots: [{ start, end }] }
+version: 1
+-->
+<div id="slots"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "title": "Pilot kickoff: Northwind × Contoso",
+  "timezone": "Asia/Kolkata",
+  "description": "Agree the pilot scope, owners and the first check-in.",
+  "attendees": [
+    { "name": "Priya Nair", "email": "priya@contoso.com" },
+    { "name": "Sam Rivera", "email": "sam@northwind.io" },
+    { "name": "Mira Shah", "email": "mira@northwind.io" }
+  ],
+  "slots": [
+    { "start": "2026-10-06T10:00:00+05:30", "end": "2026-10-06T10:30:00+05:30" },
+    { "start": "2026-10-06T15:30:00+05:30", "end": "2026-10-06T16:00:00+05:30" },
+    { "start": "2026-10-07T11:00:00+05:30", "end": "2026-10-07T11:30:00+05:30" },
+    { "start": "2026-10-08T09:30:00+05:30", "end": "2026-10-08T10:00:00+05:30" },
+    { "start": "2026-10-08T14:00:00+05:30", "end": "2026-10-08T14:30:00+05:30" },
+    { "start": "2026-10-08T16:30:00+05:30", "end": "2026-10-08T17:00:00+05:30" }
+  ]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("slots"), e = lemma.esc;
+  if (!d || !d.slots || !d.slots.length) { el.innerHTML = '<p class="lw-quiet">No time suits everyone in this range.</p>'; return; }
+  var people = d.attendees || [];
+  var minutes = Math.round((new Date(d.slots[0].end) - new Date(d.slots[0].start)) / 60000);
+  var days = [], byDay = {};
+  d.slots.forEach(function (s, i) {
+    var day = lemma.when(s.start, { dateOnly: true });
+    if (!byDay[day]) { byDay[day] = []; days.push(day); }
+    byDay[day].push('<button class="lw-slot" type="button" aria-pressed="false" data-i="' + i + '">' + lemma.when(s.start, { timeOnly: true }) + "</button>");
+  });
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec">' +
+        '<div class="lw-top">' + lemma.icon("calendar") + "<span>" + d.slots.length + " times everyone is free</span></div>" +
+        '<h2 class="lw-title">' + e(d.title || "New meeting") + "</h2>" +
+        '<div class="lw-sub"><span class="lw-bar" style="gap:8px"><span class="lw-stack">' + people.map(function (a) { return lemma.avatar(a.name || a.email, "s"); }).join("") + "</span>" +
+          e(people.map(function (a) { return (a.name || a.email).split(" ")[0]; }).join(", ")) + "</span>" +
+          (isFinite(minutes) ? '<span class="lw-bar" style="gap:6px">' + lemma.icon("clock") + minutes + " min</span>" : "") +
+          (d.timezone ? '<span class="lw-quiet">' + e(d.timezone) + "</span>" : "") + "</div>" +
+      "</div>" +
+      '<div class="lw-sec">' + days.map(function (day) {
+        return '<div class="lw-day"><span class="lw-label">' + e(day) + '</span><div class="lw-slots">' + byDay[day].join("") + "</div></div>";
+      }).join("") + "</div>" +
+      '<div class="lw-sec lw-foot"><div class="lw-bar"><span class="lw-quiet" id="picked" style="font-size:13px">Pick a time</span><span class="lw-spacer"></span>' +
+        '<button class="lw-btn" data-tone="primary" id="book" disabled>' + lemma.icon("calendar") + "<span>Book it</span></button></div></div>" +
+    "</div>";
+
+  var chosen = null, slots = el.querySelectorAll(".lw-slot");
+  slots.forEach(function (b) {
+    b.addEventListener("click", function () {
+      slots.forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+      chosen = d.slots[Number(b.dataset.i)];
+      document.getElementById("picked").textContent = lemma.when(chosen.start) + "–" + lemma.when(chosen.end, { timeOnly: true });
+      document.getElementById("book").disabled = false;
+    });
+  });
+  lemma.button("book", {
+    does: "book the meeting and invite everyone",
+    confirm: function () { return chosen ? "Book " + lemma.when(chosen.start) + " and invite " + people.length + (people.length === 1 ? " person?" : " people?") : ""; },
+    yes: "Book and invite",
+    run: function () {
+      if (!chosen) throw new Error("Pick a time first.");
+      var payload = {
+        calendar_id: "primary", summary: d.title, start_datetime: chosen.start, end_datetime: chosen.end,
+        attendees: people.map(function (a) { return a.email; }), send_updates: "all", create_meeting_room: true
+      };
+      if (d.timezone) payload.timezone = d.timezone;
+      if (d.description) payload.description = d.description;
+      return lemma.act("google_calendar", "GOOGLECALENDAR_CREATE_EVENT", payload, { kind: "composio" });
+    },
+    done: "Booked. Invites are on their way."
+  });
+})();
+</script>

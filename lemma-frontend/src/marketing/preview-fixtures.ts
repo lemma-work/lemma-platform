@@ -1,6 +1,6 @@
 /** The sample constants the landing's demo reads: every general fixture,
  *  with the sample teammates' own workflows in place of the generic ones:
- *  Kit's launch checks and June's customer imports. Workflow views import
+ *  Kit's feedback loop and June's customer imports. Workflow views import
  *  their sample straight from the fixtures rather than through `PodSource`,
  *  so `samples()` in `@/data/samples` picks this module on the demo, and
  *  `forPod` narrows it to the space being looked at.
@@ -15,167 +15,161 @@ const ago = (ms: number): string => new Date(Date.now() - ms).toISOString();
 
 const KIT_WORKFLOWS = [
     {
-        id: "wf-readiness",
-        name: "readiness-check",
-        description: "Every Thursday at 9: checks each launch asset, chases the late ones, and asks Priya to sign off.",
+        id: "wf-capture",
+        name: "capture-feedback",
+        description: "Every new message in #feedback, email to feedback@ and report from the app: files it under a theme, or starts a new one.",
         pod_id: "kit",
-        node_count: 5,
-        node_types: ["AGENT", "DECISION", "AGENT", "FORM", "END"],
+        node_count: 2,
+        node_types: ["AGENT", "END"],
         is_active: true,
-        updated_at: ago(2 * DAY),
+        updated_at: ago(DAY + 17 * HOUR),
         allowed_actions: ["read", "run", "update"],
     },
     {
-        id: "wf-intake",
-        name: "asset-intake",
-        description: "When an asset is added, drafts its brief and asks the owner to confirm the date.",
+        id: "wf-close-loop",
+        name: "close-the-loop",
+        description: "When a PR that fixes a theme merges: drafts a reply for everyone who reported it, gives Enterprise ones to Sam, and waits for the engineer who shipped it to confirm it’s live.",
         pod_id: "kit",
-        node_count: 3,
-        node_types: ["AGENT", "FORM", "END"],
+        node_count: 5,
+        node_types: ["AGENT", "AGENT", "FORM", "AGENT", "END"],
         is_active: true,
-        updated_at: ago(6 * DAY),
-        allowed_actions: ["read", "run"],
+        updated_at: ago(DAY + 17 * HOUR),
+        allowed_actions: ["read", "run", "update"],
     },
     {
-        id: "wf-press",
-        name: "press-kit",
-        description: "Gathers the approved assets into one page and brings it to Priya before it goes out.",
+        id: "wf-reconcile",
+        name: "nightly-reconcile",
+        description: "Every night at 02:00: re-reads the day’s reports, starts new themes, suggests merges, and asks again anyone whose fix is live.",
         pod_id: "kit",
         node_count: 3,
-        node_types: ["AGENT", "FORM", "END"],
+        node_types: ["AGENT", "AGENT", "END"],
         is_active: true,
-        updated_at: ago(9 * DAY),
+        updated_at: ago(DAY + 17 * HOUR),
         allowed_actions: ["read", "run"],
     },
 ];
 
 const WAITING_RUN = {
-    id: "run-readiness-now",
-    workflow_id: "wf-readiness",
+    id: "run-close-482",
+    workflow_id: "wf-close-loop",
     pod_id: "kit",
     user_id: "kit",
     status: "WAITING",
-    start_type: "SCHEDULED",
-    current_node_id: "sign-off",
-    started_at: ago(3 * HOUR),
-    created_at: ago(3 * HOUR),
+    start_type: "EVENT",
+    current_node_id: "confirm-live",
+    started_at: ago(11 * HOUR),
+    created_at: ago(11 * HOUR),
 };
 
-const SIGN_OFF_SCHEMA = {
+const CONFIRM_SCHEMA = {
     type: "object",
-    required: ["go"],
+    required: ["live"],
     properties: {
-        go: { type: "boolean", title: "Ship on the planned date" },
+        live: { type: "boolean", title: "PR #482 is live for everyone" },
         note: { type: "string", title: "Note for Kit" },
     },
 };
 
-const SIGN_OFF_WAIT = {
-    id: "wait-sign-off", run_id: WAITING_RUN.id, workflow_id: "wf-readiness", pod_id: "kit", node_id: "sign-off",
-    wait_type: "HUMAN", status: "ACTIVE", assigned_pod_member_id: "priya", created_at: ago(2 * HOUR),
-    payload: { input_schema: SIGN_OFF_SCHEMA, ui_schema: { "ui:order": ["go", "note"] } },
+const CONFIRM_WAIT = {
+    id: "wait-confirm-live", run_id: WAITING_RUN.id, workflow_id: "wf-close-loop", pod_id: "kit", node_id: "confirm-live",
+    wait_type: "HUMAN", status: "ACTIVE", assigned_pod_member_id: "dev", created_at: ago(11 * HOUR - 60_000),
+    payload: { input_schema: CONFIRM_SCHEMA, ui_schema: { "ui:order": ["live", "note"] } },
 };
 
+const captured = (minutes: number, i: number) => ({ id: "run-capture-" + i, workflow_id: "wf-capture", pod_id: "kit", user_id: "kit", status: "COMPLETED",
+    start_type: "EVENT", started_at: ago(minutes * 60_000), completed_at: ago(minutes * 60_000 - 20_000), created_at: ago(minutes * 60_000) });
+
 const KIT_RUNS: Record<string, unknown[]> = {
-    "readiness-check": [
+    "capture-feedback": [2, 47, 95, 260, 610, 640, 700].map(captured),
+    "close-the-loop": [
         WAITING_RUN,
-        { id: "run-readiness-last", workflow_id: "wf-readiness", pod_id: "kit", user_id: "kit", status: "COMPLETED", start_type: "SCHEDULED",
-            started_at: ago(7 * DAY + 3 * HOUR), completed_at: ago(7 * DAY + HOUR), created_at: ago(7 * DAY + 3 * HOUR) },
-        { id: "run-readiness-before", workflow_id: "wf-readiness", pod_id: "kit", user_id: "kit", status: "COMPLETED", start_type: "SCHEDULED",
-            started_at: ago(14 * DAY + 3 * HOUR), completed_at: ago(14 * DAY + 2 * HOUR), created_at: ago(14 * DAY + 3 * HOUR) },
+        { id: "run-close-478", workflow_id: "wf-close-loop", pod_id: "kit", user_id: "kit", status: "COMPLETED", start_type: "EVENT",
+            started_at: ago(3 * DAY), completed_at: ago(2 * DAY + 20 * HOUR), created_at: ago(3 * DAY) },
+        { id: "run-close-474", workflow_id: "wf-close-loop", pod_id: "kit", user_id: "kit", status: "COMPLETED", start_type: "EVENT",
+            started_at: ago(6 * DAY), completed_at: ago(5 * DAY + 22 * HOUR), created_at: ago(6 * DAY) },
     ],
-    "asset-intake": [
-        { id: "run-intake", workflow_id: "wf-intake", pod_id: "kit", user_id: "kit", status: "COMPLETED", start_type: "DATASTORE_EVENT",
-            started_at: ago(26 * HOUR), completed_at: ago(25 * HOUR), created_at: ago(26 * HOUR) },
-    ],
-    "press-kit": [],
+    "nightly-reconcile": [0, 1, 2].map((day) => ({ id: "run-reconcile-" + day, workflow_id: "wf-reconcile", pod_id: "kit", user_id: "kit", status: "COMPLETED",
+        start_type: "SCHEDULED", started_at: ago(day * DAY + 8.4 * HOUR), completed_at: ago(day * DAY + 8.4 * HOUR - 3 * 60_000), created_at: ago(day * DAY + 8.4 * HOUR) })),
 };
 
 const KIT_RUN_DETAIL: Record<string, unknown> = {
-    "run-readiness-now": {
+    "run-close-482": {
         ...WAITING_RUN,
-        active_wait: SIGN_OFF_WAIT,
-        execution_context: { start: { trigger: "SCHEDULE" } },
+        active_wait: CONFIRM_WAIT,
+        execution_context: { start: { trigger: "EVENT" } },
         step_history: [
-            { step_index: 0, node_id: "check-assets", status: "COMPLETED", started_at: ago(3 * HOUR), completed_at: ago(3 * HOUR - 4 * 60_000),
-                output_data: { summary: "12 assets: 3 ready, 3 in review, 4 drafting, 2 waiting on a customer.", late: 2 } },
-            { step_index: 1, node_id: "any-late", status: "COMPLETED", started_at: ago(3 * HOUR - 4 * 60_000), completed_at: ago(3 * HOUR - 4 * 60_000 + 30),
-                output_data: { matched_condition: "check-assets.late > `0`" } },
-            { step_index: 2, node_id: "chase", status: "COMPLETED", started_at: ago(3 * HOUR - 4 * 60_000), completed_at: ago(2 * HOUR),
-                output_data: { summary: "Asked Rohan about the demo video and Northfield about their quote." } },
-            { step_index: 3, node_id: "sign-off", status: "WAITING", started_at: ago(2 * HOUR) },
+            { step_index: 0, node_id: "match-theme", status: "COMPLETED", started_at: ago(11 * HOUR), completed_at: ago(11 * HOUR - 30_000),
+                output_data: { summary: "PR #482 by Dev fixes LIN-231, Dates import as text (22 reports)." } },
+            { step_index: 1, node_id: "draft-replies", status: "COMPLETED", started_at: ago(11 * HOUR - 30_000), completed_at: ago(11 * HOUR - 60_000),
+                output_data: { summary: "22 retry replies drafted, one in each thread. 3 Enterprise accounts go to Sam.", drafted: 22, via_sam: 3 } },
+            { step_index: 2, node_id: "confirm-live", status: "WAITING", started_at: ago(11 * HOUR - 60_000) },
         ],
     },
 };
 
 const KIT_SHAPES: Record<string, unknown> = {
-    "readiness-check": {
-        id: "wf-readiness",
-        name: "readiness-check",
+    "capture-feedback": {
+        id: "wf-capture",
+        name: "capture-feedback",
         description: KIT_WORKFLOWS[0].description,
         pod_id: "kit",
         is_active: true,
         allowed_actions: ["read", "run", "update"],
-        start: { type: "SCHEDULED", config: { schedule_type: "CRON" } },
+        start: { type: "EVENT", config: { connector_id: "slack", connector_trigger_id: "message posted in #feedback" } },
         nodes: [
-            { id: "check-assets", type: "AGENT", label: "Check every asset", position: { x: 40, y: 40 }, config: { agent_name: "Kit" } },
-            { id: "any-late", type: "DECISION", label: "Anything late?", position: { x: 320, y: 40 },
-                config: { rules: [{ condition: "check-assets.late > `0`", next_node_id: "chase" }, { condition: "check-assets.late == `0`", next_node_id: "sign-off" }] } },
-            { id: "chase", type: "AGENT", label: "Chase the owners", position: { x: 320, y: 200 }, config: { agent_name: "Kit" } },
-            { id: "sign-off", type: "FORM", label: "Priya signs off", position: { x: 620, y: 40 },
-                config: { input_schema: SIGN_OFF_SCHEMA, assignee_pod_member_id: "priya" } },
-            { id: "done", type: "END", label: null, position: { x: 900, y: 40 }, config: {} },
+            { id: "file-it", type: "AGENT", label: "File it under a theme", position: { x: 40, y: 40 }, config: { agent_name: "Kit" } },
+            { id: "done", type: "END", label: null, position: { x: 320, y: 40 }, config: {} },
         ],
-        edges: [
-            { id: "e1", source: "check-assets", target: "any-late", label: null },
-            { id: "e2", source: "chase", target: "sign-off", label: null },
-            { id: "e3", source: "sign-off", target: "done", label: null },
-        ],
+        edges: [{ id: "e1", source: "file-it", target: "done", label: null }],
     },
-    "asset-intake": {
-        id: "wf-intake",
-        name: "asset-intake",
+    "close-the-loop": {
+        id: "wf-close-loop",
+        name: "close-the-loop",
         description: KIT_WORKFLOWS[1].description,
         pod_id: "kit",
         is_active: true,
-        allowed_actions: ["read", "run"],
-        start: { type: "DATASTORE_EVENT", config: { table_name: "launch_assets", operations: ["INSERT"] } },
+        allowed_actions: ["read", "run", "update"],
+        start: { type: "EVENT", config: { connector_id: "github", connector_trigger_id: "pull request merged" } },
         nodes: [
-            { id: "draft-brief", type: "AGENT", label: "Draft the brief", position: { x: 40, y: 40 }, config: { agent_name: "Kit" } },
-            { id: "confirm-date", type: "FORM", label: "Owner confirms the date", position: { x: 320, y: 40 },
-                config: { input_schema: { type: "object", properties: { due: { type: "string", format: "date", title: "Due" } } } } },
-            { id: "done", type: "END", label: null, position: { x: 620, y: 40 }, config: {} },
+            { id: "match-theme", type: "AGENT", label: "Match the PR to a theme", position: { x: 40, y: 40 }, config: { agent_name: "Kit" } },
+            { id: "draft-replies", type: "AGENT", label: "Draft a reply for each reporter", position: { x: 320, y: 40 }, config: { agent_name: "Kit" } },
+            { id: "confirm-live", type: "FORM", label: "The PR’s author confirms it’s live", position: { x: 600, y: 40 },
+                config: { input_schema: CONFIRM_SCHEMA, assignee_pod_member_id: "dev" } },
+            { id: "send-replies", type: "AGENT", label: "Post the replies", position: { x: 880, y: 40 }, config: { agent_name: "Kit" } },
+            { id: "done", type: "END", label: null, position: { x: 1160, y: 40 }, config: {} },
         ],
         edges: [
-            { id: "e1", source: "draft-brief", target: "confirm-date", label: null },
-            { id: "e2", source: "confirm-date", target: "done", label: null },
+            { id: "e1", source: "match-theme", target: "draft-replies", label: null },
+            { id: "e2", source: "draft-replies", target: "confirm-live", label: null },
+            { id: "e3", source: "confirm-live", target: "send-replies", label: null },
+            { id: "e4", source: "send-replies", target: "done", label: null },
         ],
     },
-    "press-kit": {
-        id: "wf-press",
-        name: "press-kit",
+    "nightly-reconcile": {
+        id: "wf-reconcile",
+        name: "nightly-reconcile",
         description: KIT_WORKFLOWS[2].description,
         pod_id: "kit",
         is_active: true,
         allowed_actions: ["read", "run"],
-        start: { type: "MANUAL", config: null },
+        start: { type: "SCHEDULED", config: { schedule_type: "CRON" } },
         nodes: [
-            { id: "gather", type: "AGENT", label: "Gather the approved assets", position: { x: 40, y: 40 }, config: { agent_name: "Kit" } },
-            { id: "approve", type: "FORM", label: "Priya approves", position: { x: 320, y: 40 },
-                config: { input_schema: { type: "object", properties: { approved: { type: "boolean", title: "Approved" } } }, assignee_pod_member_id: "priya" } },
-            { id: "done", type: "END", label: null, position: { x: 620, y: 40 }, config: {} },
+            { id: "reconcile", type: "AGENT", label: "Re-read the day’s reports", position: { x: 40, y: 40 }, config: { agent_name: "Kit" } },
+            { id: "ask-again", type: "AGENT", label: "Ask again where a fix is live", position: { x: 320, y: 40 }, config: { agent_name: "Kit" } },
+            { id: "done", type: "END", label: null, position: { x: 600, y: 40 }, config: {} },
         ],
         edges: [
-            { id: "e1", source: "gather", target: "approve", label: null },
-            { id: "e2", source: "approve", target: "done", label: null },
+            { id: "e1", source: "reconcile", target: "ask-again", label: null },
+            { id: "e2", source: "ask-again", target: "done", label: null },
         ],
     },
 };
 
-/** Waiting on a person: the sign-off above, which is Priya's. */
+/** Waiting on a person: Dev, to confirm the fix Dev shipped is live before
+ *  anyone is told it is. */
 const KIT_WAITING = [
     {
-        wait: SIGN_OFF_WAIT,
+        wait: CONFIRM_WAIT,
         run: WAITING_RUN,
     },
 ];

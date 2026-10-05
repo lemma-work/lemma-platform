@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -11,6 +11,10 @@ from dateutil.parser import isoparse
 
 from ..models.workflow_run_status import WorkflowRunStatus
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.workflow_run_waiting_on import WorkflowRunWaitingOn
+
 
 T = TypeVar("T", bound="WorkflowRunSummaryResponse")
 
@@ -37,7 +41,10 @@ class WorkflowRunSummaryResponse:
             are RUNNING, WAITING, or terminal. WAITING is reserved for human form
             waits. Runs suspended on platform work such as an agent, function job, or
             timer remain RUNNING; the active wait row records the exact wait_type.
+        title (None | str | Unset): What this run is about, from the workflow's `run_title`. Null when the workflow sets
+            none or nothing it names is filled in yet.
         updated_at (datetime.datetime | None | Unset):
+        waiting_on (None | Unset | WorkflowRunWaitingOn): The run's active wait, while it has one.
     """
 
     id: UUID
@@ -53,10 +60,14 @@ class WorkflowRunSummaryResponse:
     start_type: str | Unset = "MANUAL"
     started_at: datetime.datetime | None | Unset = UNSET
     status: WorkflowRunStatus | Unset = UNSET
+    title: None | str | Unset = UNSET
     updated_at: datetime.datetime | None | Unset = UNSET
+    waiting_on: None | Unset | WorkflowRunWaitingOn = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.workflow_run_waiting_on import WorkflowRunWaitingOn
+
         id = str(self.id)
 
         pod_id = str(self.pod_id)
@@ -119,6 +130,12 @@ class WorkflowRunSummaryResponse:
         if not isinstance(self.status, Unset):
             status = self.status.value
 
+        title: None | str | Unset
+        if isinstance(self.title, Unset):
+            title = UNSET
+        else:
+            title = self.title
+
         updated_at: None | str | Unset
         if isinstance(self.updated_at, Unset):
             updated_at = UNSET
@@ -126,6 +143,14 @@ class WorkflowRunSummaryResponse:
             updated_at = self.updated_at.isoformat()
         else:
             updated_at = self.updated_at
+
+        waiting_on: dict[str, Any] | None | Unset
+        if isinstance(self.waiting_on, Unset):
+            waiting_on = UNSET
+        elif isinstance(self.waiting_on, WorkflowRunWaitingOn):
+            waiting_on = self.waiting_on.to_dict()
+        else:
+            waiting_on = self.waiting_on
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -155,13 +180,19 @@ class WorkflowRunSummaryResponse:
             field_dict["started_at"] = started_at
         if status is not UNSET:
             field_dict["status"] = status
+        if title is not UNSET:
+            field_dict["title"] = title
         if updated_at is not UNSET:
             field_dict["updated_at"] = updated_at
+        if waiting_on is not UNSET:
+            field_dict["waiting_on"] = waiting_on
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.workflow_run_waiting_on import WorkflowRunWaitingOn
+
         d = dict(src_dict)
         id = UUID(d.pop("id"))
 
@@ -267,6 +298,15 @@ class WorkflowRunSummaryResponse:
         else:
             status = WorkflowRunStatus(_status)
 
+        def _parse_title(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        title = _parse_title(d.pop("title", UNSET))
+
         def _parse_updated_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
                 return data
@@ -284,6 +324,23 @@ class WorkflowRunSummaryResponse:
 
         updated_at = _parse_updated_at(d.pop("updated_at", UNSET))
 
+        def _parse_waiting_on(data: object) -> None | Unset | WorkflowRunWaitingOn:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                waiting_on_type_0 = WorkflowRunWaitingOn.from_dict(data)
+
+                return waiting_on_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | WorkflowRunWaitingOn, data)
+
+        waiting_on = _parse_waiting_on(d.pop("waiting_on", UNSET))
+
         workflow_run_summary_response = cls(
             id=id,
             pod_id=pod_id,
@@ -298,7 +355,9 @@ class WorkflowRunSummaryResponse:
             start_type=start_type,
             started_at=started_at,
             status=status,
+            title=title,
             updated_at=updated_at,
+            waiting_on=waiting_on,
         )
 
         workflow_run_summary_response.additional_properties = d

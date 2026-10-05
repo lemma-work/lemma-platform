@@ -22,6 +22,10 @@ export type WorkflowUpdateRequest = {
      */
     mode?: (WorkflowMode | null);
     /**
+     * What each run is about, as up to four JMESPath expressions over the run context, joined with ' · '. Example: `["collect.candidate_name", "collect.role"]`. Evaluated whenever a run is read, so a part filled in by a later form appears once that form is answered; parts that resolve to nothing are skipped. Empty means runs carry no title. Send `[]` to remove the title.
+     */
+    run_title?: (Array<string> | null);
+    /**
      * Updated start trigger configuration.
      */
     start?: ((ManualWorkflowStartInput | ScheduledWorkflowStartInput | EventWorkflowStartInput | DataStoreWorkflowStartInput) | null);

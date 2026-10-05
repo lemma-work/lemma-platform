@@ -16,18 +16,17 @@ const CHANNELS = [
     { name: "Telegram", logo: "/connector-logos/telegram.svg" },
 ];
 
+/** Under the hero's buttons, so where it answers is said above the fold. */
 export function Channels() {
     return (
-        <div className={s.wrap}>
-            <div className={s.strip}>
-                <p className={s.label}>Ask it from wherever your people already talk</p>
-                <ul className={s.stripItems}>
-                    {CHANNELS.map(channel => (
-                        <li key={channel.name}><img src={channel.logo} alt="" width={20} height={20} />{channel.name}</li>
-                    ))}
-                    <li><span className={s.mail} aria-hidden="true">@</span>Email</li>
-                </ul>
-            </div>
+        <div className={s.strip}>
+            <p className={s.label}>Ask it from wherever your people already talk</p>
+            <ul className={s.stripItems}>
+                {CHANNELS.map(channel => (
+                    <li key={channel.name}><img src={channel.logo} alt="" width={20} height={20} />{channel.name}</li>
+                ))}
+                <li><span className={s.mail} aria-hidden="true">@</span>Email</li>
+            </ul>
         </div>
     );
 }
@@ -61,39 +60,6 @@ export function HowItWorks() {
     );
 }
 
-/* ── It builds: four teammates, four apps ─────────────────────────────── */
-
-const APPS: { src: string; width: number; height: number; face: string; app: string; who: string; job: string }[] = [
-    { src: "/landing/app-kit.webp", width: 2880, height: 1120, face: "/teammates/loop-v1.png", app: "Launch studio", who: "Kit", job: "every launch asset, its owner and what it still needs" },
-    { src: "/landing/app-june.webp", width: 2880, height: 1640, face: "/teammates/frame-v1.png", app: "Customer launchpad", who: "June", job: "a customer’s first import, checked before it runs" },
-    { src: "/landing/app-remy.webp", width: 2880, height: 1560, face: "/teammates/pleat-v1.png", app: "Deal desk", who: "Remy", job: "every buyer’s next step, with the reply drafted for review" },
-    { src: "/landing/app-scout.webp", width: 2880, height: 1520, face: "/teammates/extended/gem.png", app: "Evidence notebook", who: "Scout", job: "a research question, with the evidence and the doubts beside it" },
-];
-
-export function Builds() {
-    return (
-        <section className={`${s.wrap} ${s.section}`} aria-labelledby="builds-title">
-            <div className={s.head}>
-                <div><p className={s.label}>It builds</p><h2 id="builds-title" className={s.title}>The tools the job needs, built for it.</h2></div>
-                <p className={s.body}>Every teammate makes the screens its work calls for, and everyone involved opens them. Four teammates, four apps.</p>
-            </div>
-            <div className={s.masonry}>
-                {APPS.map(app => (
-                    <figure key={app.app} className={s.window}>
-                        <figcaption className={s.chrome}>
-                            <img src={app.face} alt="" width={22} height={22} />
-                            {app.app} <em>· {app.who}</em>
-                            <span className={s.dots} aria-hidden="true"><i /><i /><i /></span>
-                        </figcaption>
-                        <Image src={app.src} width={app.width} height={app.height} sizes="(max-width: 860px) 100vw, 590px"
-                            alt={`${app.app}, the app ${app.who} built: ${app.job}.`} />
-                    </figure>
-                ))}
-            </div>
-        </section>
-    );
-}
-
 /* ── Everyone asks, each sees their part ──────────────────────────────── */
 
 export function People() {
@@ -114,10 +80,10 @@ export function People() {
             </div>
             <figure className={s.panel}>
                 <div className={s.panelCard}>
-                    <Image src="/landing/people.webp" width={1040} height={840} sizes="(max-width: 860px) 100vw, 520px"
-                        alt="People with access to Kit: you with full access, Priya who reviews external commitments, and others in the organization who can be added." />
+                    <Image src="/landing/people.webp" width={1040} height={1036} sizes="(max-width: 860px) 100vw, 520px"
+                        alt="People with access to Kit: you with full access, Dev who confirms a fix is live, Sam who answers Enterprise accounts, Alex, and others in the organization who can be added." />
                 </div>
-                <figcaption className={s.scrawl}>Priya signs off on anything that goes out</figcaption>
+                <figcaption className={s.scrawl}>Nobody hears back until Dev says it’s live</figcaption>
             </figure>
         </section>
     );
@@ -126,12 +92,12 @@ export function People() {
 /* ── Correct it once ──────────────────────────────────────────────────── */
 
 const MOMENTS: { label: string; src: string; width: number; height: number; alt: string }[] = [
-    { label: "1 · You correct it", src: "/landing/noted.webp", width: 1608, height: 456,
-        alt: "Someone tells Kit the readiness check now runs Thursdays at 9. Kit confirms, and a line under its reply says Kit noted this, in Launch checks." },
+    { label: "1 · You correct it", src: "/landing/noted.webp", width: 1608, height: 1044,
+        alt: "Someone tells Kit that app feels stuck on mobile means the missing push notification, not a timeout. Kit re-sorts the 14 reports, and a line under its reply says Kit noted this, in Feedback rules." },
     { label: "2 · It writes the lesson down", src: "/landing/note-open.webp", width: 1640, height: 420,
-        alt: "The Launch checks note: readiness check runs Thursdays at 09:00, moved from Fridays." },
+        alt: "The Feedback rules note: on mobile, app feels stuck is the missing push notification, not a timeout, from Dev; timeouts go to Dev, top priority." },
     { label: "3 · Everyone in its space can read it", src: "/landing/remembers.webp", width: 1568, height: 640,
-        alt: "What Kit remembers: shared notes on launch checks, publishing and brand voice, with when each last changed." },
+        alt: "What Kit remembers: shared notes on feedback rules, closing the loop and capture, with when each last changed." },
 ];
 
 /** Hand-drawn arrows from each moment to the next, drawn inside the moment

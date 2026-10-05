@@ -72,6 +72,7 @@ model from `pod-model.md`.
 
 - **Definition**: named graph — `nodes`, `edges`, `start`, description. Graphs are validated at save time (single entry node, no dangling edges/rule targets, reachable nodes, compilable expressions); invalid graphs are rejected with the full issue list.
 - **Run**: one execution. Carries status, current node, run context, step history, and `active_wait` (what it's waiting on) when status is `WAITING`.
+- **Name the runs** with `run_title` on the workflow: up to four JMESPath expressions over the run context, joined with ` · ` — `"run_title": ["intake.candidate_name", "intake.role"]`. Every run list and the in-progress board show it, so set it on any workflow whose runs take days or pass between people; without it they all read "Waiting on a person". It is evaluated on every read, so a part filled in by a later form appears once that form is answered, and editing it retitles runs already in flight.
 - **Runs have no arbitrary start input object.** `workflows run` creates the run; if the entry node is a FORM, `--data` submits that entry form. Trigger payloads (schedule/event/datastore) are injected by the platform under `start.*`.
 - **Run context** (what every expression resolves against):
   - `<node_id>.<field>` — output of any executed node (form fields, agent output, function result)

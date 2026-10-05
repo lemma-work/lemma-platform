@@ -453,7 +453,9 @@ export const liveSource: PodSource = {
     },
 
     async getPod(podId: string): Promise<Pod> {
-        return podSummary(await lemma().pods.get(podId));
+        /* Through the held row: the surfaces, the agents and the schedules
+           each read the same pod for its name while the space opens. */
+        return podSummary(await podRow(podId) as Parameters<typeof podSummary>[0]);
     },
 
     async getPodDetail(podId: string, podName: string, podIcon?: string | null): Promise<PodDetail> {
@@ -1060,9 +1062,12 @@ export const liveSource: PodSource = {
     async readFile(podId: string, path: string): Promise<FileContent> {
         const client = lemma(podId);
 
-        /* The deep link is fetched alongside the metadata rather than only on
-           the fallback path: every file gets an "open" affordance, drawn
-           inline or not. */
+        /* The signed link is fetched alongside the metadata for anything
+           drawn from it — media, PDFs, files offered as a download. Text read
+           inline never uses it, and every card, skill and sub-page link reads
+           text: there it was a third request apiece for a link only Copy link
+           and Share ask for, and they ask `fileAppUrl` themselves. */
+        const inline = ["markdown", "text", "html"].includes(fileKind("", path));
         const [detail, urls] = await Promise.all([
             client.files.get(path) as Promise<{
                 name?: string;
@@ -1070,7 +1075,7 @@ export const liveSource: PodSource = {
                 mime_type?: string | null;
                 size_bytes?: number;
             }>,
-(client.files.getUrl(path) as Promise<{ app_url?: string; url?: string }>).catch(
+            inline ? ({} as { app_url?: string; url?: string }) : (client.files.getUrl(path) as Promise<{ app_url?: string; url?: string }>).catch(
                 () => ({}) as { app_url?: string; url?: string },
             ),
         ]);
@@ -1121,6 +1126,11 @@ export const liveSource: PodSource = {
         }
 
         return { ...base, kind: "binary" };
+    },
+
+    async fileAppUrl(podId: string, path: string): Promise<string | null> {
+        const urls = (await lemma(podId).files.getUrl(path)) as { app_url?: string };
+        return urls.app_url ?? null;
     },
 
     async writeFile(podId: string, path: string, text: string): Promise<void> {
@@ -1473,11 +1483,15 @@ export const liveSource: PodSource = {
            rather than taken from the reply, which would blank the grants the
            detail is already showing. */
         await lemma(podId).agents.update(name, patch);
+        agentPages.delete(podId);
         return liveSource.getAgent(podId, name);
     },
 
     async deleteAgent(podId: string, name: string): Promise<void> {
         await lemma(podId).agents.delete(name);
+        /* Or the refetch that follows gets the held page back, with the
+           agent still in it, for the rest of the window. */
+        agentPages.delete(podId);
     },
 
     /* ── standing work ──────────────────────────────────────────────

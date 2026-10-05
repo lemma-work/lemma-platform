@@ -81,6 +81,7 @@ class WidgetAssetService(WidgetContentReader):
         content: str | None = None
         path: str | None = None
         title = ""
+        data: object = None
         for tool_args in rows:
             inline = tool_args.get("content")
             source = tool_args.get("path")
@@ -95,6 +96,7 @@ class WidgetAssetService(WidgetContentReader):
             name = tool_args.get("name")
             if isinstance(name, str):
                 title = name
+            data = tool_args.get("data")
             break
 
         if content is None and path is None:
@@ -105,7 +107,7 @@ class WidgetAssetService(WidgetContentReader):
             return None
 
         return WidgetArtifact(
-            content=content or "", pod_id=pod_id, title=title, path=path
+            content=content or "", pod_id=pod_id, title=title, path=path, data=data
         )
 
     async def resolve(self, artifact: WidgetArtifact, ctx: object) -> WidgetArtifact:

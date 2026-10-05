@@ -1,0 +1,96 @@
+<!--
+widget: google-calendar/invite
+description: One Google Calendar invite with time, place, who has answered and any clash, and accept, maybe and decline.
+connector: google_calendar
+kind: composio
+operations: GOOGLECALENDAR_PATCH_EVENT
+data: { event_id, calendar_id?, summary, start, end, location?, meet_url?, organizer?: { name, email }, your_response?, attendees: [{ name?, email, response }], conflicts?: [{ summary, start, end }], description? }
+version: 1
+-->
+<div id="invite"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "event_id": "5q8m2c0v7h3k1d9j",
+  "calendar_id": "primary",
+  "summary": "Fabrikam renewal review",
+  "start": "2026-10-07T10:00:00+05:30",
+  "end": "2026-10-07T10:45:00+05:30",
+  "meet_url": "https://meet.google.com/abc-defg-hij",
+  "organizer": { "name": "Lee Duarte", "email": "lee@fabrikam.com" },
+  "your_response": "needsAction",
+  "attendees": [
+    { "name": "Lee Duarte", "email": "lee@fabrikam.com", "response": "accepted" },
+    { "name": "Alex Kim", "email": "alex@northwind.io", "response": "needsAction" },
+    { "name": "Mira Shah", "email": "mira@northwind.io", "response": "tentative" },
+    { "email": "finance@fabrikam.com", "response": "declined" }
+  ],
+  "conflicts": [{ "summary": "Hiring sync", "start": "2026-10-07T10:30:00+05:30", "end": "2026-10-07T11:00:00+05:30" }],
+  "description": "Walk through the renewal terms and the Q4 seat count."
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("invite"), e = lemma.esc;
+  if (!d || !d.event_id) { el.innerHTML = '<p class="lw-quiet">No invite to show.</p>'; return; }
+  var STATE = { accepted: ["Going", "good"], tentative: ["Maybe", "wait"], declined: ["Declined", "bad"], needsAction: ["Waiting", ""] };
+  var people = d.attendees || [];
+  var tally = people.reduce(function (c, a) { c[a.response] = (c[a.response] || 0) + 1; return c; }, {});
+  var mine = STATE[d.your_response] || STATE.needsAction;
+  var organizer = d.organizer ? (d.organizer.name || d.organizer.email) : "the organizer";
+  var minutes = Math.round((new Date(d.end) - new Date(d.start)) / 60000);
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec">' +
+        '<div class="lw-top">' + lemma.icon("calendar") + "<span>Invite from " + e(organizer) + '</span><span class="lw-spacer"></span>' +
+          '<span class="lw-pill" data-kind="' + (mine[1] || "accent") + '" id="mine"><span class="lw-led"></span>You: ' + mine[0] + "</span></div>" +
+        '<h2 class="lw-title">' + e(d.summary || "(no title)") + "</h2>" +
+        '<div class="lw-sub"><span class="lw-bar" style="gap:6px">' + lemma.icon("clock") + lemma.when(d.start) + "–" + lemma.when(d.end, { timeOnly: true }) +
+          (isFinite(minutes) ? ' <span class="lw-quiet">· ' + minutes + " min</span>" : "") + "</span>" +
+          (d.location ? '<span class="lw-bar" style="gap:6px">' + lemma.icon("pin") + e(d.location) + "</span>" : "") +
+          (d.meet_url ? '<a class="lw-bar" style="gap:6px" href="' + e(d.meet_url) + '" target="_blank" rel="noopener">' + lemma.icon("video") + "Join</a>" : "") + "</div>" +
+        ((d.conflicts || []).length ? '<div class="lw-bar" style="margin-top:12px">' + d.conflicts.map(function (c) {
+          return '<span class="lw-pill" data-kind="wait">' + lemma.icon("alert") + "Clashes with " + e(c.summary) + " · " +
+            lemma.when(c.start, { timeOnly: true }) + "–" + lemma.when(c.end, { timeOnly: true }) + "</span>";
+        }).join("") + "</div>" : "") +
+        (d.description ? '<div class="lw-body lw-quiet" style="margin-top:12px;font-size:13.5px">' + e(d.description) + "</div>" : "") +
+      "</div>" +
+      '<div class="lw-sec" style="padding-bottom:6px"><span class="lw-label">' + people.length + " guests · " + (tally.accepted || 0) + " going · " +
+        (tally.tentative || 0) + " maybe · " + (tally.needsAction || 0) + " waiting</span></div>" +
+      '<div class="lw-rows" style="border-top:0">' + people.map(function (a) {
+        var s = STATE[a.response] || STATE.needsAction;
+        var host = d.organizer && a.email === d.organizer.email;
+        return '<div class="lw-item">' + lemma.avatar(a.name || a.email, "s") + '<span class="lw-grow">' + e(a.name || a.email) +
+          (host ? ' <span class="lw-quiet">· organizer</span>' : "") + '</span><span class="lw-pill" data-kind="' + s[1] + '">' + s[0] + "</span></div>";
+      }).join("") + "</div>" +
+      '<div class="lw-sec lw-foot"><div class="lw-bar">' +
+        '<button class="lw-btn" data-tone="primary" id="yes">' + lemma.icon("check") + "<span>Accept</span></button>" +
+        '<button class="lw-btn" data-tone="soft" id="maybe">Maybe</button>' +
+        '<button class="lw-btn" data-tone="soft" id="no">Decline</button><span class="lw-spacer"></span>' +
+        '<button class="lw-btn" id="other" hidden>Suggest another time</button></div></div>' +
+    "</div>";
+
+  var answer = function (response, label, kind) {
+    return function () {
+      return lemma.act("google_calendar", "GOOGLECALENDAR_PATCH_EVENT",
+        { calendar_id: d.calendar_id || "primary", event_id: d.event_id, rsvp_response: response }, { kind: "composio" }).then(function () {
+        var pill = document.getElementById("mine");
+        pill.dataset.kind = kind;
+        pill.innerHTML = '<span class="lw-led"></span>You: ' + label;
+      });
+    };
+  };
+  lemma.button("yes", { does: "accept the invite", confirm: "Tell " + organizer + " you're going?", yes: "Accept", run: answer("accepted", "Going", "good"), done: "Accepted." });
+  lemma.button("maybe", { does: "answer maybe", run: answer("tentative", "Maybe", "wait"), done: "Answered maybe." });
+  lemma.button("no", { does: "decline the invite", confirm: "Tell " + organizer + " you can't make it?", yes: "Decline", tone: "danger", run: answer("declined", "Declined", "bad"), done: "Declined." });
+  // Google's API cannot propose a new time on a guest's behalf, so this asks in the conversation instead.
+  lemma.canCompose().then(function (can) {
+    if (!can) return;
+    var other = document.getElementById("other");
+    other.hidden = false;
+    other.addEventListener("click", function () {
+      lemma.compose("Find another time for “" + (d.summary || "this meeting") + "” that works for everyone and suggest it to " + organizer + ".");
+    });
+  });
+})();
+</script>

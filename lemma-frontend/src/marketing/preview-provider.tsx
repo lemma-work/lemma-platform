@@ -24,7 +24,7 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
     }, []);
     return <QueryClientProvider client={client}>
         {standalone ? <div className="preview-document">
-            <div className="preview-document__note"><span>Acme sample workspace · No external actions</span><a href="/">Back to Lemma ↗</a></div>
+            <div className="preview-document__note"><span>Acme</span><a href="/">Back to Lemma ↗</a></div>
             <div className="preview-document__workspace">{children}</div>
         </div> : children}
     </QueryClientProvider>;

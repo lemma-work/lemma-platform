@@ -196,6 +196,7 @@ WORKFLOW_JSON = """{
   "description": "TODO: what this workflow orchestrates.",
   "start": { "type": "MANUAL" },   // MANUAL | SCHEDULED | DATASTORE_EVENT | EVENT
   // "mode": "DURABLE",            // how runs are executed; omit for the default
+  // "run_title": ["intake.note"], // names each run on run lists and the board: up to 4 expressions
   "nodes": [
     // Entry FORM collects the run input. Node types: FORM AGENT FUNCTION DECISION LOOP WAIT_UNTIL END
     { "id": "intake", "type": "FORM", "label": "Intake",

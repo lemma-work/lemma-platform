@@ -158,6 +158,32 @@ export interface RunRow {
     startType: string | null;
     /** Who the run belongs to — who started it, or whom a schedule ran it as. */
     userId: string | null;
+    /** What the run is about, from the workflow's `run_title`. Null when the
+     *  workflow sets none, or nothing it names is filled in yet. */
+    title: string | null;
+    /** Where it is parked and on whom, while it has an active wait. */
+    waitingOn: WaitingOn | null;
+}
+
+export interface WaitingOn {
+    nodeId: string;
+    type: WaitType | null;
+    /** A pod *member* id — `Member.id`, not a user id. */
+    assigneeId: string | null;
+    /** When it started waiting here. */
+    since: string | null;
+}
+
+function readWaitingOn(raw: unknown): WaitingOn | null {
+    if (!isRecord(raw)) return null;
+    const nodeId = str(raw.node_id);
+    if (!nodeId) return null;
+    return {
+        nodeId,
+        type: waitTypeOf(raw),
+        assigneeId: str(raw.assigned_pod_member_id),
+        since: str(raw.since),
+    };
 }
 
 /** One run summary. A run without an id is unopenable and uncancellable, so
@@ -182,6 +208,8 @@ export function readRun(raw: unknown): RunRow | null {
         createdAt: str(raw.created_at),
         startType: str(raw.start_type),
         userId: str(raw.user_id),
+        title: str(raw.title),
+        waitingOn: readWaitingOn(raw.waiting_on),
     };
 }
 

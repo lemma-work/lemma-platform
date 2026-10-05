@@ -464,6 +464,7 @@ export { WorkflowRunStatus } from './models/WorkflowRunStatus.js';
 export type { WorkflowRunSummaryResponse } from './models/WorkflowRunSummaryResponse.js';
 export type { WorkflowRunWaitAssignment } from './models/WorkflowRunWaitAssignment.js';
 export type { WorkflowRunWaitAssignmentListResponse } from './models/WorkflowRunWaitAssignmentListResponse.js';
+export type { WorkflowRunWaitingOn } from './models/WorkflowRunWaitingOn.js';
 export type { WorkflowRunWaitResponse } from './models/WorkflowRunWaitResponse.js';
 export { WorkflowRunWaitStatus } from './models/WorkflowRunWaitStatus.js';
 export { WorkflowRunWaitType } from './models/WorkflowRunWaitType.js';

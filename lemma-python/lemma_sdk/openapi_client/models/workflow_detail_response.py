@@ -46,6 +46,10 @@ class WorkflowDetailResponse:
         mode (WorkflowMode | Unset): Workflow schedule ownership mode.
         nodes (list[AgentNodeResponse | DecisionNodeResponse | EndNodeResponse | FormNodeResponse | FunctionNodeResponse
             | LoopNodeResponse | WaitUntilNodeResponse] | Unset):
+        run_title (list[str] | Unset): What each run is about, as up to four JMESPath expressions over the run context,
+            joined with ' · '. Example: `["collect.candidate_name", "collect.role"]`. Evaluated whenever a run is read, so a
+            part filled in by a later form appears once that form is answered; parts that resolve to nothing are skipped.
+            Empty means runs carry no title.
         start (DataStoreWorkflowStartOutput | EventWorkflowStartOutput | ManualWorkflowStartOutput | None |
             ScheduledWorkflowStartOutput | Unset):
         updated_at (datetime.datetime | None | Unset):
@@ -74,6 +78,7 @@ class WorkflowDetailResponse:
         ]
         | Unset
     ) = UNSET
+    run_title: list[str] | Unset = UNSET
     start: (
         DataStoreWorkflowStartOutput
         | EventWorkflowStartOutput
@@ -167,6 +172,10 @@ class WorkflowDetailResponse:
 
                 nodes.append(nodes_item)
 
+        run_title: list[str] | Unset = UNSET
+        if not isinstance(self.run_title, Unset):
+            run_title = self.run_title
+
         start: dict[str, Any] | None | Unset
         if isinstance(self.start, Unset):
             start = UNSET
@@ -216,6 +225,8 @@ class WorkflowDetailResponse:
             field_dict["mode"] = mode
         if nodes is not UNSET:
             field_dict["nodes"] = nodes
+        if run_title is not UNSET:
+            field_dict["run_title"] = run_title
         if start is not UNSET:
             field_dict["start"] = start
         if updated_at is not UNSET:
@@ -392,6 +403,8 @@ class WorkflowDetailResponse:
 
                 nodes.append(nodes_item)
 
+        run_title = cast(list[str], d.pop("run_title", UNSET))
+
         def _parse_start(
             data: object,
         ) -> (
@@ -481,6 +494,7 @@ class WorkflowDetailResponse:
             is_active=is_active,
             mode=mode,
             nodes=nodes,
+            run_title=run_title,
             start=start,
             updated_at=updated_at,
             visibility=visibility,

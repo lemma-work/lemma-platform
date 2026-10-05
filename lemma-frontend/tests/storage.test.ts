@@ -129,12 +129,14 @@ test("account switches discard workspace locations but preserve appearance", () 
     browser.setItem(key("tabs"), "private-file-path");
     browser.setItem(key("org"), "first-org");
     browser.setItem(key("last-pod"), JSON.stringify({ "first-org": "first-pod" }));
+    browser.setItem(key("remembered"), JSON.stringify({ '["orgs"]': { at: 1, data: [{ id: "first-org" }] } }));
     browser.setItem("lemma-room:tabs", "old-private-file-path");
     browser.setItem(key("theme"), "dark");
     assert.equal(retainWorkspaceOwner(browser, "second"), true);
     assert.equal(browser.getItem(key("tabs")), null);
     assert.equal(browser.getItem(key("org")), null);
     assert.equal(browser.getItem(key("last-pod")), null);
+    assert.equal(browser.getItem(key("remembered")), null, "the last account's teammates were left for the next one");
     assert.equal(browser.getItem("lemma-room:tabs"), null);
     assert.equal(browser.getItem(key("theme")), "dark");
 });

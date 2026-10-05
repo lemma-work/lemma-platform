@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Tab } from "@/data";
 import { ExternalIcon, RefreshIcon, CopyIcon, DownloadIcon, MoreIcon, ComputerIcon } from "@/ui/icons";
 import { ShareDialog } from "@/thread/share-dialog";
+import { useFileAppUrl } from "@/library/file-app-url";
 import { saveFile } from "@/thread/save-file";
 import { copyText } from "@/desktop/clipboard";
 import { isDesktop } from "@/desktop/bridge";
@@ -23,6 +24,7 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
     const sample = source.label === "sample";
     const path = tab?.kind === "file" ? tab.path : "";
     const file = useQuery({ queryKey: ["file", podId, path], queryFn: () => source.readFile(podId, path), enabled: Boolean(path), staleTime: 5 * 60_000 });
+    const link = useFileAppUrl(podId, path, file.data?.appUrl, Boolean(file.data));
     const [feedback, setFeedback] = useState("");
     const [sharing, setSharing] = useState(false);
     const [downloading, setDownloading] = useState(false);
@@ -34,7 +36,7 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
         finally { setDownloading(false); }
     };
     const copy = async () => {
-        try { if (!file.data?.appUrl) return; await copyText(file.data.appUrl); setFeedback("Link copied"); }
+        try { if (!link) return; await copyText(link); setFeedback("Link copied"); }
         catch { setFeedback("Could not copy link"); }
     };
     let primary;
@@ -48,7 +50,7 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
         const downloadButton = (className: string) => <button className={className} disabled={!file.data || downloading} onClick={() => void download()} title="Download document"><DownloadIcon size={17}/><span>{downloading ? "Downloading…" : "Download"}</span></button>;
         /* On a phone the row has no width for it, so Download moves into More. */
         primary = downloadButton("view-actions__wide");
-        secondary = <>{downloadButton("view-actions__narrow")}<button disabled={!file.data?.appUrl} onClick={() => void copy()} title="Copy document link"><CopyIcon size={17}/><span>Copy link</span></button></>;
+        secondary = <>{downloadButton("view-actions__narrow")}<button disabled={!link} onClick={() => void copy()} title="Copy document link"><CopyIcon size={17}/><span>Copy link</span></button></>;
     } else if (tab?.kind === "library" || tab?.kind === "table") {
         primary = <button onClick={() => void cache.invalidateQueries({ queryKey: tab.kind === "library" ? ["library", podId] : ["table", podId, tab.name] })} title="Refresh resources"><RefreshIcon size={17}/><span>Refresh</span></button>;
     } else if (tab?.kind === "profile") {
@@ -78,6 +80,6 @@ export function ViewActions({ tab, podId, onNew, onHistory, onComputer, onReload
         {primary}<div className="view-actions__secondary">{secondary}</div>
         {secondary && <details className="view-actions__more"><summary aria-label="More view actions" title="More view actions"><MoreIcon size={19}/></summary><div>{secondary}</div></details>}
         {feedback && <button className="view-actions__feedback" role="status" onClick={() => setFeedback("")}>{feedback}</button>}
-        {sharing && file.data && <ShareDialog podId={podId} path={path} name={file.data.name} appUrl={file.data.appUrl} onClose={() => setSharing(false)} />}
+        {sharing && file.data && <ShareDialog podId={podId} path={path} name={file.data.name} appUrl={link} onClose={() => setSharing(false)} />}
     </div>;
 }

@@ -256,7 +256,9 @@ async def serve_widget(
         except WidgetSourceUnavailable as missing:
             raise HTTPException(status_code=404, detail=str(missing)) from missing
 
-    document = wrap_html_fragment(artifact.content, title=artifact.title, embed=True)
+    document = wrap_html_fragment(
+        artifact.content, title=artifact.title, embed=True, data=artifact.data
+    )
     return build_injected_html_response(document, artifact.pod_id)
 
 

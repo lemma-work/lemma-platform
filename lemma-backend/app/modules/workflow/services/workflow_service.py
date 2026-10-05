@@ -23,6 +23,7 @@ from app.modules.workflow.domain.errors import (
     WorkflowConflictError,
     WorkflowValidationError,
 )
+from app.modules.workflow.domain.run_title import validate_run_title
 from app.modules.workflow.domain.start import WorkflowStart
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRepository,
@@ -81,6 +82,7 @@ class WorkflowService:
         edges: List[WorkflowEdge] | None = None,
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
+        run_title: List[str] | None = None,
     ) -> WorkflowEntity:
         await self._require_action(
             requester_user_id=requester_user_id,
@@ -106,6 +108,7 @@ class WorkflowService:
             visibility=normalized_visibility,
             nodes=nodes or [],
             edges=edges or [],
+            run_title=validate_run_title(run_title),
         )
         # Validation raises GraphValidationError (422) listing every issue and
         # stamps entry_node_id. Empty shells skip validation until a graph is
@@ -175,6 +178,8 @@ class WorkflowService:
             flow.mode = update_data.mode
         if "start" in update_data.model_fields_set:
             flow.start = update_data.start
+        if "run_title" in update_data.model_fields_set:
+            flow.run_title = validate_run_title(update_data.run_title)
         if "visibility" in update_data.model_fields_set:
             flow.visibility = self._normalize_workflow_visibility(
                 update_data.visibility

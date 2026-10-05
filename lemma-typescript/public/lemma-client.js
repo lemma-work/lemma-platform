@@ -17718,15 +17718,16 @@ var LemmaClient = (() => {
   var WorkflowsService = class {
     /**
      * List Workflow Runs In Pod
-     * Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable).
+     * Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable) and `workflow_id`. Each run carries its `title` and, while it has one, the active wait as `waiting_on`.
      * @param podId
      * @param limit
      * @param status
+     * @param workflowId
      * @param pageToken
      * @returns WorkflowRunListResponse Successful Response
      * @throws ApiError
      */
-    static workflowRunListForPod(podId, limit = 50, status, pageToken) {
+    static workflowRunListForPod(podId, limit = 50, status, workflowId, pageToken) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/workflow-runs",
@@ -17736,6 +17737,7 @@ var LemmaClient = (() => {
         query: {
           "limit": limit,
           "status": status,
+          "workflow_id": workflowId,
           "page_token": pageToken
         },
         errors: {
@@ -18104,6 +18106,23 @@ var LemmaClient = (() => {
           () => {
             var _a;
             return WorkflowsService.workflowRunList(this.podId(), workflowName, (_a = options.limit) != null ? _a : 100, options.pageToken);
+          }
+        ),
+        /**
+         * Runs across every workflow in the pod, newest first. Filter by
+         * `status` (any of) and `workflowId`. Each run carries its `title` and,
+         * while it has one, its active wait as `waiting_on`.
+         */
+        listInPod: (options = {}) => this.client.request(
+          () => {
+            var _a;
+            return WorkflowsService.workflowRunListForPod(
+              this.podId(),
+              (_a = options.limit) != null ? _a : 50,
+              options.status,
+              options.workflowId,
+              options.pageToken
+            );
           }
         ),
         waitingAssignedToMe: (options = {}) => this.client.request(

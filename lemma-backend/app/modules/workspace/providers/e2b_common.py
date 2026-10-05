@@ -71,6 +71,28 @@ META_PROFILE_DIGEST = meta_profile_digest(DEFAULT_METADATA_NAMESPACE)
 META_TEMPLATE = meta_template(DEFAULT_METADATA_NAMESPACE)
 
 
+class CommandExited(ProviderRejected):
+    """A command ran to completion and exited non-zero.
+
+    The SDK raises that as an exception, so it used to fall through the
+    message sniffing below like any transport failure. A `KeyError` in an
+    agent's own `execute_python` code came back either as "e2b rejected the
+    credentials" -- the runner's path is a UUID, and one contained "403" -- or
+    as `SandboxUnavailable`, which the session retried, re-running the broken
+    code, until the deadline: a one-line typo cost the agent a minute, twice in
+    one turn.
+
+    It is a `ProviderRejected` because running the same command again exits
+    the same way, so every existing handler stays correct. A caller for whom
+    the exit *is* the answer catches this and reads `result`, which carries
+    `exit_code`, `stdout` and `stderr`.
+    """
+
+    def __init__(self, result) -> None:
+        super().__init__(str(result))
+        self.result = result
+
+
 def classify(exc: Exception) -> Exception:
     """Turn an SDK failure into this module's two-axis vocabulary.
 
@@ -80,6 +102,11 @@ def classify(exc: Exception) -> Exception:
     """
     name = type(exc).__name__
     message = str(exc)
+
+    # First, and by name: its message is the command's stderr, which can say
+    # anything -- including "403" or "timeout".
+    if name == "CommandExitException":
+        return CommandExited(exc)
 
     if "NotFound" in name or "not found" in message.lower():
         return ProviderGone(message)

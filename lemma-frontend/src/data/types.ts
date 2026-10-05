@@ -766,6 +766,9 @@ export interface PodSource {
     disconnect(podId: string, surfaceName: string): Promise<void>;
     downloadFile(podId: string, path: string): Promise<Blob>;
     readFile(podId: string, path: string): Promise<FileContent>;
+    /** The file's link in Lemma. `readFile` leaves it out for text it reads
+     *  inline, so this is asked only by what offers the link. */
+    fileAppUrl(podId: string, path: string): Promise<string | null>;
     /** Write a text file back, replacing what is there.
      *
      *  The whole file every time, because that is what the editor has: it

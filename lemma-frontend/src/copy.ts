@@ -64,3 +64,10 @@ export const AI_MATES = AI_MATE + "s";
  *  The agents a teammate hands work to are agents. There are no bots here:
  *  the word only ever named the teammate's own agent, which is the teammate. */
 export const SPACE = "space";
+
+/** "Kit’s", and "Follow ups’" — a name ending in s takes the apostrophe
+ *  alone, because "Follow ups’s space" is a stumble on the one button that
+ *  says whose place it is. */
+export function possessive(name: string): string {
+    return name + (/s$/i.test(name) ? "’" : "’s");
+}

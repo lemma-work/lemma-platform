@@ -79,6 +79,11 @@ function useAuthState(client: LemmaClient | null, enabled: boolean): AuthState {
                     if (retainWorkspaceOwner(localStorage, user ?? null)) cache.clear();
                 } catch { /* Storage may be unavailable; the in-memory boundary still applies. */ }
                 previousUser = user;
+                /* The session check is `GET /users/me`, the same answer
+                   `["current-user"]` asks for. Handed over here, the shell,
+                   the profile and the arrival screen read it rather than
+                   asking again the moment the gate opens. */
+                if (next.status === "authenticated" && next.user) cache.setQueryData(["current-user"], next.user);
             }
             setState(next);
         });

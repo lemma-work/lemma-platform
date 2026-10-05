@@ -18,6 +18,7 @@ if TYPE_CHECKING:
         WorkflowRunResponseExecutionContext,
     )
     from ..models.workflow_run_wait_response import WorkflowRunWaitResponse
+    from ..models.workflow_run_waiting_on import WorkflowRunWaitingOn
 
 
 T = TypeVar("T", bound="WorkflowRunResponse")
@@ -52,7 +53,10 @@ class WorkflowRunResponse:
                 waits. Runs suspended on platform work such as an agent, function job, or
                 timer remain RUNNING; the active wait row records the exact wait_type.
             step_history (list[StepRecordResponse] | Unset):
+            title (None | str | Unset): What this run is about, from the workflow's `run_title`. Null when the workflow sets
+                none or nothing it names is filled in yet.
             updated_at (datetime.datetime | None | Unset):
+            waiting_on (None | Unset | WorkflowRunWaitingOn): The run's active wait, while it has one.
     """
 
     id: UUID
@@ -71,11 +75,14 @@ class WorkflowRunResponse:
     started_at: datetime.datetime | None | Unset = UNSET
     status: WorkflowRunStatus | Unset = UNSET
     step_history: list[StepRecordResponse] | Unset = UNSET
+    title: None | str | Unset = UNSET
     updated_at: datetime.datetime | None | Unset = UNSET
+    waiting_on: None | Unset | WorkflowRunWaitingOn = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.workflow_run_wait_response import WorkflowRunWaitResponse
+        from ..models.workflow_run_waiting_on import WorkflowRunWaitingOn
 
         id = str(self.id)
 
@@ -158,6 +165,12 @@ class WorkflowRunResponse:
                 step_history_item = step_history_item_data.to_dict()
                 step_history.append(step_history_item)
 
+        title: None | str | Unset
+        if isinstance(self.title, Unset):
+            title = UNSET
+        else:
+            title = self.title
+
         updated_at: None | str | Unset
         if isinstance(self.updated_at, Unset):
             updated_at = UNSET
@@ -165,6 +178,14 @@ class WorkflowRunResponse:
             updated_at = self.updated_at.isoformat()
         else:
             updated_at = self.updated_at
+
+        waiting_on: dict[str, Any] | None | Unset
+        if isinstance(self.waiting_on, Unset):
+            waiting_on = UNSET
+        elif isinstance(self.waiting_on, WorkflowRunWaitingOn):
+            waiting_on = self.waiting_on.to_dict()
+        else:
+            waiting_on = self.waiting_on
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -200,8 +221,12 @@ class WorkflowRunResponse:
             field_dict["status"] = status
         if step_history is not UNSET:
             field_dict["step_history"] = step_history
+        if title is not UNSET:
+            field_dict["title"] = title
         if updated_at is not UNSET:
             field_dict["updated_at"] = updated_at
+        if waiting_on is not UNSET:
+            field_dict["waiting_on"] = waiting_on
 
         return field_dict
 
@@ -212,6 +237,7 @@ class WorkflowRunResponse:
             WorkflowRunResponseExecutionContext,
         )
         from ..models.workflow_run_wait_response import WorkflowRunWaitResponse
+        from ..models.workflow_run_waiting_on import WorkflowRunWaitingOn
 
         d = dict(src_dict)
         id = UUID(d.pop("id"))
@@ -353,6 +379,15 @@ class WorkflowRunResponse:
 
                 step_history.append(step_history_item)
 
+        def _parse_title(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        title = _parse_title(d.pop("title", UNSET))
+
         def _parse_updated_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
                 return data
@@ -369,6 +404,23 @@ class WorkflowRunResponse:
             return cast(datetime.datetime | None | Unset, data)
 
         updated_at = _parse_updated_at(d.pop("updated_at", UNSET))
+
+        def _parse_waiting_on(data: object) -> None | Unset | WorkflowRunWaitingOn:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                waiting_on_type_0 = WorkflowRunWaitingOn.from_dict(data)
+
+                return waiting_on_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | WorkflowRunWaitingOn, data)
+
+        waiting_on = _parse_waiting_on(d.pop("waiting_on", UNSET))
 
         workflow_run_response = cls(
             id=id,
@@ -387,7 +439,9 @@ class WorkflowRunResponse:
             started_at=started_at,
             status=status,
             step_history=step_history,
+            title=title,
             updated_at=updated_at,
+            waiting_on=waiting_on,
         )
 
         workflow_run_response.additional_properties = d

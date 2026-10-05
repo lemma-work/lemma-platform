@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { CharacterPuppet } from "@/shell/character-puppet";
 import { WorkspaceLoading } from "@/shell/workspace-loading";
+import { githubUrl } from "@/site/links";
+import { Channels } from "./sections";
 import s from "./landing.module.css";
 
 /** The loop behind the headline: a work campus in a better future, where
@@ -37,15 +39,16 @@ export function Hero() {
             <div className={s.heroWash} aria-hidden="true" />
             <div className={s.wrap}>
                 <div className={s.heroText}>
-                    <p className={s.label}>Open source</p>
-                    <h1 className={s.heroHeadline}><span>Hire an AI teammate.</span><span>Give it a space.</span></h1>
+                    <a className={s.announce} href={githubUrl} target="_blank" rel="noopener noreferrer"><span>Open source</span>Dots + Spaces + Lovable, for teams <em aria-hidden="true">→</em></a>
+                    <h1 className={s.heroHeadline}><span>Hire an AI teammate.</span></h1>
                     <p className={s.heroIntro}>
-                        The space is where it keeps the docs, lists and apps for its job, and where your people work with it.
+                        Share it with your people. It learns from all of you and builds itself around how you work.
                     </p>
                     <div className={s.ctas}>
                         <Link className={s.primary} href="/t">Get started free</Link>
-                        <Link className={s.textLink} href="/contact">Talk to us →</Link>
+                        <a className={s.textLink} href={githubUrl} target="_blank" rel="noopener noreferrer">Star it on GitHub →</a>
                     </div>
+                    <Channels />
                 </div>
             </div>
         </section>
@@ -53,13 +56,13 @@ export function Hero() {
 }
 
 /* ── The live workspace ─────────────────────────────────────────────────
-   The actual Acme sample, in its own document, on a dark band. The buttons
+   The actual Acme workspace, in its own document, on a dark band. The buttons
    under it put it on a screen worth seeing; clicking into it hands it the
    mouse. Nothing here follows the scroll. */
 
 const TRIES: { step: number; label: string }[] = [
     { step: -1, label: "Ask Kit something" },
-    { step: 2, label: "Open Launch studio" },
+    { step: 2, label: "Open Feedback loop" },
     { step: 1, label: "See who’s in" },
     { step: 3, label: "Read what Kit remembers" },
     { step: 4, label: "Connect a channel" },
@@ -151,12 +154,12 @@ export function TryIt() {
             <div className={s.wrap} style={{ position: "relative" }}>
                 <div className={s.head}>
                     <div>
-                        <p className={s.label}>Live · sample data</p>
-                        <h2 id="try-title" className={s.title}>This is Kit’s space.<br />Go on, click around.</h2>
+                        <p className={s.label}>Live</p>
+                        <h2 id="try-title" className={s.title}>An AI teammate’s space.<br />Go on, click around.</h2>
                     </div>
                     <p className={s.body}>
-                        Kit runs launches at Acme, a company we made up. The workspace is the real product: ask it something,
-                        open the app it built, read what it has learned.
+                        Meet Kit, the AI teammate that runs Acme’s feedback loop. This is the real product: ask Kit something,
+                        open the app it built, read what the team has taught it.
                     </p>
                 </div>
                 <div className={s.stage}>
@@ -166,7 +169,7 @@ export function TryIt() {
                     <div className={s.productFrame} data-engaged={engaged || undefined}>
                         <div className={s.productViewport} ref={viewport} data-revealed={ready || waitedOut || undefined}
                             onPointerLeave={event => { if (event.pointerType === "mouse") setEngaged(false); }}>
-                            <iframe ref={demo} src="/demo/landing" title="Kit’s space, with sample data" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" loading="lazy" />
+                            <iframe ref={demo} src="/demo/landing" title="Kit’s space" className={s.productIframe} sandbox="allow-scripts allow-same-origin allow-forms" loading="lazy" />
                             {/* The workspace's own loading shape, drawn by this page so it is
                                 there on first paint, until the frame has something to show. */}
                             <div className={s.productPoster} aria-hidden="true" inert><WorkspaceLoading /></div>
