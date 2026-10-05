@@ -68,6 +68,7 @@ import { Modal } from "./modal";
 import { SettingsModal, type SettingsSection } from "@/settings/settings-modal";
 import { HiringView, type FirstMove } from "@/stage/hiring";
 import { ArrivalView } from "@/org/arrival-view";
+import { NewOrgDialog } from "@/org/new-org-dialog";
 import { ConversationPane } from "@/thread/conversation";
 import { LiveConversation } from "@/thread/live-conversation";
 import { History } from "@/thread/history";
@@ -254,6 +255,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
        gets the same profile page a hired teammate gets, and that does not
        fit in a dialog. */
     const [hiring, setHiring] = useState(() => incoming.get('hire') === '1');
+    /* Making another organization, from the organization menu or Settings. */
+    const [makingOrg, setMakingOrg] = useState(false);
+    /* Not from the landing page's preview, which is a picture of the app. */
+    const canMakeOrg = !preview;
     const [collapsed, setCollapsed] = useState(() => readJson(key("sidebar-collapsed"), false));
     const [mobileOpen, setMobileOpen] = useState(false);
     const [sidebarHidden, setSidebarHidden] = useState(() => readJson(key("sidebar-hidden"), false));
@@ -1425,6 +1430,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                     orgs={orgs.data ?? []}
                     activeOrgId={activeOrgId}
                     onPickOrg={(id) => { setOrgId(id); goToPod(null); setConversationId(null); }}
+                    onNewOrg={canMakeOrg ? () => setMakingOrg(true) : null}
                     initial={settings}
                     initialFocus={settingsFocus}
                     onClose={() => { setSettings(null); setSettingsFocus(null); }}
@@ -1471,6 +1477,24 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         onOpen={(id, from) => { zoomFrom.current = from; goToPod(id); setConversationId(null); }}
                         onHire={activeOrgId ? () => { setSettings(null); setHiring(true); } : null}
                         onPickOrg={(id) => { setLeftFrom(null); setOrgId(id); }}
+                        onNewOrg={canMakeOrg ? () => setMakingOrg(true) : null}
+                        onOrgSettings={(section) => { setSettingsFocus(null); setSettings(section); setSettingsRequest((count) => count + 1); }}
+                    />
+                )}
+                {makingOrg && (
+                    <NewOrgDialog
+                        taken={(orgs.data ?? []).map((org) => org.name)}
+                        onClose={() => setMakingOrg(false)}
+                        onCreated={(org) => {
+                            /* Into the new one, at the top: an organization with
+                               nobody in it opens on hiring by itself, the same
+                               way a first one does. */
+                            setMakingOrg(false);
+                            setSettings(null);
+                            setOrgId(org.id);
+                            setConversationId(null);
+                            goToTeam(null);
+                        }}
                     />
                 )}
                 {stranger && (

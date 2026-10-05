@@ -120,6 +120,30 @@ export function isBringYourOwn(entry: CatalogEntry): boolean {
     return tenantKind(entry) !== null;
 }
 
+/** One kind of thing an organization can point at, with the entry that
+ *  carries it. */
+export interface OwnKind { kind: string; entry: CatalogEntry }
+
+/** Every kind an organization points somewhere itself, once each, in
+ *  catalogue order — "an MCP server", not every connector that is one. */
+export function ownKinds(entries: CatalogEntry[]): OwnKind[] {
+    const found: OwnKind[] = [];
+    for (const entry of entries) {
+        for (const one of entry.kinds ?? []) {
+            if (!isTenantConfigured(one)) continue;
+            if (found.some((seen) => seen.kind === one.kind)) continue;
+            found.push({ kind: one.kind, entry });
+        }
+    }
+    return found;
+}
+
+/** The kinds of an entry that an organization's own OAuth app can stand
+ *  behind — any of them, not only the one an install takes by default. */
+export function ownAppKinds(entry: CatalogEntry): ConnectorKind[] {
+    return (entry.kinds ?? []).filter(canBringOwnApp);
+}
+
 /** The kind a fresh install should take when nobody picked one.
  *
  *  Composio first where it is on offer, the same default the backend and the
@@ -245,6 +269,19 @@ export function canBringOwnApp(kind: ConnectorKind | null): boolean {
     return Boolean(kind.supports_org_custom_oauth && kind.oauth2_defaults);
 }
 
+/** Whether the redirect URL to register with an organization's own app is
+ *  Lemma's callback.
+ *
+ *  Not for Composio: it runs the OAuth round trip on its own backend, so the
+ *  URL the provider must allow is Composio's — and it already arrives in the
+ *  toolkit's own form, as an `oauth_redirect_uri` field with its default
+ *  filled in. Showing Lemma's beside it put two redirect URLs on one form,
+ *  and the one this app drew was the wrong one to register. The harness
+ *  draws the same line. */
+export function registersLemmaRedirect(kind: ConnectorKind | null): boolean {
+    return Boolean(kind && kind.kind !== COMPOSIO && kind.auth_scheme === "OAUTH2");
+}
+
 /** What re-reading an install's operations actually did.
  *
  *  A count alone cannot say. A connector with nothing to advertise, a kind
@@ -308,4 +345,28 @@ export function urlRefusal(message: string): string | null {
  *  `auth_install_resolver.py`. */
 export function oauthAppMissing(message: string | null | undefined): boolean {
     return /needs an OAuth app/i.test(message ?? "");
+}
+
+/** Where an install the organization pointed somewhere points: an MCP
+ *  server's or an API's address, or a database's host and name. Null when its
+ *  config says nothing of the sort, or has not been read. */
+export function installTarget(install: Install): string | null {
+    const config = install.config ?? {};
+    const said = (key: string) => {
+        const value = config[key];
+        return typeof value === "string" && value.trim() ? value.trim() : null;
+    };
+    const url = said("server_url") ?? said("spec_url");
+    if (url) {
+        try {
+            const parsed = new URL(url);
+            return parsed.host + (parsed.pathname === "/" ? "" : parsed.pathname);
+        } catch {
+            return url;
+        }
+    }
+    const host = said("host");
+    if (!host) return null;
+    const database = said("database");
+    return database ? host + " / " + database : host;
 }

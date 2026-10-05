@@ -4,14 +4,14 @@ import { LoadingIndicator } from "@/ui/loading";
 import { CheckCircleIcon, CodeIcon, ConnectorIcon, ExternalIcon, TableIcon, WarningIcon } from "@/ui/icons";
 import { source } from "@/data";
 import { completionPath, hereWith, openAuthorization } from "./round-trip";
-import { Fields } from "./fields";
+import { Fields, NOT_A_LOGIN } from "./fields";
 import {
     useConnector, useConnectorRefresh, useCreateAccount, useCreateInstall, useDeleteInstall, useRefreshOperations,
 } from "./queries";
 import { blank, fields, payload, problems, type Values } from "./schema";
 import {
-    connectorProblem, connectRoute, connectSchema, discoveryNote, installSchema, isTenantConfigured, kindNamed,
-    type CatalogEntry,
+    connectorProblem, connectRoute, connectSchema, discoveryNote, installSchema, kindNamed, ownKinds,
+    type CatalogEntry, type OwnKind,
 } from "./install";
 
 /** Pointing this organization at a server of its own.
@@ -28,39 +28,42 @@ import {
  *  one — GitHub, Slack and the bots are `http` too, and whichever of them
  *  sorted first became "A REST API".
  */
-const LOOKS = {
-    mcp: { title: "An MCP server", blurb: "Tools from any server speaking MCP." },
-    http: { title: "A REST API", blurb: "Anything with an OpenAPI description. Its operations are read from the spec." },
-    sql: { title: "A database", blurb: "Query it directly, with a connection string you supply." },
-} as const;
+/** How each kind looks, and — where it is not obvious — how it signs in.
+ *
+ *  The sign-in line is here because the catalogue's own field help cannot say
+ *  it: an MCP server's OAuth is not a field at all, it is found by asking the
+ *  server once the install exists, so the form showed only an optional token
+ *  and read as "no OAuth". */
+export const LOOKS: Record<string, { title: string; short: string; tagline: string; blurb: string; signIn?: string }> = {
+    mcp: {
+        title: "An MCP server", short: "MCP server", tagline: "Tools from a server", blurb: "Tools from any server speaking MCP.",
+        signIn: "A server that signs in with OAuth is found when you add it, and you sign in from there — leave the token empty for those. Otherwise paste a token, or nothing if it needs none.",
+    },
+    http: {
+        title: "A REST API", short: "REST API", tagline: "Endpoints from a spec", blurb: "Anything with an OpenAPI description. Its operations are read from the spec.",
+        signIn: "Signs in with an API key or a token you paste. OAuth sign-in for an API of your own is not supported yet.",
+    },
+    sql: { title: "A database", short: "Database", tagline: "PostgreSQL, read-only", blurb: "A PostgreSQL database, queried read-only with a username and password you supply." },
+};
 
-function Glyph({ kind }: { kind: string }) {
-    if (kind === "sql") return <TableIcon size={20} />;
-    if (kind === "http") return <CodeIcon size={20} />;
-    return <ConnectorIcon size={20} />;
+export function Glyph({ kind, size = 20 }: { kind: string; size?: number }) {
+    if (kind === "sql") return <TableIcon size={size} />;
+    if (kind === "http") return <CodeIcon size={size} />;
+    return <ConnectorIcon size={size} />;
 }
 
-export function AddConnector({ orgId, entries, onClose, onDone }: {
+export function AddConnector({ orgId, entries, initialKind = null, onClose, onDone }: {
     orgId: string;
     /** The whole catalogue; the bring-your-own entries are picked out of it. */
     entries: CatalogEntry[];
+    /** Straight to one kind's form, when the kind was the button pressed. */
+    initialKind?: string | null;
     onClose: () => void;
     onDone: () => void;
 }) {
-    /** Every non-brokered kind on offer, with the entry that carries it. */
-    const choices = useMemo(() => {
-        const found: { kind: string; entry: CatalogEntry }[] = [];
-        for (const entry of entries) {
-            for (const one of entry.kinds ?? []) {
-                if (!isTenantConfigured(one)) continue;
-                if (found.some((seen) => seen.kind === one.kind)) continue;
-                found.push({ kind: one.kind, entry });
-            }
-        }
-        return found;
-    }, [entries]);
+    const choices = useMemo(() => ownKinds(entries), [entries]);
 
-    const [picked, setPicked] = useState<{ kind: string; entry: CatalogEntry } | null>(null);
+    const [picked, setPicked] = useState<OwnKind | null>(() => choices.find((one) => one.kind === initialKind) ?? null);
 
     if (!picked) {
         return (
@@ -72,7 +75,7 @@ export function AddConnector({ orgId, entries, onClose, onDone }: {
                 ) : (
                     <div className="connect-picks">
                         {choices.map((choice) => {
-                            const look = LOOKS[choice.kind as keyof typeof LOOKS];
+                            const look = LOOKS[choice.kind];
                             return (
                                 <button className="connect-pick" key={choice.kind} onClick={() => setPicked(choice)}>
                                     <span className="connect-pick__glyph"><Glyph kind={choice.kind} /></span>
@@ -132,7 +135,7 @@ function AddOne({ orgId, kind, entry, onBack, onClose, onDone }: {
     const busy = make.isPending || connect.isPending || discover.isPending || starting;
     const ready = list.length > 0 && Object.keys(values).length === 0 ? blank(list) : values;
     const readyCreds = secrets.length > 0 && Object.keys(creds).length === 0 ? blank(secrets) : creds;
-    const look = LOOKS[kind as keyof typeof LOOKS];
+    const look = LOOKS[kind];
 
     const submit = async () => {
         setFailure(null);
@@ -239,11 +242,12 @@ function AddOne({ orgId, kind, entry, onBack, onClose, onDone }: {
             <div className="connect-form">
                 {detail.isLoading ? <p className="connect-lead"><LoadingIndicator inline label="Reading what this needs" /></p> : (
                     <>
+                        {look?.signIn && <p className="connect-lead">{look.signIn}</p>}
                         <div className="record-form">
                             <div className="record-form__field">
                                 <label htmlFor="connect-name">Name<i aria-hidden="true"> *</i></label>
                                 <small>Choose a name so your team can recognize this connection.</small>
-                                <input id="connect-name" value={name} disabled={busy} placeholder="Sentry, Postgres (staging)…"
+                                <input id="connect-name" value={name} disabled={busy} placeholder="Sentry, Postgres (staging)…" autoComplete="off" {...NOT_A_LOGIN}
                                     onChange={(event) => setName(event.target.value)} />
                             </div>
                         </div>
