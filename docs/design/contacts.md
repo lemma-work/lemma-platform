@@ -321,6 +321,10 @@ one:
   and `outsider_run`, skip the member's personal windows, and count towards a
   `contacts_month` window held to `usage_contacts_caps`
   (`GET`/`PUT /usage/organizations/{id}/contacts-cap`, owners and editors).
+- **The app.** A Contacts place in the space (People with a sheet per
+  contact; On your website; What contacts can use), a "Private messages from
+  people outside" select in a bot's settings, and the contacts cap in the
+  organization's Usage -- all behind the `contacts` feature flag.
 - **SDKs.** `pod.contacts`, `pod.web_widgets` and
   `pod.functions.set_contacts_invoke` in Python; `client.contacts` (with
   `.widgets`) and `functions.setContactsInvoke` in TypeScript.
