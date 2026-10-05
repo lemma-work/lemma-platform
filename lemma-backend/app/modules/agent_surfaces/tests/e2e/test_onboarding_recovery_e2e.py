@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.ports.plan_limits import PodAllowance
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -51,6 +52,7 @@ from app.modules.agent_surfaces.tests.e2e.helpers import _whatsapp_payload
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.services.email_challenges import EmailChallengeService
 from app.modules.identity.tests.e2e.test_email_challenges_e2e import allow_test_delivery
+from app.modules.test_support.plan_limits import SetPlan, plan  # noqa: F401
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -268,6 +270,38 @@ async def test_finishing_signup_says_so(whatsapp_signup, message_store) -> None:
     assert any(READY_MESSAGE in text for text in _said(message_store)), (
         "signup finished without telling anybody"
     )
+
+
+async def test_a_plan_with_no_room_for_a_workspace_is_said_not_crashed_on(
+    whatsapp_signup,
+    message_store,
+    plan: SetPlan,  # noqa: F811
+) -> None:
+    """Provisioning comes back with no pod when the plan refuses one.
+
+    That was an assert: the webhook was retried, dead-lettered, and the person
+    who had just proved their email heard nothing at all. With no other
+    workspace to offer, they are told why.
+    """
+    plan.pods = PodAllowance(limit=0)
+    say, sessions, codes, _sender = whatsapp_signup
+    await say("summarise this thread")
+    await say(f"full-{uuid4().hex}@gmail.com")
+
+    await say(codes[0])
+
+    said = _said(message_store)
+    assert any("no room for another workspace" in text for text in said), said
+    assert not any(READY_MESSAGE in text for text in said)
+    async with sessions() as session:
+        assert (
+            await session.scalar(
+                select(PendingChatOnboarding).where(
+                    PendingChatOnboarding.step == OnboardingStep.READY
+                )
+            )
+            is None
+        )
 
 
 async def test_a_prompt_that_never_arrives_leaves_the_step_where_the_person_last_was(

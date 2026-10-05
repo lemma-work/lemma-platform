@@ -178,6 +178,81 @@ async def test_telegram_managed_bot_full_lifecycle_completes_and_creates_surface
     )
 
 
+async def test_telegram_managed_bot_without_an_agent_goes_to_the_pod_assistant(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    """The web app starts a setup naming no agent. That means the pod's own
+    assistant, as on the plain create -- not an ownerless surface refused at
+    the end, after Telegram has already made the bot."""
+    _wire_telegram_manager(
+        monkeypatch, username="lemma_manager_bot", secret="manager-secret"
+    )
+    await _ensure_connector(db_session, "telegram")
+    await db_session.commit()
+    pod_id = test_pod["id"]
+
+    start = await authenticated_client.post(
+        f"/pods/{pod_id}/telegram-bot-setups", json={}
+    )
+    assert start.status_code == 200, start.text
+    setup_id = start.json()["setup_id"]
+
+    sender = {"id": 900555077, "username": "assistant_owner", "first_name": "Owner"}
+    for update in (
+        {
+            "update_id": 77001,
+            "message": {
+                "message_id": 1,
+                "text": f"/start surface_{setup_id}",
+                "chat": {"id": 555077},
+                "from": sender,
+            },
+        },
+        {
+            "update_id": 77002,
+            "message": {
+                "message_id": 2,
+                "chat": {"id": 555077},
+                "from": sender,
+                "managed_bot_created": {
+                    "bot": {"id": 777888077, "username": "assistant_e2e_bot"},
+                },
+            },
+        },
+    ):
+        delivered = await authenticated_client.post(
+            "/surfaces/webhooks/telegram-manager",
+            json=update,
+            headers=build_telegram_secret_headers("manager-secret"),
+        )
+        assert delivered.status_code == 200, delivered.text
+
+    completed = await authenticated_client.get(
+        f"/pods/{pod_id}/telegram-bot-setups/{setup_id}"
+    )
+    assert completed.status_code == 200, completed.text
+    body = completed.json()
+    assert body["status"] == "COMPLETE", body
+    assert body["error"] is None
+
+    surfaces = await authenticated_client.get(f"/pods/{pod_id}/surfaces")
+    assert surfaces.status_code == 200, surfaces.text
+    telegram = [
+        surface
+        for surface in surfaces.json()["items"]
+        if surface["id"] == body["surface_id"]
+    ]
+    assert len(telegram) == 1
+    assert telegram[0]["status"] == "ACTIVE"
+    # The pod's own assistant is the surface's agent, named by no agent name.
+    assert telegram[0]["agent_name"] is None
+
+
 async def test_telegram_managed_bot_provisioning_failure_marks_setup_failed(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
