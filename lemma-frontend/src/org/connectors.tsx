@@ -3,9 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import { accountName, accountTrouble, type Connector, type ConnectorAccount } from "@/data";
-import { CheckCircleIcon, ExternalIcon, PlusIcon, RefreshIcon, SearchIcon, WarningIcon } from "@/ui/icons";
+import { CheckCircleIcon, ExternalIcon, KeyIcon, RefreshIcon, SearchIcon, WarningIcon } from "@/ui/icons";
 import { ConnectDialog, RotateDialog } from "@/connect/connect-dialog";
-import { AddConnector } from "@/connect/add-connector";
+import { AddConnector, Glyph, LOOKS } from "@/connect/add-connector";
+import { OwnAppPicker } from "@/connect/own-app-picker";
+import { EditInstall } from "@/connect/edit-install";
 import {
     completionPath, hereWith, openAuthorization, outcomeNote, useConnectOutcome, type ConnectOutcome,
 } from "@/connect/round-trip";
@@ -14,7 +16,8 @@ import {
     useMayInstall, useRefreshOperations, type InstallationChoice,
 } from "@/connect/queries";
 import {
-    connectorProblem, connectRoute, discoveryNote, isBringYourOwn, kindFor, type CatalogEntry, type Install,
+    connectorProblem, connectRoute, discoveryNote, installTarget, isBringYourOwn, kindFor, ownAppKinds, ownKinds,
+    type CatalogEntry, type Install,
 } from "@/connect/install";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
 import { oauthFormForConnector } from "@/desktop/this-mac";
@@ -168,7 +171,7 @@ function AccountRow({
  *  on its own — so where there is more than one, or where the install *is* the
  *  thing somebody set up, the installs are the real list.
  */
-function InstallRow({ install, orgId, addressed, manage, needsSignIn, signingIn = false, onConnect, onChanged }: {
+function InstallRow({ install, orgId, addressed, manage, needsSignIn, signingIn = false, onConnect, onEdit, onChanged }: {
     install: Install;
     /** Fetching the sign-in address for this install. */
     signingIn?: boolean;
@@ -183,6 +186,9 @@ function InstallRow({ install, orgId, addressed, manage, needsSignIn, signingIn 
     needsSignIn: boolean;
     /** Connect an account against this install in particular. */
     onConnect?: () => void;
+    /** Change it in place. Only where the organization set it up itself —
+     *  Lemma's own app has nothing in it for anybody here to change. */
+    onEdit?: () => void;
     onChanged: () => void;
 }) {
     const [said, setSaid] = useState<string | null>(null);
@@ -197,7 +203,10 @@ function InstallRow({ install, orgId, addressed, manage, needsSignIn, signingIn 
             <span className={"acct__dot" + (off || needsSignIn ? "" : " acct__dot--ok")} aria-hidden="true" />
             <span className="acct__who">
                 {install.name || install.id}
-                <span className="acct__ref">{install.config_source === "ORG_CUSTOM" && !addressed ? "your app" : install.kind}</span>
+                {/* Where it points, for the ones the organization pointed:
+                    two MCP servers named by somebody in a hurry are told
+                    apart by their address, not by the word "mcp". */}
+                <span className="acct__ref">{install.config_source === "ORG_CUSTOM" && !addressed ? "your app" : (addressed && installTarget(install)) || install.kind}</span>
                 {install.is_default && <span className="pill">default</span>}
             </span>
             {needsSignIn && !said && <span className="acct__trouble"><WarningIcon size={13} /> Nobody has signed in yet</span>}
@@ -235,6 +244,7 @@ function InstallRow({ install, orgId, addressed, manage, needsSignIn, signingIn 
                             {reread.isPending ? "Reading…" : "Re-read operations"}
                         </button>
                     )}
+                    {manage && onEdit && <button className="linkish reachrow__quiet" onClick={onEdit}>Edit</button>}
                     {manage && <button className="linkish reachrow__quiet" onClick={() => setConfirming(true)}>Remove</button>}
                 </span>
             )}
@@ -250,6 +260,7 @@ function ConnectorCard({
     orgId,
     returned,
     mayInstall,
+    ownAppRequest = 0,
     onChanged, onAdd, brief = false }: {
     connector: Connector;
     accounts: ConnectorAccount[];
@@ -264,6 +275,9 @@ function ConnectorCard({
     /** Owner or editor: may make an install. `null` when that is not known,
      *  which offers everything and lets the backend decide. */
     mayInstall: boolean | null;
+    /** Bumped when somebody asked, from above the list, to set up the
+     *  organization's own app for this connector. */
+    ownAppRequest?: number;
     onChanged: () => void;
     /** Opens the add flow. An entry that stands for many servers has nothing
      *  to connect against until one exists, so for those this is the button. */
@@ -280,6 +294,15 @@ function ConnectorCard({
        authorize URL, and give up when there is not one. */
     const [connecting, setConnecting] = useState<Install | null | undefined>(undefined);
     const [rotating, setRotating] = useState<ConnectorAccount | null>(null);
+    const [editing, setEditing] = useState<Install | null>(null);
+    /* Whether the dialog opens on the organization's own app. */
+    const [ownAppFirst, setOwnAppFirst] = useState(false);
+    useEffect(() => {
+        if (!ownAppRequest) return;
+        setError(null);
+        setOwnAppFirst(true);
+        setConnecting(null);
+    }, [ownAppRequest]);
 
     const start = useMutation({
         mutationFn: ({ installId, connectionFields }: { installId: string | null; connectionFields?: Record<string, unknown> }) =>
@@ -322,9 +345,11 @@ function ConnectorCard({
     const installFor = (account: ConnectorAccount) => installs.find((one) => one.id === account.authConfigId) ?? null;
     const credentialed = (install: Install | null) => connectRoute(install, kindFor(entry, install)) === "credentials";
     /* Grouped by install where the installs are worth naming: several of
-       them, or ones the organization set up itself. One Gmail install behind
-       one Gmail account is noise. */
-    const grouped = addressed || installs.length > 1;
+       them, or ones the organization set up itself — a server it pointed at,
+       or an app of its own, which is worth naming even alone because its row
+       is where Edit lives. One Gmail install behind one Gmail account is
+       noise. */
+    const grouped = addressed || installs.length > 1 || installs.some((one) => one.config_source === "ORG_CUSTOM");
 
     const accountRow = (account: ConnectorAccount) => {
         const install = installFor(account);
@@ -415,6 +440,7 @@ function ConnectorCard({
                                             ? signIn ? () => start.mutate({ installId: install.id }) : undefined
                                             : () => { setError(null); setConnecting(install); }
                                     }
+                                    onEdit={addressed || install.config_source === "ORG_CUSTOM" ? () => setEditing(install) : undefined}
                                     onChanged={onChanged}
                                 />
                                 {on.map(accountRow)}
@@ -441,9 +467,20 @@ function ConnectorCard({
                     mayInstall={mayInstall}
                     authorizing={start.isPending}
                     authorizeFailure={error}
-                    onClose={() => setConnecting(undefined)}
-                    onDone={() => { setConnecting(undefined); onChanged(); }}
+                    ownAppFirst={ownAppFirst}
+                    onClose={() => { setConnecting(undefined); setOwnAppFirst(false); }}
+                    onDone={() => { setConnecting(undefined); setOwnAppFirst(false); onChanged(); }}
                     onAuthorize={(installId, connectionFields) => start.mutate({ installId, connectionFields })}
+                />
+            )}
+            {editing && (
+                <EditInstall
+                    orgId={orgId}
+                    install={editing}
+                    connector={entry}
+                    takenNames={takenNames}
+                    onClose={() => setEditing(null)}
+                    onDone={() => { setEditing(null); onChanged(); }}
                 />
             )}
             {rotating && (
@@ -476,7 +513,12 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
     /* Null until somebody picks, so the default can depend on what is there. */
     const [slice, setSlice] = useState<Slice | null>(null);
 
-    const [adding, setAdding] = useState(false);
+    /* Adding a server, a database or an API: `kind` when a tile named one. */
+    const [adding, setAdding] = useState<{ kind: string | null } | null>(null);
+    /* Choosing which service an OAuth app of the organization's own is for,
+       and then the connector it was chosen for. */
+    const [pickingApp, setPickingApp] = useState(false);
+    const [ownAppFor, setOwnAppFor] = useState<{ id: string; at: number } | null>(null);
     const [heard, setHeard] = useState<ConnectOutcome | null>(null);
     const [returned, setReturned] = useState(0);
 
@@ -546,6 +588,12 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
     const active: Slice = slice ?? (connected.length ? "connected" : "available");
     const pool = active === "connected" ? connected : active === "trouble" ? ailing : unconnected;
 
+    /* What an organization can point at itself, and whether any connector
+       takes an OAuth app of its own. Both are catalogue data: a deployment
+       without them shows no tile for them. */
+    const own = useMemo(() => ownKinds(all), [all]);
+    const anyOwnApp = all.some((connector) => ownAppKinds(connector).length > 0);
+
     const term = query.trim().toLowerCase();
     const shown = term
         ? pool.filter(
@@ -590,6 +638,40 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
 
             {connectors.isSuccess && accounts.isSuccess && (
                 <>
+                    {/* Your own server, database, API or OAuth app, named on
+                        sight. Behind one "Add your own" button beside the
+                        search they read as not there at all, and the OAuth app
+                        was not behind it either — only inside each
+                        connector's dialog. Only for those who may make one. */}
+                    {mayInstall !== false && (own.length > 0 || anyOwnApp) && (
+                        <section className="byo" aria-label="Bring your own">
+                            <h3 className="byo__head">Bring your own</h3>
+                            <div className="byo__tiles">
+                                {own.map((choice) => {
+                                    const look = LOOKS[choice.kind];
+                                    return (
+                                        <button key={choice.kind} className="byo__tile" onClick={() => setAdding({ kind: choice.kind })}>
+                                            <span className="byo__glyph"><Glyph kind={choice.kind} size={17} /></span>
+                                            <span className="byo__said">
+                                                <span className="byo__name">{look?.short ?? choice.entry.title}</span>
+                                                <small>{look?.tagline ?? "A connection you configure"}</small>
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                                {anyOwnApp && (
+                                    <button className="byo__tile" onClick={() => setPickingApp(true)}>
+                                        <span className="byo__glyph"><KeyIcon size={17} /></span>
+                                        <span className="byo__said">
+                                            <span className="byo__name">OAuth app</span>
+                                            <small>Sign in through yours</small>
+                                        </span>
+                                    </button>
+                                )}
+                            </div>
+                        </section>
+                    )}
+
                     <div className="connectors__top">
                         <label className="connectors__find">
                             <SearchIcon size={15} />
@@ -599,14 +681,6 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
                                 onChange={(event) => setQuery(event.target.value)}
                             />
                         </label>
-                        {/* Only where there is something to point at. The
-                            kinds are catalogue data, and a deployment without
-                            them should not offer a door to nothing. */}
-                        {all.some(isBringYourOwn) && mayInstall !== false && (
-                            <button className="btn" onClick={() => setAdding(true)}>
-                                <PlusIcon size={15} /> Add your own
-                            </button>
-                        )}
                     </div>
 
                     {/* The counts are the point of the pills: "69 available"
@@ -672,7 +746,8 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
                                     takenNames={takenNames}
                                     returned={returned}
                                     mayInstall={mayInstall}
-                                    onAdd={() => setAdding(true)}
+                                    ownAppRequest={ownAppFor?.id === connector.id ? ownAppFor.at : 0}
+                                    onAdd={() => setAdding({ kind: null })}
                                     orgId={orgId}
                                     onChanged={refresh}
                                     brief={active === "available"}
@@ -687,8 +762,24 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
                 <AddConnector
                     orgId={orgId}
                     entries={all}
-                    onClose={() => setAdding(false)}
-                    onDone={() => { setAdding(false); refresh(); }}
+                    initialKind={adding.kind}
+                    onClose={() => setAdding(null)}
+                    onDone={() => { setAdding(null); refresh(); }}
+                />
+            )}
+            {pickingApp && (
+                <OwnAppPicker
+                    connectors={all}
+                    onClose={() => setPickingApp(false)}
+                    onPick={(connector) => {
+                        /* Into that connector's own card, found in the list —
+                           so the sign-in that follows lands on the row it
+                           belongs to, and the app is there afterwards. */
+                        setPickingApp(false);
+                        setQuery(connector.title);
+                        setSlice(has(connector) ? "connected" : "available");
+                        setOwnAppFor({ id: connector.id, at: Date.now() });
+                    }}
                 />
             )}
 

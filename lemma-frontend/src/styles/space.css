@@ -7170,6 +7170,39 @@ samp,
     color: var(--ink-2);
     font-size: 12px;
 }
+/* An action's mark sits where an organization's initial does, so the labels
+   line up down the menu; the trailing-tick rule above must not move it. */
+.orgmenu__glyph {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--ink-3);
+}
+.orgmenu__item .orgmenu__glyph svg {
+    margin-left: 0;
+}
+.orgmenu__rule {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--line);
+}
+.new-org {
+    padding: 2px 0 4px;
+}
+.new-org code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--chrome);
+    border-radius: var(--r-sm);
+    padding: 2px 6px;
+}
+.new-org__quiet {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: var(--t-ui);
+}
 
 /* ── About: the teammate as a page ─────────────────────────────────── */
 .aboutpage {
