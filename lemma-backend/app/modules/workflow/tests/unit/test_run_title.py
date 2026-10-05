@@ -117,3 +117,9 @@ def test_a_malformed_stored_title_is_dropped_not_raised():
         {"type": "MANUAL"},
         ["a"],
     )
+
+
+def test_blank_parts_are_refused_and_kept_parts_are_stored_stripped():
+    with pytest.raises(ValueError, match="must not be empty"):
+        validate_run_title(["   "])
+    assert validate_run_title(["  collect.name "]) == ["collect.name"]

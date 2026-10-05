@@ -120,6 +120,9 @@ export function useSpaceRuns(podId: string) {
     });
 }
 
+/** 200 runs a page; ten pages is two thousand runs in flight on one workflow. */
+const MAX_BOARD_PAGES = 10;
+
 /** One workflow's runs still going — what the board is drawn from.
  *
  *  The space-wide list rather than the workflow's own, because it is the one
@@ -139,11 +142,22 @@ export function useRunsInFlight(podId: string, workflowId: string | null) {
                 return readRuns({ items: hiredHere(podId) ? [] : Object.values(SAMPLE_WORKFLOW_RUNS).flat() })
                     .filter((run) => stillGoing(run.status) && run.workflowId === workflowId);
             }
-            return readRuns(await lemma(podId).workflows.runs.listInPod({
-                status: [WorkflowRunStatus.PENDING, WorkflowRunStatus.RUNNING, WorkflowRunStatus.WAITING],
-                workflowId: workflowId!,
-                limit: 200,
-            }));
+            /* Every page, so the counts are the real ones; capped so a
+               runaway workflow cannot turn one poll into a hundred reads. */
+            const runs: RunRow[] = [];
+            let pageToken: string | undefined;
+            for (let page = 0; page < MAX_BOARD_PAGES; page += 1) {
+                const listed = await lemma(podId).workflows.runs.listInPod({
+                    status: [WorkflowRunStatus.PENDING, WorkflowRunStatus.RUNNING, WorkflowRunStatus.WAITING],
+                    workflowId: workflowId!,
+                    limit: 200,
+                    pageToken,
+                });
+                runs.push(...readRuns(listed));
+                pageToken = (listed as { next_page_token?: string | null }).next_page_token ?? undefined;
+                if (!pageToken) break;
+            }
+            return runs;
         },
     });
 }
@@ -157,7 +171,10 @@ export function useRunsInFlight(podId: string, workflowId: string | null) {
 export function useMyWaits(podId: string) {
     return useQuery({
         queryKey: ["workflow-waiting", "board", podId],
-        staleTime: 30_000,
+        staleTime: 15_000,
+        /* With the runs, so a reassignment moves the "yours" mark as soon
+           as it moves the card. */
+        refetchInterval: 20_000,
         queryFn: async (): Promise<Map<string, WaitRow>> => {
             const list = source.label === "sample"
                 ? readAssignments({ items: (await samples(podId)).SAMPLE_WAITING })

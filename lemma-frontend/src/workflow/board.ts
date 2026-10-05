@@ -26,8 +26,12 @@ const HOLDS = new Set(["FORM", "AGENT", "FUNCTION", "WAIT_UNTIL", ""]);
 
 export interface BoardCard {
     run: RunRow;
-    /** The wait on this run assigned to the person looking, when there is one. */
+    /** The wait on this run assigned to the person looking, when the
+     *  assigned-to-me list has it. */
     mine: WaitRow | null;
+    /** Waiting on the person looking, by that list or by the run's own
+     *  `waiting_on` assignee — the list is paged and can miss one. */
+    yours: boolean;
     /** When it got here, as near as is known: the active wait's own time,
      *  the run's start when it has no wait. */
     since: string | null;
@@ -66,6 +70,8 @@ export function boardOf(
     runs: RunRow[],
     workflowId: string,
     waits: ReadonlyMap<string, WaitRow> = new Map(),
+    /** The viewer's pod-member id, what a wait's assignee is named by. */
+    me: string | null = null,
 ): Board {
     const steps = [...(shape?.ordered ?? []), ...(shape?.orphans ?? [])].filter((step) => HOLDS.has(step.kind));
     const columns: BoardColumn[] = steps.map((step) => ({ id: step.id, step, cards: [] }));
@@ -79,13 +85,16 @@ export function boardOf(
         if (run.workflowId !== workflowId) continue;
         const wait = waits.get(run.id) ?? null;
         const here = wait?.createdAt ?? run.waitingOn?.since ?? null;
-        const card: BoardCard = { run, mine: wait, since: here ?? run.startedAt ?? run.createdAt, here: Boolean(here) };
+        /* Yours by either source: the assigned-to-me list carries the full
+           wait but is paged, the run's own summary names its assignee. */
+        const yours = Boolean(wait) || Boolean(me && run.waitingOn?.assigneeId === me);
+        const card: BoardCard = { run, mine: wait, yours, since: here ?? run.startedAt ?? run.createdAt, here: Boolean(here) };
         /* The wait names the step it is on, and it is the fresher of the two:
            a summary's `current_node_id` is whatever the last write left. */
         const column = at.get(wait?.nodeId ?? run.waitingOn?.nodeId ?? run.currentNodeId ?? "") ?? elsewhere;
         column.cards.push(card);
         count += 1;
-        if (wait) mine += 1;
+        if (yours) mine += 1;
     }
 
     for (const column of [...columns, elsewhere]) column.cards.sort(byWaitingLongest);
@@ -96,7 +105,7 @@ export function boardOf(
  *  the one somebody should look at, and a run waiting on you is that one
  *  whatever its age. */
 function byWaitingLongest(left: BoardCard, right: BoardCard): number {
-    if (Boolean(left.mine) !== Boolean(right.mine)) return left.mine ? -1 : 1;
+    if (left.yours !== right.yours) return left.yours ? -1 : 1;
     return stamp(left.since) - stamp(right.since);
 }
 

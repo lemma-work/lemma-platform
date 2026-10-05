@@ -34,11 +34,12 @@ export function RunBoard({ pod, workflowId, shape, onOpenRun, name }: {
     const runs = useRunsInFlight(pod.id, workflowId);
     const waits = useMyWaits(pod.id);
     const me = useMe();
+    const myMemberId = pod.members.find((member) => member.userId && member.userId === me)?.id ?? null;
     /* Waits that could not be read cost the board its "yours" marks and
        nothing else: every run is still drawn, at the step its summary names. */
     const board = useMemo(
-        () => boardOf(shape, runs.data ?? [], workflowId ?? "", waits.data),
-        [shape, runs.data, workflowId, waits.data],
+        () => boardOf(shape, runs.data ?? [], workflowId ?? "", waits.data, myMemberId),
+        [shape, runs.data, workflowId, waits.data, myMemberId],
     );
 
     if (runs.isError) {
@@ -62,7 +63,7 @@ export function RunBoard({ pod, workflowId, shape, onOpenRun, name }: {
     /* The person a form is assigned to, by membership id — what a wait names.
        Only a form waits on a person; any other wait says what it is on. */
     const heldBy = (card: BoardCard, column: BoardColumn) => {
-        if (card.mine) return "Waiting on you";
+        if (card.yours) return "Waiting on you";
         const assignee = card.run.waitingOn?.assigneeId;
         const member = assignee ? pod.members.find((one) => one.id === assignee) : null;
         if (member) return member.userId && member.userId === me ? "Waiting on you" : "Waiting on " + member.name;
@@ -105,7 +106,7 @@ function Lane({ column, starter, heldBy, onOpen }: {
                 <ol>
                     {column.cards.map((card) => (
                         <li key={card.run.id}>
-                            <button className="wfcard" data-mine={card.mine ? "" : undefined} onClick={() => onOpen(card.run.id)}>
+                            <button className="wfcard" data-mine={card.yours ? "" : undefined} onClick={() => onOpen(card.run.id)}>
                                 {/* What the run is about when the workflow names its
                                     runs; who started it when it does not. */}
                                 <span className="wfcard__top">

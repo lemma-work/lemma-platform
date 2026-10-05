@@ -680,3 +680,18 @@ test("the wait's kind beats the step's kind when saying what a run is held by", 
     const run = boardRun("x", { status: "RUNNING", waiting_on: { node_id: "screen", wait_type: "AGENT" } });
     assert.equal(sayHeldBy(screen.step, run), "With an agent");
 });
+
+test("a run assigned to the viewer is theirs even when their wait list missed it", () => {
+    const board = boardOf(boardShape, [
+        boardRun("old", { current_node_id: "legal", started_at: "2026-09-01T00:00:00Z" }),
+        boardRun("mine", {
+            current_node_id: "legal", started_at: "2026-09-20T00:00:00Z",
+            waiting_on: { node_id: "legal", wait_type: "HUMAN", assigned_pod_member_id: "m-me" },
+        }),
+    ], "wf-hire", new Map(), "m-me");
+    const legal = board.columns.find((column) => column.id === "legal")!;
+    assert.deepEqual(legal.cards.map((card) => card.run.id), ["mine", "old"]);
+    assert.equal(legal.cards[0].yours, true);
+    assert.equal(legal.cards[0].mine, null, "no wait detail without the list");
+    assert.equal(board.mine, 1);
+});

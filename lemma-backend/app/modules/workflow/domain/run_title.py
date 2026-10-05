@@ -32,12 +32,18 @@ def validate_run_title(expressions: list[str] | None) -> list[str]:
             f"got {len(expressions)}"
         )
     cleaned: list[str] = []
-    for expression in expressions:
+    for raw in expressions:
+        # The stored value is the one compiled, and an empty part is refused
+        # here rather than trusting the compiler to; `split_start` would
+        # otherwise drop it on read and the saved title would differ.
+        expression = raw.strip()
+        if not expression:
+            raise ValueError("run_title: an expression must not be empty")
         try:
             ExpressionEngine.compile(expression)
         except ExpressionSyntaxError as exc:
             raise ValueError(f"run_title: {exc}") from exc
-        cleaned.append(expression.strip())
+        cleaned.append(expression)
     return cleaned
 
 
