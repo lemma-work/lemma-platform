@@ -33,7 +33,7 @@ per object, and their buttons act through the viewer's own connected account:
 
 | Service | Widgets |
 | --- | --- |
-| gmail | email-thread |
+| gmail | email-thread, inbox |
 | outlook | email-thread |
 | google-calendar | invite, find-a-time, meeting-brief |
 | github | pr-review, issue |
@@ -51,7 +51,12 @@ display_resource(type="WIDGET", path="/skills/lemma-widget/library/gmail/email-t
                  data={"thread_id": "...", "subject": "...", "messages": [...], "draft": "..."})
 ```
 
-A draft reply belongs in `data.draft`; the person edits it and sends. Without
+A draft reply belongs in `data.draft`; the person edits it and sends.
+
+`gmail/inbox` is the exception to fetching first: pass only a Gmail search,
+`data={"query": "is:unread in:inbox"}`, and it reads the mail itself as the
+viewer. Fetching the messages to pass them in costs a connector round-trip and
+the whole inbox as tool arguments, for a list the widget draws anyway. Without
 `data` a widget shows its own sample, marked as one, and its buttons do nothing.
 
 To change one, copy it to `/widgets/<service>/<name>.html` and edit the copy:
