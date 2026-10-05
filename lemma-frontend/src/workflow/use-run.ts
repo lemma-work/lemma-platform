@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { parseSSEJson, readSSE } from "lemma-sdk";
+import { parseSSEJson, readSSE, WorkflowRunStatus } from "lemma-sdk";
 import { source } from "@/data";
 import { lemma } from "@/session/client";
-import { readRunDetail, readRuns, readWorkflows, stillGoing, type RunDetail, type RunRow } from "./runs";
+import { readAssignments, readRunDetail, readRuns, readWorkflows, stillGoing, type RunDetail, type RunRow, type WaitRow } from "./runs";
 import { readGraph } from "./run-tree";
 import { samples } from "@/data/samples";
 import { usePaneVisible } from "@/shell/pane-visible";
@@ -151,5 +151,69 @@ export function useSpaceRuns(podId: string) {
             return readRuns(await lemma(podId).request("GET", "/pods/" + podId + "/workflow-runs", { params: { limit: 100 } }));
         },
         refetchInterval: (query) => (visible ? runsPollEvery(query.state.data, 15_000) : false),
+    });
+}
+
+/** 200 runs a page; ten pages is two thousand runs in flight on one workflow. */
+const MAX_BOARD_PAGES = 10;
+
+/** One workflow's runs still going — what the board is drawn from.
+ *
+ *  The space-wide list rather than the workflow's own, because it is the one
+ *  that filters by status and by workflow: the workflow's list is newest first
+ *  and unfiltered, so a run started a fortnight ago and still stuck sits pages
+ *  deep behind finished ones — exactly the run a board exists to show. Each
+ *  run comes back with its `title` and `waiting_on`. */
+export function useRunsInFlight(podId: string, workflowId: string | null) {
+    return useQuery({
+        queryKey: ["workflow-runs", podId, "in-flight", workflowId],
+        enabled: Boolean(workflowId),
+        staleTime: 15_000,
+        refetchInterval: 20_000,
+        queryFn: async (): Promise<RunRow[]> => {
+            if (source.label === "sample") {
+                const { SAMPLE_WORKFLOW_RUNS, hiredHere } = await samples(podId);
+                return readRuns({ items: hiredHere(podId) ? [] : Object.values(SAMPLE_WORKFLOW_RUNS).flat() })
+                    .filter((run) => stillGoing(run.status) && run.workflowId === workflowId);
+            }
+            /* Every page, so the counts are the real ones; capped so a
+               runaway workflow cannot turn one poll into a hundred reads. */
+            const runs: RunRow[] = [];
+            let pageToken: string | undefined;
+            for (let page = 0; page < MAX_BOARD_PAGES; page += 1) {
+                const listed = await lemma(podId).workflows.runs.listInPod({
+                    status: [WorkflowRunStatus.PENDING, WorkflowRunStatus.RUNNING, WorkflowRunStatus.WAITING],
+                    workflowId: workflowId!,
+                    limit: 200,
+                    pageToken,
+                });
+                runs.push(...readRuns(listed));
+                pageToken = (listed as { next_page_token?: string | null }).next_page_token ?? undefined;
+                if (!pageToken) break;
+            }
+            return runs;
+        },
+    });
+}
+
+/** The waits in this space assigned to the person looking, by run id.
+ *
+ *  The board's only way to say "this one is yours" until a run summary names
+ *  its assignee: a summary carries no wait, and this endpoint is the one that
+ *  answers for the caller. Shares the inbox's cache prefix, so answering a
+ *  form from either refreshes both. */
+export function useMyWaits(podId: string) {
+    return useQuery({
+        queryKey: ["workflow-waiting", "board", podId],
+        staleTime: 15_000,
+        /* With the runs, so a reassignment moves the "yours" mark as soon
+           as it moves the card. */
+        refetchInterval: 20_000,
+        queryFn: async (): Promise<Map<string, WaitRow>> => {
+            const list = source.label === "sample"
+                ? readAssignments({ items: (await samples(podId)).SAMPLE_WAITING })
+                : readAssignments(await lemma(podId).workflows.runs.waitingAssignedToMe({ limit: 100 }));
+            return new Map(list.map((one) => [one.run.id, one.wait]));
+        },
     });
 }

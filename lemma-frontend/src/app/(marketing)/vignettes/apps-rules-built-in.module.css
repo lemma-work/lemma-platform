@@ -1,55 +1,57 @@
-/* Editing approved copy, beat by beat. Base styles are the opening frame:
-   Launch studio's release plan with the landing page approved, one of four.
+/* Editing a ready reply, beat by beat. Base styles are the opening frame:
+   Feedback loop's retry replies with the dates reply ready, one of four.
    Each `.root[data-bN]` rule is what changes from beat N on, in beat order
    so a later beat wins. With reduced motion every beat is on, so the last
-   rules here are the finished picture: the edited headline under a plan
-   that has lost its one approval.
+   rules here are the finished picture: the edited reply under a list that
+   has lost its one ready reply.
 
-   Launch studio is dark (marketing/kit/studio.css), so its greys are the
-   landing's ink lifted by paper, and its amber and green are the wait and
-   ok tokens, lightened for a dark ground. */
+   Feedback loop is cream paper with a forest accent and a serif title
+   (marketing/kit/feedback-loop.css), so its greys are the landing's own,
+   its accent is the ok token, and its amber is the wait token. */
 
 .root {
     --v-step: 110ms;
-    --s-ground: color-mix(in srgb, var(--paper) 8%, var(--ink));
-    --s-bar: color-mix(in srgb, var(--paper) 11%, var(--ink));
-    --s-panel: color-mix(in srgb, var(--paper) 10%, var(--ink));
-    --s-raise: color-mix(in srgb, var(--paper) 13%, var(--ink));
-    --s-hover: color-mix(in srgb, var(--paper) 15%, var(--ink));
-    --s-sheet: color-mix(in srgb, var(--paper) 12%, var(--ink));
-    --s-edit: color-mix(in srgb, var(--paper) 16%, var(--ink));
-    --s-well: color-mix(in srgb, var(--paper) 6%, var(--ink));
-    --s-btn: color-mix(in srgb, var(--paper) 15%, var(--ink));
-    --s-line: rgb(255 255 255 / .1);
-    --s-line-2: rgb(255 255 255 / .17);
-    --s-text: rgb(255 255 255 / .9);
-    --s-muted: rgb(255 255 255 / .6);
-    --s-violet-bg: color-mix(in srgb, var(--violet) 30%, var(--ink));
-    --s-wait-bg: color-mix(in srgb, var(--wait) 52%, var(--ink));
-    --s-wait-ink: oklch(from var(--wait) .86 .09 h);
-    --s-ok-bg: color-mix(in srgb, var(--ok) 62%, var(--ink));
-    --s-ok-ink: oklch(from var(--ok) .86 .06 h);
-    --s-done: oklch(from var(--ok) .76 .1 h);
-    --s-focus: oklch(from var(--ok) .58 .08 h);
-    --s-select: color-mix(in srgb, var(--violet) 62%, transparent);
+    --s-ground: var(--cream);
+    --s-bar: var(--paper);
+    --s-panel: var(--paper);
+    --s-raise: color-mix(in srgb, var(--ink) 3%, var(--cream));
+    --s-hover: color-mix(in srgb, var(--ok) 6%, var(--paper));
+    --s-sheet: var(--paper);
+    --s-edit: var(--paper);
+    --s-well: var(--cream);
+    --s-btn: var(--paper);
+    --s-line: var(--line);
+    --s-line-2: var(--line-2);
+    --s-text: var(--ink);
+    --s-muted: var(--ink-3);
+    --s-accent-bg: color-mix(in srgb, var(--ok) 12%, var(--paper));
+    --s-accent-ink: var(--ok);
+    --s-face-bg: color-mix(in srgb, var(--ink) 8%, var(--paper));
+    --s-wait-bg: color-mix(in srgb, var(--wait) 13%, var(--paper));
+    --s-wait-ink: var(--wait);
+    --s-ok-bg: color-mix(in srgb, var(--ok) 13%, var(--paper));
+    --s-ok-ink: var(--ok);
+    --s-done: var(--ok);
+    --s-focus: color-mix(in srgb, var(--ok) 55%, transparent);
+    --s-select: color-mix(in srgb, var(--ok) 22%, transparent);
 }
 
-.studio { position: absolute; inset: 36px 0 0 0; overflow: hidden; background: var(--s-ground); color: var(--s-text); font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.4 }
+.studio { position: absolute; inset: 36px 0 0 0; overflow: hidden; background: var(--s-ground); color: var(--s-text); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; line-height: 1.4 }
 .studio p { margin: 0 }
 
 /* Two values swapped in place: the first shows until a beat brings the second. */
 .flip { display: inline-grid; justify-items: start; align-items: center; font-style: normal }
 .flip > * { grid-area: 1 / 1 }
 
-/* ── The release plan ──────────────────────────────────────────────── */
+/* ── The retry replies ─────────────────────────────────────────────── */
 .views { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-bottom: 1px solid var(--s-line); background: var(--s-bar) }
 .views > span { display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 9px; border: 1px solid var(--s-line-2); border-radius: 4px; background: var(--s-btn) }
-.views > .viewOn { background: var(--s-violet-bg); color: var(--violet-soft) }
+.views > .viewOn { background: var(--s-accent-bg); color: var(--s-accent-ink) }
 .viewOn em { color: var(--s-muted) }
 
 .head { display: flex; align-items: flex-end; justify-content: space-between; padding: 10px 12px 0 }
 .kicker { display: block; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--s-muted) }
-.studio .title { margin: 2px 0 1px; font-size: 18px; line-height: 1.3; color: var(--s-text) }
+.studio .title { margin: 2px 0 1px; font-family: var(--serif); font-size: 18px; line-height: 1.3; color: var(--s-text) }
 .studio .sub { font-size: 12px; color: var(--s-muted) }
 
 .progress { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 10px 12px 0 }
@@ -64,15 +66,15 @@
 .row.picked { background: var(--s-hover) }
 .asset { display: flex; align-items: center; gap: 8px; min-width: 0 }
 .thumb { display: grid; flex: none; place-items: center; width: 30px; height: 26px; border-radius: 3px; font-family: Georgia, serif; font-size: 15px; line-height: 1 }
-.thumbLanding { background: color-mix(in srgb, var(--ok) 12%, var(--cream)); color: var(--ok) }
-.thumbEmail { background: var(--cream); color: var(--ok) }
-.thumbFilm { background: color-mix(in srgb, var(--ok) 82%, var(--ink)); color: var(--cream) }
-.thumbStory { background: color-mix(in srgb, var(--bad) 16%, color-mix(in srgb, var(--wait) 28%, var(--cream))); color: color-mix(in srgb, var(--wait) 60%, var(--ink)) }
+.thumbDates { background: color-mix(in srgb, var(--ok) 12%, var(--cream)); color: var(--ok) }
+.thumbMobile { background: var(--cream); color: var(--ok) }
+.thumbImports { background: color-mix(in srgb, var(--bad) 12%, var(--cream)); color: var(--bad) }
+.thumbZones { background: color-mix(in srgb, var(--bad) 16%, color-mix(in srgb, var(--wait) 28%, var(--cream))); color: color-mix(in srgb, var(--wait) 60%, var(--ink)) }
 .name { display: flex; flex-direction: column; min-width: 0; line-height: 1.3 }
 .name b { font-weight: 500; white-space: nowrap; color: var(--s-text) }
 .name small, .rev small { overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; color: var(--s-muted) }
 .owner { display: flex; align-items: center; gap: 6px }
-.owner i { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--s-violet-bg); color: var(--violet-soft); font-size: 12px; font-style: normal }
+.owner i { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--s-face-bg); color: var(--ink-2); font-size: 12px; font-style: normal }
 .rev { display: flex; flex-direction: column; line-height: 1.3 }
 .status { display: inline-block; padding: 3px 7px; border-radius: 4px; background: var(--s-wait-bg); color: var(--s-wait-ink); font-size: 12px; line-height: 1.3; white-space: nowrap }
 .statusOk { background: var(--s-ok-bg); color: var(--s-ok-ink) }
@@ -84,34 +86,34 @@
 
 /* What a beat brings, hidden until then. When the loop starts over the
    plan's values go straight back, and the sheet's once it has gone. */
-.zero, .review, .save, .dirty { opacity: 0 }
+.zero, .held, .save, .dirty { opacity: 0 }
 .flip > * { transition: none }
 .sheet .flip > * { transition: opacity var(--v-quick) steps(1, jump-start) var(--v-move) }
 
-/* ── The landing page, in Edit copy ────────────────────────────────── */
+/* ── The dates reply, in Edit reply ────────────────────────────────── */
 /* It closes by sliding away whole, and only then goes see-through. */
-.sheet { position: absolute; top: 192px; left: 12px; right: 12px; bottom: -14px; overflow: hidden; border-radius: 10px 10px 0 0; background: var(--s-sheet); box-shadow: 0 0 0 1px var(--s-line-2), 0 -10px 26px -14px rgb(0 0 0 / .7); opacity: 0; transform: translateY(190px); transition-delay: var(--v-move), 0s }
+.sheet { position: absolute; top: 192px; left: 12px; right: 12px; bottom: -14px; overflow: hidden; border-radius: 10px 10px 0 0; background: var(--s-sheet); box-shadow: 0 0 0 1px var(--s-line-2), 0 -10px 26px -14px rgb(20 20 19 / .3); opacity: 0; transform: translateY(190px); transition-delay: var(--v-move), 0s }
 .sheetHead { display: flex; align-items: center; gap: 14px; height: 38px; padding: 0 14px; border-bottom: 1px solid var(--s-line) }
 .sheetHead b { font-size: 13px; font-weight: 500 }
 .modes { display: flex; padding: 2px; border-radius: 5px; background: var(--s-well) }
 .modes span { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 4px; color: var(--s-muted) }
-.modes .modeOn { background: var(--s-violet-bg); color: var(--violet-soft) }
+.modes .modeOn { background: var(--s-accent-bg); color: var(--s-accent-ink) }
 .state { margin-left: auto; justify-items: end; color: var(--s-muted) }
 .editor { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px 14px 0; height: 100%; background: var(--s-edit) }
 .label { color: var(--s-text) }
 .field { align-self: stretch; padding: 7px 10px; border: 1px solid var(--s-line-2); border-radius: 4px; background: var(--s-well); font-size: 13px; line-height: 19px; color: var(--s-text); transition: box-shadow var(--v-quick) steps(1, jump-start) var(--v-move) }
 .actions { display: flex; gap: 8px; margin-top: 4px }
 .root .saveBtn, .root .discardBtn { display: inline-flex; align-items: center; height: 26px; padding: 0 11px; border-radius: 4px; opacity: .5; transition-delay: var(--v-move) }
-.saveBtn { background: var(--violet); color: var(--paper) }
+.saveBtn { background: var(--ok); color: var(--paper) }
 .discardBtn { border: 1px solid var(--s-line-2); background: var(--s-btn) }
 
-/* "better", selected and typed over, a letter at a time. */
+/* "#482", selected and typed over, a letter at a time. */
 .word { white-space: nowrap }
 .old { display: inline-block; max-width: 60px; overflow: hidden; vertical-align: top; border-radius: 2px; transition: max-width var(--v-quick) steps(1, jump-start) var(--v-move), background-color var(--v-quick) steps(1, jump-start) var(--v-move) }
 .typed { display: inline-block; max-width: 0; overflow: hidden; vertical-align: top; transition: max-width var(--v-quick) steps(1, jump-start) var(--v-move) }
 .root .caret { margin-left: 0; margin-right: -1.5px; background: var(--s-text); opacity: 0; transition-delay: var(--v-move) }
 
-/* The pointer, by its tip: on the landing page row to start. When the loop
+/* The pointer, by its tip: on the dates row to start. When the loop
    starts over it goes back there unseen, and shows once it has arrived. */
 .pointer { position: absolute; top: 0; left: 0; z-index: 5; transform: translate(190px, 198px); transition-delay: var(--v-move), 0s }
 
@@ -120,11 +122,11 @@
 
 /* 1 · the row, clicked: its Edit copy rises over the plan below it */
 .root[data-b1] .sheet { opacity: 1; transform: none; transition-delay: calc(2 * var(--v-step)) }
-/* 2 · onto the headline, and "better" double-clicked */
+/* 2 · onto the reply, and "#482" double-clicked */
 .root[data-b2] .pointer { transform: translate(124px, 337px); transition-delay: 0s }
 .root[data-b2] .field { box-shadow: 0 0 0 2px var(--s-focus); transition-delay: calc(7 * var(--v-step)) }
 .root[data-b2] .old { background-color: var(--s-select); transition-delay: 0s, calc(7 * var(--v-step)) }
-/* 3 · "faster" typed over it, the pointer hidden while keys are pressed
+/* 3 · "#490" typed over it, the pointer hidden while keys are pressed
    as the system hides it; the draft is now unsaved */
 .root[data-b3] .pointer { opacity: 0; transition-delay: 0s }
 .root[data-b3] .old { max-width: 0; background-color: transparent; transition-delay: 0s }
@@ -133,10 +135,10 @@
 .root[data-b3] .clean { opacity: 0; transition-delay: calc(7 * var(--v-step)) }
 .root[data-b3] .dirty { opacity: 1; transition-delay: calc(8 * var(--v-step)) }
 .root[data-b3] .saveBtn, .root[data-b3] .discardBtn { opacity: 1; transition-delay: calc(8 * var(--v-step)) }
-/* 4 · the row goes back to Needs review, its next step blocked */
-.root[data-b4] .approved, .root[data-b4] .ready { opacity: 0 }
-.root[data-b4] .review, .root[data-b4] .save { opacity: 1; transition-delay: var(--v-step) }
-/* 5 · the plan loses its one approval */
+/* 4 · the row goes to Not live, its next step blocked */
+.root[data-b4] .live, .root[data-b4] .ready { opacity: 0 }
+.root[data-b4] .held, .root[data-b4] .save { opacity: 1; transition-delay: var(--v-step) }
+/* 5 · the list loses its one ready reply */
 .root[data-b5] .fill { transform: scaleX(0); transition: transform var(--v-move) var(--ease) }
 .root[data-b5] .one { opacity: 0; transition-delay: calc(4 * var(--v-step)) }
 .root[data-b5] .zero { opacity: 1; transition-delay: calc(5 * var(--v-step)) }

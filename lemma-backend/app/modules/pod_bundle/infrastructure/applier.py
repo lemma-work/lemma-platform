@@ -468,6 +468,7 @@ class BundleApplier:
             edges=payload.get("edges"),
             user_id=self._user_id,
             ctx=self._ctx,
+            run_title=payload.get("run_title") or None,
         )
 
 

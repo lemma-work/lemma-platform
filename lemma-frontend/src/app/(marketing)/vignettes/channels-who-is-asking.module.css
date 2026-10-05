@@ -1,6 +1,5 @@
-/* Who's asking, beat by beat. Base styles are the opening frame: the #launch
-   thread on the left, Kit's launch assets on the right, the press release
-   In review. Each `.root[data-bN]` rule is what changes from beat N on,
+/* Who's asking, beat by beat. Base styles are the opening frame: the #feedback
+   thread on the left, Kit's feedback themes on the right, #482 Merged. Each `.root[data-bN]` rule is what changes from beat N on,
    written in beat order so a later beat wins over an earlier one. With
    reduced motion every beat is on, so the last rules here are the finished
    picture. */
@@ -9,7 +8,7 @@
 /* The desk the thread and Kit's space sit on. */
 .stage { position: absolute; inset: 0; background: var(--cream) }
 
-/* ── The thread in #launch ──────────────────────────────────────────── */
+/* ── The thread in #feedback ────────────────────────────────────────── */
 .thread { position: absolute; top: 16px; left: 16px; width: 300px; height: 388px; overflow: hidden }
 .head { gap: 7px }
 .logo { width: 14px; height: 14px; flex: none }
@@ -25,7 +24,7 @@
 .access svg { flex: none; color: var(--ink-3) }
 .composer { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; align-items: center; height: 34px; padding: 0 12px; border-radius: 10px; box-shadow: 0 0 0 1px var(--line-2); font-size: 12.5px; color: var(--ink-3) }
 
-/* ── Kit's space: the launch assets ─────────────────────────────────── */
+/* ── Kit's space: the feedback themes ───────────────────────────────── */
 .panel { position: absolute; top: 16px; left: 332px; width: 292px; overflow: hidden }
 .sheet { padding: 2px 12px 6px }
 .cols, .row { display: grid; grid-template-columns: minmax(0, 1fr) 52px 76px 20px; align-items: center }
@@ -38,8 +37,8 @@
 .owner { font-size: 12.5px; line-height: 22px; color: var(--ink-2) }
 /* An enum cell, as the grid tags it. */
 .pill { justify-self: start; height: 22px; padding: 0 9px; border-radius: 99px; background: rgb(20 20 19 / .06); color: var(--ink-2); font-size: 12px; line-height: 22px; white-space: nowrap }
-/* The asked-about cell: In review over Ready, one showing at a time. */
-.slot { display: block; width: 72px; overflow: hidden; transition: width var(--v-move) var(--ease), background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
+/* The asked-about cell: Merged over Live, one showing at a time. */
+.slot { display: block; width: 66px; overflow: hidden; transition: width var(--v-move) var(--ease), background-color var(--v-quick) var(--ease), color var(--v-quick) var(--ease) }
 .track { display: flex; flex-direction: column }
 .track > span { height: 22px }
 /* The lock that says this request couldn't change the row. */
@@ -49,36 +48,36 @@
 .note { position: absolute; left: 336px; width: 284px; display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 12px; line-height: 18px; color: var(--ink-3); opacity: 0; transform: translateY(4px) }
 .note b { font-weight: 500; color: var(--ink-2) }
 .noteSam { top: 312px }
-.notePriya { top: 360px }
+.noteDev { top: 360px }
 .glyph { display: grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink-2) }
 .glyphOk { background: var(--ok); box-shadow: none; color: var(--paper) }
 
-/* The cell starting toward Ready, and stopping. */
+/* The cell starting toward Live, and stopping. */
 @keyframes nudge { 45% { transform: translateY(-9px) } }
 @keyframes pulse { 30% { background-color: var(--violet-soft) } }
 
 /* ── Arriving ───────────────────────────────────────────────────────── */
-.sam, .priya, .kit { opacity: 0; transform: translateY(8px) }
+.sam, .dev, .kit { opacity: 0; transform: translateY(8px) }
 .access { opacity: 0 }
 
-/* 1 · Sam asks; under his name, what he may do */
+/* 1 · Sam asks; under the name, what Sam may do */
 .root[data-b1] .sam { opacity: 1; transform: none }
 .root[data-b1] .sam .access { opacity: 1; transition-delay: var(--v-move) }
-/* 2 · it runs as Sam: the cell starts toward Ready and stops, a lock
+/* 2 · it runs as Sam: the cell starts toward Live and stops, a lock
        settles on the row, and the note says nothing moved */
 .root[data-b2] .track { animation: nudge var(--v-slow) var(--ease) }
 .root[data-b2] .asked { background: var(--cream); transition-delay: var(--v-slow) }
 .root[data-b2] .lock { opacity: 1; transform: none; transition-delay: var(--v-slow) }
 .root[data-b2] .noteSam { opacity: 1; transform: none; transition-delay: calc(var(--v-slow) + 3 * var(--v-step)) }
-/* 3 · Priya replies in the same thread; under her name, what she may do */
-.root[data-b3] .priya { opacity: 1; transform: none }
-.root[data-b3] .priya .access { opacity: 1; transition-delay: var(--v-move) }
-/* 4 · it runs as Priya: the lock lifts, the cell flips to Ready with one
+/* 3 · Dev replies in the same thread; under the name, what Dev may do */
+.root[data-b3] .dev { opacity: 1; transform: none }
+.root[data-b3] .dev .access { opacity: 1; transition-delay: var(--v-move) }
+/* 4 · it runs as Dev: the lock lifts, the cell flips to Live with one
        pulse, and the note says whose change it was */
 .root[data-b4] .lock { opacity: 0; transform: translateY(-6px); transition-delay: 0s }
 .root[data-b4] .track { transform: translateY(-22px); transition-delay: var(--v-quick) }
-.root[data-b4] .slot { width: 56px; background: var(--violet-soft); color: var(--violet-deep); transition-delay: var(--v-quick) }
+.root[data-b4] .slot { width: 44px; background: var(--violet-soft); color: var(--violet-deep); transition-delay: var(--v-quick) }
 .root[data-b4] .asked { background: transparent; transition-delay: 0s; animation: pulse var(--v-slow) var(--ease) var(--v-quick) both }
-.root[data-b4] .notePriya { opacity: 1; transform: none; transition-delay: calc(var(--v-move) + 3 * var(--v-step)) }
-/* 5 · Kit's short reply under hers */
+.root[data-b4] .noteDev { opacity: 1; transform: none; transition-delay: calc(var(--v-move) + 3 * var(--v-step)) }
+/* 5 · Kit's short reply under Dev's */
 .root[data-b5] .kit { opacity: 1; transform: none }

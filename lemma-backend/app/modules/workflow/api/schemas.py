@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.core.authorization.context import ResourceVisibility
 from app.modules.workflow.domain.workflow import (
@@ -10,6 +10,10 @@ from app.modules.workflow.domain.workflow import (
     WorkflowMode,
 )
 from app.modules.workflow.domain.graph import WorkflowEdge
+from app.modules.workflow.domain.run_title import (
+    render_run_title,
+    validate_run_title,
+)
 from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
@@ -20,12 +24,10 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitStatus,
     WorkflowRunWaitType,
 )
-from app.modules.workflow.domain.start import (
-    DataStoreWorkflowStartConfig,
-    EventWorkflowStartConfig,
-    WorkflowStart,
-    WorkflowStartType,
-    ScheduledWorkflowStartConfig,
+from app.modules.workflow.api.start_schemas import (
+    WorkflowStartInput,
+    WorkflowStartOutput,
+    workflow_start_output_from_domain,
 )
 from app.modules.workflow.domain.nodes import (
     AgentNode,
@@ -39,222 +41,18 @@ from app.modules.workflow.domain.nodes import (
 )
 
 
-class ScheduledWorkflowStartConfigInput(ScheduledWorkflowStartConfig):
-    model_config = ConfigDict(title="ScheduledWorkflowStartConfigInput")
+RUN_TITLE_DESCRIPTION = (
+    "What each run is about, as up to four JMESPath expressions over the run "
+    "context, joined with ' · '. Example: "
+    '`["collect.candidate_name", "collect.role"]`. Evaluated whenever a run is '
+    "read, so a part filled in by a later form appears once that form is "
+    "answered; parts that resolve to nothing are skipped. Empty means runs "
+    "carry no title."
+)
 
 
-class EventWorkflowStartConfigInput(EventWorkflowStartConfig):
-    model_config = ConfigDict(title="EventWorkflowStartConfigInput")
-
-
-class DataStoreWorkflowStartConfigInput(DataStoreWorkflowStartConfig):
-    model_config = ConfigDict(title="DataStoreWorkflowStartConfigInput")
-
-
-class ManualWorkflowStartInput(BaseModel):
-    type: Literal[WorkflowStartType.MANUAL] = Field(
-        default=WorkflowStartType.MANUAL,
-        description="Manual workflow start with no configuration payload.",
-    )
-    config: None = Field(
-        default=None,
-        description="Always `null` for manual workflow starts.",
-    )
-
-    model_config = ConfigDict(title="ManualWorkflowStartInput")
-
-
-class ScheduledWorkflowStartInput(BaseModel):
-    type: Literal[WorkflowStartType.SCHEDULED] = Field(
-        default=WorkflowStartType.SCHEDULED,
-        description="Scheduled workflow start.",
-    )
-    config: ScheduledWorkflowStartConfigInput = Field(
-        ...,
-        description="Scheduled workflow definition payload.",
-    )
-
-    model_config = ConfigDict(title="ScheduledWorkflowStartInput")
-
-
-class EventWorkflowStartInput(BaseModel):
-    type: Literal[WorkflowStartType.EVENT] = Field(
-        default=WorkflowStartType.EVENT,
-        description="Event-triggered workflow start.",
-    )
-    config: EventWorkflowStartConfigInput = Field(
-        ...,
-        description="Connector trigger configuration for this workflow.",
-    )
-
-    model_config = ConfigDict(title="EventWorkflowStartInput")
-
-
-class DataStoreWorkflowStartInput(BaseModel):
-    type: Literal[WorkflowStartType.DATASTORE_EVENT] = Field(
-        default=WorkflowStartType.DATASTORE_EVENT,
-        description="Datastore-event workflow start.",
-    )
-    config: DataStoreWorkflowStartConfigInput = Field(
-        ...,
-        description="Datastore trigger configuration for this workflow.",
-    )
-
-    model_config = ConfigDict(title="DataStoreWorkflowStartInput")
-
-
-WorkflowStartInput = Annotated[
-    (
-        ManualWorkflowStartInput
-        | ScheduledWorkflowStartInput
-        | EventWorkflowStartInput
-        | DataStoreWorkflowStartInput
-    ),
-    Field(discriminator="type"),
-]
-
-
-class ScheduledWorkflowStartConfigOutput(ScheduledWorkflowStartConfig):
-    model_config = ConfigDict(
-        from_attributes=True, title="ScheduledWorkflowStartConfigOutput"
-    )
-
-
-class EventWorkflowStartConfigOutput(EventWorkflowStartConfig):
-    model_config = ConfigDict(
-        from_attributes=True, title="EventWorkflowStartConfigOutput"
-    )
-
-
-class DataStoreWorkflowStartConfigOutput(DataStoreWorkflowStartConfig):
-    model_config = ConfigDict(
-        from_attributes=True, title="DataStoreWorkflowStartConfigOutput"
-    )
-
-
-class ManualWorkflowStartOutput(BaseModel):
-    type: Literal[WorkflowStartType.MANUAL] = Field(
-        default=WorkflowStartType.MANUAL,
-        description="Manual workflow start with no configuration payload.",
-    )
-    config: None = Field(
-        default=None,
-        description="Always `null` for manual workflow starts.",
-    )
-
-    model_config = ConfigDict(from_attributes=True, title="ManualWorkflowStartOutput")
-
-
-class ScheduledWorkflowStartOutput(BaseModel):
-    type: Literal[WorkflowStartType.SCHEDULED] = Field(
-        default=WorkflowStartType.SCHEDULED,
-        description="Scheduled workflow start.",
-    )
-    config: ScheduledWorkflowStartConfigOutput = Field(
-        ...,
-        description="Scheduled workflow definition payload.",
-    )
-
-    model_config = ConfigDict(
-        from_attributes=True,
-        title="ScheduledWorkflowStartOutput",
-    )
-
-
-class EventWorkflowStartOutput(BaseModel):
-    type: Literal[WorkflowStartType.EVENT] = Field(
-        default=WorkflowStartType.EVENT,
-        description="Event-triggered workflow start.",
-    )
-    config: EventWorkflowStartConfigOutput = Field(
-        ...,
-        description="Connector trigger configuration for this workflow.",
-    )
-
-    model_config = ConfigDict(
-        from_attributes=True,
-        title="EventWorkflowStartOutput",
-    )
-
-
-class DataStoreWorkflowStartOutput(BaseModel):
-    type: Literal[WorkflowStartType.DATASTORE_EVENT] = Field(
-        default=WorkflowStartType.DATASTORE_EVENT,
-        description="Datastore-event workflow start.",
-    )
-    config: DataStoreWorkflowStartConfigOutput = Field(
-        ...,
-        description="Datastore trigger configuration for this workflow.",
-    )
-
-    model_config = ConfigDict(
-        from_attributes=True,
-        title="DataStoreWorkflowStartOutput",
-    )
-
-
-WorkflowStartOutput = Annotated[
-    (
-        ManualWorkflowStartOutput
-        | ScheduledWorkflowStartOutput
-        | EventWorkflowStartOutput
-        | DataStoreWorkflowStartOutput
-    ),
-    Field(discriminator="type"),
-]
-
-
-def workflow_start_input_to_domain(
-    start: WorkflowStartInput | None,
-) -> WorkflowStart | None:
-    if start is None:
-        return None
-
-    if isinstance(start, ManualWorkflowStartInput):
-        return WorkflowStart(type=WorkflowStartType.MANUAL, config=None)
-
-    if isinstance(start, ScheduledWorkflowStartInput):
-        return WorkflowStart(
-            type=WorkflowStartType.SCHEDULED,
-            config=ScheduledWorkflowStartConfig.model_validate(
-                start.config.model_dump()
-            ),
-        )
-
-    if isinstance(start, EventWorkflowStartInput):
-        return WorkflowStart(
-            type=WorkflowStartType.EVENT,
-            config=EventWorkflowStartConfig.model_validate(start.config.model_dump()),
-        )
-
-    return WorkflowStart(
-        type=WorkflowStartType.DATASTORE_EVENT,
-        config=DataStoreWorkflowStartConfig.model_validate(start.config.model_dump()),
-    )
-
-
-def workflow_start_output_from_domain(
-    start: WorkflowStart | None,
-) -> WorkflowStartOutput | None:
-    if start is None:
-        return None
-
-    if start.type == WorkflowStartType.MANUAL:
-        return ManualWorkflowStartOutput()
-
-    if start.type == WorkflowStartType.SCHEDULED:
-        return ScheduledWorkflowStartOutput(
-            config=ScheduledWorkflowStartConfigOutput.model_validate(start.config),
-        )
-
-    if start.type == WorkflowStartType.EVENT:
-        return EventWorkflowStartOutput(
-            config=EventWorkflowStartConfigOutput.model_validate(start.config),
-        )
-
-    return DataStoreWorkflowStartOutput(
-        config=DataStoreWorkflowStartConfigOutput.model_validate(start.config),
-    )
+def _checked_run_title(value: list[str] | None) -> list[str] | None:
+    return None if value is None else validate_run_title(value)
 
 
 class WorkflowCreateRequest(BaseModel):
@@ -295,6 +93,11 @@ class WorkflowCreateRequest(BaseModel):
         default_factory=list,
         description="Optional initial graph edges connecting the provided nodes.",
     )
+    run_title: list[str] = Field(
+        default_factory=list, description=RUN_TITLE_DESCRIPTION
+    )
+
+    _run_title = field_validator("run_title")(_checked_run_title)
 
 
 class WorkflowUpdateRequest(BaseModel):
@@ -314,7 +117,13 @@ class WorkflowUpdateRequest(BaseModel):
         default=None,
         description="Updated start trigger configuration.",
     )
+    run_title: list[str] | None = Field(
+        default=None,
+        description=RUN_TITLE_DESCRIPTION + " Send `[]` to remove the title.",
+    )
     visibility: ResourceVisibility | None = None
+
+    _run_title = field_validator("run_title")(_checked_run_title)
 
 
 class WorkflowGraphUpdateRequest(BaseModel):
@@ -423,6 +232,9 @@ class WorkflowResponse(BaseModel):
     nodes: list[WorkflowNodeResponse] = Field(default_factory=list)
     edges: list[WorkflowEdge] = Field(default_factory=list)
     start: WorkflowStartOutput | None = None
+    run_title: list[str] = Field(
+        default_factory=list, description=RUN_TITLE_DESCRIPTION
+    )
     is_active: bool = True
     mode: WorkflowMode = WorkflowMode.GLOBAL
     visibility: str = "POD"
@@ -472,6 +284,23 @@ class WorkflowListResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WorkflowRunWaitingOn(BaseModel):
+    """Where a suspended run is parked and on whom -- the active wait, cut
+    down to what a list needs. The full wait (form schema included) is on
+    `workflow.run.get` as `active_wait`."""
+
+    node_id: str
+    wait_type: WorkflowRunWaitType
+    assigned_pod_member_id: UUID | None = Field(
+        default=None,
+        description="The pod member a FORM wait is assigned to, when it is.",
+    )
+    since: datetime | None = Field(
+        default=None,
+        description="When the run started waiting here.",
+    )
+
+
 class WorkflowRunSummaryResponse(BaseModel):
     id: UUID
     workflow_id: UUID = Field(validation_alias=AliasChoices("workflow_id", "flow_id"))
@@ -487,6 +316,17 @@ class WorkflowRunSummaryResponse(BaseModel):
     completed_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    title: str | None = Field(
+        default=None,
+        description=(
+            "What this run is about, from the workflow's `run_title`. Null when "
+            "the workflow sets none or nothing it names is filled in yet."
+        ),
+    )
+    waiting_on: WorkflowRunWaitingOn | None = Field(
+        default=None,
+        description="The run's active wait, while it has one.",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -573,10 +413,25 @@ def workflow_response_from_domain(workflow: WorkflowEntity) -> WorkflowResponse:
     return WorkflowResponse.model_validate(payload)
 
 
+def waiting_on_from_domain(
+    wait: WorkflowRunWaitEntity | None,
+) -> WorkflowRunWaitingOn | None:
+    if wait is None:
+        return None
+    return WorkflowRunWaitingOn(
+        node_id=wait.node_id,
+        wait_type=wait.wait_type,
+        assigned_pod_member_id=wait.assigned_pod_member_id,
+        since=wait.created_at,
+    )
+
+
 def run_response_from_domain(
     run: WorkflowRunEntity,
     active_wait: WorkflowRunWaitEntity | None = None,
+    run_title: list[str] | None = None,
 ) -> WorkflowRunResponse:
+    view = run.execution_context.to_view()
     return WorkflowRunResponse(
         id=run.id,
         workflow_id=run.flow_id,
@@ -592,7 +447,9 @@ def run_response_from_domain(
         completed_at=run.completed_at,
         created_at=run.created_at,
         updated_at=run.updated_at,
-        execution_context=run.execution_context.to_view(),
+        execution_context=view,
+        title=render_run_title(run_title, view) if run_title else None,
+        waiting_on=waiting_on_from_domain(active_wait),
         step_history=[
             StepRecordResponse.model_validate(step) for step in run.step_history
         ],

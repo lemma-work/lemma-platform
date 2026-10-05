@@ -297,6 +297,21 @@
     .wfdock__list {
         max-height: none;
     }
+    /* One lane and the edge of the next, so it is plain the board goes on. */
+    .wfboard {
+        margin-bottom: 24px;
+        padding: 12px 12px 14px;
+    }
+    .wfboard__lanes {
+        margin: 0 -12px;
+        padding: 0 12px 4px;
+    }
+    .wfboard__lane {
+        flex: 0 0 78%;
+    }
+    .wfboard__lane[data-empty] {
+        flex: 0 0 44%;
+    }
 
     /* ── Workflows index ─────────────────────────────────────────────── */
     .wfindex__row {
