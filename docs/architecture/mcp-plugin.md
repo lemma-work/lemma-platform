@@ -81,12 +81,12 @@ servers and need a publicly reachable API.
 | # | Piece | Size | Needs |
 |---|---|---|---|
 | 1 | Table view | built | — |
-| 2 | Open a row; "Open in Lemma" | small | a stable in-app URL for a table, a record and a file |
+| 2 | Open a row; a file view; "Open in Lemma" | small | a stable in-app URL for a table, a record and a file |
 | 3 | `search` and `fetch` for ChatGPT company knowledge | small | the same URLs, for citations |
 | 4 | Waiting-form and approval card | medium | two new pod tools, `pod:write` |
 | 5 | Claude Code plugin in a marketplace repository | small | MCP-first skill text; Deepak's go-ahead to publish |
 | 6 | Directory listings | — | the decision in [§d](#d-directory-listings-and-one-url-per-pod), submission assets |
-| 7 | A pod's own app as the view | large | an SDK bridge transport, an app-only request tool, apps as resources — [§b](#b-a-pods-own-app-inside-the-host); spike first |
+| 7 | A pod's own app, framed, in ChatGPT then Claude | medium | a delegated token per connection, an embedded SDK mode, token-gated private app files — [§b](#b-a-pods-own-app-inside-the-host); probe first |
 
 ### a. More views
 
@@ -97,7 +97,12 @@ separate `ui://lemma/record` earns its place only if it edits, which means an
 app-only write tool (`_meta.ui.visibility: ["app"]`, hidden from the model) and
 `pod:write`; leave that until someone asks to edit from inside a chat.
 
-**"Open in Lemma".** Until an app can run as the view (§b), this is how a person gets from a chat to it. `ui/open-link` is standard and both hosts implement it
+**A file view.** `pod_read_file`, `pod_list_files` and
+`pod_view_document_pages` answer with text and page images; a view can show a
+folder as a list and a document as its pages, the same way the table view shows
+records.
+
+**"Open in Lemma".** Until apps are framed in the host (§b), this is how a person gets from a chat to one. `ui/open-link` is standard and both hosts implement it
 (Claude always asks the person to confirm for a custom connector; a directory
 listing can allowlist its destinations). It needs a stable
 in-app URL for a table, a record and a file, passed in the result's `_meta`,
@@ -119,78 +124,63 @@ on a stateless server; elicitation is the follow-up.
 
 ### b. A pod's own app inside the host
 
-There are two ways to put a pod app in a conversation. Framing the deployed app
-does not work. Running the app's own files as the view, with the SDK talking
-through the host, can work; it is a real project, so it waits behind the
-smaller pieces above.
+Views are for what Lemma itself shows — tables, records, files, forms. A pod's
+app is shown as itself: the deployed app, framed inside a thin Lemma view and
+signed in with a token the connection mints, not rebuilt as a view.
 
-**Framing the deployed app: no.**
+**Why it is framed, and what the frame needs.**
 
 - **MCP Apps has no "load this URL" mode.** A view is HTML the server returns;
-  the `externalUrl` content type is deferred in the spec and still future work
-  in its draft. A hosted page can only be a nested iframe from an origin listed
-  in `_meta.ui.csp.frameDomains`.
-- **Claude restricts `frameDomains`** "pending security review"
-  ([Claude MCP Apps design guidelines](https://claude.com/docs/connectors/building/mcp-apps/design-guidelines)).
-- **ChatGPT allows it only for the MCP server's own registrable domain**, with a
+  the `externalUrl` content type is deferred in the spec. A deployed app can
+  only be a nested iframe from an origin the view lists in
+  `_meta.ui.csp.frameDomains`.
+- **ChatGPT allows that for the MCP server's own registrable domain**, with a
   justification at review
-  ([ChatGPT UI guide](https://developers.openai.com/plugins/build/chatgpt-ui)),
-  which a self-hosted deployment's app domain need not satisfy.
-- **The app could not sign in.** The SDK authenticates with the Lemma session
-  cookie, and a private app is opened with the `__Host-lemmaAppAccess` cookie
-  (#860). Both are `SameSite=Lax`, which no browser sends from a frame nested
-  in another site's page, so the app would load and every data call would fail
-  — in every browser, not only Safari. Making them `SameSite=None; Partitioned`
-  would still leave a partitioned cookie that never sees the person's Lemma
-  session, Safari dropping such cookies across some redirect chains (WebKit
-  bug 306194), and a nested frame inheriting sandbox flags that neither host
-  documents.
+  ([ChatGPT UI guide](https://developers.openai.com/plugins/build/chatgpt-ui)).
+  **Claude restricts `frameDomains`** "pending security review"
+  ([Claude MCP Apps design guidelines](https://claude.com/docs/connectors/building/mcp-apps/design-guidelines)),
+  so ChatGPT comes first and Claude follows when it opens.
+- **Not with cookies.** The SDK's session cookie and the #860
+  `__Host-lemmaAppAccess` cookie are both `SameSite=Lax`, which no browser sends
+  from a frame inside another site's page. The SDK already has a token mode —
+  every call, the WebSocket included, sent as `Authorization: Bearer` — so the
+  framed app signs in with a token instead.
 
-**Running the app as the view: yes, with three pieces.** A deployed app is
-static files (a Vite build, or one `index.html`) in object storage, and its
-JavaScript reaches Lemma only through the SDK. So the server can return the
-app's own `index.html` as a `ui://` resource, and the SDK can make its calls
-through the host instead of over HTTP. The connection's grant is then the
-app's authority: the person, under their roles and row-level security, within
-`pod:read` or `pod:write`. That is what the app has inside Lemma, with no cookie,
-no `frameDomains` and nothing for either host to approve beyond the view.
+**The token is a delegated one.** Lemma already mints pod-scoped delegated
+tokens for agents and functions (`app/core/authorization/delegation.py`,
+`mint_delegated_token`). One minted with the pod's own agent as the actor is the
+person acting through Lem, the standing the MCP tools already run with: refused
+for any other pod (`Delegated pod mismatch`), refused for organization-level
+actions, destructive actions gated, row-level security and the person's current
+roles applied on every request. Four things to add around it:
 
-1. **A bridge transport in the SDK.** Today `LemmaClient` calls the global
-   `fetch` and a global generated-client singleton, with no transport option
-   (`lemma-typescript/src/http.ts`, `generated.ts`). It needs one, and an
-   implementation that sends each request as a `tools/call` through the host.
-   `window.__LEMMA_CONFIG__`, which the server already injects into an app's
-   entrypoint, can select it.
-2. **An app-only tool that runs those requests.** Hidden from the model
-   (`_meta.ui.visibility: ["app"]`), limited to routes under this pod, with
-   reads needing `pod:read` and anything else `pod:write`, and the same audit
-   line as every other call. This is broader than the curated pod toolset — it
-   is the app's whole API surface — which is the security decision to make
-   deliberately.
-3. **Apps as per-pod resources.** `ui://lemma/apps/<slug>`, listed per pod the
-   way tools are, built from the app's current release with its scripts,
-   styles and small assets inlined (a private app's assets are cookie-gated, so
-   they cannot be fetched from a `resourceDomains` origin). A tool to open one
-   carries its `resourceUri`, and asks for full screen; on ChatGPT, behind a
-   feature check, `openai/ui` can also make it a sidebar app.
+1. **Read-only connections.** The `scope` claim is enforced only for named
+   workloads (`workload_authority.py`), not for the pod's own agent, so a token
+   for a `pod:read` connection could still write. Enforce it on that path too,
+   or offer apps only to connections allowed to write.
+2. **Revocation.** It is an ordinary access token and lives until it expires.
+   Every mint re-checks the connection and the view re-mints as it goes, so
+   ending a connection reaches a framed app within one token lifetime; a
+   per-request check would close even that.
+3. **Delivery.** The view asks for the token through an app-only tool
+   (`_meta.ui.visibility: ["app"]`), so it is never in the transcript or seen by
+   the model, and hands it to the framed app by `postMessage`. The SDK gains an
+   embedded mode that asks its parent for a token and asks again on a 401.
+4. **Private apps' files.** They sit behind the app-access cookie too, so they
+   need a token-based gate of their own.
 
-What does not carry over, and needs a fallback in the SDK:
+**How a person meets it.** Tools are listed per pod, so each app can be its own
+tool ("Open Customers"), described from the app's own description, for the
+model to pick and for ChatGPT's suggestions to rank. It opens inline with
+Expand to full screen, and on ChatGPT, behind a feature check, as a sidebar app
+(`openai/ui`). The SDK's existing compose bridge, which fills Lemma's chat
+composer, maps onto `ui/message` and `ui/update-model-context`, so an app talks
+to the conversation with no change of its own.
 
-- **Push.** `useLiveRecords` rides a WebSocket and agent replies stream over
-  SSE. A view hears only what its host forwards, so these become refetches
-  and whole replies.
-- **History routing** inside the host's frame; hash routing is the safe
-  choice.
-- **File upload.** The standard has none; ChatGPT's `uploadFile` behind a
-  feature check is the only option.
-- **Connector sign-in popups.**
-
-The same transport would let Lemma widgets render in Claude and ChatGPT too,
-since a widget is HTML that reaches Lemma through the same SDK.
-
-The first step is a spike: one no-build app (a single `index.html`, with the SDK
-inlined) running through the bridge in the reference host, before committing to
-the SDK change.
+**First, a probe in ChatGPT**, because the rest depends on what only ChatGPT can
+answer: whether it frames a developer-mode connector's origin, which sandbox
+flags the nested frame gets, and whether a framed app reaches the API and its
+WebSocket with a delegated token.
 
 ### c. Packaging Lemma as one plugin
 
