@@ -11,8 +11,10 @@ from uuid import UUID
 from opentelemetry import trace
 
 from app.core.bounded import BoundedDict
+from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
+logger = get_logger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
@@ -144,9 +146,23 @@ class FunctionSessionTokenCache:
 
         try:
             token = await asyncio.shield(task)
-            if token.expires_at <= required_until:
-                raise ValueError(
-                    "fresh function token expires before the required execution window"
+            if token.expires_at <= self._wall_clock():
+                raise ValueError("fresh function token is already expired")
+            covers_window = token.expires_at > required_until
+            span.set_attribute("lemma.token_covers_window", covers_window)
+            if not covers_window:
+                # The issuer's access-token lifetime is shorter than this run's
+                # window -- a job's deadline can outlast it -- so no token covers
+                # it, and this is the longest-lived one available. Refusing it
+                # would fail every such run up front, including the ones that
+                # finish well inside the token's life; a call made after it
+                # expires is refused at the gateway instead.
+                logger.warning(
+                    "function.session_token.shorter_than_window",
+                    pod_id=str(key.pod_id),
+                    function_id=str(key.function_id),
+                    expires_at=token.expires_at.isoformat(),
+                    required_until=required_until.isoformat(),
                 )
             return token
         finally:

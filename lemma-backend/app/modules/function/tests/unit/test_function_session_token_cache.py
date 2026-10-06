@@ -4,6 +4,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import uuid7
 
+import pytest
+
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -107,3 +109,41 @@ async def test_cache_mints_fresh_token_for_required_validity_window() -> None:
             min_validity_until=wall_now + timedelta(seconds=60),
         )
     ).value == "token-2"
+
+
+async def test_cache_serves_fresh_token_shorter_than_window_and_remints_next() -> None:
+    # A job's deadline plus its callback grace can outlast the issuer's whole
+    # access-token lifetime. No token covers that window, so the run gets the
+    # longest-lived one there is rather than failing before it starts -- and a
+    # later run is never handed that same token back.
+    wall_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cache = FunctionSessionTokenCache(wall_clock=lambda: wall_now)
+    calls = 0
+    key = _key()
+
+    async def mint(**_kwargs) -> FunctionSessionToken:
+        nonlocal calls
+        calls += 1
+        return FunctionSessionToken(
+            value=f"token-{calls}",
+            expires_at=wall_now + timedelta(seconds=300),
+        )
+
+    job_window = wall_now + timedelta(seconds=660)
+    assert (
+        await cache.get(key, minter=mint, min_validity_until=job_window)
+    ).value == "token-1"
+    assert (
+        await cache.get(key, minter=mint, min_validity_until=job_window)
+    ).value == "token-2"
+
+
+async def test_cache_refuses_a_fresh_token_that_is_already_expired() -> None:
+    wall_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cache = FunctionSessionTokenCache(wall_clock=lambda: wall_now)
+
+    async def mint(**_kwargs) -> FunctionSessionToken:
+        return FunctionSessionToken(value="dead-on-arrival", expires_at=wall_now)
+
+    with pytest.raises(ValueError, match="already expired"):
+        await cache.get(_key(), minter=mint)
