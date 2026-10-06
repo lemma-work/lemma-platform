@@ -3,6 +3,7 @@ import { isDisplayResourceTool, parseDisplayResource, type DisplayResource } fro
 import { notedBy, type Noted } from "./memory-notes";
 import { parseToolCard, type SignInAsk, type ToolCard } from "./tool-cards";
 import { toolKey, toolLabel, toolTitle } from "./tool-name";
+import { clientIdOf, pendingStateOf, type PendingState } from "./pending-sends";
 import {
     approvalDetails,
     askQuestions,
@@ -108,6 +109,9 @@ export interface HumanMessage {
     at: string;
     note?: boolean;
     from?: string;
+    /** Drawn before the server has it: still going, or refused. See
+     *  `pending-sends.ts`. */
+    pending?: PendingState;
 }
 
 export interface Turn {
@@ -326,7 +330,10 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
     const open = (seed: RawMessage): Turn => {
         const day = dayOf(seed.created_at);
         const turn: Turn = {
-            id: seed.id ?? "turn-" + turns.length,
+            /* A message drawn before the server had it, and the server's copy
+               of it, are one turn: keyed by the id they share, the row is not
+               remounted when one replaces the other. */
+            id: clientIdOf(seed) ?? seed.id ?? "turn-" + turns.length,
             notes: [],
             items: [],
             day: day && day !== lastDay ? ((lastDay = day), day) : undefined,
@@ -509,11 +516,13 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
 
         if (message.role === "user") {
             current = open(message);
+            const pending = pendingStateOf(message);
             current.human = {
                 id: message.id ?? "u" + turns.length,
                 text,
                 at: clockOf(message.created_at),
                 ...humanMarks(message.metadata),
+                ...(pending ? { pending } : {}),
             };
             continue;
         }
