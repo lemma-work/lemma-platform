@@ -87,6 +87,16 @@ export function useCreateSchedule(podId: string) {
     });
 }
 
+/** Events on servers the caller connected, for the form's "When". */
+export function useServerEvents(podId: string, enabled: boolean) {
+    return useQuery({
+        queryKey: [SCHEDULES, podId, "server-events"],
+        queryFn: () => source.serverEvents(podId),
+        enabled,
+        staleTime: 60_000,
+    });
+}
+
 /** What a new schedule could be pointed at. Fetched when the form opens, not
  *  with the list. */
 export function useScheduleTargets(podId: string, enabled: boolean) {

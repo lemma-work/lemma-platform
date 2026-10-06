@@ -35,8 +35,13 @@ def default_webhook_sources() -> WebhookSourceRegistry:
     from app.modules.connectors.infrastructure.webhook_sources.github import (
         GitHubWebhookSource,
     )
+    from app.modules.connectors.infrastructure.webhook_sources.mcp import (
+        McpWebhookSource,
+    )
 
-    return WebhookSourceRegistry([ComposioWebhookSource(), GitHubWebhookSource()])
+    return WebhookSourceRegistry(
+        [ComposioWebhookSource(), GitHubWebhookSource(), McpWebhookSource()]
+    )
 
 
 __all__ = ["default_webhook_sources"]

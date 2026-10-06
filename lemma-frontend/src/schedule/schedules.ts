@@ -28,6 +28,9 @@ export const SCHEDULE_REMOVE = "schedule.delete";
  *  not a bug — the row still draws, it just cannot say more than the word. */
 export type ScheduleKind = "TIME" | "WEBHOOK" | "DATASTORE" | "UNKNOWN";
 
+/** The webhook source a connected MCP server's events arrive as. */
+export const MCP_SOURCE = "mcp";
+
 /** The outcome of the last fire attempt. `FILTERED` is not a failure: the AI
  *  filter read the event and said it did not matter. */
 export type FireStatus = "TRIGGERED" | "FILTERED" | "ERROR" | "";
@@ -113,9 +116,12 @@ export function scopeOf(kind: ScheduleKind, visibility: string): Scope {
 /** A WEBHOOK schedule listens through a connected account and a connector
  *  trigger; without both it is a schedule that can never fire, and nothing
  *  else on the row says so. */
-export function setupOf(kind: ScheduleKind, accountId: string, connectorTriggerId: string): string {
+export function setupOf(kind: ScheduleKind, accountId: string, connectorTriggerId: string, source = ""): string {
     if (kind !== "WEBHOOK") return "";
     if (!accountId) return "Needs an account connected before it can listen.";
+    /* A connected MCP server's event is subscribed when the row is made; it
+       names no catalog trigger. */
+    if (source === MCP_SOURCE) return "";
     if (!connectorTriggerId) return "Needs its trigger installed on the connected account.";
     return "";
 }
@@ -216,6 +222,14 @@ export function triggerOf(kind: ScheduleKind, config: Record<string, unknown>, c
         if (once) return { trigger: "Once", literal: once };
         return { trigger: "On a schedule", literal: "" };
     }
+    if (kind === "WEBHOOK" && text(config["source"]) === MCP_SOURCE) {
+        /* A connected server's own event, narrowed by its arguments. */
+        const event = text(config["event"]);
+        const narrowed = Object.entries(record(config["arguments"]))
+            .map(([key, value]) => key + " = " + text(value))
+            .join(", ");
+        return { trigger: "When " + (event || "an event") + " happens", literal: narrowed };
+    }
     if (kind === "WEBHOOK") {
         const source = text(config["source"]);
         const said = source ? "When " + humanizeName(source).toLowerCase() + " sends something" : "When something arrives";
@@ -282,7 +296,7 @@ export function readSchedule(raw: unknown): StandingJob {
         ownerId: text(row["user_id"]),
         visibility: text(row["visibility"]).toUpperCase(),
         raw: row,
-        needsSetup: setupOf(kind, text(row["account_id"]), text(row["connector_trigger_id"])),
+        needsSetup: setupOf(kind, text(row["account_id"]), text(row["connector_trigger_id"]), text(config["source"])),
     };
 }
 
@@ -462,21 +476,67 @@ export function agoOf(iso: string, now: number = Date.now()): string {
 
 /* ── making one ─────────────────────────────────────────────────────── */
 
-/** A new TIME schedule, as this app lets one be written.
- *
- *  Only TIME. A WEBHOOK schedule needs a connected account and a connector
- *  trigger id, and a DATASTORE one needs a table plus an explicit operation
- *  set the workflow is built to handle — neither is a form this section can
- *  put in front of somebody honestly, so neither is offered.
- */
+/** What starts a new schedule: a time, a row added to a table, or an event on
+ *  an MCP server you connected (`server`, with `serverEvent` set). A catalog
+ *  connector trigger needs an id nothing here can offer honestly, so it is not
+ *  in the form. */
+export type DraftWhen = "time" | "record.created" | "server";
+
+/** An event on an MCP server someone connected, as the pod's catalog offers
+ *  it: listened to through that person's account, so it is theirs to pick. */
+export interface ServerEvent {
+    /** The picker's value; unique across servers and accounts. */
+    key: string;
+    accountId: string;
+    server: string;
+    event: string;
+    description: string;
+    /** The arguments the server requires, each a field on the form. */
+    asks: { name: string; description: string }[];
+}
+
+/** The connected-server events in `GET /pods/{id}/events`; the platform's own
+ *  hook points there are offered by `WHENS` instead. */
+export function readServerEvents(raw: unknown): ServerEvent[] {
+    const items = Array.isArray(record(raw)["items"]) ? (record(raw)["items"] as unknown[]) : [];
+    return items.flatMap((item) => {
+        const row = record(item);
+        const accountId = text(row["account_id"]);
+        const event = text(row["event"]);
+        if (!accountId || !event) return [];
+        const schema = record(row["input_schema"]);
+        const properties = record(schema["properties"]);
+        const required = Array.isArray(schema["required"]) ? (schema["required"] as unknown[]).map(text).filter(Boolean) : [];
+        return [{
+            key: MCP_SOURCE + ":" + accountId + ":" + event,
+            accountId,
+            server: text(row["server"]),
+            event,
+            description: text(row["description"]),
+            asks: required.map((name) => ({ name, description: text(record(properties[name])["description"]) })),
+        }];
+    });
+}
+
+export const WHENS: { value: DraftWhen; label: string }[] = [
+    { value: "time", label: "On a schedule" },
+    { value: "record.created", label: "When a row is added to a table" },
+];
+
 export interface ScheduleDraft {
     name: string;
+    when: DraftWhen;
+    /** For `record.created`: which table. */
+    table: string;
     cron: string;
     timezone: string;
     target: "agent" | "workflow";
     agentName: string;
     workflowName: string;
     instruction: string;
+    /** For `server`: which event, and what was typed for its arguments. */
+    serverEvent: ServerEvent | null;
+    eventArguments: Record<string, string>;
 }
 
 /** Something a new schedule could be pointed at. The name is what the request
@@ -488,7 +548,10 @@ export interface TargetChoice {
 }
 
 export function blankDraft(): ScheduleDraft {
-    return { name: "", cron: "0 9 * * 1-5", timezone: "", target: "agent", agentName: "", workflowName: "", instruction: "" };
+    return {
+        name: "", when: "time", table: "", cron: "0 9 * * 1-5", timezone: "", target: "agent", agentName: "", workflowName: "", instruction: "",
+        serverEvent: null, eventArguments: {},
+    };
 }
 
 /** The floor the platform enforces, from `schedule_minimum_interval_minutes`
@@ -508,8 +571,19 @@ export const MINIMUM_MINUTES = 15;
 export function draftProblems(draft: ScheduleDraft): Record<string, string> {
     const wrong: Record<string, string> = {};
     if (!draft.name.trim()) wrong.name = "Give it a name. It is what this row will be called.";
+    if (draft.when === "record.created" && !draft.table.trim()) wrong.table = "Pick the table to watch.";
+    if (draft.when === "server") {
+        const missing = (draft.serverEvent?.asks ?? []).filter((ask) => !(draft.eventArguments[ask.name] ?? "").trim());
+        if (!draft.serverEvent) wrong.event = "Pick the event to listen for.";
+        else if (missing.length) wrong.event = "Fill in " + missing.map((ask) => ask.name).join(", ") + ".";
+        /* The server's event wakes an agent; a workflow listens to the app
+           event its own start names, and refuses to be told another. */
+        if (draft.target === "workflow") wrong.target = "An event from a connected server wakes an agent, not a workflow.";
+    }
     const fields = draft.cron.trim().split(/\s+/).filter(Boolean);
-    if (!draft.cron.trim()) {
+    if (draft.when !== "time") {
+        /* No cron to check: an event says when it fires. */
+    } else if (!draft.cron.trim()) {
         wrong.cron = "A cron expression says when it fires.";
     } else if (fields.length !== 5) {
         wrong.cron = "Five fields: minute, hour, day of month, month, day of week. This has " + fields.length + ".";
@@ -533,20 +607,34 @@ export function draftProblems(draft: ScheduleDraft): Record<string, string> {
  *  than sent as null, which would count as present.
  */
 export function createRequest(draft: ScheduleDraft): Record<string, unknown> {
+    const body: Record<string, unknown> = { name: draft.name.trim(), ...startOf(draft) };
+    if (draft.when === "server" && draft.serverEvent) body.account_id = draft.serverEvent.accountId;
+    if (draft.target === "workflow") body.workflow_name = draft.workflowName.trim();
+    else body.agent_name = draft.agentName.trim();
+    if (draft.instruction.trim()) body.instruction = draft.instruction.trim();
+    return body;
+}
+
+/** The schedule type and config a draft's "when" becomes. */
+function startOf(draft: ScheduleDraft): { schedule_type: string; config: Record<string, unknown> } {
+    if (draft.when === "server" && draft.serverEvent) {
+        const asked = new Set(draft.serverEvent.asks.map((ask) => ask.name));
+        const args = Object.fromEntries(
+            Object.entries(draft.eventArguments)
+                .filter(([name, value]) => asked.has(name) && value.trim())
+                .map(([name, value]) => [name, value.trim()]),
+        );
+        return { schedule_type: "WEBHOOK", config: { source: MCP_SOURCE, event: draft.serverEvent.event, arguments: args } };
+    }
+    if (draft.when === "record.created") {
+        return { schedule_type: "DATASTORE", config: { table_name: draft.table.trim(), operations: ["INSERT"] } };
+    }
     const config: Record<string, unknown> = { cron: draft.cron.trim() };
     /* An absent `timezone` means UTC and stays absent: `resolve_zone` reads
        None as UTC, and writing "UTC" into the config would give every schedule
        a diff to no effect. */
     if (draft.timezone.trim()) config.timezone = draft.timezone.trim();
-    const body: Record<string, unknown> = {
-        name: draft.name.trim(),
-        schedule_type: "TIME",
-        config,
-    };
-    if (draft.target === "workflow") body.workflow_name = draft.workflowName.trim();
-    else body.agent_name = draft.agentName.trim();
-    if (draft.instruction.trim()) body.instruction = draft.instruction.trim();
-    return body;
+    return { schedule_type: "TIME", config };
 }
 
 /** A few cadences worth offering, each with the cron it actually produces.
@@ -601,7 +689,14 @@ export function copyRequest(job: StandingJob, accountId?: string): Record<string
     if (job.filter) body.filter_instruction = job.filter;
     const schema = row["filter_output_schema"];
     if (schema && typeof schema === "object") body.filter_output_schema = schema;
-    if (job.kind === "WEBHOOK") {
+    if (job.kind === "WEBHOOK" && text(record(row["config"])["source"]) === MCP_SOURCE) {
+        /* Subscribed afresh on your account; the original's subscription id
+           is not carried over. */
+        body.account_id = accountId;
+        body.config = Object.fromEntries(
+            Object.entries(record(row["config"])).filter(([key]) => key !== "provider_trigger_id"),
+        );
+    } else if (job.kind === "WEBHOOK") {
         body.account_id = accountId;
         /* An agent's webhook names its trigger; a workflow's derives it and
            refuses to be told (`schedule_target_policy.py`). */

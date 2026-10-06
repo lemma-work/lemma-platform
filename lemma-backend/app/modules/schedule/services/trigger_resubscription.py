@@ -27,7 +27,7 @@ from app.modules.schedule.domain.interfaces import (
     ExternalScheduleWriter,
     ScheduleConfig,
 )
-from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
+from app.modules.schedule.domain.schedule import ScheduleEntity
 
 logger = get_logger(__name__)
 
@@ -67,12 +67,7 @@ async def resubscribe_for_new_config(
     drop whichever one loses. ``None`` means nothing remote changed.
     """
     sent = update_data.get("config")
-    if (
-        not isinstance(sent, dict)
-        or existing.schedule_type is not ScheduleType.WEBHOOK
-        or not existing.connector_trigger_id
-        or not existing.account_id
-    ):
+    if not isinstance(sent, dict) or not existing.listens_through_account:
         return None
     authored: ScheduleConfig = {
         key: value for key, value in sent.items() if key != PROVIDER_TRIGGER_ID

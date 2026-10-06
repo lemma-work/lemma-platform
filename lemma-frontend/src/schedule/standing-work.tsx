@@ -9,11 +9,11 @@ import { isForbidden } from "@/session/auth-state";
 import { isPodDefaultAgent } from "@/data/agent-names";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, RefreshIcon } from "@/ui/icons";
 import {
-    useCreateSchedule, useRetryRun, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules,
+    useCreateSchedule, useRetryRun, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules, useServerEvents,
 } from "./queries";
 import {
-    CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may,
-    type ScheduleDraft, type StandingJob,
+    CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, WHENS, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may,
+    type DraftWhen, type ScheduleDraft, type StandingJob,
 } from "./schedules";
 
 /** What a teammate does without being asked, and whether it is still working.
@@ -386,20 +386,26 @@ function Runs({ podId, job, onOpenRun, onOpenConversation }: { podId: string; jo
 
 /* ── putting something new on a clock ───────────────────────────────── */
 
-/** Only a clock, and the form says so.
+/** "When…" over what the API can actually be told without knowing its ids.
  *
- *  A WEBHOOK schedule needs a connected account and a connector trigger id,
- *  and a DATASTORE one needs a table plus the operations the target is built
- *  to handle. Neither is a form this section could put in front of somebody
- *  without asking them to know things the API knows — so neither is offered
- *  here, and the ones that already exist are still read and paused like any
- *  other.
+ *  A time; a row added to a table you pick; or an event on an MCP server you
+ *  connected, with a field for each argument it requires. A catalog connector trigger needs a trigger id and a DATASTORE
+ *  schedule on other operations needs the set the target is built for —
+ *  neither is offered here, and the ones that already exist are still read
+ *  and paused like any other.
  */
 function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
     const [draft, setDraft] = useState<ScheduleDraft>(blankDraft);
     const [tried, setTried] = useState(false);
     const targets = useScheduleTargets(podId, true);
+    const serverEvents = useServerEvents(podId, true);
     const create = useCreateSchedule(podId);
+    const tables = useQuery({
+        queryKey: ["library", podId, "tables", "schedule-form"],
+        queryFn: () => source.listLibrary(podId, "tables", "/"),
+        enabled: draft.when === "record.created",
+        staleTime: 60_000,
+    });
 
     const wrong = draftProblems(draft);
     const change = (patch: Partial<ScheduleDraft>) => setDraft((was) => ({ ...was, ...patch }));
@@ -423,6 +429,60 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
             </label>
             {tried && wrong.name && <p className="sched-field__problem">{wrong.name}</p>}
 
+            <label className="sched-field">
+                <span>When</span>
+                <select
+                    value={draft.when === "server" ? draft.serverEvent?.key ?? "" : draft.when}
+                    onChange={(event) => {
+                        const heard = (serverEvents.data ?? []).find((one) => one.key === event.target.value);
+                        change(heard
+                            ? { when: "server", serverEvent: heard, eventArguments: {} }
+                            : { when: event.target.value as DraftWhen, serverEvent: null, eventArguments: {} });
+                    }}
+                >
+                    {WHENS.map((one) => <option key={one.value} value={one.value}>{one.label}</option>)}
+                    {/* Grouped by server: each is listened to through your own
+                        connection to it, so only servers you connected appear. */}
+                    {Object.entries(groupBy(serverEvents.data ?? [], (one) => one.server)).map(([server, events]) => (
+                        <optgroup key={server} label={"From " + server}>
+                            {events.map((one) => <option key={one.key} value={one.key}>{one.event}</option>)}
+                        </optgroup>
+                    ))}
+                </select>
+            </label>
+
+            {draft.when === "server" && draft.serverEvent && <>
+                {/* Closed, the select says only the event's name; two servers
+                    can both have an `issue.created`. */}
+                <p className="sched-new__note">
+                    {"From " + draft.serverEvent.server + "." + (draft.serverEvent.description ? " " + draft.serverEvent.description : "")}
+                </p>
+                {draft.serverEvent.asks.map((ask) => (
+                    <label key={ask.name} className="sched-field">
+                        <span>{ask.name}</span>
+                        <input
+                            value={draft.eventArguments[ask.name] ?? ""}
+                            placeholder={ask.description || undefined}
+                            spellCheck={false}
+                            onChange={(event) => change({ eventArguments: { ...draft.eventArguments, [ask.name]: event.target.value } })}
+                        />
+                    </label>
+                ))}
+            </>}
+            {tried && wrong.event && <p className="sched-field__problem">{wrong.event}</p>}
+
+            {draft.when === "record.created" && (
+                <label className="sched-field">
+                    <span>Table</span>
+                    <select value={draft.table} onChange={(event) => change({ table: event.target.value })}>
+                        <option value="">Pick one…</option>
+                        {(tables.data?.items ?? []).map((one) => <option key={one.name} value={one.name}>{one.name}</option>)}
+                    </select>
+                </label>
+            )}
+            {tried && wrong.table && <p className="sched-field__problem">{wrong.table}</p>}
+
+            {draft.when === "time" && <>
             <label className="sched-field">
                 <span>Frequency</span>
                 <select
@@ -459,6 +519,7 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                     onChange={(event) => change({ timezone: event.target.value })}
                 />
             </label>
+            </>}
 
             <label className="sched-field">
                 <span>Run</span>
@@ -515,4 +576,10 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
             </div>
         </div>
     );
+}
+
+function groupBy<T>(items: T[], key: (item: T) => string): Record<string, T[]> {
+    const groups: Record<string, T[]> = {};
+    for (const item of items) (groups[key(item)] ??= []).push(item);
+    return groups;
 }

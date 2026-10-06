@@ -37,6 +37,11 @@ outcome. RLS datastore events assign that ownership to the row owner; other
 schedule sources assign it to the schedule owner. The three types are TIME
 (cron, or once with `scheduled_at`), WEBHOOK and DATASTORE.
 
+`GET /pods/{pod_id}/events` lists what a schedule can start on, in the MCP
+Events descriptor shape (`domain/event_catalog.py`): `time`, `record.*`, and the
+events of every MCP server the caller connected, each with the schedule type
+that serves it.
+
 A DATASTORE schedule can narrow what fires it with `when` conditions over the
 written row (`domain/match_conditions.py`: equals, not equals, in, not in,
 changed, written, from, to). They are checked before any LLM filter, so a row
@@ -73,8 +78,18 @@ claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
 it. The registry in `app/modules/schedule/contracts/webhook_source.py` is the
 allow-list that makes that safe: a source with no plugin is refused before
 anything reaches matching, a run, or an agent's first message. Plugins live in
-`app/modules/connectors/infrastructure/webhook_sources/` — `composio` and
-`github` today.
+`app/modules/connectors/infrastructure/webhook_sources/` — `composio`,
+`github` and `mcp` today.
+
+`mcp` is a connected MCP server's events. Every subscription has its own
+secret, so the delivery names the subscription in the callback URL's query
+(`?subscription=`, carried as `WebhookDelivery.query`) and the plugin verifies
+against that one secret. The server proves the callback with a signed
+challenge before it answers `events/subscribe`; the plugin returns it as
+`VerifiedDelivery.reply`, which the endpoint echoes without matching anything.
+An occurrence routes by `{"provider_trigger_id": <our subscription id>}`, the
+same key a Composio trigger uses, and its `eventId` makes the
+`source_event_id`.
 
 Each plugin does two things, and they are separate because they fail
 differently. `verify` proves the delivery came from the source and parses it; a
@@ -96,8 +111,10 @@ delivery id: providers issue a new delivery id when they retry, and
 
 ## Provisioning
 
-Creating a webhook schedule that names a connector trigger asks
-`ExternalScheduleWriter` to provision it. There are three outcomes and they are
+Creating a webhook schedule that names a connector trigger — or, with
+`config.source` `mcp`, a connected MCP server's event — asks
+`ExternalScheduleWriter` to provision it (`ScheduleEntity.listens_through_account`
+says which do). There are three outcomes and they are
 now distinguishable, which they were not:
 
 - a provider subscription is created, and its id is stored;

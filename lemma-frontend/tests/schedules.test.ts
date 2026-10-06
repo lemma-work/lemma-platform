@@ -330,3 +330,67 @@ test("an empty instruction is left off, not sent as an empty string", () => {
     assert.equal("instruction" in bare, false);
     assert.equal(createRequest({ ...blankDraft(), name: "D", agentName: "a", instruction: "Do it" }).instruction, "Do it");
 });
+
+test("standing work can start on a new row, not only a time", async () => {
+    const { blankDraft, createRequest, draftProblems } = await import("../src/schedule/schedules.ts");
+    const rows = { ...blankDraft(), name: "new leads", when: "record.created" as const, agentName: "pod_default" };
+    assert.ok(draftProblems(rows).table, "a row event needs its table");
+    assert.deepEqual(draftProblems({ ...rows, table: "leads", cron: "" }), {}, "a row event needs no cron");
+    assert.deepEqual(createRequest({ ...rows, table: "leads" }), {
+        name: "new leads",
+        schedule_type: "DATASTORE",
+        config: { table_name: "leads", operations: ["INSERT"] },
+        agent_name: "pod_default",
+    });
+});
+
+test("standing work can start on an event from an MCP server you connected", async () => {
+    const { blankDraft, copyRequest, createRequest, draftProblems, readSchedule, readServerEvents, triggerOf } =
+        await import("../src/schedule/schedules.ts");
+    const [issue, ...rest] = readServerEvents({
+        items: [
+            { name: "time", schedule_type: "TIME", input_schema: {} },
+            {
+                name: "mcp.tracker.issue.created",
+                schedule_type: "WEBHOOK",
+                description: "An issue was opened in a project.",
+                account_id: "acc1",
+                server: "tracker",
+                event: "issue.created",
+                input_schema: {
+                    type: "object",
+                    properties: { project: { type: "string", description: "Which project" } },
+                    required: ["project"],
+                },
+            },
+        ],
+    });
+    assert.equal(rest.length, 0, "the platform's own events are offered by WHENS, not here");
+    assert.deepEqual(issue.asks, [{ name: "project", description: "Which project" }]);
+
+    const draft = { ...blankDraft(), name: "triage", when: "server" as const, serverEvent: issue, agentName: "pod_default" };
+    assert.match(draftProblems(draft).event ?? "", /project/, "a required argument is asked for");
+    assert.ok(draftProblems({ ...draft, eventArguments: { project: "web" }, target: "workflow" as const }).target);
+
+    const body = createRequest({ ...draft, eventArguments: { project: " web ", stray: "x" } });
+    assert.deepEqual(body, {
+        name: "triage",
+        schedule_type: "WEBHOOK",
+        config: { source: "mcp", event: "issue.created", arguments: { project: "web" } },
+        account_id: "acc1",
+        agent_name: "pod_default",
+    });
+
+    const config = { source: "mcp", event: "issue.created", arguments: { project: "web" }, provider_trigger_id: "sub1" };
+    assert.deepEqual(triggerOf("WEBHOOK", config, ""), { trigger: "When issue.created happens", literal: "project = web" });
+    const row = readSchedule({
+        id: "s9", name: "triage", schedule_type: "WEBHOOK", agent_name: "pod_default", agent_id: "a1",
+        account_id: "acc1", connector_trigger_id: null, config,
+    });
+    assert.equal(row.needsSetup, "", "no catalog trigger is missing: the event is the server's");
+
+    const copy = copyRequest(row, "acc2");
+    assert.deepEqual(copy?.config, { source: "mcp", event: "issue.created", arguments: { project: "web" } });
+    assert.equal(copy?.account_id, "acc2");
+    assert.equal("connector_trigger_id" in (copy ?? {}), false);
+});

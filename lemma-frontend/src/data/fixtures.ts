@@ -3403,6 +3403,11 @@ export const fixtureSource: PodSource = {
         SCHEDULES = [...SCHEDULES, made];
         return readSchedule(made);
     },
+    async serverEvents(_podId: string) {
+        /* No sample space has connected an MCP server. */
+        await wait(40);
+        return [];
+    },
     async scheduleTargets(podId: string) {
         await wait(70);
         const teammate = samplePodName(podId);

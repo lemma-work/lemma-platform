@@ -47,6 +47,11 @@ class WebhookDelivery:
     source: str
     raw_body: bytes
     headers: Mapping[str, str]
+    #: The callback URL's query. A source whose secret is per subscription
+    #: names the subscription here, in a URL it chose itself, because the
+    #: provider's own id for it may not exist yet when the first request
+    #: arrives -- an MCP server's challenge comes before its answer.
+    query: Mapping[str, str] = field(default_factory=dict)
 
     def header(self, name: str) -> str | None:
         """A header by name, case-insensitively.
@@ -69,6 +74,10 @@ class VerifiedDelivery:
 
     delivery: WebhookDelivery
     payload: WebhookPayload
+    #: Set when the delivery is a handshake rather than an event: the body to
+    #: answer with, and nothing is matched or run. An MCP server proves our
+    #: callback by sending a signed challenge it expects echoed back.
+    reply: WebhookPayload | None = None
 
 
 @dataclass(frozen=True, slots=True)

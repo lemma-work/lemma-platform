@@ -9,9 +9,10 @@ and operation execution routing between native Lemma integrations and Composio.
 
 ## Runtime contributions
 
-The module contributes eight API routers and no event consumer or background
-task. Long external operation calls use a resolve -> external call -> persist
-saga so a pooled database connection is not held during provider I/O.
+The module contributes nine API routers, no event consumer, and one cron
+(`renew_mcp_event_subscriptions`, every five minutes).
+Long external operation calls use a resolve -> external call -> persist saga so
+a pooled database connection is not held during provider I/O.
 
 ## Main data model
 
@@ -21,6 +22,8 @@ saga so a pooled database connection is not held during provider I/O.
 | `connector_operations` | Searchable operation metadata and JSON input/output schemas |
 | `connector_triggers` | Available external trigger metadata |
 | `auth_config_operations` | Operations discovered for one organization's install. MCP tools and OpenAPI-URL endpoints describe a customer's own systems, so they are kept out of the global catalog entirely rather than held there behind a nullable tenant column |
+| `auth_config_events` | Events an MCP install's server lists with `events/list`, discovered beside its tools and kept per install for the same reason |
+| `connector_event_subscriptions` | One subscription to an MCP server's event, made on a person's account for one schedule: our id (in the callback URL), our encrypted `whsec_` secret, the server's id and `refreshBefore` |
 | `auth_configs` | Organization installation/configuration and encrypted OAuth client secrets |
 | `accounts` | User-owned encrypted provider credentials and connection status |
 | `connect_requests` | Short-lived OAuth state and authorization flow metadata |
@@ -98,3 +101,35 @@ Tests cover native and Composio routing, OAuth state, account identity,
 credential encryption/refresh, catalog import, and operation timeouts. Dynamic
 connector schemas are parsed by a restricted AST reader, never `exec()`; see
 `infrastructure/schema_compiler.py` and its hostile-input tests.
+
+## MCP server events
+
+An MCP install's server may offer events through the MCP Events working-group
+draft (webhook slice, revision 2026-07-28) — the same draft a pod speaks to
+ChatGPT from `mcp_access`. Here the pod is the subscriber:
+
+- **Discovery.** `events/list` is called beside `tools/list` whenever the
+  install's tools are discovered; a server that offers none (method not found,
+  an older revision) is an install with no events, not a failed discovery. The
+  descriptors go to `auth_config_events`, never to the global trigger catalog:
+  the one `mcp` connector is every server anyone connected.
+- **Subscribing.** `contracts/mcp_events.subscribe_to_mcp_event` is what a
+  WEBHOOK schedule with `config.source = "mcp"` calls when it is created. It
+  checks the event is offered and its required arguments present, commits a
+  pending row with a fresh secret, then calls `events/subscribe` with the
+  callback `{api_url}/webhooks/mcp?subscription=<our id>`. The commit comes
+  first because the server proves the callback with a signed challenge before
+  it answers. Our id becomes the schedule's `provider_trigger_id`.
+- **Delivery.** `webhook_sources/mcp.py` verifies each request against that
+  subscription's secret (Standard Webhooks, five-minute skew), checks the
+  server's `X-MCP-Subscription-Id` once it has named one, echoes a challenge,
+  and routes an occurrence by our id with `mcp:<id>:<eventId>` as its
+  `source_event_id`. `gap` and `terminated` notices run nothing.
+- **Renewal.** The cron renews each subscription halfway through what the
+  server granted, by subscribing again with the same identity; a failure is
+  noted on the row. Unsubscribing (schedule edited or deleted) is best effort
+  at the server and certain here: the row goes, so a late delivery verifies
+  against nothing.
+- **Calls to the server** are raw JSON-RPC POSTs
+  (`infrastructure/adapters/mcp_events_client.py`) through the SSRF guard, with
+  redirects refused, and the account's credentials as headers.

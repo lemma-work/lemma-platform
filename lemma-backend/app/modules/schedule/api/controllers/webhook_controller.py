@@ -71,7 +71,10 @@ async def handle_webhook(
         )
 
     delivery = WebhookDelivery(
-        source=source, raw_body=raw_body, headers=dict(request.headers)
+        source=source,
+        raw_body=raw_body,
+        headers=dict(request.headers),
+        query=dict(request.query_params),
     )
     try:
         verified = await plugin.verify(delivery)
@@ -90,6 +93,10 @@ async def handle_webhook(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid webhook signature",
         )
+
+    if verified.reply is not None:
+        # A handshake the source asked to have answered, not an event.
+        return verified.reply
 
     # State the delivery changes about the source itself -- an App uninstalled,
     # repositories removed from one. Deliberately not wrapped: retirement is

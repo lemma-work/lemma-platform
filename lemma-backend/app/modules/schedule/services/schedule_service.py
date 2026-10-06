@@ -163,11 +163,7 @@ class ScheduleService:
         schedule = ScheduleEntity(**schedule_create.model_dump())
         created = await self.schedule_repository.create(schedule)
 
-        if (
-            created.schedule_type == ScheduleType.WEBHOOK
-            and created.connector_trigger_id
-            and created.account_id
-        ):
+        if created.listens_through_account:
             try:
                 provisioned = (
                     await self.external_schedule_writer.create_provider_trigger(created)
@@ -460,11 +456,8 @@ class ScheduleService:
         if not existing:
             return False
 
-        if (
-            existing.schedule_type == ScheduleType.WEBHOOK
-            and existing.connector_trigger_id
-            and existing.account_id
-            and existing.config.get("provider_trigger_id")
+        if existing.listens_through_account and existing.config.get(
+            "provider_trigger_id"
         ):
             try:
                 await self.external_schedule_writer.delete_provider_trigger(existing)

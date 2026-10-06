@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 from app.modules.schedule.config import schedule_settings
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.modules.schedule.domain.schedule import (
+    MCP_EVENT_SOURCE,
     ScheduleRunStatus,
     ScheduleFireStatus,
     ScheduleType,
@@ -87,8 +88,12 @@ class CreateScheduleRequest(BaseModel):
             self.agent_name
             and self.schedule_type == ScheduleType.WEBHOOK
             and not self.connector_trigger_id
+            and self.config.get("source") != MCP_EVENT_SOURCE
         ):
-            raise ValueError("Agent webhook schedules require connector_trigger_id")
+            raise ValueError(
+                "Agent webhook schedules require connector_trigger_id, or a "
+                "connected MCP server's event (config.source 'mcp')"
+            )
         # "A target with no standing instruction must be told what to do" is
         # enforced in the service, not here: it is a question about the resolved
         # agent, and a validator cannot look one up. The cost is that it comes

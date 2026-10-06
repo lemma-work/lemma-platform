@@ -55,6 +55,12 @@ class TimeScheduleConfig(BaseModel):
     )
 
 
+#: The webhook source a connected MCP server's events arrive as. A WEBHOOK
+#: schedule naming it carries the event and its arguments in its config and is
+#: subscribed on its author's account, like a connector trigger.
+MCP_EVENT_SOURCE = "mcp"
+
+
 class WebhookScheduleConfig(BaseModel):
     """Configuration for webhook-based schedules."""
 
@@ -280,6 +286,26 @@ class ScheduleEntity(Entity):
         if self.schedule_type == ScheduleType.DATASTORE:
             return DatastoreScheduleConfig(**self.config)
         return None
+
+    @property
+    def listens_to_mcp(self) -> bool:
+        """A WEBHOOK schedule on a connected MCP server's event."""
+        return (
+            self.schedule_type == ScheduleType.WEBHOOK
+            and not self.connector_trigger_id
+            and self.config.get("source") == MCP_EVENT_SOURCE
+        )
+
+    @property
+    def listens_through_account(self) -> bool:
+        """Whether its subscription is made on its author's account -- a
+        connector trigger, or an MCP server's event -- and so is created,
+        swapped and dropped with the schedule."""
+        return (
+            self.schedule_type == ScheduleType.WEBHOOK
+            and self.account_id is not None
+            and (bool(self.connector_trigger_id) or self.listens_to_mcp)
+        )
 
     @property
     def has_target(self) -> bool:

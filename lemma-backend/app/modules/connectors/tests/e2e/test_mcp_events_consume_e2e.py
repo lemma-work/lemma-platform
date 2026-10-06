@@ -1,0 +1,536 @@
+"""Standing work on a connected MCP server's events, against a live server.
+
+The server is a real FastMCP app on a free port, offering one tool and the
+working-group draft's `events/*`, and behaving the way a subscriber should be
+able to rely on: it proves the callback with a signed challenge before
+answering `events/subscribe`, signs every occurrence with the secret it was
+given, and treats a second subscribe with the same identity as a refresh.
+
+Its deliveries reach the app under test in process, so the challenge arrives
+at `POST /webhooks/mcp` while `events/subscribe` is still waiting -- the
+order that forces the subscription to be committed before the call.
+
+The loop: connecting the server records its events; the pod's catalog offers
+them; a WEBHOOK schedule on one subscribes on the author's account; an
+occurrence starts one run and its redelivery none; an edit swaps the
+subscription; renewal refreshes it; deleting the schedule unsubscribes, and the
+old callback stops verifying.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import secrets
+import socket
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
+
+import pytest
+import pytest_asyncio
+import uvicorn
+from fastmcp import FastMCP
+from fastmcp.server.context import ServerRequestContext
+from fastmcp.server.extensions import MethodBinding, ServerExtension
+from httpx import ASGITransport, AsyncClient
+from pydantic import JsonValue
+from sqlalchemy import select
+
+from app.core.webhooks.signatures import standard_webhook_signature
+from app.mcp_events import ListEventsParams, SubscribeParams, UnsubscribeParams
+from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.infrastructure.models.connector import Connector
+from app.modules.connectors.infrastructure.models.mcp_event import (
+    ConnectorEventSubscription,
+)
+from app.modules.schedule.infrastructure.models.run import ScheduleRun
+from app.modules.test_support.e2e.waiters import eventually
+
+pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
+
+PROTOCOL = frozenset({"2026-07-28"})
+
+ISSUE_CREATED = {
+    "name": "issue.created",
+    "description": "An issue was opened in a project.",
+    "delivery": ["webhook"],
+    "inputSchema": {
+        "type": "object",
+        "properties": {"project": {"type": "string"}},
+        "required": ["project"],
+        "additionalProperties": False,
+    },
+    "payloadSchema": {"type": "object"},
+}
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@dataclass
+class _Subscription:
+    id: str
+    name: str
+    arguments: dict[str, JsonValue]
+    url: str
+    secret: str
+    refreshes: int = 0
+
+
+@dataclass
+class _Tracker:
+    """The server's side: what it was asked, and what it sends."""
+
+    deliver: object = None
+    subscriptions: dict[tuple[str, str, str], _Subscription] = field(
+        default_factory=dict
+    )
+    challenges_passed: int = 0
+    unsubscribed: list[str] = field(default_factory=list)
+
+    async def send(self, sub: _Subscription, body: dict[str, object]) -> tuple:
+        raw = json.dumps(body).encode()
+        message_id = f"msg_{secrets.token_hex(6)}"
+        timestamp = int(time.time())
+        return await self.deliver(  # type: ignore[misc]
+            sub.url,
+            raw,
+            {
+                "Content-Type": "application/json",
+                "webhook-id": message_id,
+                "webhook-timestamp": str(timestamp),
+                "webhook-signature": standard_webhook_signature(
+                    sub.secret, message_id, timestamp, raw
+                ),
+                "X-MCP-Subscription-Id": sub.id,
+            },
+        )
+
+    async def emit(self, event_id: str, project: str, title: str) -> list[int]:
+        statuses = []
+        for sub in list(self.subscriptions.values()):
+            if sub.arguments.get("project") != project:
+                continue
+            status, _ = await self.send(
+                sub,
+                {
+                    "eventId": event_id,
+                    "name": "issue.created",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {"project": project, "title": title},
+                    "cursor": None,
+                },
+            )
+            statuses.append(status)
+        return statuses
+
+
+class _TrackerEvents(ServerExtension):
+    identifier = "test.tracker/events"
+
+    def __init__(self, tracker: _Tracker) -> None:
+        self._tracker = tracker
+
+    def methods(self) -> list[MethodBinding]:
+        return [
+            MethodBinding("events/list", ListEventsParams, self._list, PROTOCOL),
+            MethodBinding(
+                "events/subscribe", SubscribeParams, self._subscribe_hook, PROTOCOL
+            ),
+            MethodBinding(
+                "events/unsubscribe",
+                UnsubscribeParams,
+                self._unsubscribe_hook,
+                PROTOCOL,
+            ),
+        ]
+
+    async def _list(
+        self, ctx: ServerRequestContext[object, object], params: ListEventsParams
+    ) -> dict[str, JsonValue]:
+        return {"events": [ISSUE_CREATED]}
+
+    async def _subscribe_hook(
+        self, ctx: ServerRequestContext[object, object], params: SubscribeParams
+    ) -> dict[str, JsonValue]:
+        from mcp.shared.exceptions import MCPError
+
+        key = (
+            params.name,
+            json.dumps(params.arguments, sort_keys=True),
+            params.delivery.url,
+        )
+        existing = self._tracker.subscriptions.get(key)
+        if existing is not None:
+            existing.refreshes += 1
+            existing.secret = params.delivery.secret or existing.secret
+        else:
+            sub = _Subscription(
+                id=f"sub_{secrets.token_hex(6)}",
+                name=params.name,
+                arguments=dict(params.arguments),
+                url=params.delivery.url,
+                secret=params.delivery.secret or "",
+            )
+            challenge = secrets.token_urlsafe(16)
+            status, body = await self._tracker.send(
+                sub, {"type": "verification", "challenge": challenge}
+            )
+            if status != 200 or body.get("challenge") != challenge:
+                raise MCPError(code=-32015, message="callback did not verify")
+            self._tracker.challenges_passed += 1
+            self._tracker.subscriptions[key] = sub
+            existing = sub
+        refresh_before = datetime.now(timezone.utc) + timedelta(hours=1)
+        return {
+            "id": existing.id,
+            "refreshBefore": refresh_before.isoformat().replace("+00:00", "Z"),
+        }
+
+    async def _unsubscribe_hook(
+        self, ctx: ServerRequestContext[object, object], params: UnsubscribeParams
+    ) -> dict[str, JsonValue]:
+        key = (
+            params.name,
+            json.dumps(params.arguments, sort_keys=True),
+            params.delivery.url,
+        )
+        gone = self._tracker.subscriptions.pop(key, None)
+        if gone is not None:
+            self._tracker.unsubscribed.append(gone.id)
+        return {}
+
+
+@pytest_asyncio.fixture
+async def tracker(test_app, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+    state = _Tracker()
+    base = settings.api_url.rstrip("/")
+    inbound = AsyncClient(
+        transport=ASGITransport(app=test_app), base_url="http://testserver"
+    )
+
+    async def deliver(url: str, raw: bytes, headers: dict[str, str]) -> tuple:
+        assert url.startswith(base), url
+        response = await inbound.post(
+            url.removeprefix(base), content=raw, headers=headers
+        )
+        try:
+            return response.status_code, response.json()
+        except ValueError:
+            return response.status_code, {}
+
+    state.deliver = deliver
+    server = FastMCP("tracker")
+
+    @server.tool
+    def open_issue(project: str, title: str) -> dict:
+        """Open an issue."""
+        return {"project": project, "title": title}
+
+    server.add_extension(_TrackerEvents(state))
+    port = _free_port()
+    runner = uvicorn.Server(
+        uvicorn.Config(
+            server.http_app(
+                path="/mcp", transport="http", json_response=True, stateless_http=True
+            ),
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+        )
+    )
+    task = asyncio.create_task(runner.serve())
+
+    async def started() -> bool:
+        if task.done():
+            raise RuntimeError(f"tracker failed to start: {task.exception()}")
+        return runner.started
+
+    await eventually(
+        label=f"tracker on {port}",
+        probe=started,
+        done=bool,
+        timeout_seconds=5.0,
+        interval_seconds=0.05,
+    )
+    state.url = f"http://127.0.0.1:{port}/mcp"  # type: ignore[attr-defined]
+    yield state
+    runner.should_exit = True
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await inbound.aclose()
+
+
+@pytest_asyncio.fixture
+async def tracker_account(db_session, fixed_test_org, fixed_test_user, tracker):
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.connectors.api.dependencies import get_connector_service
+
+    connector = Connector(
+        id=f"tracker-{uuid4().hex[:8]}",
+        title="Tracker",
+        description="An issue tracker that speaks MCP Events.",
+        kinds=[
+            {
+                "kind": "mcp",
+                "auth_scheme": "API_KEY",
+                "discovery": "mcp",
+                "auth_config_schema": {
+                    "type": "object",
+                    "required": ["server_url"],
+                    "properties": {"server_url": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            }
+        ],
+        is_active=True,
+    )
+    db_session.add(connector)
+    await db_session.commit()
+    org_id = UUID(str(fixed_test_org["id"]))
+    user_id = UUID(str(fixed_test_user["id"]))
+    service = get_connector_service(SqlAlchemyUnitOfWork(db_session))
+    install = await service.create_auth_config(
+        user_id=user_id,
+        organization_id=org_id,
+        connector_id=connector.id,
+        config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+        config={"server_url": tracker.url},
+        name=f"tracker-{uuid4().hex[:6]}",
+    )
+    account = await service.create_account(
+        user_id=user_id,
+        organization_id=org_id,
+        auth_config_id=install.id,
+        credentials={"api_key": "unused"},
+    )
+    return install, account
+
+
+async def _pod(client: AsyncClient, org_id: str) -> str:
+    response = await client.post(
+        "/pods",
+        json={
+            "name": f"Tracker pod {uuid4().hex[:6]}",
+            "organization_id": org_id,
+            "type": "HYBRID",
+            "description": "MCP events e2e pod",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def _schedule(
+    client: AsyncClient, pod_id: str, account_id: str, *, project: str, status=201
+) -> dict:
+    response = await client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "schedule_type": "WEBHOOK",
+            "agent_name": "POD_DEFAULT",
+            "instruction": "Triage the new issue.",
+            "account_id": account_id,
+            "config": {
+                "source": "mcp",
+                "event": "issue.created",
+                "arguments": {"project": project},
+            },
+        },
+    )
+    assert response.status_code == status, response.text
+    return response.json()
+
+
+async def _runs(db_session, schedule_id: str) -> list[ScheduleRun]:
+    db_session.expire_all()
+    return list(
+        (
+            await db_session.execute(
+                select(ScheduleRun).where(ScheduleRun.schedule_id == schedule_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@dataclass(frozen=True)
+class _Row:
+    id: UUID
+    remote_id: str | None
+    refresh_before: datetime | None
+
+
+async def _subscriptions(db_session) -> list[_Row]:
+    """Read as values: the session is expired between reads, and an expired
+    row reloading itself outside the greenlet is not what is being tested."""
+    db_session.expire_all()
+    rows = (await db_session.execute(select(ConnectorEventSubscription))).scalars()
+    return [_Row(row.id, row.remote_id, row.refresh_before) for row in rows]
+
+
+async def test_an_issue_on_a_connected_server_starts_standing_work_once(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account, worker
+):
+    _ = worker
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+
+    catalog = (await authenticated_client.get(f"/pods/{pod_id}/events")).json()
+    offered = [item for item in catalog["items"] if item.get("event")]
+    assert [
+        (item["event"], item["server"], item["schedule_type"]) for item in offered
+    ] == [("issue.created", install.name, "WEBHOOK")]
+    assert offered[0]["account_id"] == str(account.id)
+
+    schedule = await _schedule(
+        authenticated_client, pod_id, str(account.id), project="web"
+    )
+    assert tracker.challenges_passed == 1, "the callback proved itself first"
+    [row] = await _subscriptions(db_session)
+    assert schedule["config"]["provider_trigger_id"] == str(row.id)
+    assert row.remote_id and row.refresh_before is not None
+
+    assert await tracker.emit("evt_1", "web", "Login is broken") == [200]
+    runs = await eventually(
+        label="one run",
+        probe=lambda: _runs(db_session, schedule["id"]),
+        done=lambda found: len(found) == 1,
+        timeout_seconds=30,
+        interval_seconds=0.15,
+    )
+    assert runs[0].source_event_id == f"mcp:{row.id}:evt_1"
+
+    # The same event again, then a new one: only the new one runs.
+    assert await tracker.emit("evt_1", "web", "Login is broken") == [200]
+    assert await tracker.emit("evt_2", "web", "Signup is slow") == [200]
+    runs = await eventually(
+        label="two runs",
+        probe=lambda: _runs(db_session, schedule["id"]),
+        done=lambda found: len(found) >= 2,
+        timeout_seconds=30,
+        interval_seconds=0.15,
+    )
+    assert sorted(run.source_event_id for run in runs) == [
+        f"mcp:{row.id}:evt_1",
+        f"mcp:{row.id}:evt_2",
+    ]
+
+
+async def test_edit_renew_and_delete_keep_the_server_in_step(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.connectors.contracts.mcp_events import mcp_target
+    from app.modules.connectors.services.mcp_event_subscriptions import (
+        McpEventSubscriptions,
+    )
+
+    _, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    schedule = await _schedule(
+        authenticated_client, pod_id, str(account.id), project="web"
+    )
+    [first] = await _subscriptions(db_session)
+
+    edited = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}",
+        json={
+            "config": {
+                "source": "mcp",
+                "event": "issue.created",
+                "arguments": {"project": "api"},
+            }
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    [second] = await eventually(
+        label="the old subscription dropped",
+        probe=lambda: _subscriptions(db_session),
+        done=lambda found: [row.id for row in found] != [first.id] and len(found) == 1,
+        timeout_seconds=10,
+        interval_seconds=0.1,
+    )
+    assert edited.json()["config"]["provider_trigger_id"] == str(second.id)
+    assert first.remote_id in tracker.unsubscribed
+    assert [sub.arguments for sub in tracker.subscriptions.values()] == [
+        {"project": "api"}
+    ]
+
+    later = datetime.now(timezone.utc) + timedelta(minutes=40)
+    renewed = await McpEventSubscriptions(
+        SessionUnitOfWorkFactory(async_session_maker),
+        target=mcp_target,
+        clock=lambda: later,
+    ).renew_due()
+    assert renewed == 1
+    assert [sub.refreshes for sub in tracker.subscriptions.values()] == [1]
+
+    [live] = list(tracker.subscriptions.values())
+    removed = await authenticated_client.delete(
+        f"/pods/{pod_id}/schedules/{schedule['id']}"
+    )
+    assert removed.status_code in (200, 204), removed.text
+    assert tracker.subscriptions == {}
+    assert await _subscriptions(db_session) == []
+    status, _ = await tracker.send(
+        live, {"eventId": "evt_late", "name": "issue.created", "data": {}}
+    )
+    assert status == 403, "a callback with no subscription verifies nothing"
+
+
+async def test_what_cannot_be_listened_to_is_refused_and_leaves_nothing(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    _, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+
+    no_account = await authenticated_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "schedule_type": "WEBHOOK",
+            "agent_name": "POD_DEFAULT",
+            "instruction": "x",
+            "config": {"source": "mcp", "event": "issue.created", "arguments": {}},
+        },
+    )
+    assert no_account.status_code in (400, 422), no_account.text
+
+    unknown = await authenticated_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "schedule_type": "WEBHOOK",
+            "agent_name": "POD_DEFAULT",
+            "instruction": "x",
+            "account_id": str(account.id),
+            "config": {"source": "mcp", "event": "issue.closed", "arguments": {}},
+        },
+    )
+    assert unknown.status_code in (400, 422), unknown.text
+
+    unnarrowed = await authenticated_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "schedule_type": "WEBHOOK",
+            "agent_name": "POD_DEFAULT",
+            "instruction": "x",
+            "account_id": str(account.id),
+            "config": {"source": "mcp", "event": "issue.created", "arguments": {}},
+        },
+    )
+    assert unnarrowed.status_code in (400, 422), unnarrowed.text
+    assert "project" in unnarrowed.text
+
+    assert await _subscriptions(db_session) == []
+    assert tracker.subscriptions == {}
