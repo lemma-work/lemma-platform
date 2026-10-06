@@ -49,7 +49,7 @@ from app.modules.agent.infrastructure.mcp import (
 )
 from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.tools.dispatcher import AgentToolDispatcher, ToolInfo
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.tool_errors import (
     is_control_flow_exception,
@@ -99,18 +99,7 @@ class PodMCPService:
             pod_id=pod_id, token=token, principal=principal
         )
         tools = await self.dispatcher.list_tools(ctx=caller.ctx, toolsets=[pod_toolset])
-        return [
-            Tool(
-                name=exported_tool_name(tool.name),
-                title=policy_for(tool.name).title,
-                description=tool.description,
-                input_schema=inline_tool_schema_refs(tool.input_schema),
-                annotations=policy_for(tool.name).annotations(),
-                _meta={"lemma_tool_name": tool.name},
-            )
-            for tool in tools
-            if caller.may_call(tool.name)
-        ]
+        return [as_mcp_tool(tool) for tool in tools if caller.may_call(tool.name)]
 
     async def call_tool(
         self,
@@ -232,6 +221,26 @@ class PodMCPService:
             workload_id=workload_id,
             agent_name=agent_name,
         )
+
+
+def as_mcp_tool(tool: ToolInfo) -> Tool:
+    """A pod tool as an MCP client is shown it: annotated, and linked to its view."""
+    policy = policy_for(tool.name)
+    meta: dict[str, object] = {"lemma_tool_name": tool.name}
+    if policy.view is not None:
+        # Named for every caller, not only those that said they render MCP
+        # Apps: this server is stateless, so a client's `initialize`
+        # capabilities are gone by the time it lists tools. A host that cannot
+        # draw the view ignores the key, and the text result is whole without it.
+        meta.update(policy.view.tool_meta())
+    return Tool(
+        name=exported_tool_name(tool.name),
+        title=policy.title,
+        description=tool.description,
+        input_schema=inline_tool_schema_refs(tool.input_schema),
+        annotations=policy.annotations(),
+        _meta=meta,
+    )
 
 
 def _external_caller(principal: McpPrincipal, *, pod_id: UUID) -> _Caller:

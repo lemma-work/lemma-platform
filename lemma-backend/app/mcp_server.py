@@ -23,6 +23,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
 from app.modules.agent.infrastructure.mcp import LEMMA_MCP_SERVER_NAME
 from app.modules.agent.services.pod_mcp_service import pod_mcp_service
+from app.modules.agent.services.pod_mcp_views import POD_MCP_VIEWS
 from app.modules.mcp_access.contracts import (
     MCP_MOUNT_PATH,
     McpPrincipal,
@@ -154,13 +155,23 @@ def _forward_to_pod(scope: Scope, pod_id: str) -> Scope:
     return forwarded
 
 
+def build_pod_mcp_server() -> PodFastMCP:
+    mcp_server = PodFastMCP(
+        LEMMA_MCP_SERVER_NAME,
+        instructions="Lemma tools for the current pod's datastore.",
+        auth=LemmaMCPAuthProvider(),
+    )
+    # The views tools name in `_meta.ui.resourceUri`. Static HTML, the same for
+    # every pod, so they are registered once rather than resolved per request
+    # the way the tools are: a host reading one learns nothing about the pod.
+    for view in POD_MCP_VIEWS:
+        mcp_server.add_resource(view.resource())
+    return mcp_server
+
+
 class PodMCPASGIApp:
     def __init__(self) -> None:
-        mcp_server = PodFastMCP(
-            LEMMA_MCP_SERVER_NAME,
-            instructions="Lemma tools for the current pod's datastore.",
-            auth=LemmaMCPAuthProvider(),
-        )
+        mcp_server = build_pod_mcp_server()
         # stateless_http=True: every request carries the pod id (URL) and a
         # bearer token and re-authorizes per call, so there is no per-session
         # server state to keep. A stateful transport holds the Mcp-Session-Id

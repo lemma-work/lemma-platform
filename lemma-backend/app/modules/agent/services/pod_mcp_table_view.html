@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lemma table</title>
+<style>
+/* The host's own variables first (MCP Apps standard names), then Lemma's stock.
+   Inside Claude or ChatGPT the card should look like that host's cards; the
+   fallbacks are for a host that sends no styles, and for before they arrive. */
+:root {
+  color-scheme: light dark;
+  --ink: var(--color-text-primary, light-dark(#20211f, #f6f4ec));
+  --ink-2: var(--color-text-secondary, light-dark(#55564e, #aaa79a));
+  --ink-3: var(--color-text-tertiary, light-dark(#6a6b62, #8b8878));
+  --ground: var(--color-background-primary, light-dark(#fffefa, #1e1c17));
+  --chrome: var(--color-background-secondary, light-dark(#f4f3ed, #272520));
+  --line: var(--color-border-tertiary, light-dark(rgb(32 33 31 / 0.08), rgb(246 244 236 / 0.09)));
+  --line-2: var(--color-border-secondary, light-dark(rgb(32 33 31 / 0.16), rgb(246 244 236 / 0.18)));
+  --ring: var(--color-ring-primary, light-dark(#6b4fe0, #a08cff));
+  --bad: var(--color-text-danger, light-dark(#b3261e, #f08a7e));
+  --bad-ground: var(--color-background-danger, light-dark(#fef2f2, #331919));
+  --ui: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  --mono: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  --text-xs: var(--font-text-xs-size, 12px);
+  --text-sm: var(--font-text-sm-size, 13px);
+  --text-md: var(--font-text-md-size, 15px);
+  --radius: var(--border-radius-md, 8px);
+  --radius-sm: var(--border-radius-sm, 6px);
+  --frame-max: 420px;
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: transparent; }
+body { font: 400 var(--text-sm)/1.45 var(--ui); color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+.view { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
+:root[data-mode="fullscreen"] .view { height: 100vh; }
+
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.heading { min-width: 0; }
+/* Weight never goes above 500: hierarchy is size and the space above. */
+.kicker { margin: 0 0 3px; font: 400 11px/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.title { margin: 0; font: 500 var(--text-md)/1.3 var(--ui); letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.sql { margin: 4px 0 0; font: 400 var(--text-xs)/1.4 var(--mono); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 72ch; }
+:root[data-mode="fullscreen"] .sql { white-space: pre-wrap; max-width: none; }
+
+button { font: 400 var(--text-xs)/1 var(--ui); color: var(--ink); background: transparent; border: 1px solid var(--line-2); border-radius: var(--radius-sm); padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+button:hover:not(:disabled) { background: var(--chrome); }
+button:disabled { opacity: 0.45; cursor: default; }
+button:focus-visible, th button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+
+.state { margin: 0; padding: 16px; border-radius: var(--radius); background: var(--chrome); color: var(--ink-2); text-align: center; }
+.state[data-kind="error"] { background: var(--bad-ground); color: var(--bad); text-align: left; overflow-wrap: anywhere; }
+
+.frame { overflow: auto; max-height: var(--frame-max); border: 1px solid var(--line); border-radius: var(--radius); }
+:root[data-mode="fullscreen"] .frame { flex: 1; max-height: none; }
+table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: var(--text-sm); }
+caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+th, td { padding: 7px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: 0; }
+th { position: sticky; top: 0; z-index: 1; background: var(--ground); color: var(--ink-2); font-weight: 500; font-size: var(--text-xs); border-bottom-color: var(--line-2); }
+/* The whole cell is the target, not just the word in it. */
+th button { all: unset; box-sizing: border-box; width: 100%; cursor: pointer; display: flex; gap: 4px; align-items: baseline; border-radius: 3px; }
+th[data-kind="number"] button { justify-content: flex-end; }
+th[aria-sort] { color: var(--ink); }
+th .arrow { font-family: var(--mono); color: var(--ink-3); }
+tbody tr:hover td { background: var(--chrome); }
+td { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; }
+:root[data-mode="fullscreen"] td { max-width: 60ch; }
+td[data-kind="number"], th[data-kind="number"] { text-align: right; }
+td[data-kind="number"] { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+td[data-kind="json"] { font-family: var(--mono); font-size: var(--text-xs); color: var(--ink-2); }
+td[data-kind="empty"] { color: var(--ink-3); }
+.record { display: grid; grid-template-columns: minmax(8ch, max-content) 1fr; gap: 6px 16px; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); }
+.record dt { color: var(--ink-2); font-size: var(--text-xs); padding-top: 1px; }
+.record dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.record dd[data-kind="number"], .record dd[data-kind="json"] { font-family: var(--mono); }
+.record dd[data-kind="empty"] { color: var(--ink-3); }
+
+.foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--ink-2); font-size: var(--text-xs); }
+.count { font-variant-numeric: tabular-nums; }
+.pager { display: inline-flex; gap: 6px; }
+.notice { color: var(--bad); }
+</style>
+</head>
+<body>
+<main class="view" id="view">
+  <header class="head">
+    <div class="heading">
+      <p class="kicker" id="kicker">Lemma</p>
+      <h1 class="title" id="title">Loading…</h1>
+      <p class="sql" id="sql" hidden></p>
+    </div>
+    <button type="button" id="expand" hidden>Expand</button>
+  </header>
+  <p class="state" id="state" role="status">Waiting for the result…</p>
+  <div class="frame" id="frame" hidden>
+    <table id="table"><caption id="caption"></caption><thead></thead><tbody></tbody></table>
+  </div>
+  <dl class="record" id="record" hidden></dl>
+  <footer class="foot" id="foot" hidden>
+    <span class="count" id="count" aria-live="polite"></span>
+    <span class="notice" id="notice" role="alert" hidden></span>
+    <span class="pager" id="pager" hidden>
+      <button type="button" id="prev">Previous</button>
+      <button type="button" id="next">Next</button>
+    </span>
+  </footer>
+</main>
+
+<script>
+"use strict";
+// What a pod tool's result says, as something a table can draw. No DOM and no
+// host in here, so it can be checked on its own.
+const LemmaTable = (() => {
+  // A timestamp as the datastore returns one: `2026-10-06 15:42:29.453694+00:00`.
+  // Only with a zone -- without one it is a wall-clock time in some place
+  // unknown, and converting it would invent a moment.
+  const TIMESTAMP = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})$/;
+  // The columns every pod table carries (the datastore's SYSTEM_COLUMNS and
+  // its default key). A person reads their own columns first.
+  const SYSTEM_COLUMNS = ["id", "created_at", "updated_at", "user_id"];
+  // Postgres `numeric` comes back as a string, so no digit is lost on the way.
+  // It is shown exactly as sent, and lined up and sorted as the number it is.
+  const DECIMAL = /^-?\d+(\.\d+)?$/;
+  const LONG_TEXT = 48;
+  // What `ui/update-model-context` may carry before it is cut to a summary.
+  // The model already has the first page from the tool result; this is only
+  // the page the person moved to.
+  const CONTEXT_CHARS = 16000;
+
+  const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  const text = (value) => (typeof value === "string" ? value : "");
+  const count = (value) => (Number.isInteger(value) && value >= 0 ? value : null);
+
+  function payloadOf(result) {
+    if (!isObject(result)) return null;
+    if (isObject(result.structuredContent)) return result.structuredContent;
+    // A host that forwards only `content` still has the same JSON, as text.
+    for (const block of Array.isArray(result.content) ? result.content : []) {
+      if (!block || block.type !== "text" || typeof block.text !== "string") continue;
+      try {
+        const parsed = JSON.parse(block.text);
+        if (isObject(parsed)) return parsed;
+      } catch (_) {
+        // Not JSON; try the next block.
+      }
+    }
+    return null;
+  }
+
+  // The tool's one parameter is its request model; a client sends it flat, or
+  // wrapped under the parameter's name.
+  function requestOf(args) {
+    if (isObject(args) && isObject(args.request)) return args.request;
+    return isObject(args) ? args : {};
+  }
+
+  function withRequest(args, changes) {
+    const base = isObject(args) ? args : {};
+    if (isObject(base.request)) return { ...base, request: { ...base.request, ...changes } };
+    return { ...base, ...changes };
+  }
+
+  function columnsOf(rows) {
+    const seen = new Set();
+    const columns = [];
+    for (const row of rows) {
+      for (const key of Object.keys(row)) {
+        if (!seen.has(key)) {
+          seen.add(key);
+          columns.push(key);
+        }
+      }
+    }
+    return columns;
+  }
+
+  // A query's columns are in the order its SELECT chose; a table's are not
+  // chosen, so the ones the person made come first.
+  function ownColumnsFirst(columns) {
+    const own = columns.filter((column) => !SYSTEM_COLUMNS.includes(column));
+    const system = SYSTEM_COLUMNS.filter((column) => columns.includes(column));
+    return [...own, ...system];
+  }
+
+  // Safari's Date reads strict ISO only: a `T`, milliseconds, a colon in the zone.
+  function parseTimestamp(value) {
+    const match = TIMESTAMP.exec(value);
+    if (!match) return null;
+    const [, day, time, fraction, zone] = match;
+    const millis = fraction ? `.${fraction.slice(0, 3).padEnd(3, "0")}` : "";
+    const offset = zone === "Z" || zone.includes(":") ? zone : `${zone.slice(0, 3)}:${zone.slice(3)}`;
+    const date = new Date(`${day}T${time}${millis}${offset}`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function sortOf(request) {
+    const first = Array.isArray(request.sorts) ? request.sorts[0] : null;
+    if (!isObject(first) || typeof first.column !== "string") return null;
+    return { column: first.column, direction: first.direction === "desc" ? "desc" : "asc" };
+  }
+
+  function failure(message) {
+    return { kind: "error", message };
+  }
+
+  function model(result, args) {
+    const request = requestOf(args);
+    const payload = payloadOf(result);
+    if (!payload) return failure("This result has nothing a table can show.");
+    if (result.isError === true || payload.success === false) {
+      return failure(text(payload.error) || "The tool reported a failure.");
+    }
+    if (Array.isArray(payload.records)) {
+      const rows = payload.records.filter(isObject);
+      const offset = count(request.offset) ?? 0;
+      const total = count(payload.total);
+      // Asked for, or -- when more rows exist than came back -- what the
+      // server's default turned out to be.
+      const pageSize = count(request.limit) || rows.length;
+      return {
+        kind: "records",
+        table: text(request.table_name),
+        columns: ownColumnsFirst(columnsOf(rows)),
+        rows,
+        offset,
+        total,
+        pageSize,
+        sort: sortOf(request),
+        hasFilters: Array.isArray(request.filters) && request.filters.length > 0,
+        complete: offset === 0 && total !== null && rows.length >= total,
+      };
+    }
+    if (isObject(payload.record)) {
+      return {
+        kind: "record",
+        table: text(request.table_name),
+        id: text(request.record_id),
+        fields: ownColumnsFirst(Object.keys(payload.record)).map((key) => [key, payload.record[key]]),
+      };
+    }
+    if (Array.isArray(payload.rows)) {
+      const rows = payload.rows.filter(isObject);
+      return {
+        kind: "query",
+        sql: text(request.sql),
+        columns: columnsOf(rows),
+        rows,
+        truncated: payload.truncated === true,
+        complete: payload.truncated !== true,
+      };
+    }
+    return failure("This result has nothing a table can show.");
+  }
+
+  function cell(value, { locale, timeZone } = {}) {
+    if (value === null || value === undefined) return { kind: "empty", text: "—", label: "empty" };
+    if (typeof value === "boolean") return { kind: "bool", text: value ? "Yes" : "No" };
+    if (typeof value === "number") return { kind: "number", text: String(value) };
+    if (typeof value === "string") {
+      if (DECIMAL.test(value)) return { kind: "number", text: value };
+      const date = parseTimestamp(value);
+      if (date) {
+        try {
+          const shown = new Intl.DateTimeFormat(locale || undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+            timeZone: timeZone || undefined,
+          }).format(date);
+          return { kind: "date", text: shown, title: value };
+        } catch (_) {
+          // An unknown locale or zone from the host: show it as written.
+        }
+      }
+      return { kind: "text", text: value, title: value.length > LONG_TEXT ? value : undefined };
+    }
+    if (Object.keys(value).length === 0) return { kind: "empty", text: "—", label: "empty" };
+    const json = JSON.stringify(value);
+    return { kind: "json", text: json, title: json.length > LONG_TEXT ? json : undefined };
+  }
+
+  const numeric = (value) =>
+    typeof value === "number" ? value : typeof value === "string" && DECIMAL.test(value) ? Number(value) : null;
+
+  function compare(a, b) {
+    const aEmpty = a === null || a === undefined;
+    const bEmpty = b === null || b === undefined;
+    if (aEmpty || bEmpty) return aEmpty === bEmpty ? 0 : aEmpty ? 1 : -1;
+    const [x, y] = [numeric(a), numeric(b)];
+    if (x !== null && y !== null) return x - y;
+    if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b);
+    const left = typeof a === "string" ? a : JSON.stringify(a);
+    const right = typeof b === "string" ? b : JSON.stringify(b);
+    return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+  }
+
+  // Empty cells stay last whichever way the column is sorted.
+  function sortRows(rows, column, direction) {
+    const sign = direction === "desc" ? -1 : 1;
+    return rows
+      .map((row, index) => ({ row, index }))
+      .sort((left, right) => {
+        const a = left.row[column];
+        const b = right.row[column];
+        const aEmpty = a === null || a === undefined;
+        const bEmpty = b === null || b === undefined;
+        if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+        return sign * compare(a, b) || left.index - right.index;
+      })
+      .map(({ row }) => row);
+  }
+
+  // Whole pages only: a page re-sorted on its own would look like the table's
+  // order and not be it.
+  function sortMode(view, canCallTools) {
+    if (view.kind !== "records" && view.kind !== "query") return "none";
+    if (view.complete) return "local";
+    if (view.kind === "records" && canCallTools) return "server";
+    return "none";
+  }
+
+  function pageArgs(args, view, direction) {
+    const size = view.pageSize || view.rows.length || 20;
+    const offset = direction === "next" ? view.offset + view.rows.length : Math.max(0, view.offset - size);
+    return withRequest(args, { offset, limit: size });
+  }
+
+  function sortArgs(args, view, column, direction) {
+    const size = view.pageSize || view.rows.length || 20;
+    return withRequest(args, { offset: 0, limit: size, sorts: [{ column, direction }] });
+  }
+
+  function canPage(view, direction) {
+    if (view.kind !== "records") return false;
+    if (direction === "previous") return view.offset > 0;
+    if (view.total !== null) return view.offset + view.rows.length < view.total;
+    return view.rows.length > 0 && view.rows.length >= view.pageSize;
+  }
+
+  function plural(n, one, many, format) {
+    return `${format(n)} ${n === 1 ? one : many}`;
+  }
+
+  function range(view, format) {
+    const first = view.offset + 1;
+    const last = view.offset + view.rows.length;
+    const shown = first === last ? format(first) : `${format(first)}–${format(last)}`;
+    return view.total === null ? shown : `${shown} of ${format(view.total)}`;
+  }
+
+  function summary(view, format = String) {
+    if (view.kind === "records") {
+      if (view.rows.length === 0) return view.offset > 0 ? "No more records" : "No records";
+      if (view.complete) return plural(view.total, "record", "records", format);
+      return range(view, format);
+    }
+    if (view.kind === "query") {
+      if (view.rows.length === 0) return "No rows";
+      const rows = plural(view.rows.length, "row", "rows", format);
+      return view.truncated ? `First ${rows} — the result was cut short` : rows;
+    }
+    return "";
+  }
+
+  // What the model is told after the person pages or sorts: where they are
+  // looking now, and those rows, so "the third one" means the third one shown.
+  function contextFor(view) {
+    let shown = `records ${range(view, String)}`;
+    if (view.rows.length === 0) shown = "no records";
+    else if (view.complete) shown = `all ${plural(view.total, "record", "records", String)}`;
+    let where = `The person is looking at ${shown} in the Lemma pod table "${view.table}"`;
+    if (view.sort) where += `, sorted by ${view.sort.column} ${view.sort.direction === "desc" ? "descending" : "ascending"}`;
+    where += ".";
+    const rows = JSON.stringify(view.rows);
+    const body = where.length + rows.length + 32 <= CONTEXT_CHARS ? `${where}\nThe rows shown:\n${rows}` : where;
+    return { content: [{ type: "text", text: body }] };
+  }
+
+  return { model, cell, sortRows, sortMode, pageArgs, sortArgs, canPage, summary, contextFor, requestOf };
+})();
+</script>
+
+<script>
+"use strict";
+// The MCP Apps bridge (ext-apps 2026-01-26): JSON-RPC 2.0 over postMessage to
+// the host, which proxies `tools/call` to the pod's MCP server.
+(() => {
+  const PROTOCOL_VERSION = "2026-01-26";
+  const INITIALIZE_TIMEOUT_MS = 10000;
+  const CALL_TIMEOUT_MS = 60000;
+  const byId = (id) => document.getElementById(id);
+  const root = document.documentElement;
+
+  const state = {
+    args: null,
+    result: null,
+    view: null,
+    localSort: null,
+    hostContext: {},
+    hostCapabilities: {},
+    busy: false,
+  };
+
+  // --- JSON-RPC ------------------------------------------------------------
+
+  let nextId = 1;
+  const pending = new Map();
+
+  function post(message) {
+    // The parent is the host (or its sandbox proxy), fixed for this frame's
+    // life; the origin it serves from is the host's to choose.
+    window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  }
+
+  function request(method, params, timeoutMs = CALL_TIMEOUT_MS) {
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`${method} timed out`));
+      }, timeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      post({ id, method, params });
+    });
+  }
+
+  function notify(method, params) {
+    post({ method, params });
+  }
+
+  function settle(message) {
+    const waiting = pending.get(message.id);
+    if (!waiting) return;
+    pending.delete(message.id);
+    clearTimeout(waiting.timer);
+    if (message.error) waiting.reject(new Error(message.error.message || "Request failed"));
+    else waiting.resolve(message.result || {});
+  }
+
+  function answer(message) {
+    if (message.method === "ui/resource-teardown" || message.method === "ping") {
+      post({ id: message.id, result: {} });
+      return;
+    }
+    post({ id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } });
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (message.method === undefined) settle(message);
+    else if (message.id !== undefined) answer(message);
+    else onNotification(message.method, message.params || {});
+  });
+
+  function onNotification(method, params) {
+    switch (method) {
+      case "ui/notifications/tool-input":
+        state.args = params.arguments || {};
+        if (state.result) render(state.result);
+        else drawHeading({ kind: "pending" }, true);
+        break;
+      case "ui/notifications/tool-result":
+        render(params);
+        break;
+      case "ui/notifications/tool-cancelled":
+        showState("The call was cancelled before it finished.", "neutral");
+        break;
+      case "ui/notifications/host-context-changed":
+        applyHostContext(params);
+        break;
+      default:
+        break;
+    }
+  }
+
+  // --- Host context --------------------------------------------------------
+
+  let fontStyle = null;
+
+  function applyHostContext(changes) {
+    state.hostContext = { ...state.hostContext, ...changes };
+    const context = state.hostContext;
+    if (changes.theme === "light" || changes.theme === "dark") root.dataset.theme = changes.theme;
+    const variables = changes.styles && changes.styles.variables;
+    if (variables && typeof variables === "object") {
+      for (const [name, value] of Object.entries(variables)) {
+        if (name.startsWith("--") && typeof value === "string") root.style.setProperty(name, value);
+      }
+    }
+    const fonts = changes.styles && changes.styles.css && changes.styles.css.fonts;
+    if (typeof fonts === "string") {
+      fontStyle = fontStyle || document.head.appendChild(document.createElement("style"));
+      fontStyle.textContent = fonts;
+    }
+    const dimensions = context.containerDimensions || {};
+    if (Number.isFinite(dimensions.maxHeight)) {
+      root.style.setProperty("--frame-max", `${Math.max(160, Math.min(560, dimensions.maxHeight - 120))}px`);
+    }
+    root.dataset.mode = context.displayMode === "fullscreen" ? "fullscreen" : "inline";
+    drawExpand();
+    if (state.view && (changes.locale || changes.timeZone || changes.displayMode)) draw();
+  }
+
+  function canCallTools() {
+    return Boolean(state.hostCapabilities.serverTools);
+  }
+
+  function toolName() {
+    const info = state.hostContext.toolInfo;
+    return (info && info.tool && info.tool.name) || "lemma_pod_get_records";
+  }
+
+  // --- Drawing -------------------------------------------------------------
+
+  function numberFormat() {
+    try {
+      return new Intl.NumberFormat(state.hostContext.locale || undefined).format;
+    } catch (_) {
+      return String;
+    }
+  }
+
+  function showState(message, kind) {
+    const status = byId("state");
+    status.textContent = message;
+    status.dataset.kind = kind;
+    status.hidden = false;
+    byId("frame").hidden = true;
+    byId("record").hidden = true;
+    byId("foot").hidden = true;
+  }
+
+  function drawHeading(view, loading = false) {
+    const kicker = byId("kicker");
+    const title = byId("title");
+    const sql = byId("sql");
+    sql.hidden = true;
+    if (view.kind === "query") {
+      kicker.textContent = "Lemma · Query";
+      title.textContent = "Query result";
+      if (view.sql) {
+        sql.textContent = view.sql;
+        sql.title = view.sql;
+        sql.hidden = false;
+      }
+    } else if (view.kind === "record") {
+      kicker.textContent = view.table ? `Lemma · ${view.table}` : "Lemma · Record";
+      title.textContent = "Record";
+      if (view.id) {
+        sql.textContent = view.id;
+        sql.title = view.id;
+        sql.hidden = false;
+      }
+    } else {
+      const request = LemmaTable.requestOf(state.args);
+      const table = view.table || (typeof request.table_name === "string" ? request.table_name : "");
+      if (typeof request.sql === "string" && !table) {
+        kicker.textContent = "Lemma · Query";
+        title.textContent = "Query result";
+      } else {
+        kicker.textContent = "Lemma · Table";
+        title.textContent = table || "Records";
+      }
+    }
+    if (loading) showState("Waiting for the result…", "neutral");
+  }
+
+  function render(result) {
+    state.result = result;
+    state.view = LemmaTable.model(result, state.args);
+    state.localSort = null;
+    draw();
+  }
+
+  function draw() {
+    const view = state.view;
+    drawHeading(view);
+    drawExpand();
+    if (view.kind === "error") {
+      showState(view.message, "error");
+      return;
+    }
+    byId("notice").hidden = true;
+    if (view.kind === "record") {
+      drawRecord(view);
+      return;
+    }
+    const format = numberFormat();
+    byId("count").textContent = LemmaTable.summary(view, format);
+    byId("foot").hidden = false;
+    drawPager(view);
+    if (view.rows.length === 0) {
+      showState(view.kind === "query" ? "The query returned no rows." : emptyRecordsText(view), "neutral");
+      byId("foot").hidden = view.offset === 0 || view.kind === "query";
+      return;
+    }
+    byId("state").hidden = true;
+    byId("record").hidden = true;
+    byId("frame").hidden = false;
+    drawTable(view);
+  }
+
+  function emptyRecordsText(view) {
+    if (view.offset > 0) return "There are no more records.";
+    return view.hasFilters ? "No records match these filters." : "This table has no records yet.";
+  }
+
+  function drawTable(view) {
+    const table = byId("table");
+    const mode = LemmaTable.sortMode(view, canCallTools());
+    const sort = mode === "local" ? state.localSort : view.sort;
+    const rows = mode === "local" && sort ? LemmaTable.sortRows(view.rows, sort.column, sort.direction) : view.rows;
+    const options = { locale: state.hostContext.locale, timeZone: state.hostContext.timeZone };
+    const cells = rows.map((row) => view.columns.map((column) => LemmaTable.cell(row[column], options)));
+    const numeric = view.columns.map((_, i) => cells.length > 0 && cells.every((row) => row[i].kind === "number" || row[i].kind === "empty"));
+
+    byId("caption").textContent = `${byId("title").textContent}, ${LemmaTable.summary(view, numberFormat())}`;
+    const head = document.createElement("tr");
+    view.columns.forEach((column, i) => {
+      const th = document.createElement("th");
+      th.scope = "col";
+      if (numeric[i]) th.dataset.kind = "number";
+      const sorted = sort && sort.column === column ? sort.direction : null;
+      if (sorted) th.setAttribute("aria-sort", sorted === "desc" ? "descending" : "ascending");
+      if (mode === "none") {
+        th.textContent = column;
+      } else {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.append(column);
+        const arrow = document.createElement("span");
+        arrow.className = "arrow";
+        arrow.setAttribute("aria-hidden", "true");
+        arrow.textContent = sorted === "asc" ? "↑" : sorted === "desc" ? "↓" : "";
+        button.append(arrow);
+        button.title = `Sort by ${column}`;
+        button.addEventListener("click", () => sortBy(column, sorted === "asc" ? "desc" : "asc", mode));
+        th.append(button);
+      }
+      head.append(th);
+    });
+    table.tHead.replaceChildren(head);
+
+    const body = document.createDocumentFragment();
+    for (const row of cells) {
+      const tr = document.createElement("tr");
+      for (const value of row) {
+        const td = document.createElement("td");
+        td.dataset.kind = value.kind;
+        td.textContent = value.text;
+        if (value.title) td.title = value.title;
+        if (value.label) td.setAttribute("aria-label", value.label);
+        tr.append(td);
+      }
+      body.append(tr);
+    }
+    table.tBodies[0].replaceChildren(body);
+  }
+
+  function drawRecord(view) {
+    const list = byId("record");
+    const options = { locale: state.hostContext.locale, timeZone: state.hostContext.timeZone };
+    const items = document.createDocumentFragment();
+    for (const [name, raw] of view.fields) {
+      const value = LemmaTable.cell(raw, options);
+      const dt = document.createElement("dt");
+      dt.textContent = name;
+      const dd = document.createElement("dd");
+      dd.dataset.kind = value.kind;
+      dd.textContent = value.kind === "json" ? JSON.stringify(raw, null, 2) : value.text;
+      if (value.title && value.kind === "date") dd.title = value.title;
+      items.append(dt, dd);
+    }
+    list.replaceChildren(items);
+    byId("state").hidden = true;
+    byId("frame").hidden = true;
+    byId("foot").hidden = true;
+    list.hidden = view.fields.length === 0;
+    if (view.fields.length === 0) showState("This record has no fields.", "neutral");
+  }
+
+  function drawPager(view) {
+    const pager = byId("pager");
+    const previous = LemmaTable.canPage(view, "previous");
+    const next = LemmaTable.canPage(view, "next");
+    pager.hidden = !canCallTools() || !(previous || next);
+    byId("prev").disabled = state.busy || !previous;
+    byId("next").disabled = state.busy || !next;
+  }
+
+  function drawExpand() {
+    const button = byId("expand");
+    const modes = state.hostContext.availableDisplayModes || [];
+    const fullscreen = state.hostContext.displayMode === "fullscreen";
+    const target = fullscreen ? "inline" : "fullscreen";
+    const nothingToExpand = !state.view || state.view.kind === "error";
+    button.hidden = !modes.includes(target) || (nothingToExpand && !fullscreen);
+    button.textContent = fullscreen ? "Collapse" : "Expand";
+    button.dataset.target = target;
+  }
+
+  // --- Acting --------------------------------------------------------------
+
+  function sortBy(column, direction, mode) {
+    if (mode === "local") {
+      state.localSort = { column, direction };
+      drawTable(state.view);
+      return;
+    }
+    fetchAndShow(LemmaTable.sortArgs(state.args, state.view, column, direction));
+  }
+
+  async function fetchAndShow(args) {
+    if (state.busy) return;
+    state.busy = true;
+    root.setAttribute("aria-busy", "true");
+    drawPager(state.view);
+    try {
+      const result = await request("tools/call", { name: toolName(), arguments: args });
+      state.args = args;
+      render(result);
+      if (state.view.kind === "records") {
+        // Best effort: a host that does not take context still shows the page.
+        request("ui/update-model-context", LemmaTable.contextFor(state.view)).catch(() => {});
+      }
+    } catch (_) {
+      const notice = byId("notice");
+      notice.textContent = "That page did not load. Try again.";
+      notice.hidden = false;
+    } finally {
+      state.busy = false;
+      root.removeAttribute("aria-busy");
+      if (state.view) drawPager(state.view);
+    }
+  }
+
+  byId("prev").addEventListener("click", () => fetchAndShow(LemmaTable.pageArgs(state.args, state.view, "previous")));
+  byId("next").addEventListener("click", () => fetchAndShow(LemmaTable.pageArgs(state.args, state.view, "next")));
+  byId("expand").addEventListener("click", async (event) => {
+    const mode = event.currentTarget.dataset.target;
+    try {
+      const result = await request("ui/request-display-mode", { mode });
+      applyHostContext({ displayMode: result.mode || mode });
+    } catch (_) {
+      // The host kept the mode it had; nothing to undo.
+    }
+  });
+
+  // --- Size ----------------------------------------------------------------
+
+  let reported = "";
+  let frame = 0;
+  new ResizeObserver(() => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      const box = byId("view").getBoundingClientRect();
+      const size = { width: Math.ceil(box.width), height: Math.ceil(box.height) };
+      const key = `${size.width}x${size.height}`;
+      if (key === reported) return;
+      reported = key;
+      notify("ui/notifications/size-changed", size);
+    });
+  }).observe(byId("view"));
+
+  // --- Start ---------------------------------------------------------------
+
+  (async () => {
+    try {
+      const result = await request(
+        "ui/initialize",
+        {
+          protocolVersion: PROTOCOL_VERSION,
+          // `appInfo`, as the spec's types and every SDK-built host validate
+          // it; the spec's prose example still says `clientInfo`, and a host
+          // answers that with an error.
+          appInfo: { name: "lemma-table", version: "1.0.0" },
+          appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+        },
+        INITIALIZE_TIMEOUT_MS,
+      );
+      state.hostCapabilities = result.hostCapabilities || {};
+      applyHostContext(result.hostContext || {});
+      notify("ui/notifications/initialized", {});
+    } catch (_) {
+      byId("title").textContent = "Lemma table";
+      showState("This view opens inside a conversation, where a Lemma tool shows its results.", "neutral");
+    }
+  })();
+})();
+</script>
+</body>
+</html>

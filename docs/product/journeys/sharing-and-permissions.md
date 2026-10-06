@@ -233,6 +233,30 @@ rights than the person who asked.
 
 **Contracts:** `mcp_access.grants.list`, `mcp_access.grants.revoke`
 
+### PS-ACCESS-042 — A connected tool shows a pod's records as a table the person can work in
+**Status:** manual
+
+- Where the tool can show interactive views, when it reads records or runs a
+  query, the system shall show the result as a table.
+- When the table is one page of more, the system shall say which rows are shown
+  out of how many.
+- When the person moves to another page or sorts the table, the system shall
+  read the rows with the same access the tool was given.
+- When the person sorts a table that has more rows than are shown, the system
+  shall sort the whole table, not only the page shown.
+- When the person moves to another page or sorts the table, the system shall
+  tell the tool which rows the person is now looking at.
+- If a query's result was cut short, then the system shall say so.
+- If reading the records fails, then the system shall show the failure.
+- Where the tool cannot show interactive views, the system shall give it the
+  same result as text.
+
+> **Manual:** the view runs inside Claude's or ChatGPT's own page, so proving it
+> needs a host. Verified against the MCP Apps reference host over the public
+> mount with a real token; the module suites cover the tool listing, the served
+> view and the payloads it draws (`mcp_access/tests/e2e`,
+> `agent/tests/unit/test_pod_mcp_views.py`).
+
 ## Capability: Understand and audit access
 
 ### PS-ACCESS-030 — A person can see who can reach a resource

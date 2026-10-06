@@ -542,6 +542,85 @@ async def test_a_read_only_connection_is_not_offered_the_writing_tools(
     assert "pod:write" in published.json()["result"]["content"][0]["text"]
 
 
+async def test_a_host_finds_the_table_view_and_the_rows_it_draws(
+    mcp_client, authenticated_client, test_pod
+):
+    """What an MCP Apps host does with a read-only connection: find the view a
+    tool names, read it from this server, and hand it a result -- here, the
+    page the view's own Next button asks for."""
+    pod_id = test_pod["id"]
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "orders",
+            "columns": [
+                {"name": "customer", "type": "TEXT"},
+                {"name": "amount", "type": "FLOAT"},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    for customer, amount in (("Ada", 12.5), ("Grace", 40.0), ("Linus", 7.0)):
+        added = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/orders/records",
+            json={"data": {"customer": customer, "amount": amount}},
+        )
+        assert added.status_code == 201, added.text
+
+    await mcp_client.register()
+    tokens = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    access = tokens["access_token"]
+
+    listed = await mcp_client.rpc(pod_id, access, "tools/list")
+    views = {
+        tool["name"]: tool["_meta"].get("ui", {}).get("resourceUri")
+        for tool in listed.json()["result"]["tools"]
+    }
+    assert views["lemma_pod_get_records"] == "ui://lemma/table"
+    assert views["lemma_pod_query"] == "ui://lemma/table"
+    assert views["lemma_pod_tables"] is None
+
+    read = await mcp_client.rpc(
+        pod_id, access, "resources/read", {"uri": "ui://lemma/table"}
+    )
+    assert read.status_code == 200, read.text
+    [view] = read.json()["result"]["contents"]
+    assert view["mimeType"] == "text/html;profile=mcp-app"
+    assert view["_meta"]["ui"]["csp"] == {"connectDomains": [], "resourceDomains": []}
+    assert "ui/initialize" in view["text"]
+
+    page = await mcp_client.rpc(
+        pod_id,
+        access,
+        "tools/call",
+        {
+            "name": "lemma_pod_get_records",
+            "arguments": {
+                "table_name": "orders",
+                "offset": 2,
+                "limit": 2,
+                "sorts": [{"column": "amount", "direction": "desc"}],
+            },
+        },
+    )
+    records = page.json()["result"]["structuredContent"]
+    assert records["total"] == 3
+    assert [row["customer"] for row in records["records"]] == ["Linus"]
+
+    query = await mcp_client.rpc(
+        pod_id,
+        access,
+        "tools/call",
+        {
+            "name": "lemma_pod_query",
+            "arguments": {"sql": "select customer from orders order by amount"},
+        },
+    )
+    rows = query.json()["result"]["structuredContent"]
+    assert [row["customer"] for row in rows["rows"]] == ["Linus", "Ada", "Grace"]
+    assert rows["truncated"] is False
+
+
 async def test_a_denied_consent_redirects_with_access_denied(
     mcp_client, authenticated_client, test_pod
 ):
