@@ -281,6 +281,46 @@ and `/.well-known/oauth-protected-resource/api/mcp/<pod id>`. Set
 `SUPERTOKENS_API_GATEWAY_PATH=/api/st` to match. This is how the connector was
 tested against claude.ai and ChatGPT through a single tunnel.
 
+## Events
+
+A connected client can subscribe to a pod's events: the webhook slice of the
+MCP Events working-group draft, which is what ChatGPT implements. It is a
+draft with no SEP, so it is kept to `app/mcp_events.py` (the wire) and
+`mcp_access` (everything it decides).
+
+- **Advertised** as `capabilities.events` on `server/discover`. The SDK sieves
+  spec results against the spec's model, which has no `events`, so a FastMCP
+  middleware adds it after the sieve. The methods are a FastMCP server
+  extension (`work.lemma/events`) gated to protocol 2026-07-28.
+- **One event**, `record.created`, with one argument, `table`. A client may
+  subscribe only to a table the person can read at that moment
+  (`-32012 Forbidden` otherwise).
+- **Subscribing** takes the client's own `whsec_` secret (24 to 64 bytes) and a
+  callback URL that must pass the SSRF guard. Before anything is stored the
+  callback is sent a signed `{"type": "verification", "challenge": ...}` and
+  must echo the challenge, compared in constant time; a URL this connection
+  already proved is not challenged again. Identity is `(grant, url, name,
+  arguments)`: subscribing again with the same four refreshes the row and may
+  rotate the secret. `refreshBefore` is never more than the client asked for,
+  never more than 24 hours, never null. At most 50 per connection
+  (`-32013`). The secret is stored encrypted.
+- **Delivering** is one worker job per subscriber per row, fanned out from the
+  datastore stream after a cheap "is anything listening to this pod" check.
+  Every delivery re-checks the grant (live, still `pod:read`) and reads the row
+  as the person under their permissions and row-level security; a row they
+  cannot read is never sent. The body is the draft's `EventOccurrence`,
+  Standard Webhooks signed over the exact bytes, `webhook-id` = the source
+  event id on every retry, capped at 256 KiB (a larger row is sent as its id).
+  Redirects are refused. 2xx is delivered; 410 ends the subscription; 413 and a
+  URL the guard now refuses are dropped; anything else is retried with backoff,
+  five tries in all.
+- **Ending**: `events/unsubscribe` (idempotent), Stop beside the subscription
+  in the person's connected apps (`DELETE /oauth/grants/{id}/subscriptions/
+  {sub}`), revoking the connection (deliveries stop at once, the rows go with
+  the grant), or the client letting `refreshBefore` pass. `terminated` is not
+  sent: ChatGPT does not handle it, and the next delivery's re-check is what
+  enforces revocation.
+
 ## Not built yet
 
 - **MCP Apps.** A table view for `pod_get_records` and `pod_query` results is

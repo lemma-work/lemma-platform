@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
+from app.mcp_events import AdvertiseEvents, PodEventsExtension
 from app.modules.agent.infrastructure.mcp import LEMMA_MCP_SERVER_NAME
 from app.modules.agent.services.pod_mcp_service import pod_mcp_service
 from app.modules.mcp_access.contracts import (
@@ -161,6 +162,9 @@ class PodMCPASGIApp:
             instructions="Lemma tools for the current pod's datastore.",
             auth=LemmaMCPAuthProvider(),
         )
+        # `events/*` for outside clients; see `app/mcp_events.py`.
+        mcp_server.add_extension(PodEventsExtension(_verified_principal))
+        mcp_server.add_middleware(AdvertiseEvents())
         # stateless_http=True: every request carries the pod id (URL) and a
         # bearer token and re-authorizes per call, so there is no per-session
         # server state to keep. A stateful transport holds the Mcp-Session-Id

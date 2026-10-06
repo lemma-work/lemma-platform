@@ -19,6 +19,9 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.mcp_access.domain.entities import ConnectedApp
 from app.modules.mcp_access.infrastructure.repositories import McpAccessRepository
+from app.modules.mcp_access.infrastructure.subscription_repository import (
+    EventSubscriptionRepository,
+)
 
 logger = get_logger(__name__)
 
@@ -59,6 +62,26 @@ class GrantService:
             return await McpAccessRepository(uow).list_connected_apps(
                 user_id=None if everyone else user_id, pod_id=pod_id, limit=MAX_LISTED
             )
+
+    async def stop_listening(
+        self, *, user_id: UUID, grant_id: UUID, subscription_id: str
+    ) -> bool:
+        """End one event subscription, by whoever may end the connection it
+        belongs to. False for "no such", "already ended" and "not yours"."""
+        async with self._uow_factory() as uow:
+            owner = await McpAccessRepository(uow).grant_owner(grant_id)
+            if owner is None:
+                return False
+            owner_id, pod_id = owner
+            if owner_id != user_id and not await self._administers(
+                uow, user_id, pod_id
+            ):
+                return False
+            stopped = await EventSubscriptionRepository(uow).remove_for_grant(
+                grant_id=grant_id, public_id=subscription_id
+            )
+            await uow.commit()
+        return stopped
 
     async def revoke(self, *, user_id: UUID, grant_id: UUID) -> bool:
         """End one of the person's own connections, or -- as a pod admin --

@@ -8,6 +8,8 @@ import {
     TOOLS,
     accessLabel,
     disconnectClient,
+    listeningLine,
+    stopListening,
     fetchMcpUrl,
     loadConnections,
     reachableFromInternet,
@@ -174,6 +176,16 @@ function McpAccess({ pod }: { pod: Pod }) {
         userId === me ? "you"
             : pod.members.find(member => member.userId === userId)?.name ?? "a former member";
 
+    const stop = async (grantId: string, subscriptionId: string) => {
+        try {
+            await stopListening(apiUrl, grantId, subscriptionId);
+            setProblem(null);
+            await cache.invalidateQueries({ queryKey: ["mcp-grants", pod.id] });
+        } catch (error) {
+            setProblem(error instanceof Error ? error.message : null);
+        }
+    };
+
     const disconnect = async (grantId: string) => {
         setConfirming(null);
         try {
@@ -241,6 +253,16 @@ function McpAccess({ pod }: { pod: Pod }) {
                                         {everyone ? "by " + whoConnected(item.user_id) + " · " : ""}
                                         {accessLabel(item.scopes)} · {item.last_used_at ? "used " + agoOf(item.last_used_at) : "connected " + agoOf(item.connected_at)}
                                     </small>
+                                    {(item.listens_to ?? []).map(subscription => (
+                                        <small key={subscription.id} className="access__listens">
+                                            Told about: {listeningLine(subscription)}
+                                            {subscription.last_error
+                                                ? " · last delivery failed"
+                                                : subscription.last_delivery_at ? " · last sent " + agoOf(subscription.last_delivery_at) : ""}
+                                            {" "}
+                                            <button className="linkish" onClick={() => void stop(item.grant_id, subscription.id)}>Stop</button>
+                                        </small>
+                                    ))}
                                 </span>
                                 <span className="access__actions">
                                     {asking ? (

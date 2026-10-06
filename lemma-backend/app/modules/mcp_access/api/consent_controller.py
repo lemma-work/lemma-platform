@@ -17,6 +17,9 @@ from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.schemas import ErrorResponse
 from app.modules.mcp_access.domain.entities import ConnectedApp, Scope
 from app.modules.mcp_access.domain.resources import pod_resource_url
+from app.modules.mcp_access.infrastructure.subscription_repository import (
+    EventSubscriptionRepository,
+)
 from app.modules.mcp_access.services.grants import GrantService
 from app.modules.mcp_access.services.wiring import consent_service, issuer
 
@@ -68,6 +71,17 @@ class ConsentAnswerResponse(BaseModel):
     )
 
 
+class EventSubscriptionResponse(BaseModel):
+    """Something a connected app asked to be told about."""
+
+    id: str
+    name: str
+    arguments: dict[str, object]
+    last_delivery_at: datetime | None
+    last_error: str | None
+    refresh_before: datetime
+
+
 class ConnectedClientResponse(BaseModel):
     grant_id: UUID
     user_id: UUID = Field(description="The person who connected it.")
@@ -78,6 +92,8 @@ class ConnectedClientResponse(BaseModel):
     scopes: list[Scope]
     connected_at: datetime
     last_used_at: datetime | None
+    #: What it listens to, by event subscription (`events/subscribe`).
+    listens_to: list[EventSubscriptionResponse] = Field(default_factory=list)
 
 
 class ConnectedClientsResponse(BaseModel):
@@ -165,7 +181,55 @@ async def list_grants(
     apps = await GrantService(get_uow_factory()).list(
         user_id=user.id, pod_id=pod_id, everyone=everyone
     )
-    return ConnectedClientsResponse(items=[_connected(app) for app in apps])
+    listening = await _subscriptions_of([app.grant_id for app in apps])
+    return ConnectedClientsResponse(
+        items=[
+            _connected(app).model_copy(
+                update={"listens_to": listening.get(app.grant_id, [])}
+            )
+            for app in apps
+        ]
+    )
+
+
+async def _subscriptions_of(
+    grant_ids: list[UUID],
+) -> dict[UUID, list[EventSubscriptionResponse]]:
+    async with get_uow_factory()() as uow:
+        stored = await EventSubscriptionRepository(uow).for_grants(grant_ids)
+    found: dict[UUID, list[EventSubscriptionResponse]] = {}
+    for item in stored:
+        found.setdefault(item.grant_id, []).append(
+            EventSubscriptionResponse(
+                id=item.public_id,
+                name=item.name,
+                arguments=item.arguments,
+                last_delivery_at=item.last_delivery_at,
+                last_error=item.last_error,
+                refresh_before=item.refresh_before,
+            )
+        )
+    return found
+
+
+@router.delete(
+    "/grants/{grant_id}/subscriptions/{subscription_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="mcp_access.grants.subscription.delete",
+    summary="Stop telling a connected app about an event",
+    responses={404: {"model": ErrorResponse, "description": "No such subscription"}},
+)
+async def stop_subscription(
+    grant_id: UUID, subscription_id: str, user: CurrentUser
+) -> None:
+    """The app keeps its connection and stops receiving this event. It may
+    subscribe again; ending the connection is what stops it for good."""
+    if not await GrantService(get_uow_factory()).stop_listening(
+        user_id=user.id, grant_id=grant_id, subscription_id=subscription_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No such subscription"
+        )
 
 
 @router.delete(

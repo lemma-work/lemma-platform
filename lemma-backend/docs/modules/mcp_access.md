@@ -22,8 +22,14 @@ what each client requires, is in
 - Checking an access token on a pod's MCP endpoint, and the per-grant and
   per-IP rate limits.
 
+- Event subscriptions for connected clients (`events/list`, `events/subscribe`,
+  `events/unsubscribe`, served through `app/mcp_events.py`), their verification,
+  and signed webhook delivery with a re-check of the grant and the row on every
+  send. The wire format and its limits are in the architecture doc's Events
+  section.
+
 Tables: `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens` (digests
-only). Pending authorizations and codes are short-lived Redis keys.
+only), `mcp_event_subscriptions` (secrets encrypted). Pending authorizations and codes are short-lived Redis keys.
 
 ## What it does not own
 

@@ -198,7 +198,39 @@ export type ConnectedClient = {
     scopes: string[];
     connected_at: string;
     last_used_at: string | null;
+    /** What it asked to be told about (`events/subscribe`). */
+    listens_to?: EventSubscription[];
 };
+
+export type EventSubscription = {
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    last_delivery_at: string | null;
+    last_error: string | null;
+};
+
+/** A subscription in a person's words: what it is told about. */
+export function listeningLine(subscription: EventSubscription): string {
+    const table = typeof subscription.arguments.table === "string" ? subscription.arguments.table : null;
+    if (subscription.name === "record.created") return table ? "New rows in " + table : "New rows";
+    return subscription.name;
+}
+
+/** Stops one event reaching the app; the connection itself stays. A 404 is
+ *  already-stopped, and the caller reloads the list either way. */
+export async function stopListening(
+    apiUrl: string,
+    grantId: string,
+    subscriptionId: string,
+    fetcher: typeof fetch = fetch,
+): Promise<void> {
+    const response = await fetcher(
+        apiUrl + "/oauth/grants/" + encodeURIComponent(grantId) + "/subscriptions/" + encodeURIComponent(subscriptionId),
+        { method: "DELETE", credentials: "include" },
+    );
+    if (!response.ok && response.status !== 404) throw new Error("It could not be stopped (" + response.status + ").");
+}
 
 /** Where an app's metadata document is served — the one checked fact about
  *  it — or null for an app that registered itself. Shown beside the name,
