@@ -253,8 +253,8 @@ async def test_send_display_resource_for_conversation_sends_render_plan():
     assert isinstance(render_plan, SurfaceDisplayRenderPlan)
     assert render_plan.title == "Table: deals"
     assert render_plan.primary_action is not None
-    assert "/pod/" in render_plan.primary_action.url
-    assert "tab=deals" in render_plan.primary_action.url
+    assert "/t/" in render_plan.primary_action.url
+    assert render_plan.primary_action.url.endswith("/table/deals")
 
 
 async def test_a_delivered_file_carries_no_caption(monkeypatch):
