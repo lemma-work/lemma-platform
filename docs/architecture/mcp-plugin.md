@@ -86,7 +86,7 @@ servers and need a publicly reachable API.
 | 4 | Waiting-form and approval card | medium | two new pod tools, `pod:write` |
 | 5 | Claude Code plugin in a marketplace repository | small | MCP-first skill text; Deepak's go-ahead to publish |
 | 6 | Directory listings | — | the decision in [§d](#d-directory-listings-and-one-url-per-pod), submission assets |
-| 7 | A pod's own app, framed, in ChatGPT then Claude | medium | a delegated token per connection, an embedded SDK mode, token-gated private app files — [§b](#b-a-pods-own-app-inside-the-host); probe first |
+| 7 | A pod's own app, framed, in ChatGPT then Claude | medium | a delegated token per connection, an embedded SDK mode, token-gated private app files — [§b](#b-a-pods-own-app-inside-the-host); probed in ChatGPT, works |
 
 ### a. More views
 
@@ -177,10 +177,43 @@ Expand to full screen, and on ChatGPT, behind a feature check, as a sidebar app
 composer, maps onto `ui/message` and `ui/update-model-context`, so an app talks
 to the conversation with no change of its own.
 
-**First, a probe in ChatGPT**, because the rest depends on what only ChatGPT can
-answer: whether it frames a developer-mode connector's origin, which sandbox
-flags the nested frame gets, and whether a framed app reaches the API and its
-WebSocket with a delegated token.
+**Probed in ChatGPT, 2026-10-06: it works.** A throwaway branch
+(`probe/chatgpt-app-frame`, not merged) added an open-app tool, an app-only
+tool minting the delegated token, and a view framing a real deployed pod app
+twice — once from the MCP server's own host, once from another site. Run from
+ChatGPT's desktop app (host `chatgpt` 26.930) through a developer-mode
+connector, with a `pod:read pod:write` grant:
+
+- **ChatGPT framed both origins.** It echoed both in its sandbox's
+  `frameDomains`, with no CSP violation — the same-registrable-domain rule was
+  not enforced for a developer-mode connector, so expect it only at review.
+- **The frame is a normal, same-origin-capable page.** Its own origin, secure
+  context, `localStorage`, `sessionStorage` and IndexedDB all worked, and
+  `SameSite=None` cookies (partitioned or not) were kept; `SameSite=Lax` ones
+  were not, as expected.
+- **The token did everything an app needs.** Read records (200), wrote one
+  (201), another pod refused (403), the datastore WebSocket opened with
+  `?access_token`, and the browser SDK loaded and listed rows with `token`.
+  Both frames reported within about three seconds.
+- **ChatGPT's host offers** `serverTools`, `openLinks`, `updateModelContext`,
+  `message`, and `inline`/`fullscreen` display modes, plus its own
+  `openai/modelContext`, `openai/files` and `openai/message` extensions.
+
+What the probe and its local run also showed:
+
+- **The actor name must stay empty.** A delegated token counts as the pod's
+  own agent only if its actor name is empty or `pod_default`; any other name —
+  the client's, for attribution — demotes it to a named workload with only its
+  own grants, and reads fail. Attribute through the session claim
+  (`mcp:<connection id>`) instead.
+- **`GET /organizations` answers** for such a token. Organization-level
+  *actions* are refused, but that listing is not confined to the pod; close it
+  before shipping.
+- **The pod app's "Remix on Lemma" badge shows inside the frame**; an embedded
+  app should not carry it.
+- Not covered: chatgpt.com in a browser (the run was the desktop app), Claude
+  (still restricts `frameDomains`), a private app (its files are still behind
+  the cookie), and a read-only connection (gap 1 above, expected to write).
 
 ### c. Packaging Lemma as one plugin
 
