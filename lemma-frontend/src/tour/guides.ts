@@ -80,9 +80,9 @@ export function guideFor(place: GuidePlace, name: string): Guide {
                 place, title,
                 lines: [
                     { gesture: "Views", what: "A table shows its rows as a board, a timeline or a checklist when they suit one, and Show as table switches back." },
-                    { gesture: "Filter", what: "Narrow the rows with the filters above them, or search the rows that have loaded." },
                     { gesture: "Rows", what: "Open a row to see the whole of it, with everything it links to." },
                     { gesture: "RLS", what: "On a table marked RLS, each person sees only their own rows." },
+                    { gesture: "Forms", what: "Collect responses lets people outside add rows through a form you share as a link or put on a website." },
                     { gesture: "Ask", what: "Bottom right, ask about the rows, or ask " + name + " to change them." },
                 ],
                 tryIt: {

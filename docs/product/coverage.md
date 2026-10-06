@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 170 |
 | `gap` | 2 |
 | `manual` | 21 |
-| `planned` | 17 |
+| `planned` | 18 |
 | `withdrawn` | 0 |
-| **total** | **210** |
+| **total** | **211** |
 
 Scenario tests declaring a promise: 425.
 
@@ -297,6 +297,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-048` A contact sees what is theirs, and only that | `planned` | — |
 | `PS-SURF-049` A web widget answers visitors on the pod's behalf | `planned` | — |
 | `PS-SURF-050` A member writes first to a contact only where the contact wants it | `planned` | — |
+| `PS-SURF-051` People outside the pod add rows to a table it opened to them | `planned` | — |
 | `PS-SURF-047` Contacts cost the organization, never a member | `planned` | — |
 
 ## [Working with data](journeys/working-with-data.md)

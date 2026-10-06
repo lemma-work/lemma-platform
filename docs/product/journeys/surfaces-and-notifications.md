@@ -710,9 +710,9 @@ Public, the way a group's people from outside it are.
 > Proven at module level by `agent_surfaces/tests/e2e/test_web_widgets_e2e.py`
 > and at unit level by `agent_surfaces/tests/unit/test_web_widgets.py`.
 
-- The system shall let a pod's editors put a chat bubble or a form on a web
-  page with a public key, and shall show its signing secret once, when it is
-  made or rotated.
+- The system shall let a pod's editors put its chat on a web page with a
+  public key, or share it as a page Lemma hosts, and shall show its signing
+  secret once, when it is made or rotated.
 - The system shall answer an anonymous visitor from what the pod made Public,
   and shall answer a visitor named by a token the page's server signed with the
   widget's secret, or who entered a code sent to their email, as a contact --
@@ -722,13 +722,13 @@ Public, the way a group's people from outside it are.
   signed with a secret once it is rotated.
 - The system shall answer only pages on the widget's allowed origins, and shall
   refuse strangers at a widget that answers known contacts only.
-- The system shall run a form's function only when the pod opened it to
-  contacts, and only for a verified contact when the form says so, and shall
-  show the visitor only the function's public result.
+- The system shall stream the answer to the visitor as it is written, and
+  shall never send them the model's thinking, tool traffic, or anything from a
+  member's private note.
 
 **Contracts:** `agent.web_widget.create`, `agent.web_widget.update`,
 `agent.web_widget.rotate_secret`, `public.web.session.start`,
-`public.web.message.send`, `public.web.code.verify`, `public.web.form.submit`
+`public.web.message.send`, `public.web.stream.read`, `public.web.code.verify`
 
 ### PS-SURF-050 — A member writes first to a contact only where the contact wants it
 **Status:** planned
@@ -747,6 +747,31 @@ Public, the way a group's people from outside it are.
   button on the page it opens does.
 
 **Contracts:** `contact.follow_up`
+
+### PS-SURF-051 — People outside the pod add rows to a table it opened to them
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_public_rows_e2e.py`,
+> and at unit level by `datastore/tests/unit/test_public_rows.py` and
+> `agent/tests/unit/test_form_tools.py`.
+
+- The system shall let a member who can change a table open it to rows from
+  people outside the pod -- anyone, or confirmed contacts only -- for chosen
+  columns, and shall refuse to open a per-member table or to leave closed a
+  column the table cannot do without.
+- The system shall let any page holding a widget's public key learn the open
+  columns and add one row, as the member who opened the table, and shall
+  ignore every column that is not open and read nothing back.
+- The system shall ask a stranger to confirm their email before they add a row
+  to a table open to contacts only, and shall name a confirmed sender on a
+  contact-owned table itself, whatever the page sent.
+- The system shall let the pod's chat on that page fill the form's open
+  columns from the conversation, and shall never add the row for the visitor.
+- The system shall stop taking rows the moment the table is closed.
+
+**Contracts:** `table.public_rows.open`, `table.public_rows.get`,
+`table.public_rows.close`, `table.public_rows.list`, `public.web.table.read`,
+`public.web.row.add`
 
 ### PS-SURF-047 — Contacts cost the organization, never a member
 **Status:** planned

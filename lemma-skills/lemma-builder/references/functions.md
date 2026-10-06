@@ -429,6 +429,15 @@ lemma functions permissions get save_expense
 A run failing with `MISSING_WORKLOAD_RESOURCE_GRANT` names the resource it tried to
 reach — add exactly that grant and retry.
 
+### Opening a function to contacts
+
+`PUT /pods/{pod}/functions/{name}/contacts` `{"contacts_invoke": true}` lets a
+contact's conversation call it (the `contact_function` tool). It runs as its owner's
+runs do, held to its own grants, and receives the asking contact as `contact_id` in
+its input — set by the platform, never by the model. Its output goes to the agent
+answering the contact, so return only what that person may be told. See
+`people-outside.md`.
+
 ### Exposing a function as an agent's tool
 
 Grants also flow the other way: grant an **agent** `function.execute` on a function

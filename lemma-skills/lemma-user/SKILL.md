@@ -491,6 +491,25 @@ Workloads execute operations via the invoking user's connected account
 a connect request and hand the link to the user:
 `lemma connectors connect-requests create gmail --auth-config-id <id>`.
 
+## Contacts and form responses
+
+People outside the pod — **contacts** (known by the channel they wrote from) and
+anonymous web visitors — reach it through its bots, its web chat and tables opened
+to outside rows. There is no `lemma` CLI command for them yet; use the Python SDK:
+
+```python
+pod = Lemma().pod()
+pod.contacts.list()                        # who has written; handles say who vouched
+pod.contacts.follow_up(contact_id, "Your order shipped.")   # refused outside WhatsApp's 24h window or after an unsubscribe
+pod.contacts.export(contact_id)            # their words and the bot's answers
+pod.tables.list_public_rows()              # tables taking rows from outside, and from whom
+```
+
+**Form responses are rows** of the opened table: read them like any records. To set
+up a new form, use `lemma-form`; to change who may answer, `pod.tables.open_public_rows`
+/ `close_public_rows` (needs the right to change the table). Deleting a contact
+(`pod.contacts.delete`) also deletes their conversations — confirm with the person first.
+
 ## Workspace execution notes
 
 - Long-running processes (dev servers, watchers, REPLs): keep one persistent

@@ -198,9 +198,15 @@ The people a space's bots answer who are not in it are a place in it:
 
 - Three parts, each a thing a member does: **People** (who has written; one
   opens in a sheet with how they are known, a name, a box to write back, and
-  Export / Forget), **On your website** (chat bubbles and forms with their
+  Export / Forget), **On your website** (the space's chat, with its link and
   code to paste), **What contacts can use** (switches for contact-owned
   tables and for functions opened to contacts).
+- Forms are not here. A form is a table opened to people outside: **Collect
+  responses** in a table's header (`src/library/collect-responses.tsx`, words
+  in `src/data/public-rows.ts`) picks who can answer and which columns, then
+  gives the hosted link, the script tag, plain HTML, and "ask for a custom
+  design". It reuses the space's first web chat as the door, making one named
+  "Website" if there is none.
 - A host id is never shown — "Signed in on your site". Every handle says who
   vouched for it in plain words.
 - A signing secret is shown once, in its own sheet, with the code to paste
