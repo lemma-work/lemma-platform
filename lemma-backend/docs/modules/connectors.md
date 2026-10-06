@@ -126,8 +126,13 @@ ChatGPT from `mcp_access`. Here the pod is the subscriber:
   and routes an occurrence by our id with `mcp:<id>:<eventId>` as its
   `source_event_id`. `gap` and `terminated` notices run nothing.
 - **Renewal.** The cron renews each subscription halfway through what the
-  server granted, by subscribing again with the same identity; a failure is
-  noted on the row. Unsubscribing (schedule edited or deleted) is best effort
+  server granted, by subscribing again with the same identity. Each row holds
+  `renew_after`, when it is next tried, and the cron takes only rows past it,
+  oldest first. A failure is noted on the row and pushes `renew_after` on by a
+  wait that doubles from five minutes to six hours (never past the last pass
+  that could still renew a live grant), so a row the server keeps refusing
+  cannot hold the place of one that would renew. A pass stops starting
+  renewals after four minutes. Unsubscribing (schedule edited or deleted) is best effort
   at the server and certain here: the row goes, so a late delivery verifies
   against nothing.
 - **Calls to the server** are raw JSON-RPC POSTs

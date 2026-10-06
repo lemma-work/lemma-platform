@@ -93,6 +93,8 @@ class _Tracker:
     )
     challenges_passed: int = 0
     unsubscribed: list[str] = field(default_factory=list)
+    #: Projects whose subscriptions it will no longer refresh.
+    refusing: set[str] = field(default_factory=set)
 
     async def send(self, sub: _Subscription, body: dict[str, object]) -> tuple:
         raw = json.dumps(body).encode()
@@ -168,6 +170,8 @@ class _TrackerEvents(ServerExtension):
         )
         existing = self._tracker.subscriptions.get(key)
         if existing is not None:
+            if existing.arguments.get("project") in self._tracker.refusing:
+                raise MCPError(code=-32016, message="subscription revoked")
             existing.refreshes += 1
             existing.secret = params.delivery.secret or existing.secret
         else:
@@ -488,6 +492,65 @@ async def test_edit_renew_and_delete_keep_the_server_in_step(
         live, {"eventId": "evt_late", "name": "issue.created", "data": {}}
     )
     assert status == 403, "a callback with no subscription verifies nothing"
+
+
+async def test_a_subscription_the_server_keeps_refusing_steps_aside(
+    authenticated_client,
+    fixed_test_org,
+    db_session,
+    tracker,
+    tracker_account,
+    monkeypatch,
+):
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.connectors.contracts.mcp_events import mcp_target
+    from app.modules.connectors.infrastructure.repositories import (
+        mcp_event_repository,
+    )
+    from app.modules.connectors.services.mcp_event_subscriptions import (
+        McpEventSubscriptions,
+    )
+
+    # A batch of one shows with two subscriptions what a full batch of refused
+    # ones did before: the refused one took the batch on every pass.
+    monkeypatch.setattr(mcp_event_repository, "REFRESH_BATCH", 1)
+    _, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    await _schedule(authenticated_client, pod_id, str(account.id), project="web")
+    await _schedule(authenticated_client, pod_id, str(account.id), project="api")
+    tracker.refusing.add("web")
+
+    later = datetime.now(timezone.utc) + timedelta(minutes=40)
+    refresher = McpEventSubscriptions(
+        SessionUnitOfWorkFactory(async_session_maker),
+        target=mcp_target,
+        clock=lambda: later,
+    )
+    assert await refresher.renew_due() == 0, "the refused one was due first"
+    assert await refresher.renew_due() == 1, "and then waited its turn"
+    assert {
+        sub.arguments["project"]: sub.refreshes
+        for sub in tracker.subscriptions.values()
+    } == {"web": 0, "api": 1}
+
+    db_session.expire_all()
+    rows = (
+        await db_session.execute(
+            select(
+                ConnectorEventSubscription.arguments,
+                ConnectorEventSubscription.renew_failures,
+                ConnectorEventSubscription.renew_after,
+                ConnectorEventSubscription.last_error,
+            )
+        )
+    ).all()
+    state = {row.arguments["project"]: row for row in rows}
+    assert state["web"].renew_failures == 1
+    assert state["web"].renew_after == later + timedelta(minutes=5)
+    assert "subscription revoked" in (state["web"].last_error or "")
+    assert state["api"].renew_failures == 0
+    assert state["api"].last_error is None
 
 
 async def test_what_cannot_be_listened_to_is_refused_and_leaves_nothing(

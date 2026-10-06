@@ -40,6 +40,7 @@ class StoredEventSubscription:
     remote_id: str | None
     granted_at: datetime | None
     refresh_before: datetime | None
+    renew_failures: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +65,7 @@ def _stored(row: ConnectorEventSubscription) -> StoredEventSubscription:
         remote_id=row.remote_id,
         granted_at=row.granted_at,
         refresh_before=row.refresh_before,
+        renew_failures=row.renew_failures,
     )
 
 
@@ -198,6 +200,7 @@ class McpEventRepository:
         remote_id: str | None,
         granted_at: datetime,
         refresh_before: datetime,
+        renew_after: datetime,
     ) -> None:
         await self._session.execute(
             update(ConnectorEventSubscription)
@@ -206,7 +209,27 @@ class McpEventRepository:
                 remote_id=remote_id,
                 granted_at=granted_at,
                 refresh_before=refresh_before,
+                renew_after=renew_after,
+                renew_failures=0,
                 last_error=None,
+            )
+        )
+
+    async def renewal_failed(
+        self,
+        subscription_id: UUID,
+        *,
+        error: str,
+        failures: int,
+        retry_after: datetime,
+    ) -> None:
+        await self._session.execute(
+            update(ConnectorEventSubscription)
+            .where(ConnectorEventSubscription.id == subscription_id)
+            .values(
+                last_error=error[:500],
+                renew_failures=failures,
+                renew_after=retry_after,
             )
         )
 
@@ -234,13 +257,18 @@ class McpEventRepository:
         )
         return removed.scalar_one_or_none() is not None
 
-    async def granted_subscriptions(self) -> list[StoredEventSubscription]:
-        """Those the server has granted, soonest to lapse first."""
+    async def due_for_renewal(self, now: datetime) -> list[StoredEventSubscription]:
+        """Those whose renewal or retry is due, longest overdue first.
+
+        Only what is due is selected, so the batch limit applies to work that
+        needs doing. A failed renewal moves its own `renew_after` on, so one the
+        server keeps refusing goes to the back rather than holding the front.
+        """
         rows = (
             await self._session.execute(
                 select(ConnectorEventSubscription)
-                .where(ConnectorEventSubscription.refresh_before.is_not(None))
-                .order_by(ConnectorEventSubscription.refresh_before)
+                .where(ConnectorEventSubscription.renew_after <= now)
+                .order_by(ConnectorEventSubscription.renew_after)
                 .limit(REFRESH_BATCH)
             )
         ).scalars()

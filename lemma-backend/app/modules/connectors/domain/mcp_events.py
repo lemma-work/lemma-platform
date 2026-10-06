@@ -41,6 +41,14 @@ ASSUMED_TTL = timedelta(hours=1)
 #: How often the refresher runs, and so how little lifetime is too little.
 REFRESH_INTERVAL = timedelta(minutes=5)
 
+#: How long one pass keeps starting renewals. Shorter than the interval by more
+#: than one call's timeout, so a pass that meets a slow server ends before the
+#: next one starts.
+RENEW_PASS_BUDGET = timedelta(minutes=4)
+
+#: The longest a subscription that keeps failing to renew waits between tries.
+MAX_RETRY_DELAY = timedelta(hours=6)
+
 #: One server never offers more than this many events to the catalog.
 MAX_EVENTS_PER_INSTALL = 100
 
@@ -137,14 +145,29 @@ def refresh_before_from(value: object, *, now: datetime) -> datetime:
     return now + ASSUMED_TTL
 
 
-def refresh_due(
-    *, granted_at: datetime, refresh_before: datetime, now: datetime
-) -> bool:
-    """Whether a subscription should be renewed on this pass.
+def renew_at(*, granted_at: datetime, refresh_before: datetime) -> datetime:
+    """When a granted subscription is next renewed.
 
-    Halfway through what was granted, or when the next pass would be too late.
-    A server granting less than two passes' worth can still lapse between
-    them; it is then renewed late rather than never, by the next pass.
+    Halfway through what was granted, or two passes before it lapses if that
+    is sooner. A server granting less than two passes' worth can still lapse
+    between them; it is then renewed late rather than never, by the next pass.
     """
     halfway = granted_at + (refresh_before - granted_at) / 2
-    return now >= halfway or refresh_before - now <= 2 * REFRESH_INTERVAL
+    return min(halfway, refresh_before - 2 * REFRESH_INTERVAL)
+
+
+def retry_at(*, failures: int, refresh_before: datetime, now: datetime) -> datetime:
+    """When to try again after `failures` renewals in a row have failed.
+
+    The wait doubles from one pass up to `MAX_RETRY_DELAY`, so a subscription
+    the server keeps refusing -- or whose account needs signing in again --
+    costs a call every few hours rather than every pass, and never holds the
+    place of one that would renew. While the server still holds the
+    subscription, the retry is never later than the last pass that could
+    renew it in time: a short outage must not cost a working subscription.
+    """
+    delay = min(REFRESH_INTERVAL * 2 ** min(max(failures - 1, 0), 10), MAX_RETRY_DELAY)
+    last_chance = refresh_before - 2 * REFRESH_INTERVAL
+    if last_chance > now:
+        return min(now + delay, last_chance)
+    return now + delay

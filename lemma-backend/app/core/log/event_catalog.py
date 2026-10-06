@@ -552,6 +552,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.install_update.renegotiating_mcp_authorization': EventSpec('info', frozenset({'replacing_registered_client'})),
     'connectors.lemma_auth_provider.access_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
     'connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
+    'connectors.mcp_events.renew_budget_spent.degraded': EventSpec('warning', frozenset({'left_count', 'renewed_count'})),
     'connectors.mcp_events.renewed': EventSpec('info', frozenset({'renewed_count'})),
     'connectors.mcp_events.target_unavailable': EventSpec('info', frozenset({'error_type', 'subscription_id'})),
     'connectors.mcp_events.unsubscribe.degraded': EventSpec('warning', frozenset({'code', 'subscription_id'})),

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -73,12 +73,21 @@ class ConnectorEventSubscription(UUIDAuditBase):
     refresh_before: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: When the refresher next renews it: halfway through the grant, or, after
+    #: a failed renewal, a retry that waits longer each time.
+    renew_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: Renewals in a row that failed; a grant resets it.
+    renew_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     last_event_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
-        Index("ix_connector_event_subscriptions_refresh", "refresh_before"),
+        Index("ix_connector_event_subscriptions_renew", "renew_after"),
         Index("ix_connector_event_subscriptions_account", "account_id"),
     )

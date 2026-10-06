@@ -17,7 +17,8 @@ from app.modules.connectors.domain.mcp_events import (
     arguments_problem,
     parse_descriptors,
     refresh_before_from,
-    refresh_due,
+    renew_at,
+    retry_at,
 )
 from app.modules.connectors.infrastructure.repositories.mcp_event_repository import (
     StoredEventSubscription,
@@ -68,14 +69,35 @@ def test_arguments_are_checked_for_what_is_certain() -> None:
 
 
 def test_a_subscription_is_renewed_halfway_or_when_the_next_pass_is_too_late() -> None:
-    granted = NOW
     lapses = NOW + timedelta(hours=24)
-    assert not refresh_due(granted_at=granted, refresh_before=lapses, now=NOW)
-    assert refresh_due(
-        granted_at=granted, refresh_before=lapses, now=NOW + timedelta(hours=12)
-    )
+    assert renew_at(granted_at=NOW, refresh_before=lapses) == NOW + timedelta(hours=12)
     short = NOW + timedelta(minutes=8)
-    assert refresh_due(granted_at=granted, refresh_before=short, now=NOW)
+    assert renew_at(granted_at=NOW, refresh_before=short) <= NOW
+
+
+def test_a_failing_renewal_waits_longer_each_time_up_to_a_ceiling() -> None:
+    lapsed = NOW - timedelta(hours=1)
+    waits = [
+        retry_at(failures=failures, refresh_before=lapsed, now=NOW) - NOW
+        for failures in (1, 2, 3, 8, 50)
+    ]
+    assert waits == [
+        timedelta(minutes=5),
+        timedelta(minutes=10),
+        timedelta(minutes=20),
+        timedelta(hours=6),
+        timedelta(hours=6),
+    ]
+
+
+def test_a_failing_renewal_still_gets_its_last_chance_before_lapsing() -> None:
+    lapses = NOW + timedelta(hours=1)
+    assert retry_at(failures=6, refresh_before=lapses, now=NOW) == NOW + timedelta(
+        minutes=50
+    )
+    assert retry_at(failures=1, refresh_before=lapses, now=NOW) == NOW + timedelta(
+        minutes=5
+    )
 
 
 def test_refresh_before_falls_back_when_the_server_names_none() -> None:

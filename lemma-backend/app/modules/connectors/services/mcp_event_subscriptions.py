@@ -7,8 +7,10 @@ committed where the webhook endpoint can find them when the challenge arrives.
 A pending row first, then the call, then what the server granted.
 
 A subscription lasts until the server's `refreshBefore`, and the refresher
-renews each one halfway through what was granted. Nothing here holds a
-database connection across a call to the server.
+renews each one halfway through what was granted. One that fails to renew is
+retried later, waiting longer each time, so it never holds the place of one
+that would renew. Nothing here holds a database connection across a call to
+the server.
 """
 
 from __future__ import annotations
@@ -32,12 +34,14 @@ from app.modules.connectors.domain.errors import (
 )
 from app.modules.connectors.domain.mcp_events import (
     MCP_WEBHOOK_SOURCE,
+    RENEW_PASS_BUDGET,
     REQUESTED_TTL,
     SUBSCRIPTION_PARAM,
     arguments_problem,
     new_secret,
     refresh_before_from,
-    refresh_due,
+    renew_at,
+    retry_at,
 )
 from app.modules.connectors.infrastructure.adapters.mcp_events_client import (
     TRANSPORT_FAILURE,
@@ -178,24 +182,24 @@ class McpEventSubscriptions:
         await self._forget(subscription_id)
 
     async def renew_due(self) -> int:
-        """Renew every subscription past halfway; the count renewed."""
-        now = self._clock()
+        """Renew what is due this pass; the count renewed.
+
+        Stops starting renewals once the pass has spent its budget, so a slow
+        server cannot run one pass into the next. What is left is still due,
+        and the next pass takes it first.
+        """
+        started = self._clock()
         async with self._uow_factory() as uow:
-            due = [
-                stored
-                for stored in await McpEventRepository(
-                    uow.session
-                ).granted_subscriptions()
-                if stored.granted_at is not None
-                and stored.refresh_before is not None
-                and refresh_due(
-                    granted_at=stored.granted_at,
-                    refresh_before=stored.refresh_before,
-                    now=now,
-                )
-            ]
+            due = await McpEventRepository(uow.session).due_for_renewal(started)
         renewed = 0
-        for stored in due:
+        for attempted, stored in enumerate(due):
+            if self._clock() - started >= RENEW_PASS_BUDGET:
+                logger.warning(
+                    "connectors.mcp_events.renew_budget_spent.degraded",
+                    renewed_count=renewed,
+                    left_count=len(due) - attempted,
+                )
+                break
             renewed += int(await self._renew(stored))
         return renewed
 
@@ -222,7 +226,7 @@ class McpEventSubscriptions:
             target = await self._target_or_none(uow, stored)
         secret = get_secret_cipher().decrypt_str(stored.secret_ciphertext)
         if target is None or not secret:
-            await self._note(stored.id, "account_unavailable")
+            await self._renewal_failed(stored, "account_unavailable")
             return False
         try:
             granted = await self._client(target.server_url, target.headers).subscribe(
@@ -233,7 +237,7 @@ class McpEventSubscriptions:
                 ttl_ms=int(REQUESTED_TTL.total_seconds() * 1000),
             )
         except McpEventsError as exc:
-            await self._note(stored.id, f"{exc.code}: {exc.message}")
+            await self._renewal_failed(stored, f"{exc.code}: {exc.message}")
             return False
         await self._record_grant(stored.id, granted)
         return True
@@ -258,20 +262,33 @@ class McpEventSubscriptions:
     ) -> None:
         now = self._clock()
         remote = granted.get("id")
+        refresh_before = refresh_before_from(granted.get("refreshBefore"), now=now)
         async with self._uow_factory() as uow:
             await McpEventRepository(uow.session).granted(
                 subscription_id,
                 remote_id=remote if isinstance(remote, str) else None,
                 granted_at=now,
-                refresh_before=refresh_before_from(
-                    granted.get("refreshBefore"), now=now
-                ),
+                refresh_before=refresh_before,
+                renew_after=renew_at(granted_at=now, refresh_before=refresh_before),
             )
             await uow.commit()
 
-    async def _note(self, subscription_id: UUID, error: str) -> None:
+    async def _renewal_failed(
+        self, stored: StoredEventSubscription, error: str
+    ) -> None:
+        now = self._clock()
+        failures = stored.renew_failures + 1
         async with self._uow_factory() as uow:
-            await McpEventRepository(uow.session).note(subscription_id, error=error)
+            await McpEventRepository(uow.session).renewal_failed(
+                stored.id,
+                error=error,
+                failures=failures,
+                retry_after=retry_at(
+                    failures=failures,
+                    refresh_before=stored.refresh_before or now,
+                    now=now,
+                ),
+            )
             await uow.commit()
 
     async def _forget(self, subscription_id: UUID) -> None:
