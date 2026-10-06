@@ -8,6 +8,7 @@ import type { Pod } from "@/data";
 import { applyArchived, patchConversationLists, refreshConversationLists, unbound } from "./conversation-list";
 
 import { ConversationTitle } from "./conversation-title";
+import { prefetchOnIntent } from "./opened-transcripts";
 
 const SHOWN = 5;
 
@@ -105,6 +106,7 @@ export function History({
                                     aria-current={entry.id === conversationId}
                                     onClick={() => onPick(entry.id)}
                                     title={entry.title}
+                                    {...(entry.id === conversationId ? {} : prefetchOnIntent(pod.id, entry.id))}
                                 >
                                     <span className="history__name">{entry.title}</span>
                                     <span className="history__at">{entry.at}</span>

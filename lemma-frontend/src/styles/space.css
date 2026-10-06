@@ -1888,12 +1888,6 @@ samp,
 .split .composer__box {
     box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
 }
-.working {
-    padding-left: var(--turn-indent, 0px);
-    font-size: 14px;
-    color: var(--ink-3);
-}
-
 /* ── Sign-in, beside the thread ──────────────────────────────────────────
    The browser, with one thin bar: where you are, why (on request), and the
    two answers. */

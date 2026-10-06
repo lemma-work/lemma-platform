@@ -78,12 +78,14 @@ export const CARRY_SCRIPT =
     `for(i=0;i<k.length;i++){o='${WAS}:'+k[i];n='${PREFIX}:'+k[i];v=s.getItem(o);` +
     `if(v!==null){if(s.getItem(n)===null)s.setItem(n,v);s.removeItem(o)}}}catch(e){}})();`;
 
-/** Workspace locations belong to an account; appearance belongs to the browser. */
+/** Workspace locations belong to an account; appearance belongs to the browser.
+ *  So do unsent drafts (`thread/drafts.ts`): somebody's half-written words are
+ *  not the next person's to find in the composer. */
 export function retainWorkspaceOwner(store: KeyValueStore, owner: string | null): boolean {
     const ownerKey = key("workspace-owner");
     const changed = store.getItem(ownerKey) !== owner;
     if (changed || owner === null) {
-        for (const name of ["org", "tabs", "last-pod", "remembered"]) {
+        for (const name of ["org", "tabs", "last-pod", "remembered", "drafts"]) {
             store.removeItem(key(name));
             store.removeItem(WAS + ":" + name);
         }

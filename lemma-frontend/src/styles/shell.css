@@ -1158,22 +1158,9 @@
 }
 
 /* ── working ───────────────────────────────────────────────────────── */
-.working {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 20px;
-    margin-left: var(--turn-indent);
-    font-size: var(--t-ui);
-    color: var(--ink-3);
-}
-.working__dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 9999px;
-    background: var(--accent);
-    animation: pulse 1.4s ease-in-out infinite;
-}
+/* A run with no step yet is drawn as its reply's "Working" row (see
+   `Transcript`), so the pulse is the only part of the old standalone line
+   left. */
 @keyframes pulse {
     0%,
     100% {
@@ -1211,6 +1198,14 @@
 .steps__toggle:hover {
     color: var(--ink);
     border-color: var(--line-2);
+}
+/* Nothing to open yet: the row only says the run has started. */
+.steps__toggle[data-empty] {
+    cursor: default;
+}
+.steps__toggle[data-empty]:hover {
+    color: var(--ink-2);
+    border-color: var(--line);
 }
 .steps__state {
     width: 17px;
@@ -5433,6 +5428,15 @@ a.reach { text-decoration: none; }
 .message-actions .copy-control__button { width: 28px; height: 28px; background: var(--paper); color: var(--ink-3); }
 .message-actions .copy-control__button:hover { background: var(--chrome); color: var(--ink); }
 .message-actions { gap: 2px; }
+
+/* A message drawn before the server has it. Quieter until it lands, so the
+   moment it is confirmed is visible without anything moving; the head says
+   "Sending…" where its time will go. One the server refused keeps its place
+   and says so, with what can be done about it under the bubble. */
+.msg--you .msg__body { transition: opacity 160ms ease; }
+.msg--you[data-pending="sending"] .msg__body { opacity: .62; }
+.msg--you[data-pending="failed"] .msg__at { color: var(--bad); }
+.msg__unsent { display: flex; gap: 14px; margin-top: 5px; padding-right: 3px; font-size: 12.5px; }
 .message-actions .copy-control__button:disabled { cursor: default; color: var(--ok); }
 /* The platform saying the teammate wrote a note: quiet, under the reply,
    never a bubble. */
