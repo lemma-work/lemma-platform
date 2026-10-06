@@ -180,7 +180,11 @@ export function FloatingChat({ pod, resource, live, state, onOpenFile, onOpenTab
     const [detached, setDetached] = useState<Record<string, boolean>>({});
     const attached = resource !== null && !detached[key];
     const [made, setMade] = useState<Record<string, string>>({});
-    const thread = useResourceThread(pod.id, attached ? resource : null, live);
+    /* Looked up once the chat is open, not while it is a pill: every doc,
+       table and app opened would otherwise spend a search — and sometimes a
+       write — on a conversation nobody asked for. Until it answers the
+       open chat says "Opening…", so nothing is sent to a new one. */
+    const thread = useResourceThread(pod.id, attached ? resource : null, live && state.open);
 
     const createWith = useMemo(() => attached && resource ? {
         title: resourceTitle(resource.kind, resource.name),

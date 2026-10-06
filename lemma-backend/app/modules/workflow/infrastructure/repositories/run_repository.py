@@ -155,6 +155,7 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
         limit: int = 100,
         cursor: UUID | None = None,
         statuses: List[str] | None = None,
+        flow_id: UUID | None = None,
     ) -> tuple[List[WorkflowRunEntity], UUID | None]:
         """Recent runs across every workflow in a pod, newest first.
 
@@ -189,6 +190,8 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
         )
         if statuses:
             stmt = stmt.where(WorkflowRunModel.status.in_(statuses))
+        if flow_id is not None:
+            stmt = stmt.where(WorkflowRunModel.flow_id == flow_id)
         if cursor is not None:
             stmt = stmt.where(WorkflowRunModel.id < cursor)
         result = await self.session.execute(stmt)
@@ -254,3 +257,20 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
+
+    async def contexts_by_ids(
+        self, run_ids: Sequence[UUID]
+    ) -> dict[UUID, dict[str, object]]:
+        """The stored execution context of each run, keyed by id.
+
+        Kept out of every summary read on purpose -- it is the one column that
+        grows with the run -- and fetched only for the runs whose workflow has
+        a `run_title` to evaluate against it.
+        """
+        if not run_ids:
+            return {}
+        stmt = select(WorkflowRunModel.id, WorkflowRunModel.execution_context).where(
+            WorkflowRunModel.id.in_(list(run_ids))
+        )
+        result = await self.session.execute(stmt)
+        return {row[0]: row[1] or {} for row in result.all()}

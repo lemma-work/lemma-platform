@@ -188,7 +188,11 @@ class AppService:
             logger.debug(
                 "apps.app_service.app_html_lint.diagnostic", pod_id=str(pod_id)
             )
-        document = wrap_html_fragment(artifact.content, title=name, embed=False)
+        # The data comes along: an app saved from a widget showing one email
+        # shows that email, not the widget's sample.
+        document = wrap_html_fragment(
+            artifact.content, title=name, embed=False, data=artifact.data
+        )
         entity_data: dict = {
             "pod_id": pod_id,
             "user_id": user_id,

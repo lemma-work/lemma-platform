@@ -132,13 +132,13 @@ export function TableView({ podId, name, teammate, onOpenRecord, onAsk }: {
     const cache = useQueryClient();
     const sample = source.label === "sample";
     /* The primary key is the table's to declare. Assuming `id` is how a delete
-       ends up aimed at nothing, or an update writes over a different row. */
-    const detail = useQuery({
-        queryKey: ["table", podId, name, "detail"],
-        queryFn: () => lemma(podId).tables.get(name),
-        enabled: !sample,
-        staleTime: 300_000,
-    });
+       ends up aimed at nothing, or an update writes over a different row.
+       Read through the source rather than the client so the record page,
+       which asks under the same key, gets the same answer, and the sample
+       has one to give. */
+    const detailKey = ["table", podId, name, "detail"];
+    const readDetail = () => source.tableShape(podId, name) as Promise<{ primary_key_column?: string; enable_rls?: boolean; columns?: { name: string; system?: boolean }[] } | null>;
+    const detail = useQuery({ queryKey: detailKey, queryFn: readDetail, staleTime: 300_000 });
     const primaryKey = (detail.data as { primary_key_column?: string } | undefined)?.primary_key_column ?? "id";
     const rowsKey = ["table", podId, name, "rows"];
     const [editing, setEditing] = useState<{ row: Row | null; preset?: Row } | null>(null);
@@ -183,7 +183,9 @@ export function TableView({ podId, name, teammate, onOpenRecord, onAsk }: {
         }
     }
 
-    const columns = useQuery({ queryKey: ["table", podId, name, "columns"], queryFn: () => source.tableColumns(podId, name), staleTime: 300_000 });
+    /* The columns are part of the detail above — one `tables.get` — so they
+       are read out of it rather than asked for a second time in parallel. */
+    const columns = useQuery({ queryKey: detailKey, queryFn: readDetail, staleTime: 300_000, select: shape => shape?.columns });
     const rows = useInfiniteQuery({ queryKey: ["table", podId, name, "rows"], initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => source.tableRows(podId, name, pageParam), getNextPageParam: page => page.next || undefined, staleTime: 60_000 });
     /* Asked once, up front. Without it there is no telling a table of twenty-six
        things from the first page of four thousand, and the two want opposite

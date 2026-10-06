@@ -1,0 +1,90 @@
+<!--
+widget: outlook/email-thread
+description: One Outlook conversation with the newest message open, a reply you can edit and send, and archive, flag and mark-read.
+connector: outlook
+kind: composio
+operations: OUTLOOK_REPLY_EMAIL, OUTLOOK_MOVE_MESSAGE, OUTLOOK_UPDATE_EMAIL
+data: { subject, is_read?, draft?, messages: [{ id, from: { name, email }, to?, date, text }] }
+version: 1
+-->
+<div id="mail"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "subject": "Renewal paperwork for Fabrikam",
+  "is_read": false,
+  "draft": "Hi Lee,\n\nSigned and back in the portal this morning. Could you send the PO number so finance can match the invoice?\n\nThanks,\nAlex",
+  "messages": [
+    { "id": "AAMkAGI2THVSAAA=", "from": { "name": "Alex Kim", "email": "alex@northwind.io" }, "date": "2026-09-30T08:05:00Z", "text": "Hi Lee, is the renewal ready to sign?" },
+    { "id": "AAMkAGI2THVSAAB=", "from": { "name": "Lee Duarte", "email": "lee@fabrikam.com" }, "to": ["alex@northwind.io"], "date": "2026-10-01T13:22:00Z", "text": "Hi Alex,\n\nThe renewal is in the portal for signature. Once it's signed we'll raise the PO.\n\nLee" }
+  ]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("mail"), e = lemma.esc;
+  if (!d || !d.messages || !d.messages.length) { el.innerHTML = '<p class="lw-quiet">No conversation to show.</p>'; return; }
+  var msgs = d.messages, last = msgs[msgs.length - 1], unread = d.is_read === false;
+  var who = function (p) { return p ? (p.name || p.email) : "Unknown"; };
+  var to = (last.from && last.from.email) || who(last.from);
+
+  var earlier = msgs.slice(0, -1).map(function (m, i) {
+    return '<button class="lw-item" type="button" data-open="' + i + '">' + lemma.avatar(who(m.from), "s") +
+      '<span class="lw-grow">' + e(who(m.from)) + ' <span class="lw-quiet">— ' + e((m.text || "").replace(/\s+/g, " ")) + "</span></span>" +
+      '<span class="lw-end">' + lemma.when(m.date, { ago: true }) + "</span></button>" +
+      '<div class="lw-sec" hidden data-full="' + i + '"><div class="lw-body">' + e(m.text || "") + "</div></div>";
+  }).join("");
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec" data-say>' +
+        '<div class="lw-top">' + lemma.icon("mail") + "<span>Outlook</span><span>·</span><span>" + msgs.length + (msgs.length === 1 ? " message" : " messages") + "</span>" +
+          (unread ? '<span class="lw-pill" data-kind="accent"><span class="lw-led"></span>Unread</span>' : "") +
+          '<span class="lw-spacer"></span><span class="lw-bar">' +
+            '<button class="lw-btn" data-icon id="archive" title="Archive" aria-label="Archive">' + lemma.icon("archive") + "</button>" +
+            '<button class="lw-btn" data-icon id="flag" title="Flag" aria-label="Flag">' + lemma.icon("flag") + "</button>" +
+            (unread ? '<button class="lw-btn" data-icon id="read" title="Mark as read" aria-label="Mark as read">' + lemma.icon("read") + "</button>" : "") +
+          "</span></div>" +
+        '<h2 class="lw-title">' + e(d.subject || "(no subject)") + "</h2>" +
+      "</div>" +
+      (earlier ? '<div class="lw-rows">' + earlier + "</div>" : "") +
+      '<div class="lw-sec">' +
+        '<div class="lw-bar" style="gap:10px;flex-wrap:nowrap">' + lemma.avatar(who(last.from), "l") +
+          '<div style="min-width:0;flex:1"><div>' + e(who(last.from)) + '</div><div class="lw-quiet" style="font-size:12.5px">' +
+          e((last.from && last.from.email) || "") + (last.to && last.to.length ? " · to " + e(last.to.join(", ")) : "") + "</div></div>" +
+          '<span class="lw-quiet" style="font-size:12px;white-space:nowrap">' + lemma.when(last.date) + "</span></div>" +
+        '<div class="lw-body" style="margin-top:14px">' + e(last.text || "") + "</div>" +
+      "</div>" +
+      '<div class="lw-sec">' +
+        '<div class="lw-compose"><div class="lw-to">' + lemma.icon("reply") + "<span>Reply to " + e(who(last.from)) + "</span></div>" +
+          '<textarea id="reply" rows="4" placeholder="Write a reply"></textarea>' +
+          '<div class="lw-bar"><span class="lw-quiet" style="font-size:12px;padding-left:6px">Sends from your Outlook</span><span class="lw-spacer"></span>' +
+            '<button class="lw-btn" data-tone="primary" id="send">' + lemma.icon("send") + '<span>Send</span><span class="lw-kbd">⌘↵</span></button></div>' +
+        "</div>" +
+      "</div>" +
+    "</div>";
+
+  el.querySelectorAll("[data-open]").forEach(function (row) {
+    row.addEventListener("click", function () { var full = el.querySelector('[data-full="' + row.dataset.open + '"]'); full.hidden = !full.hidden; });
+  });
+  var reply = document.getElementById("reply");
+  reply.value = d.draft || "";
+  reply.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); document.getElementById("send").click(); }
+  });
+  var act = function (op, payload) { return lemma.act("outlook", op, payload, { kind: "composio" }); };
+
+  lemma.button("send", {
+    does: "send this reply to " + to,
+    confirm: function () { return reply.value.trim() ? "Send to " + to + "?" : ""; },
+    yes: "Send now",
+    run: function () {
+      if (!reply.value.trim()) throw new Error("Write the reply first.");
+      return act("OUTLOOK_REPLY_EMAIL", { message_id: last.id, comment: reply.value });
+    },
+    done: "Sent to " + to + "."
+  });
+  lemma.button("archive", { does: "move the message to Archive", run: function () { return act("OUTLOOK_MOVE_MESSAGE", { message_id: last.id, destination_id: "archive" }); }, done: "Archived." });
+  lemma.button("flag", { does: "flag the message", run: function () { return act("OUTLOOK_UPDATE_EMAIL", { message_id: last.id, flag: { flagStatus: "flagged" } }); }, done: function () { document.getElementById("flag").dataset.on = ""; return "Flagged."; } });
+  if (unread) lemma.button("read", { does: "mark the message read", run: function () { return act("OUTLOOK_UPDATE_EMAIL", { message_id: last.id, is_read: true }); }, done: "Marked as read." });
+})();
+</script>

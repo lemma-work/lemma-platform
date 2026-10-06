@@ -80,13 +80,18 @@ async def start_telegram_managed_bot_setup(
     if existing is not None:
         raise AgentSurfaceAlreadyExistsError(surface_name)
 
-    agent_id = (
+    agent_name_id = (
         await agent_id_for_name(
             uow.session, pod_id=pod_id, name=request.default_agent_name
         )
         if request.default_agent_name
         else None
     )
+    # Naming no agent means the pod's own assistant, whose row id is the pod's
+    # -- as on the plain create. Left None, the setup ran to the end and the
+    # surface was refused at creation for having no owner, after Telegram had
+    # already made the bot.
+    agent_id = agent_name_id or pod_id
     await require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,

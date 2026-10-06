@@ -6,10 +6,11 @@ who looks after a group, not the stranger asking in it. And it lists the pod's
 tables, files, people and the owner's memory -- names the stranger has no
 business learning, handed to a model that is replying to them.
 
-So this says four things and nothing else: which pod the agent is speaking for,
-that the person is outside it, who looks after the conversation (by the id
-`message_user` takes, so a question can be passed on), and that only Public
-things are readable. It is short enough to rebuild every run, so it is not
+So this says five things and nothing else: which pod the agent is speaking for,
+that the people in the chat are outside it, who looks after the conversation
+(so a question can be passed on with `message_user`), that a message written in
+Lemma is that member's and not a stranger's, and that only Public things are
+readable. It is short enough to rebuild every run, so it is not
 cached.
 """
 
@@ -76,13 +77,19 @@ def render_outsider_brief(
         "# Runtime Context",
         f"- You are speaking for the pod {pod_name or '(unnamed)'}.",
         (
-            "- The person writing to you is NOT a member of it. Nothing in this "
-            "pod is theirs unless it is marked Public."
+            "- The people writing to you from the chat are NOT members of it, "
+            "and each of their messages is labelled with who wrote it. Nothing "
+            "in this pod is theirs unless it is marked Public."
         ),
         (
             f"- Who looks after this conversation: {owner_name}. Pass on what "
             "you cannot answer with `message_user` -- it always reaches them, "
             "whatever you put in `to` -- and their reply comes back to you here."
+        ),
+        (
+            f"- A message marked as written in Lemma is from {owner_name}, not "
+            "from anybody in the chat. Answer it here; never pass it on to them "
+            "with `message_user`."
         ),
         (
             "- You can read only what the pod has marked Public. A refusal from "

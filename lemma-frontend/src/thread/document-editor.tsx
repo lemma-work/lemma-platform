@@ -30,6 +30,7 @@ import { joinFrontmatter, splitFrontmatter } from "@/skills/skill-frontmatter";
 import { SAVE_AFTER_MS, describeSave, sayLocked, type SaveState } from "./document-save";
 import { useDocAsk } from "@/docs/doc-ask";
 import { ChatIcon } from "@/ui/icons";
+import { usePaneVisible } from "@/shell/pane-visible";
 
 type Pick = { top: number; left: number; text: string };
 
@@ -84,8 +85,21 @@ function titleOf(editor: Editor): string | null {
     return first.textContent;
 }
 
+/** The SHA-256 of the UTF-8 bytes a save writes, as the server records it
+ *  (`content_sha256`). Null where the browser has no subtle crypto — an
+ *  insecure origin — and then every change is read back, as before. */
+async function contentStamp(text: string): Promise<string | null> {
+    try {
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+        return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    } catch {
+        return null;
+    }
+}
+
 export function DocumentEditor({ podId, path, text }: { podId: string; path: string; text: string }) {
     const cache = useQueryClient();
+    const visible = usePaneVisible();
 
     /** What this app believes is on disk. Everything else is measured from it. */
     const [saved, setSaved] = useState(text);
@@ -233,6 +247,12 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     const target = useRef(path);
     useEffect(() => { target.current = path; }, [path]);
     const renaming = useRef(false);
+    /* The fingerprints of what this editor has written: the SHA-256 of the
+       bytes, which is what the server stamps the file with. The change check
+       below takes a stamp found here as a file that already says what the
+       editor holds, so a save of ours is not fetched back — and any other
+       stamp, an agent's edit landing beside ours included, still is. */
+    const ourStamps = useRef<string[]>([]);
     const persist = useCallback(async (next: string) => {
         /* Held while the file moves; the autosave comes back round once the
            new path is in. */
@@ -241,6 +261,8 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
         const at = target.current;
         setState("saving");
         try {
+            const stamp = await contentStamp(next);
+            if (stamp) ourStamps.current = [...ourStamps.current.slice(-7), stamp];
             await source.writeFile(podId, at, next);
             if (attempt.current !== mine) return;
             setSaved(next);
@@ -438,10 +460,20 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
     /* An agent writing into this page is seen while it writes: the file's
        fingerprint is checked every few seconds while the page is on screen,
        and a change is read in — unless you have unsaved words of your own,
-       which the adopt-effect below already refuses to overwrite. */
+       which the adopt-effect below already refuses to overwrite.
+
+       On screen means this pane in front as well as the browser tab: a page
+       left open behind another stops asking, and asks at once on the way
+       back. The last stamp outlives the pause in a ref, so that first ask
+       can still tell an edit made while it was hidden.
+
+       A stamp that is the fingerprint of something this editor wrote is our
+       own save: the editor and the file cache already hold those words, and
+       reading them back cost a refetch for every pause in typing. Anything
+       else is somebody else's edit and is read in. */
+    const lastStamp = useRef<{ path: string; stamp: string | null } | null>(null);
     useEffect(() => {
-        if (!asPage || source.label !== "live") return;
-        let last: string | null = null;
+        if (!asPage || source.label !== "live" || !visible) return;
         let stopped = false;
         const tick = async () => {
             if (document.hidden) return;
@@ -449,8 +481,10 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
                 const meta = (await lemma(podId).files.get(path)) as { content_sha256?: string | null; updated_at?: string | null };
                 if (stopped) return;
                 const stamp = meta.content_sha256 ?? meta.updated_at ?? null;
-                if (last !== null && stamp !== last) void cache.invalidateQueries({ queryKey: ["file", podId, path] });
-                last = stamp;
+                const last = lastStamp.current?.path === path ? lastStamp.current.stamp : null;
+                const ours = meta.content_sha256 != null && ourStamps.current.includes(meta.content_sha256);
+                if (last !== null && stamp !== last && !ours) void cache.invalidateQueries({ queryKey: ["file", podId, path] });
+                lastStamp.current = { path, stamp };
             } catch {
                 /* The next tick asks again. */
             }
@@ -458,7 +492,7 @@ export function DocumentEditor({ podId, path, text }: { podId: string; path: str
         void tick();
         const timer = setInterval(() => void tick(), 4000);
         return () => { stopped = true; clearInterval(timer); };
-    }, [asPage, cache, path, podId]);
+    }, [asPage, cache, path, podId, visible]);
 
     /* Typing stops, the file is written. No button, because a button on a
        paragraph is a chore and losing the paragraph to a closed tab is worse. */

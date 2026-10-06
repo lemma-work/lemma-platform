@@ -15,12 +15,12 @@ import path from "node:path";
 const origin = process.argv[2] ?? "http://localhost:3000";
 const out = path.resolve(process.argv[3] ?? path.join(import.meta.dirname, "../public/landing"));
 
-/** The strip that labels the sample ("Acme sample workspace · No external
- *  actions") is for visitors of the live sample, not for a picture of it. */
+/** The strip over a standalone demo ("Acme · Back to Lemma") is for its
+ *  visitors, not for a picture of it. */
 async function belowBanner(page) {
     return page.evaluate(() => {
         const shell = document.querySelector(".shell, .app, main") ?? document.body;
-        const banner = [...document.body.querySelectorAll("*")].find((node) => /sample workspace/i.test(node.textContent ?? "") && node.getBoundingClientRect().height < 80 && node.getBoundingClientRect().top < 10);
+        const banner = document.querySelector(".preview-document__note");
         return banner ? Math.ceil(banner.getBoundingClientRect().bottom) : shell.getBoundingClientRect().top;
     });
 }
@@ -60,22 +60,23 @@ await mkdir(out, { recursive: true });
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
 
-/* Each sample teammate's own app, full width below the sample banner: the
-   windows under "The tools the job needs". Heights differ on purpose, so the
-   columns do not line up into a grid. */
-const APPS = [
-    { name: "app-kit", teammate: "kit", height: 560 },
-    { name: "app-remy", teammate: "remy", height: 780 },
-    { name: "app-june", teammate: "june", height: 820 },
-    { name: "app-scout", teammate: "scout", height: 760 },
-];
-for (const app of APPS) {
-    await page.goto(origin + "/demo/launch?teammate=" + app.teammate, { waitUntil: "networkidle" });
-    await page.addStyleTag({ content: QUIET });
-    await page.waitForTimeout(2500);
-    const top = await belowBanner(page);
-    await write(await page.screenshot({ type: "png", clip: { x: 0, y: top, width: 1440, height: Math.min(app.height, 900 - top) } }), app.name, 86);
+/* Each sample teammate's own app, below the banner: the tabs under "The
+   tools the job needs". All the same size, 1280×720, so switching tabs never
+   moves the page; 1280 rather than 1440 so the text stays readable at the
+   size the landing shows it. */
+const APPS = ["kit", "remy", "june", "scout"];
+const apps = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 });
+for (const teammate of APPS) {
+    await apps.goto(origin + "/demo/launch?teammate=" + teammate, { waitUntil: "networkidle" });
+    await apps.addStyleTag({ content: QUIET });
+    await apps.waitForTimeout(2500);
+    const top = await belowBanner(apps);
+    await apps.setViewportSize({ width: 1280, height: top + 720 });
+    await apps.waitForTimeout(800);
+    await write(await apps.screenshot({ type: "png", clip: { x: 0, y: top, width: 1280, height: 720 } }), "app-" + teammate, 86);
+    await apps.setViewportSize({ width: 1280, height: 800 });
 }
+await apps.close();
 
 await page.goto(origin + "/demo/landing", { waitUntil: "networkidle" });
 await page.addStyleTag({ content: QUIET });

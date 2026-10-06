@@ -274,6 +274,7 @@ _NAME_TO_MODULE = {
     'GroupListResponse': 'group_list_response',
     'GroupOwnerResponse': 'group_owner_response',
     'GroupPersonResponse': 'group_person_response',
+    'GroupPublicResponse': 'group_public_response',
     'GroupResponse': 'group_response',
     'GroupStartRequest': 'group_start_request',
     'GroupTimelineResponse': 'group_timeline_response',
@@ -392,6 +393,7 @@ _NAME_TO_MODULE = {
     'PodUpdateRequest': 'pod_update_request',
     'PublicAudience': 'public_audience',
     'PublicColumnResponse': 'public_column_response',
+    'PublicFileResponse': 'public_file_response',
     'PublishMode': 'publish_mode',
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
@@ -580,6 +582,7 @@ _NAME_TO_MODULE = {
     'WorkflowRunWaitResponsePayload': 'workflow_run_wait_response_payload',
     'WorkflowRunWaitStatus': 'workflow_run_wait_status',
     'WorkflowRunWaitType': 'workflow_run_wait_type',
+    'WorkflowRunWaitingOn': 'workflow_run_waiting_on',
     'WorkflowSummaryResponse': 'workflow_summary_response',
     'WorkflowUpdateRequest': 'workflow_update_request',
     'WorkspaceAppAccessRequest': 'workspace_app_access_request',
@@ -857,6 +860,7 @@ if TYPE_CHECKING:
     from .group_list_response import GroupListResponse
     from .group_owner_response import GroupOwnerResponse
     from .group_person_response import GroupPersonResponse
+    from .group_public_response import GroupPublicResponse
     from .group_response import GroupResponse
     from .group_start_request import GroupStartRequest
     from .group_timeline_response import GroupTimelineResponse
@@ -975,6 +979,7 @@ if TYPE_CHECKING:
     from .pod_update_request import PodUpdateRequest
     from .public_audience import PublicAudience
     from .public_column_response import PublicColumnResponse
+    from .public_file_response import PublicFileResponse
     from .publish_mode import PublishMode
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
@@ -1163,6 +1168,7 @@ if TYPE_CHECKING:
     from .workflow_run_wait_response_payload import WorkflowRunWaitResponsePayload
     from .workflow_run_wait_status import WorkflowRunWaitStatus
     from .workflow_run_wait_type import WorkflowRunWaitType
+    from .workflow_run_waiting_on import WorkflowRunWaitingOn
     from .workflow_summary_response import WorkflowSummaryResponse
     from .workflow_update_request import WorkflowUpdateRequest
     from .workspace_app_access_request import WorkspaceAppAccessRequest
@@ -1453,6 +1459,7 @@ __all__ = [
     'GroupListResponse',
     'GroupOwnerResponse',
     'GroupPersonResponse',
+    'GroupPublicResponse',
     'GroupResponse',
     'GroupStartRequest',
     'GroupTimelineResponse',
@@ -1571,6 +1578,7 @@ __all__ = [
     'PodUpdateRequest',
     'PublicAudience',
     'PublicColumnResponse',
+    'PublicFileResponse',
     'PublishMode',
     'PublishStartRequest',
     'PublishStatus',
@@ -1759,6 +1767,7 @@ __all__ = [
     'WorkflowRunWaitResponsePayload',
     'WorkflowRunWaitStatus',
     'WorkflowRunWaitType',
+    'WorkflowRunWaitingOn',
     'WorkflowSummaryResponse',
     'WorkflowUpdateRequest',
     'WorkspaceAppAccessRequest',

@@ -319,6 +319,7 @@ def build_agent_instruction_parts(
         surface_platform = getattr(ctx, "surface_platform", None)
         if surface_platform:
             from app.modules.agent.domain.surface_prompts import (
+                is_group_conversation,
                 surface_platform_guidance,
             )
 
@@ -326,6 +327,7 @@ def build_agent_instruction_parts(
                 surface_platform,
                 answers_outsider=bool(getattr(ctx, "answers_outsider", False)),
                 answers_contact=getattr(ctx, "contact_id", None) is not None,
+                in_group=is_group_conversation(ctx),
             )
             if fragment:
                 sections.append(fragment)

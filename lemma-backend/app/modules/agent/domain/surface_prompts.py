@@ -25,19 +25,30 @@ from app.modules.agent_surfaces.contracts.platforms import (
 _MAX_LISTED_ATTACHMENTS = 10
 
 
+def is_group_conversation(ctx: object) -> bool:
+    """Whether a run's conversation is a chat that several people read.
+
+    Read off ``surface_conversation_kind``, which routing records on the
+    conversation: ``CHANNEL`` is a group, a Slack channel or a Teams channel.
+    """
+    return getattr(ctx, "surface_conversation_kind", None) == "CHANNEL"
+
+
 def surface_platform_guidance(
     platform: str | None,
     *,
     answers_outsider: bool = False,
     answers_contact: bool = False,
+    in_group: bool = False,
 ) -> str:
     """The standing system-prompt fragment for a surface platform.
 
     Returns ``""`` for an unknown or absent platform so callers can append
     unconditionally. ``answers_outsider`` adds the section for a run speaking
-    for the pod to somebody outside it; it is stable per conversation, so it
-    rides in the cached prefix with the rest. ``answers_contact`` narrows that
-    to a contact's private chat, where only they read the answer.
+    for the pod to somebody outside it, and ``in_group`` the one for a chat
+    several people read; both are stable per conversation, so they ride in the
+    cached prefix with the rest. ``answers_contact`` narrows the outsider
+    section to a contact's private chat, where only they read the answer.
     """
     facts = platform_facts(platform)
     if facts is None:
@@ -45,13 +56,17 @@ def surface_platform_guidance(
 
     lines: list[str] = [f"# Talking over {facts.display_name}"]
 
+    in_group = in_group and not facts.is_email
+    who = "people in a group chat" if in_group else "the user"
     lines.append(
-        f"You are conversing with the user through {facts.display_name}, a "
-        "third-party messaging platform — not Lemma's own chat UI. The recipient "
-        "sees ONLY the messages you send to the platform; they do NOT see this "
+        f"You are conversing with {who} through {facts.display_name}, a "
+        "third-party messaging platform — not Lemma's own chat UI. They see "
+        "ONLY the messages you send to the platform; they do NOT see this "
         "internal conversation, your tool calls, your reasoning, or intermediate "
         "progress. Send a single, complete reply when your work is done."
     )
+    if in_group:
+        lines.append(_GROUP_SECTION)
 
     if facts.is_email:
         lines.extend(_email_sections(facts))
@@ -77,15 +92,47 @@ def surface_platform_guidance(
     return "\n\n".join(lines)
 
 
+# A group read like a direct chat goes wrong in ways nobody in it can follow:
+# "Yo bro, what do you need?" to a room, "you" that means somebody other than the
+# reader, "I've messaged him" with no telling who him is. Each line answers one of
+# those. The Lemma line is there because a member can type into this
+# conversation from Lemma, and the group sees only the answer, never what was
+# typed -- so an answer that leans on it reads as nonsense, or as the reply to
+# whoever spoke last.
+_GROUP_SECTION = (
+    "## In a group\n"
+    "This is a group chat, not a one-to-one conversation: everyone in it reads "
+    "everything you post.\n"
+    "- Each message from the chat is labelled with who wrote it. Answer the "
+    "person who addressed you, and start with their name whenever the group "
+    "could not otherwise tell who you are answering.\n"
+    '- "You" in your reply means that one person. Name everybody else — '
+    'never "he" or "him" where the group could not tell who.\n'
+    '- Talk like a teammate in the room, not a help desk: no "What do you '
+    'need?", no restating the question, no sign-off. Answer briefly, and '
+    "offer to send more detail to someone directly rather than posting a long "
+    "report to everyone.\n"
+    "- A message marked as written in Lemma was not seen by the group — only "
+    "your answer is. Make that answer stand on its own for the people reading "
+    'it: say who it is for, and who it is from when that matters ("Priya — '
+    "Arjun's asking how the launch went\").\n"
+    "- Do not tell the group what you were asked in private, or that you "
+    "messaged somebody on another person's behalf, unless saying so is the "
+    "point."
+)
+
+
 # Why each line is there: the first two are what keep a stranger's turn from
 # becoming a way in -- the run cannot read more than Public, but it can still
 # *say* things, and the conversation around it names people and plans. The last
 # is what makes "I can't share that" a handoff rather than a dead end.
 _OUTSIDER_SECTION = (
     "## Speaking for the pod to somebody outside it\n"
-    "The person writing to you is not a member of this pod. You answer them "
-    "on the pod's behalf, and everything you say is seen by them and by "
-    "everyone else in this chat.\n"
+    "The people writing to you from this chat are not members of this pod. "
+    "You answer them on the pod's behalf, and everything you say is seen by "
+    "them and by everyone else in this chat. (A message marked as written in "
+    "Lemma is the exception: it is from the member who looks after this "
+    "conversation.)\n"
     "- Answer from what they said, from the conversation shown to you, and "
     "from things the pod has marked Public. Nothing else is yours to share.\n"
     "- Do not repeat people's names, contact details, plans or numbers from "

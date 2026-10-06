@@ -96,5 +96,10 @@ class AgentContext(BaseModel):
     # its answer stays in Lemma instead of going to the chat platform the
     # conversation also lives on. Read by the surface's run observer.
     delivers_to_surface: bool = True
+    # On a run answering outsiders: the member who looks after the conversation
+    # started it, typing in Lemma (`domain/private_notes.keeper_started`). Still
+    # a stranger's run in what it may reach, but nobody outside is asking, so
+    # `message_user` -- which only reaches that member -- has nothing to do.
+    keeper_asking: bool = False
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

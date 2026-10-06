@@ -81,6 +81,15 @@ export function teamNameFor(email: string | null | undefined): string {
     return words.slice(0, 1).toUpperCase() + words.slice(1);
 }
 
+/** The same guess, unless it names an organization this person is already
+ *  in — where it would be a second "Acme" beside the first, offered to the
+ *  one person who already knows that name is taken. */
+export function freshTeamNameFor(email: string | null | undefined, taken: readonly string[]): string {
+    const named = teamNameFor(email);
+    const key = named.trim().toLowerCase();
+    return taken.some((one) => one.trim().toLowerCase() === key) ? "" : named;
+}
+
 /** What the platform calls a workspace belonging to one person.
  *
  *  `"<who>'s Personal"` is not invented here — `shortOrgName` in `data/live.ts`

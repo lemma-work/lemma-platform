@@ -15,7 +15,7 @@ import { Fields } from "./fields";
 import { blank, fields, payload, problems, type Values } from "./schema";
 import {
     canBringOwnApp, canInstallWithDefaults, connectorProblem, connectRoute, connectSchema, freshInstallName, installSchema, kindFor,
-    isStaleDefault, kindNamed, needsOwnApp, oauthAppMissing, type CatalogEntry, type Install,
+    isStaleDefault, kindNamed, needsOwnApp, oauthAppMissing, ownAppKinds, registersLemmaRedirect, type CatalogEntry, type Install,
 } from "./install";
 
 /** The redirect URI the app being registered must allow, copyable. It is the
@@ -70,7 +70,7 @@ function useMachineApp(connectorId: string): { machine: string; open: () => void
  */
 export function ConnectDialog({
     orgId, connector, install, takenNames, mayInstall = null, authorizing = false, authorizeFailure = null,
-    onClose, onDone, onAuthorize,
+    ownAppFirst = false, onClose, onDone, onAuthorize,
 }: {
     orgId: string;
     connector: CatalogEntry;
@@ -92,6 +92,9 @@ export function ConnectDialog({
     /** Why the sign-in could not start. Said here, because the card the caller
      *  would otherwise write it on is behind this dialog. */
     authorizeFailure?: string | null;
+    /** Open on the organization's own app rather than on connecting — the
+     *  door somebody took when that is what they came to set up. */
+    ownAppFirst?: boolean;
     onClose: () => void;
     onDone: () => void;
     /** Hands the browser round trip back to the caller, which already owns it. */
@@ -106,13 +109,20 @@ export function ConnectDialog({
     /* With no install, the kind a fresh one would take. Asking only for an
        unambiguous kind left every connector offering two — Composio and a
        native one — at "has not described what it needs". */
-    const kind = useMemo(() => kindFor(entry, against), [entry, against]);
+    const usual = useMemo(() => kindFor(entry, against), [entry, against]);
+    /* The kinds an organization's own app can stand behind. Not only the one
+       an install would take by default: where Composio is offered beside a
+       native kind, Composio is the default and never takes an organization's
+       app, so asking of it alone hid "Use your own app" exactly where the
+       native kind supports one. */
+    const appKinds = useMemo(() => ownAppKinds(entry), [entry]);
+    const [bringingApp, setBringingApp] = useState(ownAppFirst);
+    const kind = bringingApp && !canBringOwnApp(usual) ? appKinds[0] ?? usual : usual;
     const refresh = useConnectorRefresh(orgId);
 
     /* Nothing to connect against, and Lemma cannot make it alone: the
        organization's own app, or whatever else the install needs, comes first. */
     const ownApp = (!against || isStaleDefault(against, kind)) && (needsOwnApp(kind) || !canInstallWithDefaults(kind));
-    const [bringingApp, setBringingApp] = useState(false);
     const showingApp = ownApp || bringingApp;
 
     const list = useMemo(
@@ -242,7 +252,7 @@ export function ConnectDialog({
                                 : "Authorisation will run against your app rather than Lemma's."}
                     </p>
                 )}
-                {showingApp && signsIn && <RedirectUri connectorId={connector.id} />}
+                {showingApp && registersLemmaRedirect(kind) && <RedirectUri connectorId={connector.id} />}
                 {showingApp && signsIn && machineApp && (
                     <button type="button" className="linkish thismac-setup" onClick={machineApp.open}>
                         <KeyIcon size={13} /> Or set it up once for {machineApp.machine} →
@@ -266,7 +276,7 @@ export function ConnectDialog({
                                     ? <LoadingIndicator inline label={"Opening " + connector.title} />
                                     : <>Continue <ExternalIcon size={13} /></>}
                             </button>
-                            {canBringOwnApp(kind) && !ownApp && mayInstall !== false && (
+                            {appKinds.length > 0 && !ownApp && mayInstall !== false && against?.config_source !== "ORG_CUSTOM" && (
                                 <button className="btn" disabled={busy} onClick={() => { setBringingApp(true); setValues({}); }}>
                                     Use your own app
                                 </button>

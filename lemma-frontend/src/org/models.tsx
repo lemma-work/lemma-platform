@@ -90,12 +90,17 @@ const OLLAMA_PRESET: typeof PRESETS[number] = {
 
 /** A computer that has just been paired publishes its agents a few seconds
  *  later, and one that is waking up changes status on its own. Poll quickly
- *  while anything is unsettled, slowly once everything is online — without
- *  this a machine sits at "Offline" until the window is refocused. */
+ *  only while a fresh pairing is still being looked for — that is a person
+ *  watching the screen for it. No computer at all, or one offline, can stay
+ *  that way for days, and every poll here lists each computer's harnesses
+ *  too, so those are looked at twice a minute rather than every four seconds:
+ *  still soon enough that a machine does not sit at "Offline" until the
+ *  window is refocused. */
 function computerPoll(computers: Computer[] | undefined): number {
     if (!computers) return 4_000;
-    const unsettled = computers.length === 0 || computers.some((one) => !one.online || stillLooking(one));
-    return unsettled ? 4_000 : 20_000;
+    if (computers.some((one) => stillLooking(one))) return 4_000;
+    const unsettled = computers.length === 0 || computers.some((one) => !one.online);
+    return unsettled ? 30_000 : 20_000;
 }
 
 function Mark({ runtime }: { runtime: { harness: string; kind: "key" | "agent"; scope?: string } }) {

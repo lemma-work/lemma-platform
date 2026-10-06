@@ -29,7 +29,7 @@ from app.modules.agent.domain.outsiders import (
     answers_outsiders,
     conversation_contact_id,
 )
-from app.modules.agent.domain.private_notes import run_is_private
+from app.modules.agent.domain.private_notes import keeper_started, run_is_private
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
@@ -139,6 +139,7 @@ async def build_run_context(
         answers_outsider=for_outsider,
         contact_id=contact_id,
         delivers_to_surface=not run_is_private(agent_run.metadata),
+        keeper_asking=for_outsider and keeper_started(agent_run.metadata),
         **surface_context,
     )
     try:

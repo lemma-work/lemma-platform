@@ -17,6 +17,7 @@ Nothing here reads an inbound event.
 
 from __future__ import annotations
 
+from datetime import timezone
 from typing import Any
 from uuid import UUID
 
@@ -30,6 +31,7 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
 )
@@ -207,6 +209,9 @@ class SurfaceDelivery:
             )
             return None
 
+        if await self._answers_lemma_message(link):
+            parsed_event = parsed_event.model_copy(update={"answers_inbound": False})
+
         return SurfaceEgressTarget(
             link=link,
             surface=surface,
@@ -216,6 +221,28 @@ class SurfaceDelivery:
             credentials=await self.egress_credentials(surface, event=parsed_event),
             conversation_user_id=conversation.user_id,
         )
+
+    async def _answers_lemma_message(self, link: AgentSurfaceConversationLink) -> bool:
+        """Whether what goes out now answers a message typed in Lemma.
+
+        The latest run was started from Lemma, and nobody in the chat has
+        written since it started -- someone who has is part of what it answers.
+        Only a group's conversation can hold such a run, so nothing else pays
+        for the lookup.
+        """
+        if link.conversation_kind != "CHANNEL":
+            return False
+        started = await agent_conversations.lemma_message_run_started_at(
+            self.uow, link.conversation_id
+        )
+        if started is None:
+            return False
+        last_inbound = link.inbound_activity_at
+        if last_inbound.tzinfo is None:
+            last_inbound = last_inbound.replace(tzinfo=timezone.utc)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return started >= last_inbound
 
     async def egress_metadata(
         self,

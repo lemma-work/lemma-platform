@@ -133,7 +133,7 @@ class TelegramManagerService:
                 agent_id=agent_id,
                 surface_config=surface_config.model_dump(mode="json"),
                 is_enabled=is_enabled,
-                suggested_bot_name=_suggested_bot_name(pod_name, surface_name),
+                suggested_bot_name=_suggested_bot_name(pod_name),
                 suggested_bot_username=_suggested_bot_username(
                     pod_name,
                     surface_name,
@@ -262,9 +262,14 @@ class TelegramManagerService:
         await self._client.call("sendMessage", payload)
 
 
-def _suggested_bot_name(pod_name: str, surface_name: str) -> str:
-    name = f"{pod_name.strip()} · {surface_name.strip()}".strip(" ·")
-    return (name or "Lemma agent")[:64]
+def _suggested_bot_name(pod_name: str) -> str:
+    """The pod's name, which is what Lemma calls this bot everywhere else.
+
+    It used to add the surface's name -- "Lemma · Personal" -- which named the
+    bot after a setting nobody in a group can see. The person can still rename
+    it in Telegram while creating it.
+    """
+    return (pod_name.strip() or "Lemma agent")[:64]
 
 
 def _suggested_bot_username(

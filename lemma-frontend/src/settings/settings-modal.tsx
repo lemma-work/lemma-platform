@@ -89,6 +89,10 @@ function thisMacEntries(noun: string): Entry[] {
     ];
 }
 
+/** The organization picker's last choice, which makes one instead of
+ *  choosing one. Not a uuid, so it can never be an organization's id. */
+const NEW_ORG = "new-organization";
+
 /** Sections about paying, which a local installation has nothing to say in:
  *  it runs the open-source backend on somebody's own machine, with no plans
  *  to pick and no seats to buy. Hidden rather than shown empty, because an
@@ -103,6 +107,7 @@ export function SettingsModal({
     orgs,
     activeOrgId,
     onPickOrg,
+    onNewOrg = null,
     initial = "account",
     initialFocus = null,
     onClose,
@@ -110,6 +115,9 @@ export function SettingsModal({
     orgs: Org[];
     activeOrgId: string | null;
     onPickOrg: (id: string) => void;
+    /** Make another organization. Offered from the organization picker,
+     *  which is where somebody choosing between them already is. */
+    onNewOrg?: (() => void) | null;
     initial?: SettingsSection;
     /** A part of the section to open at — Advanced's Google form, say. */
     initialFocus?: string | null;
@@ -146,6 +154,18 @@ export function SettingsModal({
     });
 
     const name = sample ? "Sample user" : displayName(user.data);
+    /* The organization picker doubles as the way to make another: one more
+       choice at the foot of the list, never selected itself. */
+    const pickOrg = (value: string) => {
+        if (value === NEW_ORG) onNewOrg?.();
+        else onPickOrg(value);
+    };
+    const orgOptions = <>
+        {orgs.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+        ))}
+        {onNewOrg && <option value={NEW_ORG}>New organization…</option>}
+    </>;
     const here = [...yours, ...theirs, ...thisMacEntries(noun)].find((entry) => entry.key === section) ?? yours[0];
 
     function nav(entry: Entry) {
@@ -194,14 +214,13 @@ export function SettingsModal({
                             )}
                         </select>
                     </label>
-                    {/* Only where there is a choice to make. */}
-                    {org && orgs.length > 1 && (
+                    {/* Only where there is a choice to make — another
+                        organization, or a new one. */}
+                    {org && (orgs.length > 1 || onNewOrg) && (
                         <label className="settings-picker__field">
                             <span className="sr-only">Organization</span>
-                            <select value={org.id} onChange={(event) => onPickOrg(event.target.value)}>
-                                {orgs.map((candidate) => (
-                                    <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
-                                ))}
+                            <select value={org.id} onChange={(event) => pickOrg(event.target.value)}>
+                                {orgOptions}
                             </select>
                         </label>
                     )}
@@ -220,13 +239,11 @@ export function SettingsModal({
                             <OrgIcon size={15} />
                             <select
                                 value={org.id}
-                                onChange={(event) => onPickOrg(event.target.value)}
+                                onChange={(event) => pickOrg(event.target.value)}
                                 aria-label="Organization"
-                                disabled={orgs.length < 2}
+                                disabled={orgs.length < 2 && !onNewOrg}
                             >
-                                {orgs.map((candidate) => (
-                                    <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
-                                ))}
+                                {orgOptions}
                             </select>
                         </label>
                         {theirs.map(nav)}

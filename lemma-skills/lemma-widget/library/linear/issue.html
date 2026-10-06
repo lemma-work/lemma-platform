@@ -1,0 +1,82 @@
+<!--
+widget: linear/issue
+description: One Linear issue; change its status, assignee or priority in place, or comment.
+connector: linear
+kind: composio
+operations: LINEAR_UPDATE_ISSUE, LINEAR_CREATE_LINEAR_COMMENT
+data: { id, identifier, title, url?, team?, description?, labels?: [name], priority?, state: { id, name }, states?: [{ id, name }], assignee?: { id, name }, users?: [{ id, name }] }
+version: 1
+-->
+<div id="issue"></div>
+<script type="application/json" data-lemma-sample>
+{
+  "id": "6f1c2b9e-4a7d-4c1e-9b3a-2d8e5f7a1c04",
+  "identifier": "ENG-214", "team": "Engineering",
+  "title": "Rate-limit the public share endpoint",
+  "url": "https://linear.app/northwind/issue/ENG-214",
+  "description": "Shared links can be hit without limit. Add a per-IP limit and a 429 page.",
+  "labels": ["security"], "priority": 2,
+  "state": { "id": "st-todo", "name": "Todo" },
+  "states": [{ "id": "st-backlog", "name": "Backlog" }, { "id": "st-todo", "name": "Todo" }, { "id": "st-progress", "name": "In Progress" }, { "id": "st-review", "name": "In Review" }, { "id": "st-done", "name": "Done" }],
+  "assignee": null,
+  "users": [{ "id": "u-mira", "name": "Mira Shah" }, { "id": "u-sam", "name": "Sam Rivera" }]
+}
+</script>
+<script>
+(function () {
+  var d = lemma.data, el = document.getElementById("issue"), e = lemma.esc;
+  if (!d || !d.id) { el.innerHTML = '<p class="lw-quiet">No issue to show.</p>'; return; }
+  var PRIORITY = ["No priority", "Urgent", "High", "Medium", "Low"];
+  var pick = function (id, label, items, current) {
+    return "<dt>" + label + '</dt><dd><span class="lw-pick"><select id="' + id + '" aria-label="' + label + '">' + items.map(function (i) {
+      return '<option value="' + e(i.value) + '"' + (String(i.value) === String(current) ? " selected" : "") + ">" + e(i.label) + "</option>";
+    }).join("") + "</select></span></dd>";
+  };
+  var states = (d.states || [d.state]).map(function (s) { return { value: s.id, label: s.name }; });
+  var users = [{ value: "", label: "Unassigned" }].concat((d.users || (d.assignee ? [d.assignee] : [])).map(function (u) { return { value: u.id, label: u.name }; }));
+  var priorities = PRIORITY.map(function (p, i) { return { value: i, label: p }; });
+
+  el.innerHTML =
+    '<div class="lw-card">' +
+      '<div class="lw-sec" data-say>' +
+        '<div class="lw-top">' + lemma.icon("issue") + '<span class="lw-mono">' + e(d.identifier || "") + "</span>" + (d.team ? "<span>· " + e(d.team) + "</span>" : "") +
+          '<span class="lw-spacer"></span>' + (d.url ? '<a class="lw-quiet" href="' + e(d.url) + '" target="_blank" rel="noopener" style="text-decoration:none">Open in Linear</a>' : "") + "</div>" +
+        '<h2 class="lw-title">' + e(d.title) + "</h2>" +
+        ((d.labels || []).length ? '<div class="lw-bar" style="margin-top:10px">' + d.labels.map(function (l) { return '<span class="lw-pill"><span class="lw-led" style="color:var(--w-chart-4, #b94082)"></span>' + e(l) + "</span>"; }).join("") + "</div>" : "") +
+        '<dl class="lw-props" style="margin:14px 0 0">' + pick("state", "Status", states, d.state && d.state.id) +
+          pick("assignee", "Assignee", users, d.assignee ? d.assignee.id : "") + pick("priority", "Priority", priorities, d.priority != null ? d.priority : 0) + "</dl>" +
+      "</div>" +
+      (d.description ? '<div class="lw-sec"><div class="lw-body">' + e(d.description.length > 700 ? d.description.slice(0, 700) + "…" : d.description) + "</div></div>" : "") +
+      '<div class="lw-sec">' +
+        '<div class="lw-compose"><textarea id="note" rows="2" placeholder="Leave a comment"></textarea>' +
+          '<div class="lw-bar"><span class="lw-spacer"></span><button class="lw-btn" data-tone="primary" id="comment">Comment</button></div></div>' +
+      "</div>" +
+    "</div>";
+
+  var act = function (op, payload) { return lemma.act("linear", op, payload, { kind: "composio" }); };
+  var note = document.getElementById("note");
+  lemma.button("comment", {
+    does: "post the comment",
+    run: function () { if (!note.value.trim()) throw new Error("Write the comment first."); return act("LINEAR_CREATE_LINEAR_COMMENT", { issueId: d.id, body: note.value }); },
+    done: "Comment posted."
+  });
+  // Each property saves the moment it changes, through a hidden button, so it gets the same busy, result and sample handling.
+  [["state", "stateId", "Status"], ["assignee", "assigneeId", "Assignee"], ["priority", "priority", "Priority"]].forEach(function (s) {
+    var field = document.getElementById(s[0]);
+    var go = document.createElement("button");
+    go.hidden = true;
+    go.textContent = "change the " + s[0];
+    field.parentElement.appendChild(go);
+    lemma.button(go, {
+      does: "change the " + s[2].toLowerCase(),
+      run: function () {
+        var payload = { issueId: d.id };
+        payload[s[1]] = s[0] === "priority" ? Number(field.value) : (field.value || null);
+        return act("LINEAR_UPDATE_ISSUE", payload);
+      },
+      done: function () { return s[2] + " set to " + field.selectedOptions[0].textContent + "."; }
+    });
+    field.addEventListener("change", function () { go.click(); });
+  });
+})();
+</script>

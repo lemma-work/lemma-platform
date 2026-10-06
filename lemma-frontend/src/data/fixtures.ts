@@ -1446,6 +1446,13 @@ const SAMPLE_BOTS_CLOSED = new Set<string>(["researcher-whatsapp"]);
    may configure — Priya is told. */
 const SAMPLE_VIEWER_ADMIN = true;
 
+/** What a sample group's people from outside the space can be answered from. */
+const SAMPLE_PUBLIC = {
+    files: [{ name: "pricing.md", path: "/pricing.md" }, { name: "faq.md", path: "/support/faq.md" }],
+    tables: ["price_list"],
+    more: false,
+};
+
 let GROUPS: SampleGroup[] = [
     {
         pod: "marketing",
@@ -2848,7 +2855,7 @@ export const fixtureSource: PodSource = {
     async getGroup(_podId: string, groupId: string) {
         await wait(120);
         const entry = sampleGroup(groupId);
-        const group = readGroupDetail({ ...groupWire(entry), people: entry.people, waiting: entry.waiting });
+        const group = readGroupDetail({ ...groupWire(entry), people: entry.people, waiting: entry.waiting, public: SAMPLE_PUBLIC });
         if (!group) throw new Error("That group is not here any more.");
         return group;
     },
@@ -3345,6 +3352,9 @@ export const fixtureSource: PodSource = {
         if (path.endsWith(".pdf")) return (await fetch("/sample-document.pdf")).blob();
         return new Blob(["Sample file content"], { type: "text/plain" });
     },
+    async fileAppUrl() {
+        return "https://example.invalid/file";
+    },
     async readFile(_podId: string, path: string) {
         const file = await sampleFile(path);
         const edited = SAMPLE_EDITS.get(path);
@@ -3792,8 +3802,48 @@ export const SAMPLE_WORKFLOW_RUNS: Record<string, unknown[]> = {
             completed_at: new Date(Date.now() - 20 * 86400_000 + 120_000).toISOString(),
             created_at: new Date(Date.now() - 20 * 86400_000).toISOString(),
         },
+        /* Three more still going, so the in-progress board has lanes with
+           more than one card in them and a lane that is not a form. */
+        {
+            id: "run-approve-1",
+            workflow_id: "wf-budget",
+            pod_id: "sample",
+            user_id: "priya-user",
+            status: "WAITING",
+            start_type: "MANUAL",
+            current_node_id: "notify-approver",
+            started_at: new Date(Date.now() - 5 * 86400_000).toISOString(),
+            created_at: new Date(Date.now() - 5 * 86400_000).toISOString(),
+            title: "Events · 12500",
+            waiting_on: { node_id: "notify-approver", wait_type: "HUMAN", assigned_pod_member_id: "priya", since: new Date(Date.now() - 5 * 86400_000 + 3600_050).toISOString() },
+        },
+        {
+            id: "run-approve-2",
+            workflow_id: "wf-budget",
+            pod_id: "sample",
+            user_id: "sample-user",
+            status: "WAITING",
+            start_type: "MANUAL",
+            current_node_id: "notify-approver",
+            started_at: new Date(Date.now() - 2 * 86400_000).toISOString(),
+            created_at: new Date(Date.now() - 2 * 86400_000).toISOString(),
+            title: "Marketing · 9400",
+            waiting_on: { node_id: "notify-approver", wait_type: "HUMAN", assigned_pod_member_id: "priya", since: new Date(Date.now() - 2 * 86400_000 + 3600_050).toISOString() },
+        },
+        {
+            id: "run-paying",
+            workflow_id: "wf-budget",
+            pod_id: "sample",
+            user_id: "sample-user",
+            status: "RUNNING",
+            start_type: "SCHEDULED",
+            current_node_id: "pay",
+            started_at: new Date(Date.now() - 40 * 60_000).toISOString(),
+            created_at: new Date(Date.now() - 40 * 60_000).toISOString(),
+            title: "Marketing · 1800",
+        },
         /* A run with no id at all. The list drops it, and the point of it
-           being here is that the four above still draw. */
+           being here is that the ones above still draw. */
         { workflow_id: "wf-budget", status: "COMPLETED" },
     ],
     "supplier-onboarding": [
@@ -4002,6 +4052,34 @@ export const SAMPLE_RUN_DETAIL: Record<string, unknown> = {
     },
 };
 
+/* The board's extra runs, opened. Built from their summaries so the two
+   cannot disagree: collect and decide behind them, and the step each is at
+   still going. */
+for (const id of ["run-approve-1", "run-approve-2", "run-paying"]) {
+    const run = SAMPLE_WORKFLOW_RUNS["budget-sign-off"].find((one) => (one as { id?: string }).id === id) as Record<string, string>;
+    const from = Date.parse(run.started_at);
+    /* The title is `run_title` evaluated over this context, so the context
+       is read back out of it rather than said twice. */
+    const [centre, said] = run.title.split(" · ");
+    const amount = Number(said);
+    SAMPLE_RUN_DETAIL[id] = {
+        ...run,
+        execution_context: { start: { started_by: run.user_id, trigger: run.start_type }, collect: { amount, cost_centre: centre } },
+        step_history: [
+            { step_index: 0, node_id: "collect", status: "COMPLETED", started_at: new Date(from).toISOString(), completed_at: new Date(from + 3600_000).toISOString(), output_data: { amount, cost_centre: centre } },
+            { step_index: 1, node_id: "decide", status: "COMPLETED", started_at: new Date(from + 3600_000).toISOString(), completed_at: new Date(from + 3600_040).toISOString() },
+            { step_index: 2, node_id: run.current_node_id, status: run.status, started_at: new Date(from + 3600_050).toISOString() },
+        ],
+        ...(run.status === "WAITING" ? {
+            active_wait: {
+                id: "wait-" + id, run_id: id, pod_id: "sample", workflow_id: "wf-budget", node_id: run.current_node_id,
+                wait_type: "HUMAN", status: "ACTIVE", assigned_pod_member_id: "priya", created_at: new Date(from + 3600_050).toISOString(),
+                payload: { input_schema: { type: "object", required: ["approved"], properties: { approved: { type: "boolean", title: "Approved" }, note: { type: "string", title: "Note" } } } },
+            },
+        } : {}),
+    };
+}
+
 /** One workflow opened, keyed by *name*, because `workflows.get` is.
  *
  *  `WorkflowSummaryResponse` omits the graph on purpose (api/schemas.py:444),
@@ -4032,6 +4110,7 @@ export const SAMPLE_WORKFLOW_SHAPES: Record<string, unknown> = {
         is_active: true,
         allowed_actions: ["read", "run", "update"],
         start: { type: "MANUAL", config: null },
+        run_title: ["collect.cost_centre", "collect.amount"],
         /* Out of order on purpose: `nodes` is a list, and the point of the
            walk is that the wiring decides the order rather than whatever the
            author happened to save last. */

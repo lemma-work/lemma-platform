@@ -27,10 +27,12 @@ class SurfacePlatformCapability(AbstractCapability[object]):
         *,
         answers_outsider: bool = False,
         answers_contact: bool = False,
+        in_group: bool = False,
     ) -> None:
         self._platform = platform
         self._answers_outsider = answers_outsider
         self._answers_contact = answers_contact
+        self._in_group = in_group
 
     def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
         return "surface_platform"
@@ -40,4 +42,5 @@ class SurfacePlatformCapability(AbstractCapability[object]):
             self._platform,
             answers_outsider=self._answers_outsider,
             answers_contact=self._answers_contact,
+            in_group=self._in_group,
         )

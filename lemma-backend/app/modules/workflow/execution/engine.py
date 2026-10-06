@@ -509,7 +509,8 @@ class WorkflowEngine:
         # turn a successful advance into a raised exception. Clients still poll.
         try:
             wait = await self.wait_repo.get_active_for_run(run.id)
-            payload = run_response_from_domain(run, wait).model_dump(mode="json")
+            title = await self.flow_repo.run_title_of(run.flow_id)
+            payload = run_response_from_domain(run, wait, title).model_dump(mode="json")
             # The wait read above needs a connection; the Redis publish does
             # not, and this runs after every node advance.
             async with connection_released(getattr(self.wait_repo, "session", None)):

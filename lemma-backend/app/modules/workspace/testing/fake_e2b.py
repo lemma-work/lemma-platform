@@ -23,6 +23,22 @@ class NotFoundException(FakeE2BError):
     pass
 
 
+class CommandExitException(FakeE2BError):
+    """The SDK's answer to a command that ran and exited non-zero.
+
+    Shaped like the real one -- it is also the command's result, and its
+    message is the command's stderr -- because that message is what the
+    provider used to sniff, and stderr can say anything.
+    """
+
+    def __init__(self, *, exit_code: int, stdout: str, stderr: str) -> None:
+        super().__init__(f"Command exited with code {exit_code} and error:\n{stderr}")
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        self.error = stderr
+
+
 class RateLimitException(FakeE2BError):
     pass
 
@@ -111,6 +127,9 @@ class FakeE2B:
     #: so a workspace whose agent is down is modelled here, not with
     #: `runtime_status`.
     agent_answers: bool = True
+    #: The traceback the next `execute_python` runner exits 1 with, as an
+    #: agent's own buggy code would. `None` runs it cleanly.
+    python_raises: str | None = None
     # The lifetime each started process was given, in the order they started.
     # Recorded because E2B kills a command at this value and defaults it to 60s,
     # so "the provider passed no timeout" is indistinguishable from "the
@@ -205,6 +224,10 @@ class FakeE2B:
                 if background:
                     world._next += 1
                     return FakeCommandHandle(pid=world._next)
+                if world.python_raises is not None and cmd.startswith("python3 "):
+                    raise CommandExitException(
+                        exit_code=1, stdout="", stderr=world.python_raises
+                    )
 
                 class _Result:
                     stdout = f"ran: {cmd}"

@@ -8778,6 +8778,16 @@
             "title": "Platform",
             "type": "string"
           },
+          "public": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GroupPublicResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "shared_externally": {
             "default": false,
             "description": "A Slack channel shared with another company.",
@@ -9032,6 +9042,37 @@
           "in_pod"
         ],
         "title": "GroupPersonResponse",
+        "type": "object"
+      },
+      "GroupPublicResponse": {
+        "description": "The pod's Public files and tables, the first few of each.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/PublicFileResponse"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "more": {
+            "description": "More is Public than is listed here.",
+            "title": "More",
+            "type": "boolean"
+          },
+          "tables": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "required": [
+          "files",
+          "tables",
+          "more"
+        ],
+        "title": "GroupPublicResponse",
         "type": "object"
       },
       "GroupResponse": {
@@ -13150,6 +13191,31 @@
           "description"
         ],
         "title": "PublicColumnResponse",
+        "type": "object"
+      },
+      "PublicFileResponse": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent for a file in somebody's personal files.",
+            "title": "Path"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PublicFileResponse",
         "type": "object"
       },
       "PublishMode": {
@@ -18945,6 +19011,14 @@
             "title": "Nodes",
             "type": "array"
           },
+          "run_title": {
+            "description": "What each run is about, as up to four JMESPath expressions over the run context, joined with ' · '. Example: `[\"collect.candidate_name\", \"collect.role\"]`. Evaluated whenever a run is read, so a part filled in by a later form appears once that form is answered; parts that resolve to nothing are skipped. Empty means runs carry no title.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Run Title",
+            "type": "array"
+          },
           "start": {
             "anyOf": [
               {
@@ -19103,6 +19177,14 @@
             "format": "uuid",
             "title": "Pod Id",
             "type": "string"
+          },
+          "run_title": {
+            "description": "What each run is about, as up to four JMESPath expressions over the run context, joined with ' · '. Example: `[\"collect.candidate_name\", \"collect.role\"]`. Evaluated whenever a run is read, so a part filled in by a later form appears once that form is answered; parts that resolve to nothing are skipped. Empty means runs carry no title.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Run Title",
+            "type": "array"
           },
           "start": {
             "anyOf": [
@@ -19545,6 +19627,18 @@
             "title": "Step History",
             "type": "array"
           },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this run is about, from the workflow's `run_title`. Null when the workflow sets none or nothing it names is filled in yet.",
+            "title": "Title"
+          },
           "updated_at": {
             "anyOf": [
               {
@@ -19561,6 +19655,17 @@
             "format": "uuid",
             "title": "User Id",
             "type": "string"
+          },
+          "waiting_on": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowRunWaitingOn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run's active wait, while it has one."
           },
           "workflow_id": {
             "format": "uuid",
@@ -19691,6 +19796,18 @@
             "$ref": "#/components/schemas/WorkflowRunStatus",
             "default": "PENDING"
           },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What this run is about, from the workflow's `run_title`. Null when the workflow sets none or nothing it names is filled in yet.",
+            "title": "Title"
+          },
           "updated_at": {
             "anyOf": [
               {
@@ -19707,6 +19824,17 @@
             "format": "uuid",
             "title": "User Id",
             "type": "string"
+          },
+          "waiting_on": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowRunWaitingOn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run's active wait, while it has one."
           },
           "workflow_id": {
             "format": "uuid",
@@ -19888,6 +20016,50 @@
         "title": "WorkflowRunWaitType",
         "type": "string"
       },
+      "WorkflowRunWaitingOn": {
+        "description": "Where a suspended run is parked and on whom -- the active wait, cut\ndown to what a list needs. The full wait (form schema included) is on\n`workflow.run.get` as `active_wait`.",
+        "properties": {
+          "assigned_pod_member_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pod member a FORM wait is assigned to, when it is.",
+            "title": "Assigned Pod Member Id"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the run started waiting here.",
+            "title": "Since"
+          },
+          "wait_type": {
+            "$ref": "#/components/schemas/WorkflowRunWaitType"
+          }
+        },
+        "required": [
+          "node_id",
+          "wait_type"
+        ],
+        "title": "WorkflowRunWaitingOn",
+        "type": "object"
+      },
       "WorkflowSummaryResponse": {
         "description": "Lean workflow shape for list responses.\n\nOmits the full graph (`nodes`/`edges`/`start`) — fetch those from\n`workflow.get`. Carries cheap derived `node_count`/`node_types` so list\nviews can show step counts and participant badges without the graph.",
         "properties": {
@@ -20036,6 +20208,21 @@
               }
             ],
             "description": "Updated workflow schedule ownership mode."
+          },
+          "run_title": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What each run is about, as up to four JMESPath expressions over the run context, joined with ' · '. Example: `[\"collect.candidate_name\", \"collect.role\"]`. Evaluated whenever a run is read, so a part filled in by a later form appears once that form is answered; parts that resolve to nothing are skipped. Empty means runs carry no title. Send `[]` to remove the title.",
+            "title": "Run Title"
           },
           "start": {
             "anyOf": [
@@ -36317,7 +36504,7 @@
     },
     "/pods/{pod_id}/workflow-runs": {
       "get": {
-        "description": "Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable).",
+        "description": "Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable) and `workflow_id`. Each run carries its `title` and, while it has one, the active wait as `waiting_on`.",
         "operationId": "workflow.run.list_for_pod",
         "parameters": [
           {
@@ -36357,6 +36544,23 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workflow_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workflow Id"
             }
           },
           {

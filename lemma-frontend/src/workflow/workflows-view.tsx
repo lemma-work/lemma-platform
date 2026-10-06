@@ -13,6 +13,8 @@ import {
 } from "./runs";
 import { readShape, type FlowStep, type WorkflowShape } from "./shape";
 import { samples } from "@/data/samples";
+import { usePaneVisible } from "@/shell/pane-visible";
+import { runsPollEvery } from "./use-run";
 
 /** What this teammate has been told to do the same way twice.
  *
@@ -176,6 +178,7 @@ function RunsPane({ podId, flow, name, teammate, onBack, onOpenRun, onDiscuss }:
     onOpenRun: (runId: string) => void;
     onDiscuss?: (name: string) => void;
 }) {
+    const visible = usePaneVisible();
     /* A second request, and unavoidable: the list response omits the graph on
        purpose and carries a `node_count` in its place (`api/schemas.py:444`).
        Its own query rather than a field on the row, so a forbidden or
@@ -205,8 +208,8 @@ function RunsPane({ podId, flow, name, teammate, onBack, onOpenRun, onDiscuss }:
         staleTime: 30_000,
         /* A run in flight changes without anybody touching this page, and a
            list of runs that never moves is a list people stop believing.
-           Only while something is actually going. */
-        refetchInterval: (query) => (query.state.data?.some((run) => stillGoing(run.status)) ? 15_000 : false),
+           Only while something is actually going, and only on screen. */
+        refetchInterval: (query) => (visible ? runsPollEvery(query.state.data, 15_000) : false),
     });
 
     return (
@@ -409,6 +412,7 @@ export function RunPane({ podId, runId, workflowName, onBack }: {
     onBack: () => void;
 }) {
     const cache = useQueryClient();
+    const visible = usePaneVisible();
     const [refused, setRefused] = useState<string | null>(null);
 
     const run = useQuery({
@@ -421,7 +425,7 @@ export function RunPane({ podId, runId, workflowName, onBack }: {
             return readRunDetail(await lemma(podId).workflows.runs.get(runId, podId));
         },
         staleTime: 15_000,
-        refetchInterval: (query) => (query.state.data && stillGoing(query.state.data.status) ? 10_000 : false),
+        refetchInterval: (query) => (visible && query.state.data && stillGoing(query.state.data.status) ? 10_000 : false),
     });
 
     const cancel = useMutation({

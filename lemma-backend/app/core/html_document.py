@@ -13,6 +13,7 @@ app.core.runtime_config; this module only builds the document shell.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -115,14 +116,18 @@ _KIT_DIR = Path(__file__).parent / "widget_kit"
 # The drawing half -- `lemma.stats / bars / line / table / record` -- rides along
 # for the same reason: a trend with a hover layer and an accessible table was
 # twelve kilobytes a widget wrote out by hand; drawn by the page, it is one call.
+# The acting half -- `lemma.data / act / button` -- is what lets a library widget
+# be an email or a pull request someone can answer, not a picture of one.
 _WIDGET_KIT = "".join(
     (
         "\n    <style data-lemma-widget-tokens>\n",
         (_KIT_DIR / "widget-tokens-v1.css").read_text(encoding="utf-8"),
         (_KIT_DIR / "widget-draw-v1.css").read_text(encoding="utf-8"),
+        (_KIT_DIR / "widget-act-v1.css").read_text(encoding="utf-8"),
         "\n    </style>\n    <script data-lemma-widget-kit>\n",
         (_KIT_DIR / "widget-kit-v1.js").read_text(encoding="utf-8"),
         (_KIT_DIR / "widget-draw-v1.js").read_text(encoding="utf-8"),
+        (_KIT_DIR / "widget-act-v1.js").read_text(encoding="utf-8"),
         "\n    </script>",
     )
 )
@@ -137,12 +142,35 @@ def _escape(value: str) -> str:
     )
 
 
-def wrap_html_fragment(content: str, *, title: str = "", embed: bool = True) -> str:
+def widget_data_script(data: object) -> str:
+    """``data`` as the inert JSON block ``lemma.data`` reads.
+
+    JSON inside a script element ends at the first ``</script``, wherever it
+    sits, so every ``<`` is written as its escape: the parsed value is the same
+    and nothing in it can close the element.
+    """
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return (
+        '<script type="application/json" data-lemma-widget-data>'
+        + payload.replace("<", "\\u003c")
+        + "</script>"
+    )
+
+
+def wrap_html_fragment(
+    content: str,
+    *,
+    title: str = "",
+    embed: bool = True,
+    data: object = None,
+) -> str:
     """Wrap a fragment into a full HTML document.
 
     - ``embed=True`` (in-conversation widget): transparent page + a height bridge
       and theme bridge so the iframe can auto-size and follow the explicit host theme.
     - ``embed=False`` (standalone / promoted app): same shell, no height bridge.
+    - ``data``: what the widget was displayed with, read in the page as
+      ``lemma.data``. One library widget shows any email this way, with no copy.
 
     Content that already declares ``<!doctype>``/``<html>``/``<body>`` is returned
     unchanged — it is already a full document.
@@ -150,6 +178,8 @@ def wrap_html_fragment(content: str, *, title: str = "", embed: bool = True) -> 
     fragment = (content or "").strip()
     if _FULL_DOC_RE.search(fragment):
         return fragment
+    if data is not None:
+        fragment = f"{widget_data_script(data)}\n    {fragment}"
 
     bridge = _HEIGHT_BRIDGE if embed else ""
     styles = _RESET_STYLES + (_EMBED_STYLES if embed else "")

@@ -280,6 +280,9 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
 - The system shall answer them from the conversation and from what the pod has
   marked Public, and from nothing else — not the pod's other data, not the
   answering member's own access, files, memory or connected accounts.
+- The system shall show, on the group's page, the files and tables the pod has
+  marked Public — including files shared with anyone with a Lemma account,
+  which carry the same mark — read as the run answering an outsider reads them.
 - The system shall keep their questions in one conversation per group that
   belongs to the member answering for it, and shall show who asked each one.
 - The system shall never take anything somebody outside the pod types as that
@@ -314,13 +317,17 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
   what the bot said there.
 - When the bot answers in such a group, the system shall show it the recent
   record as background, marking what was said by people outside the pod.
+- When the bot answers in any group or channel, the system shall tell it that
+  everyone there reads the answer, so it answers the person who addressed it,
+  by name where that is not plain, rather than as in a direct chat.
 
 **Contracts:** `surface.webhook.handle_platform`
 
 ### PS-SURF-017 — A person can say something to the agent without the group reading it
 **Status:** planned
 
-> Proven at unit level by `agent/tests/unit/test_private_notes.py` and
+> Proven at unit level by `agent/tests/unit/test_private_notes.py`,
+> `agent/tests/unit/test_written_in_lemma.py` and
 > `agent_surfaces/tests/unit/test_private_note_runs.py`.
 
 A conversation that lives on a chat platform can also be read and written in
@@ -339,6 +346,16 @@ Lemma, and what the agent says in it goes to the platform.
 - The system shall answer a note and a message for the platform in separate
   runs: a note never shapes an answer that goes to the chat, and a run that
   continues a note -- resumed, retried or following on -- stays in Lemma.
+- When a person writes in Lemma into a group's conversation without marking it
+  a note, the system shall tell the agent that the group did not see the
+  message, only the answer, so the answer makes sense on its own there.
+- In the conversation that answers people outside the pod, the system shall
+  tell the agent that what was written in Lemma is the answering member's,
+  never a stranger's, and shall not let the agent pass it back to that member
+  as a question from outside.
+- When the agent answers a message written in Lemma, the system shall post the
+  answer in the group without quoting whatever was last said there, unless
+  somebody in the chat has written since.
 
 **Contracts:** `agent.conversation.message.send`
 

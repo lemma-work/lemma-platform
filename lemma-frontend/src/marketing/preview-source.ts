@@ -1,4 +1,4 @@
-import { conversationWidget } from "./conversation-widgets";
+import { conversationWidget, kitWidget } from "./conversation-widgets";
 import { sampleListing } from "@/thread/memory-notes";
 import { teammates, teammateFor } from "./teammates";
 import { fixtureSource } from "@/data/fixtures";
@@ -13,7 +13,7 @@ const added = new Map<string, Member[]>();
 export const previewCandidates = [
     { id: "aditi", label: "aditi@acme.test", orgRole: "member" },
     { id: "rohan", label: "rohan@acme.test", orgRole: "member" },
-    { id: "dev", label: "dev@acme.test", orgRole: "admin" },
+    { id: "maya", label: "maya@acme.test", orgRole: "admin" },
 ];
 
 export function addPreviewMember(podId: string, id: string, role: string): void {
@@ -23,22 +23,43 @@ export function addPreviewMember(podId: string, id: string, role: string): void 
     added.set(podId, [...members, { id, name: candidate.label, initials: id.slice(0, 2).toUpperCase(), kind: "person", role, can: role }]);
 }
 
+/* The faces of teammates hired during the tour. A hire is a copy of Kit
+   with a new name, so it used to keep Kit's picture too — every new hire
+   wore Kit in the rail while the reveal, which draws from the pod's id, drew
+   the face that was dealt. A hire starts with no picture, which is what the
+   live source hands back, and keeps whatever the hiring flow then saves. */
+const faces = new Map<string, string | null>();
+function faceOf(person: { id: string; icon: string }): string | null {
+    return faces.has(person.id) ? faces.get(person.id) ?? null : person.icon;
+}
+
 const voicePath = "/skills/brand-voice/SKILL.md";
 const edits = new Map<string, string>();
 function members(id: string): Member[] {
     const person = teammateFor(id);
+    const teammate: Member = { id: person.id, name: person.name, initials: person.name.slice(0, 2).toUpperCase(), kind: "teammate", role: person.role, can: "prepares work · asks before sending" };
+    /* Kit's loop needs a whole product team: the engineer who confirms a fix
+       is live, and support, who answers the big customers. */
+    if (id === "kit") return [
+        { id: "you", name: "You", initials: "YO", kind: "person", role: "Owner", can: "everything · assigns owners", userId: "sample-user" },
+        { id: "dev", name: "Dev", initials: "DE", kind: "person", role: "Member", can: "confirms a fix is live before anyone hears back", userId: "dev-user" },
+        { id: "sam", name: "Sam", initials: "SA", kind: "person", role: "Member", can: "answers Enterprise accounts", userId: "sam-user" },
+        { id: "alex", name: "Alex", initials: "AL", kind: "person", role: "Member", can: "fixes what is assigned", userId: "alex-user" },
+        { ...teammate, can: "drafts replies · nothing goes out until the fix is live" },
+        ...(added.get(id) ?? []),
+    ];
     return [
         { id: "you", name: "You", initials: "YO", kind: "person", role: "Owner", can: "everything", userId: "sample-user" },
         { id: "priya", name: "Priya", initials: "PR", kind: "person", role: "Member", can: "reviews external commitments", userId: "priya-user" },
         /* June's imports wait on Dev; nobody else's work does. */
         ...(id === "june" ? [{ id: "dev", name: "Dev", initials: "DE", kind: "person" as const, role: "Member", can: "approves customer data fixes", userId: "dev-user" }] : []),
-        { id: person.id, name: person.name, initials: person.name.slice(0, 2).toUpperCase(), kind: "teammate", role: person.role, can: "prepares work · asks before sending" },
+        teammate,
         ...(added.get(id) ?? []),
     ];
 }
 function persona(id: string) {
     const person = teammateFor(id);
-    return { name: person.name, initials: person.name.slice(0, 2).toUpperCase(), iconUrl: person.icon };
+    return { name: person.name, initials: person.name.slice(0, 2).toUpperCase(), iconUrl: faceOf(person) };
 }
 function guidance(id: string) {
     const person = teammateFor(id);
@@ -52,9 +73,9 @@ function guidance(id: string) {
 const DAY = 86_400_000;
 function notesOf(id: string): { path: string; gloss: string; daysAgo: number; text: string }[] {
     if (id === "kit") return [
-        { path: "/memory/launch-checks.md", gloss: "Readiness runs Thursdays at 9", daysAgo: 2, text: "# Launch checks\n\n- Readiness check runs Thursdays at 09:00 (moved from Fridays after the September launch).\n- A launch is not ready until the demo matches the current onboarding.\n" },
-        { path: "/memory/publishing.md", gloss: "Anything public goes to Priya first", daysAgo: 4, text: "# Publishing\n\n- Anything public is prepared and brought to Priya. Kit never publishes on its own.\n- Customer names need written permission first.\n" },
-        { path: "/memory/brand-voice.md", gloss: "Lead with the customer’s problem", daysAgo: 20, text: "# Brand voice\n\n" + teammateFor(id).learned + "\n" },
+        { path: "/memory/feedback-rules.md", gloss: "On mobile, “stuck” means Notifications", daysAgo: 0, text: "# Feedback rules\n\n- On mobile, “app feels stuck” is the missing push notification, not a timeout. File it under Notifications on mobile. (Dev)\n- Timeouts go to Dev, top priority. (You)\n- Priority is reports × paying accounts. (You)\n" },
+        { path: "/memory/closing-the-loop.md", gloss: "Replies wait until the fix is live", daysAgo: 1, text: "# Closing the loop\n\n- Draft a retry reply for everyone who reported a problem when its fix merges. Nothing goes out until the PR’s author confirms it’s live. (You)\n- Enterprise accounts hear from their CSM. Kit drafts, Sam sends. (Sam)\n- If someone says it still breaks, reopen the theme and tell its owner.\n" },
+        { path: "/memory/capture.md", gloss: "Every #feedback message, as it lands", daysAgo: 1, text: "# Capture\n\n- Every message in #feedback, every email to feedback@ and every in-app report is filed as it lands. Nothing waits for a weekly sweep. (You)\n- A report that fits no theme starts a new one; the nightly run suggests merges.\n" },
         { path: "/me/agents/pod-default/your-preferences.md", gloss: "Summaries as short bullets", daysAgo: 9, text: "# Your preferences\n\n- Summaries as short bullets, decisions first.\n" },
     ];
     if (id === "remy") return [
@@ -68,13 +89,12 @@ function notesOf(id: string): { path: string; gloss: string; daysAgo: number; te
 
 /** A correction and the note it becomes, in a teammate's sample
  *  conversation: somebody tells it how things work now, it says so, and the
- *  write under the reply is what draws "Kit noted this". Kit's is specific
- *  because the landing shows it; the others reuse their first note. */
+ *  write under the reply is what draws "Remy noted this". Remy's is
+ *  specific; the others reuse their first note. Kit has a conversation of
+ *  its own, below. */
 function notedIn(id: string) {
     const note = notesOf(id)[0];
-    const told = id === "kit"
-        ? { ask: "From now on the readiness check runs Thursdays at 9, not Fridays.", reply: "Got it. Readiness checks run Thursdays at 09:00 from now on." }
-        : id === "remy"
+    const told = id === "remy"
         ? { ask: "Raj isn’t the buyer at Northstar. Anita signs; Raj only evaluates.", reply: "Thanks. I’ll send Raj the technical detail and bring decisions to Anita." }
         : { ask: "Keep this in mind for next time: " + note.gloss.charAt(0).toLowerCase() + note.gloss.slice(1) + ".", reply: "Noted. I’ll work that way from now on." };
     return [
@@ -87,20 +107,80 @@ function notedIn(id: string) {
     ];
 }
 
+/** Kit's conversation, the way the loop got built: one ask that leaves a
+ *  space behind it (tables, two workflows, a nightly run, a page, the app),
+ *  what happened overnight while nobody was here, and a correction that
+ *  becomes a rule. Every part is a real message the thread draws: the work
+ *  folds into steps, widgets and resource cards are `display_resource`, and
+ *  "Kit noted this" is drawn from the note it writes. */
+function kitConversation() {
+    let sequence = 0;
+    /* When each message happened: the ask yesterday afternoon took seven
+       minutes of work; this morning's two came minutes apart. */
+    let clock = Date.now() - 18 * 3_600_000;
+    const tick = (minutes: number) => new Date(clock += minutes * 60_000).toISOString();
+    const said = (role: "user" | "assistant", text: string, minutes = 0.2) => ({ id: "kit-" + ++sequence, role, kind: "TEXT", sequence, text, created_at: tick(minutes) });
+    const thought = (text: string) => ({ id: "kit-" + ++sequence, role: "assistant", kind: "THINKING", sequence, text, created_at: tick(0.1) });
+    const did = (tool_name: string, tool_args: Record<string, unknown>, tool_result: unknown = { success: true }, minutes = 0.6) => {
+        const call = "kit-call-" + ++sequence;
+        return [
+            { id: call, role: "assistant", kind: "TOOL_CALL", sequence, tool_name, tool_call_id: call, tool_args, created_at: tick(0.05) },
+            { id: call + "-back", role: "assistant", kind: "TOOL_RETURN", sequence: ++sequence, tool_call_id: call, tool_result, created_at: tick(minutes) },
+        ];
+    };
+    const show = (tool_args: Record<string, unknown>) => ({ id: "kit-" + ++sequence, role: "assistant", kind: "TOOL_CALL", sequence, tool_name: "display_resource", tool_args, created_at: tick(0.05) });
+    const rules = notesOf("kit")[0];
+    const later = (hours: number) => { clock = Date.now() - hours * 3_600_000; return []; };
+    return [
+        said("user", teammateFor("kit").ask, 0),
+        ...did("run_connector_operation", { comment: "Reading the last 30 days of #feedback", connector: "slack", operation: "conversations.history", channel: "#feedback" }, { success: true, messages: 214 }, 1.4),
+        ...did("exec_command", { comment: "A table for every report, and one for the themes they fall into", command: "lemma tables create feedback_reports feedback_themes" }),
+        ...did("pod_write_record", { comment: "Filed 214 reports under 9 themes", table: "feedback_reports", records: 214 }, { success: true }, 1.6),
+        ...did("pod_query", { comment: "Linked 6 themes to their tickets, 4 tickets to merged PRs", query: "SELECT theme, ticket, pr FROM feedback_themes" }),
+        ...did("exec_command", { comment: "Capture: runs on every new #feedback message", command: "lemma workflows create capture-feedback --on slack.message_posted" }, { success: true }, 0.4),
+        ...did("exec_command", { comment: "Close the loop: runs when a PR merges", command: "lemma workflows create close-the-loop --on github.pull_request_merged" }, { success: true }, 0.4),
+        ...did("exec_command", { comment: "Nightly reconcile, every day at 02:00", command: "lemma schedules create nightly-reconcile --cron '0 2 * * *'" }, { success: true }, 0.2),
+        ...did("pod_write_file", { comment: "This week’s report", path: "/pages/Feedback report, week 40.md" }),
+        ...did("exec_command", { comment: "Built Feedback loop and shared it with Dev, Sam and Alex", command: "lemma apps deploy feedback-loop" }, { success: true }, 1.2),
+        said("assistant", teammateFor("kit").reply),
+        show({ type: "WIDGET", content: kitWidget("themes") }),
+        show({ type: "APP", name: "Feedback loop" }),
+
+        ...later(1.6),
+        said("user", "What happened overnight?", 0),
+        ...did("pod_query", { comment: "Read last night’s runs", query: "SELECT * FROM workflow_runs WHERE started_at > now() - interval '12 hours'" }, { success: true }, 0.2),
+        said("assistant", "The nightly reconcile ran at 02:00 with nobody here. It filed 8 new reports and started one new theme, Upload spinner never ends (5). It looks like the import timeouts, so I suggested a merge in Feedback loop.\n\nDev merged PR #482 at 23:10. It fixes Dates import as text, so I drafted 22 retry replies, one in each thread, with the PR link. Sam’s rule: Enterprise accounts hear from their CSM, so 3 of the 22 went to Sam. The other 19 wait for Dev to confirm the fix is live."),
+        show({ type: "WIDGET", content: kitWidget("replies") }),
+        show({ type: "WORKFLOW", name: "close-the-loop" }),
+
+        /* Eight messages, the sample pane's first page, so the correction
+           opens on the ask that made it. */
+        ...later(1.4),
+        said("user", "Dev says “app feels stuck” on mobile is the missing push notification, not a timeout. Sort them that way. And timeouts go to Dev, top priority.", 0),
+        thought("11 of the 14 “app feels stuck” reports came from the mobile app. The other 3 are uploads over 10k rows."),
+        ...did("pod_write_record", { comment: "Moved 11 reports to Notifications on mobile, 3 to Large imports time out, now Dev’s at P0", table: "feedback_reports", records: 14 }, { success: true }, 0.3),
+        said("assistant", "Done. 11 of the 14 were on mobile, so they’re under Notifications on mobile now. The other 3 are real timeouts and joined Large imports time out, which Dev owns as P0 with the 3 sample files people sent. I’ll sort “stuck” that way from now on."),
+        show({ type: "WIDGET", content: kitWidget("resorted") }),
+        ...did("pod_write_file", { path: rules.path, description: rules.gloss, content: rules.text, overwrite: true }, { success: true, path: rules.path, created: false }, 0.1),
+    ];
+}
+
 /** Isolated fictional work; production and general QA fixtures stay separate. */
 export const previewSource: PodSource = {
     ...fixtureSource,
     async listOrgs() { return [{ id: "acme", name: "Acme" }]; },
     async getPod(podId) { return (await previewSource.listPods("acme")).find(pod => pod.id === podId) ?? null; },
     async listPods(orgId) {
-        return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: person.icon, description: person.role, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
+        return orgId === "acme" ? teammates.map(person => ({ id: person.id, orgId, name: person.name, iconUrl: faceOf(person), description: person.role, teammate: persona(person.id), subtitle: person.role, members: members(person.id), waiting: person.waiting })) : [];
     },
     async createPod(orgId, name, description) {
         const id = "sample-" + Date.now();
         const person = { ...teammates[0], id, name, role: description?.trim() || "New teammate", job: description ?? "Define my first responsibility with me.", promise: description ?? "Ready for my first responsibility.", waiting: "Ready to get started", ask: "What should we work on first?", reply: "This is a sample teammate. Give me a first responsibility to explore the setup.", learned: "No team guidance yet.", items: [], app: "Workspace" };
         teammates.push(person);
-        return { id, orgId, name, iconUrl: person.icon, description: person.role, teammate: persona(id), subtitle: person.role, members: members(id), waiting: person.waiting };
+        faces.set(id, null);
+        return { id, orgId, name, iconUrl: faceOf(person), description: person.role, teammate: persona(id), subtitle: person.role, members: members(id), waiting: person.waiting };
     },
+    async setPodIcon(id, iconUrl) { faces.set(id, iconUrl); },
     async renamePod(id, name) { const person = teammates.find(item => item.id === id); if (person) person.name = name; },
     async describePod(id, description) { const person = teammates.find(item => item.id === id); if (person) person.role = description.trim() || person.role; },
     async deletePod(id) { const at = teammates.findIndex(item => item.id === id); if (at >= 0) teammates.splice(at, 1); },
@@ -130,6 +210,7 @@ export const previewSource: PodSource = {
     },
     async getConversation(id) {
         const person = teammateFor(id);
+        if (id === "kit") return { id: id + "-today", title: person.ask, status: "COMPLETED", messages: kitConversation() } satisfies Conversation;
         return { id: id + "-today", title: person.ask, status: "COMPLETED", messages: [
             { id: id + "-1", role: "user", kind: "TEXT", sequence: 1, text: person.ask },
             { id: id + "-2", role: "assistant", kind: "TEXT", sequence: 2, text: person.reply },
@@ -164,7 +245,7 @@ export const previewSource: PodSource = {
     async getProfile(id) {
         const person = teammateFor(id);
         const profile = await fixtureSource.getProfile(id);
-        return { ...profile, podId: id, name: person.name, iconUrl: person.icon, headline: person.promise, about: person.job + "\n\n" + person.learned, commitments: [], counts: { tables: spaceOf(id)?.tables.length ?? 0, functions: 0, workflows: SAMPLE_WORKFLOWS.filter(flow => flow.pod_id === id).length }, projects: [{ id: person.id, name: person.app, description: person.role, status: "running", tabId: "app:launch" }] };
+        return { ...profile, podId: id, name: person.name, iconUrl: faceOf(person), headline: person.promise, about: person.job + "\n\n" + person.learned, commitments: [], counts: { tables: spaceOf(id)?.tables.length ?? 0, functions: 0, workflows: SAMPLE_WORKFLOWS.filter(flow => flow.pod_id === id).length }, projects: [{ id: person.id, name: person.app, description: person.role, status: "running", tabId: "app:launch" }] };
     },
     async tableColumns(id, name) { return sampleTableIn(id, name)?.columns ?? []; },
     async tableRows(id, name) { return { items: sampleTableIn(id, name)?.rows() ?? [], next: null }; },

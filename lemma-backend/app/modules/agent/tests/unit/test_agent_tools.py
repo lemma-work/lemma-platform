@@ -422,6 +422,30 @@ def _payload_error(**kwargs) -> str:
     return validate_display_payload(DisplayResourceRequest(**kwargs)) or ""
 
 
+def test_widget_data_goes_with_a_widget_page_and_stays_one_record():
+    """`data` is what a library widget is displayed with: valid beside `path` or
+    `content`, refused where nothing would ever read it, and bounded because it is
+    written into the page on every view."""
+    library = "/skills/lemma-widget/library/gmail/email-thread.html"
+    assert not _payload_error(
+        type=DisplayResourceType.WIDGET, path=library, data={"subject": "Hi"}
+    )
+    assert "only valid for WIDGET" in _payload_error(
+        type=DisplayResourceType.FILE, path="/me/a.pdf", data={"x": 1}
+    )
+    assert "only accept type" in _payload_error(
+        type=DisplayResourceType.BROWSER, data={"x": 1}
+    )
+    assert "public_url" in _payload_error(
+        type=DisplayResourceType.WIDGET,
+        public_url="https://example.com/w",
+        data={"x": 1},
+    )
+    assert "limit" in _payload_error(
+        type=DisplayResourceType.WIDGET, path=library, data={"text": "x" * 70_000}
+    )
+
+
 def test_display_resource_validates_widget_form_and_table_payloads():
     # Enum coercion + field-level coercions still happen at construction time and
     # never raise.

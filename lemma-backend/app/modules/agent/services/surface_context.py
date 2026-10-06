@@ -2,7 +2,7 @@
 
 A conversation that started on Slack, Teams or email carries the surface it
 arrived on in `metadata`, and both the runner and the conversation MCP bridge
-need the same eight fields out of it before they can build a tool context. They
+need the same nine fields out of it before they can build a tool context. They
 each had a copy; this is the one they share.
 
 `parse_surface_event_metadata` is imported lazily and its failure is tolerated
@@ -30,11 +30,12 @@ _TEXT_KEYS = (
     "external_user_id",
     "external_message_id",
     "agent_display_name",
+    "conversation_kind",
 )
 
 
 class SurfaceContext(TypedDict):
-    """The eight surface fields, named and typed.
+    """The nine surface fields, named and typed.
 
     A `TypedDict` rather than a plain dict because both callers splat this into
     a `ConversationContext(...)`, and splatting a `dict[str, object]` types
@@ -51,6 +52,8 @@ class SurfaceContext(TypedDict):
     external_user_id: str | None
     external_message_id: str | None
     agent_display_name: str | None
+    #: ``DM``, ``CHANNEL`` or ``EMAIL``, as routing recorded it.
+    surface_conversation_kind: str | None
 
 
 def surface_context_from_conversation(conversation: Conversation) -> SurfaceContext:
@@ -69,6 +72,7 @@ def surface_context_from_conversation(conversation: Conversation) -> SurfaceCont
         "external_user_id": _text(metadata.get("external_user_id")),
         "external_message_id": _text(metadata.get("external_message_id")),
         "agent_display_name": _text(metadata.get("agent_display_name")),
+        "surface_conversation_kind": _text(metadata.get("conversation_kind")),
     }
 
 

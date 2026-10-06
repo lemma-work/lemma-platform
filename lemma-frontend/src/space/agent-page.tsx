@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { source, type Pod, type Surface } from "@/data";
+import { source, type ConversationRef, type Pod, type Surface } from "@/data";
 import { AskBox } from "@/chat/ask-box";
 import { lemma } from "@/session/client";
 import {
@@ -172,25 +172,40 @@ function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, cre
     );
 }
 
-interface ChatRow { id: string; title: string; at: string | null }
+/** `stamp` is set when the row comes already dated for a list — the space's
+ *  own conversations, read from the sidebar's cache — and `at` otherwise. */
+interface ChatRow { id: string; title: string; at: string | null; stamp?: string }
+
+function spaceChats(list: ConversationRef[]): ChatRow[] {
+    return list.map((row) => ({ id: row.id, title: row.title, at: null, stamp: row.at }));
+}
 
 function Conversations({ pod, detail, live, onOpen }: { pod: Pod; detail: AgentDetail; live: boolean; onOpen: (id: string) => void }) {
     const [all, setAll] = useState(false);
-    const chats = useQuery({
+    /* The front bot's conversations are the space's own list, which the
+       sidebar has already read under its key — so this reads that, rather
+       than asking `listDefault` again under a key of its own. Any other bot's
+       are its own request. */
+    const front = useQuery({
+        queryKey: ["conversations", pod.id],
+        queryFn: () => source.listConversations(pod.id),
+        enabled: live && !detail.takesInput && detail.front,
+        staleTime: 60_000,
+        select: spaceChats,
+    });
+    const bot = useQuery({
         queryKey: ["bot-conversations", pod.id, detail.name],
-        enabled: live && !detail.takesInput,
+        enabled: live && !detail.takesInput && !detail.front,
         staleTime: 30_000,
         queryFn: async (): Promise<ChatRow[]> => {
-            const client = lemma(pod.id).conversations;
-            const listed = detail.front
-                ? await client.listDefault({ pod_id: pod.id, limit: 30 })
-                : await client.listByAgent(detail.name, { pod_id: pod.id, limit: 30 });
+            const listed = await lemma(pod.id).conversations.listByAgent(detail.name, { pod_id: pod.id, limit: 30 });
             return ((listed as { items?: unknown[] }).items ?? []).map((raw) => {
                 const row = raw as { id: string; title?: string | null; last_activity_at?: string | null; updated_at?: string | null };
                 return { id: row.id, title: (row.title ?? "").trim() || "Untitled", at: row.last_activity_at ?? row.updated_at ?? null };
             });
         },
     });
+    const chats = detail.front ? front : bot;
     if (detail.takesInput) return null;
     const rows = chats.data ?? [];
     const shown = all ? rows : rows.slice(0, 6);
@@ -210,7 +225,7 @@ function Conversations({ pod, detail, live, onOpen }: { pod: Pod; detail: AgentD
                             <button onClick={() => onOpen(row.id)}>
                                 <ChatIcon size={16} />
                                 <span>{row.title}</span>
-                                <small>{sayWhen(row.at)}</small>
+                                <small>{row.stamp ?? sayWhen(row.at)}</small>
                             </button>
                         </li>
                     ))}
