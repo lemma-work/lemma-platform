@@ -56,6 +56,32 @@ export class McpAccessService {
         });
     }
     /**
+     * Stop telling a connected app about an event
+     * The app keeps its connection and stops receiving this event. It may
+     * subscribe again; ending the connection is what stops it for good.
+     * @param grantId
+     * @param subscriptionId
+     * @returns void
+     * @throws ApiError
+     */
+    public static mcpAccessGrantsSubscriptionDelete(
+        grantId: string,
+        subscriptionId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/oauth/grants/{grant_id}/subscriptions/{subscription_id}',
+            path: {
+                'grant_id': grantId,
+                'subscription_id': subscriptionId,
+            },
+            errors: {
+                404: `No such subscription`,
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * The MCP URL for a pod
      * Built here rather than in the browser, which knows the API's address
      * only as the page was configured -- not necessarily as clients reach it.
