@@ -6,6 +6,7 @@ from ..errors import LemmaNotFoundError
 from ..openapi_client.api.schedules import (
     schedule_create,
     schedule_delete,
+    schedule_event_list,
     schedule_get,
     schedule_list,
     schedule_run_list,
@@ -13,6 +14,7 @@ from ..openapi_client.api.schedules import (
     schedule_update,
 )
 from ..openapi_client.models.create_schedule_request import CreateScheduleRequest
+from ..openapi_client.models.event_catalog_response import EventCatalogResponse
 from ..openapi_client.models.schedule_detail_response import ScheduleDetailResponse
 from ..openapi_client.models.schedule_list_response import ScheduleListResponse
 from ..openapi_client.models.schedule_run_list_response import ScheduleRunListResponse
@@ -73,6 +75,11 @@ class PodSchedules(BoundResource):
             limit=limit,
             page_token=page_token if page_token is not None else UNSET,
         )
+
+    def events(self) -> EventCatalogResponse:
+        """What a schedule here can start on: the platform's own events, then
+        those of every MCP server you connected in this organization."""
+        return self._call(schedule_event_list, self._pod_uuid())
 
     def create(self, request: CreateScheduleRequest) -> ScheduleDetailResponse:
         return self._call(schedule_create, self._pod_uuid(), body=request)
