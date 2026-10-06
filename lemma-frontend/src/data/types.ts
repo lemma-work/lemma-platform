@@ -1,5 +1,6 @@
 import type { AgentSurfaceResponse, SurfaceSetupResponse, AvailableSurfaceChannelsResponse, GroupUpdateRequest, SurfaceUpdateRequest, ContactExportResponse } from "lemma-sdk";
-import type { Contact, ContactReach, ContactsCap, FormColumn, NewWebWidget, WebWidget, WidgetAnswer, WidgetDraft } from "./contacts";
+import type { Contact, ContactReach, ContactsCap, NewWebWidget, WebWidget, WidgetAnswer, WidgetDraft } from "./contacts";
+import type { Audience, TableOpening } from "./public-rows";
 import type { Connectable } from "./connectable";
 import type { Connector, ConnectorAccount } from "./accounts";
 import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
@@ -625,8 +626,11 @@ export interface PodSource {
     /** A new signing secret, shown this once. */
     rotateWidgetSecret(podId: string, widgetId: string): Promise<string>;
     deleteWidget(podId: string, widgetId: string): Promise<void>;
-    /** The columns of a table a form may ask for. */
-    formColumns(podId: string, table: string): Promise<FormColumn[]>;
+    /** Who outside the space may add rows to a table, and which columns could be open. */
+    tableOpening(podId: string, table: string): Promise<TableOpening>;
+    /** Let people outside add rows to a table — the rows a form adds. */
+    openTable(podId: string, table: string, audience: Audience, columns: string[]): Promise<TableOpening>;
+    closeTable(podId: string, table: string): Promise<void>;
     /** The space's tables and functions, with which ones contacts can reach. */
     contactReach(podId: string): Promise<ContactReach>;
     setTableContactOwned(podId: string, table: string, on: boolean): Promise<void>;

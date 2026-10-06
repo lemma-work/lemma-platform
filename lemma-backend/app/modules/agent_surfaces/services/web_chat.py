@@ -1,7 +1,8 @@
 """What a visitor holding a widget's public key can do.
 
 Start a session; send a message and read the answers; prove an email address
-with a one-time code; submit the widget's form. Nothing else.
+with a one-time code; add a row to a table the pod opened to visitors. Nothing
+else -- and what a row may contain is the table's to decide, never the page's.
 
 A visitor is anonymous -- an outsider, answered from what the pod made Public --
 until something vouches for them: a token the customer's server signed with
@@ -44,7 +45,6 @@ from app.modules.agent_surfaces.domain.web_widgets import (
     WebSession,
     WebWidget,
     WidgetAnswer,
-    WidgetKind,
     digest,
     mint_code,
     mint_session_token,
@@ -52,12 +52,7 @@ from app.modules.agent_surfaces.domain.web_widgets import (
 from app.modules.agent_surfaces.infrastructure.repositories.web_widget_repository import (  # noqa: E501
     WebWidgetRepository,
 )
-from app.modules.agent_surfaces.domain.web_forms import FormAnswerRefused
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
-from app.modules.agent_surfaces.services.web_form_submit import (
-    FormClosed,
-    add_form_row,
-)
 from app.modules.contacts.contracts import (
     ContactRef,
     IdentityKind,
@@ -65,9 +60,13 @@ from app.modules.contacts.contracts import (
     find_contact,
     open_contact,
 )
-from app.modules.function.contracts.contact_functions import (
-    ContactFunctionUnavailable,
-    run_function_for_contact,
+from app.modules.datastore.contracts.public_rows import (
+    OpenTable,
+    PublicAudience,
+    PublicRowRefused,
+    PublicRowsClosed,
+    add_visitor_row,
+    visitor_table,
 )
 from app.modules.pod.contracts.members import pod_member_id, pod_name
 
@@ -82,10 +81,6 @@ MAX_MESSAGE_CHARS = 4000
 MAX_HISTORY = 100
 CODE_TTL = timedelta(minutes=10)
 MAX_CODE_ATTEMPTS = 5
-
-#: The output key a form function puts what the visitor may see under. Nothing
-#: else a function returns reaches the page.
-PUBLIC_OUTPUT_KEY = "public"
 
 _EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,63}$")
 
@@ -252,8 +247,6 @@ class WebChat:
     async def send_visitor_message(
         self, widget: WebWidget, *, token: str, text: str
     ) -> None:
-        if widget.kind is not WidgetKind.CHAT:
-            raise _refused("This widget is a form", 400, "not_a_chat")
         message = text.strip()[:MAX_MESSAGE_CHARS]
         if not message:
             raise _refused("Say something first", 400, "empty_message")
@@ -431,90 +424,59 @@ class WebChat:
             token=token, is_contact=True, display_name=contact.display_name
         )
 
-    # -- forms --------------------------------------------------------------
+    # -- rows -------------------------------------------------------------
 
-    async def submit_visitor_form(
+    async def visitor_table(
+        self, widget: WebWidget, *, token: str | None, table: str
+    ) -> tuple[OpenTable, bool]:
+        """What a page may ask for on ``table``, and whether this visitor may send.
+
+        A table open to contacts only is still described to a stranger, so the
+        page can ask them to confirm their email before they answer.
+        """
+        if token:
+            await self._visitor_session(widget, token)
+        async with self.uow_factory() as uow:
+            opened = await visitor_table(uow, pod_id=widget.pod_id, table_name=table)
+        if opened is None or not opened.columns:
+            raise _refused("There is nothing to fill in here", 404, "table_closed")
+        return opened, opened.audience is PublicAudience.CONTACTS
+
+    async def add_visitor_row(
         self,
         widget: WebWidget,
         *,
         token: str | None,
-        input_data: dict[str, object],
+        table: str,
+        answers: dict[str, object],
         address: str,
-    ) -> object:
-        if widget.kind is not WidgetKind.FORM or not (
-            widget.form or widget.form_function
-        ):
-            raise _refused("This widget is not a form", 400, "not_a_form")
-        contact_id = await self._form_sender(widget, token=token, address=address)
-        if widget.form is not None:
-            return await self._add_form_row(widget, contact_id, input_data)
-        return await self._run_form_function(widget, contact_id, input_data)
-
-    async def _form_sender(
-        self, widget: WebWidget, *, token: str | None, address: str
-    ) -> UUID | None:
-        """Who is sending, once they are let send at all: their contact, if known."""
+    ) -> None:
         session = await self._visitor_session(widget, token) if token else None
+        if widget.answer is WidgetAnswer.KNOWN and (
+            session is None or session.contact_id is None
+        ):
+            raise _refused("This is for existing customers only", 403, "not_a_contact")
         contact_id = session.contact_id if session else None
-        if widget.form_requires_code and contact_id is None:
-            raise _refused("Verify your email first", 403, "not_a_contact")
-        if widget.answer is WidgetAnswer.KNOWN and contact_id is None:
-            raise _refused(
-                "This form is for existing customers only", 403, "not_a_contact"
-            )
+        _opened, contacts_only = await self.visitor_table(
+            widget, token=None, table=table
+        )
+        if contacts_only and contact_id is None:
+            raise _refused("Confirm your email first", 403, "needs_contact")
         if not await self.limiter.allow_submission(
             widget_id=widget.id, address=address
         ):
-            raise _refused(
-                "Too many submissions. Try again later.", 429, "rate_limited"
-            )
-        return contact_id
-
-    async def _run_form_function(
-        self, widget: WebWidget, contact_id: UUID | None, input_data: dict[str, object]
-    ) -> object:
-        function_name = widget.form_function
-        if not function_name:
-            raise _refused("This widget is not a form", 400, "not_a_form")
+            raise _refused("Too many answers. Try again later.", 429, "rate_limited")
         try:
-            outcome = await run_function_for_contact(
+            await add_visitor_row(
                 self.uow_factory,
                 pod_id=widget.pod_id,
-                name=function_name,
-                contact_id=contact_id,
-                input_data=input_data,
-            )
-        except ContactFunctionUnavailable as exc:
-            raise _refused(
-                "This form is not available", 404, "form_unavailable"
-            ) from exc
-        if not outcome.completed:
-            logger.info(
-                "agent_surfaces.web_chat.form_not_completed.observed",
-                widget_id=str(widget.id),
-                status=outcome.status,
-            )
-            raise _refused("That did not go through. Try again.", 502, "form_failed")
-        return (outcome.output or {}).get(PUBLIC_OUTPUT_KEY)
-
-    async def _add_form_row(
-        self, widget: WebWidget, contact_id: UUID | None, answers: dict[str, object]
-    ) -> object:
-        assert widget.form is not None
-        try:
-            said = await add_form_row(
-                self.uow_factory,
-                pod_id=widget.pod_id,
-                widget_id=widget.id,
-                form=widget.form,
-                owner=widget.looked_after_by,
-                contact_id=contact_id,
+                table_name=table,
                 answers=answers,
+                contact_id=contact_id,
             )
-        except FormAnswerRefused as exc:
+        except PublicRowRefused as exc:
             raise _refused(exc.message, 422, "bad_answer") from exc
-        except FormClosed as exc:
+        except PublicRowsClosed as exc:
             raise _refused(
-                "This form can't take answers right now", 503, "form_closed"
+                "This isn't taking answers right now", 403, "table_closed"
             ) from exc
-        return {"message": said}

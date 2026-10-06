@@ -15906,29 +15906,6 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * List Form Columns
-     * The columns of a table a form may ask for, and how each can be asked.
-     * @param podId
-     * @param table
-     * @returns FormColumnsResponse Successful Response
-     * @throws ApiError
-     */
-    static agentWebWidgetFormColumns(podId, table) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/web-widgets/form-columns",
-        path: {
-          "pod_id": podId
-        },
-        query: {
-          "table": table
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
      * Delete Widget
      * @param podId
      * @param widgetId
@@ -16698,7 +16675,7 @@ var LemmaClient = (() => {
     constructor(client) {
       __publicField(this, "client", client);
       /**
-       * Web widgets: chat bubbles and forms for other people's pages. The public key
+       * Web widgets: the pod's chat on other people's pages, and the key a form page adds rows with. The public key
        * goes in the page and names the widget only; the signing secret, returned by
        * `create` and `rotateWidgetSecret` once, stays on the customer's server.
        */
@@ -16711,9 +16688,7 @@ var LemmaClient = (() => {
         rotateSecret: (podId, widgetId) => this.client.request(
           () => AgentSurfacesService.agentWebWidgetRotateSecret(podId, widgetId)
         ),
-        remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId)),
-        /** The columns of a table a form may ask for, and how each can be asked. */
-        formColumns: (podId, table) => this.client.request(() => AgentSurfacesService.agentWebWidgetFormColumns(podId, table))
+        remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId))
       });
     }
     /** The pod's contacts, newest first. Page with `next_before`. */
@@ -17782,6 +17757,24 @@ var LemmaClient = (() => {
   // src/openapi_client/services/TablesService.ts
   var TablesService = class {
     /**
+     * Tables Open To People Outside
+     * @param podId
+     * @returns OpenTablesResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/public-rows",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Tables
      * List tables in a datastore.
      * @param podId
@@ -17941,6 +17934,70 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Stop People Outside Adding Rows
+     * @param podId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    static tablePublicRowsClose(podId, tableName) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Who Outside May Add Rows
+     * @param podId
+     * @param tableName
+     * @returns TableOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsGet(podId, tableName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Let People Outside Add Rows
+     * Open the table to rows from people outside the pod -- confirmed contacts, or anyone -- for the chosen columns only. Rows are added as the member opening it, who must be able to change the table.
+     * @param podId
+     * @param tableName
+     * @param requestBody
+     * @returns TableOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsOpen(podId, tableName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/tables.ts
@@ -17964,6 +18021,16 @@ var LemmaClient = (() => {
           return this.client.request(() => TablesService.tableColumnAdd(this.podId(), tableName, payload));
         },
         remove: (tableName, columnName) => this.client.request(() => TablesService.tableColumnRemove(this.podId(), tableName, columnName))
+      });
+      /**
+       * Who outside the pod may add rows to a table. A form is any page that adds a
+       * row through a web widget's key; the table decides which columns it may write.
+       */
+      __publicField(this, "publicRows", {
+        get: (tableName) => this.client.request(() => TablesService.tablePublicRowsGet(this.podId(), tableName)),
+        open: (tableName, payload) => this.client.request(() => TablesService.tablePublicRowsOpen(this.podId(), tableName, payload)),
+        close: (tableName) => this.client.request(() => TablesService.tablePublicRowsClose(this.podId(), tableName)),
+        list: () => this.client.request(() => TablesService.tablePublicRowsList(this.podId()))
       });
     }
     list(options = {}) {

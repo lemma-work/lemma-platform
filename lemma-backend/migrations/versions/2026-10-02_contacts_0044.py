@@ -29,8 +29,9 @@ installed when the flag is set. **`functions.contacts_invoke`** marks a function
 a contact's conversation may call. Both default to false, so nothing existing
 changes.
 
-**`agent_surface_web_widgets`** is a pod's chat bubbles and forms for other
-people's web pages, each answering as one of its agents. Its `public_key` is
+**`agent_surface_web_widgets`** is a pod's chat for other people's web pages,
+each answering as one of its agents. A widget is also how a page's visitor is
+known: the session it opens is what adds rows to a table open to visitors. Its `public_key` is
 unique and readable by anybody; its `signing_secret` (encrypted) signs the
 tokens a customer's server issues for its own signed-in users.
 **`agent_surface_web_sessions`** is one visitor's chat with one widget, found by
@@ -137,7 +138,6 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("name", sa.String(255), nullable=False),
-        sa.Column("kind", sa.String(20), nullable=False),
         sa.Column("public_key", sa.String(64), nullable=False),
         sa.Column("signing_secret", sa.Text(), nullable=False),
         sa.Column("allowed_origins", postgresql.JSONB(), nullable=False),
@@ -147,13 +147,6 @@ def upgrade() -> None:
             postgresql.UUID(as_uuid=True),
             sa.ForeignKey("users.id", ondelete="SET NULL"),
             nullable=True,
-        ),
-        sa.Column("form_function", sa.String(255), nullable=True),
-        sa.Column(
-            "form_requires_code",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.text("false"),
         ),
     )
     op.create_index(

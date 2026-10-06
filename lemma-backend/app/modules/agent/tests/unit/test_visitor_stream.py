@@ -104,3 +104,36 @@ async def test_a_public_run_and_a_garbled_frame():
         "text": "ok",
     }
     assert await _translate("not json", public) is None
+
+
+def _fill_return(result: object) -> dict:
+    return {
+        "type": "message",
+        "agent_run_id": RUN,
+        "data": {
+            "role": "tool",
+            "kind": "TOOL_RETURN",
+            "tool_name": "fill_form",
+            "tool_result": result,
+        },
+    }
+
+
+def test_a_filled_form_reaches_the_page_from_the_checked_result():
+    frame = visitor_frame(
+        _fill_return(
+            {"success": True, "table": "signups", "filled": {"full_name": "Priya"}}
+        )
+    )
+    assert frame == {
+        "type": "fill",
+        "table": "signups",
+        "values": {"full_name": "Priya"},
+    }
+
+
+def test_a_failed_fill_or_another_tools_result_sends_nothing():
+    assert visitor_frame(_fill_return({"success": False, "forms": []})) is None
+    other = _fill_return({"success": True, "table": "t", "filled": {"a": 1}})
+    other["data"]["tool_name"] = "pod_query"
+    assert visitor_frame(other) is None

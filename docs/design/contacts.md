@@ -128,14 +128,16 @@ Contact authority applies only where the conversation is theirs alone.
 
 ### Web widgets and public keys
 
-Web chat and forms are **web widgets**: one row per chat bubble or form, owned
-by a pod and answering as one of its bots. A widget carries:
+Web chat is a **web widget**: one row per chat, owned by a pod and answering
+as one of its bots. It is also the door a form page adds rows through; a form
+itself is any page adding a row to a table opened to visitors (see
+[forms-and-chat.md](forms-and-chat.md)). A widget carries:
 
 - **A public key** (`pk_…`). It goes in the page, so anyone can copy it and
   call the endpoint from a script. It names the widget and nothing else: it
   never identifies a person, and whatever it allows, the internet gets. A
   public key allows starting an anonymous chat with the widget's bot, and
-  submitting the widget's one form.
+  adding rows to the pod's tables opened to visitors.
 - **A signing secret** (`sk_…`), for a widget embedded in the customer's own
   product. It stays on their server, which signs a short-lived token naming its
   signed-in user (HS256, `aud` = the public key, `sub` = their user id,
@@ -169,11 +171,12 @@ Notes per channel:
   kept 90 days like every other conversation. Public reads only, rate-limited by session and IP, with bot protection on the
   first message. "Get updates by email" verifies a code and turns the session
   into a contact, keeping the conversation.
-- **Forms.** A Public app calls one `contacts: invoke` function. A form that needs
-  no reply runs anonymously. A form that does (support request, booking)
-  verifies a code first, so the submitter becomes a contact.
-- **Blogs.** Pages are a Public app. Comments go through a form function into a
-  moderation table, and publishing a comment is a member's or agent's action.
+- **Forms.** A page adds a row to a table opened to visitors: anyone, or only
+  confirmed contacts. A form that needs no reply runs anonymously. A form that
+  does (support request, booking) opens its table to contacts, so the sender
+  confirms a code first and their row names them.
+- **Blogs.** Pages are a Public app. Comments are rows in a moderation table
+  opened to visitors, and publishing a comment is a member's or agent's action.
   Subscribing verifies an email and records consent for newsletters.
 
 ### Unverified email
@@ -296,17 +299,18 @@ one:
   as its owner's runs do (owner's authority narrowed by the function's grants)
   with the contact's id written into `contact_id` in its input, replacing
   anything the model put there.
-- **Web widgets.** `/pods/{pod_id}/web-widgets` (chat or form; public key,
+- **Web widgets.** `/pods/{pod_id}/web-widgets` (a chat; public key,
   encrypted signing secret shown once and rotatable, allowed origins, answer,
   looked-after-by). Public endpoints under `/public/web/{public_key}`: session
   (optionally with a host token, HS256, `aud` = public key, ≤ 10 minutes),
-  messages, history, email code and verify, form submit; bodies are JSON as
+  messages, stream, history, email code and verify, table and rows; bodies are JSON as
   `text/plain` so no CORS pre-flight, and responses name the origin only when
   the widget allows it. An anonymous visitor is an outsider; a host token
   (`host`) or a code (`code`) makes them a contact, upgrading their
-  conversation in place. A form runs its `contacts: invoke` function with the
-  contact, or none; only the function's `public` output reaches the page.
-  `/public/web/widget.js` is the bubble and form handler. Limits per widget,
+  conversation in place. A row goes to a table opened to visitors
+  (`datastore_public_rows`), as the member who opened it, with the visitor's
+  contact on a contact-owned table. `/public/web/widget.js` is the chat and the
+  form drawer. Limits per widget,
   session, address and email, failing closed.
 - **Follow-ups.** `POST /pods/{pod_id}/contacts/{id}/messages` writes to a
   contact in their most recent conversation: WhatsApp within 24 hours of their
@@ -346,7 +350,8 @@ control beyond what `message_user` gives.
 3. **Contact-owned tables** and `app.current_contact_id`.
 4. **`contacts: invoke` functions** with injected identity, one-time codes and
    step-up.
-5. **Forms.** Public app to function, anonymous or code-verified.
+5. **Forms.** A table opened to visitors and any page that adds its rows; see
+   [forms-and-chat.md](forms-and-chat.md).
 6. **Web chat.** Embedded with a host token, public with anonymous sessions that
    upgrade.
 7. **Outbound and consent.** WhatsApp templates, email unsubscribe, and

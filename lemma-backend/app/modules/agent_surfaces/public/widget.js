@@ -1,17 +1,24 @@
 /*
- * Lemma web widget: a chat bubble, or the handler for a form, on any page.
+ * Lemma web widget: the pod's chat, and forms for its tables, on any page.
  *
  *   <script src="https://API/public/web/widget.js" data-lemma-key="pk_..." async></script>
  *
  * Optional attributes:
  *   data-lemma-token="<host token>"  a signed-in user of the page's product, signed
  *                                    by the page's server with the widget's secret
- *                                    (or call LemmaChat.identify(token) later)
+ *                                    (or call Lemma.identify(token) later)
  *   data-lemma-color="#5a3fd4"       the accent colour
  *   data-lemma-greeting="Hi!"        the first thing the chat says
- * A form widget draws its own form where the script tag is. A page that marks
- * its own <form data-lemma-form> keeps its markup and the widget only submits it.
- * data-lemma-page is set by Lemma's hosted page: the form, or the chat, fills it.
+ *   data-lemma-table="signups"       draw a form for a table the pod opened to
+ *                                    visitors, where the script tag is; the chat
+ *                                    stays beside it to answer and fill it in
+ *   data-lemma-title / -intro / -thanks   the form's words
+ *   data-lemma-chat="off"            no chat bubble
+ *
+ * A page with its own design marks <form data-lemma-table="signups">, or calls
+ * Lemma.addRow("signups", {...}). Either way the table decides which columns
+ * may be written; the page only asks. data-lemma-page is set by Lemma's hosted
+ * page.
  *
  * Everything the server says is built into the page as DOM nodes -- markdown
  * included -- and never parsed as markup. Requests are JSON sent as text/plain
@@ -31,10 +38,14 @@
   var accent = /^#[0-9a-f]{3,8}$/i.test(script.getAttribute("data-lemma-color") || "")
     ? script.getAttribute("data-lemma-color")
     : "#5a3fd4";
-  var greeting = script.getAttribute("data-lemma-greeting") || "Hi! How can we help?";
+  var greeting =
+    script.getAttribute("data-lemma-greeting") ||
+    (script.getAttribute("data-lemma-table")
+      ? "Hi! Ask me anything about this, or tell me your details and I'll fill the form in for you."
+      : "Hi! How can we help?");
   var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var pageMode = script.hasAttribute("data-lemma-page");
-  var state = { session: null, isContact: false, kind: "chat", requiresCode: false, title: "", form: null };
+  var state = { session: null, isContact: false, title: "" };
 
   function remember(saved) {
     try {
@@ -78,23 +89,17 @@
     return call("/session", { host_token: hostToken }).then(function (data) {
       state.session = data.session;
       state.isContact = data.is_contact;
-      state.kind = data.kind;
-      state.requiresCode = data.requires_code;
       state.title = data.title || "";
-      state.form = data.form || null;
-      remember(hostToken ? null : { session: state.session, isContact: state.isContact,
-        kind: state.kind, requiresCode: state.requiresCode, title: state.title });
+      remember(hostToken ? null : { session: state.session, isContact: state.isContact, title: state.title });
       return data;
     });
   }
   function ensureSession() {
     if (state.session) return Promise.resolve();
     var saved = hostToken ? null : recalled();
-    if (saved && saved.kind !== "form") {
+    if (saved) {
       state.session = saved.session;
       state.isContact = !!saved.isContact;
-      state.kind = saved.kind || "chat";
-      state.requiresCode = !!saved.requiresCode;
       state.title = saved.title || "";
       return Promise.resolve();
     }
@@ -200,6 +205,10 @@
     "box-shadow:0 1px 2px rgba(20,16,10,.06),0 8px 28px rgba(20,16,10,.08);animation:lw-in .25s ease both}",
     ".lw-pagewrap{padding:48px 16px 0}.lw-inlinewrap .lw-fc{box-shadow:none;border:1px solid var(--line)}",
     ".lw-fc h1{font-size:22px;font-weight:500;margin:0 0 6px;letter-spacing:-.01em}",
+    ".lw-eyebrow{font-size:12px;color:var(--ink2);margin:0 0 4px}",
+    ".lw-filled input,.lw-filled textarea,.lw-filled select{animation:lw-glow 1.4s ease}",
+    "@keyframes lw-glow{0%{box-shadow:0 0 0 3px color-mix(in srgb,var(--a) 35%,transparent);",
+    "border-color:var(--a)}100%{box-shadow:none}}",
     ".lw-fc .lw-intro{margin:0 0 20px;color:var(--ink2);white-space:pre-wrap}",
     ".lw-field{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}",
     ".lw-field label{font-weight:500;font-size:13.5px}.lw-field .lw-req{color:var(--ink2);font-weight:400}",
@@ -483,6 +492,8 @@
       else new Reply(frame.text, true).finish(frame.text);
       live = null;
       if (busy) showTyping();
+    } else if (frame.type === "fill") {
+      onFill(frame);
     } else if (frame.type === "done") {
       if (live) live.finish();
       live = null;
@@ -711,7 +722,7 @@
 
     var loaded = false;
     function toggle(open) {
-      if (pageMode && !open) return;
+      if (shell.classList.contains("lw-page") && !open) return;
       shell.classList.toggle("lw-open", open);
       launch.setAttribute("aria-label", open ? "Close chat" : "Open chat");
       if (!open) {
@@ -778,21 +789,55 @@
   }
 
   // ------------------------------------------------------------------- forms
+  // A form is a page that adds a row to a table the pod opened to visitors.
+  // The table decides which columns may be written and by whom; this only
+  // draws the questions and sends the answers. A page can draw its own and
+  // call Lemma.addRow instead, or mark a plain <form data-lemma-table="...">.
 
   var ICON_TICK =
     '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" ' +
     'stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 
-  function fieldInput(field) {
+  /** Fields the chat filled, by table, for every form on the page that asks for them. */
+  var fillers = [];
+
+  function spoken(name) {
+    var words = String(name).replace(/_/g, " ").trim();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
+  }
+
+  function inputFor(column) {
+    switch (column.type) {
+      case "INTEGER":
+      case "FLOAT":
+        return "number";
+      case "BOOLEAN":
+        return "checkbox";
+      case "DATE":
+        return "date";
+      case "DATETIME":
+        return "datetime";
+      case "ENUM":
+        return "choice";
+    }
+    var name = column.name.toLowerCase();
+    if (name.indexOf("email") >= 0) return "email";
+    if (/phone|mobile/.test(name)) return "phone";
+    if (/message|note|description|detail|comment/.test(name)) return "long";
+    return "text";
+  }
+
+  function fieldInput(column) {
+    var kind = inputFor(column);
     var control;
-    if (field.input === "long") {
+    if (kind === "long") {
       control = el("textarea");
-    } else if (field.input === "choice") {
+    } else if (kind === "choice") {
       control = el("select");
       var blank = el("option", null, "Choose…");
       blank.value = "";
       control.appendChild(blank);
-      field.options.forEach(function (option) {
+      column.options.forEach(function (option) {
         var item = el("option", null, option);
         item.value = option;
         control.appendChild(item);
@@ -802,43 +847,61 @@
       control.type = {
         email: "email", phone: "tel", number: "number", date: "date",
         datetime: "datetime-local", checkbox: "checkbox",
-      }[field.input] || "text";
-      if (field.input === "number") control.step = "any";
-      if (field.input === "email") control.autocomplete = "email";
-      if (field.input === "phone") control.autocomplete = "tel";
+      }[kind] || "text";
+      if (kind === "number") control.step = column.type === "INTEGER" ? "1" : "any";
+      if (kind === "email") control.autocomplete = "email";
+      if (kind === "phone") control.autocomplete = "tel";
     }
-    control.name = field.name;
-    control.id = "lw-f-" + field.name;
-    if (field.required && field.input !== "checkbox") control.required = true;
+    control.name = column.name;
+    control.id = "lw-f-" + column.name;
+    if (column.required && kind !== "checkbox") control.required = true;
     return control;
   }
 
-  function renderForm(into) {
-    var spec = state.form;
+  function setValue(control, value) {
+    if (control.type === "checkbox") control.checked = value === true || value === "true";
+    else control.value = value == null ? "" : String(value);
+  }
+
+  function addRow(table, values) {
+    return withSession(function () {
+      return call("/rows", { session: state.session, table: table, values: values });
+    });
+  }
+
+  function describeTable(table) {
+    return withSession(function () {
+      return call("/table", { session: state.session, table: table });
+    });
+  }
+
+  function renderForm(into, spec) {
     var card = el("div", "lw-fc");
     into.appendChild(card);
-    card.appendChild(el("h1", null, spec.title));
-    if (spec.intro) card.appendChild(el("p", "lw-intro", spec.intro));
+    if (state.title) card.appendChild(el("div", "lw-eyebrow", state.title));
+    card.appendChild(el("h1", null, script.getAttribute("data-lemma-title") || spoken(spec.table)));
+    var intro = script.getAttribute("data-lemma-intro");
+    if (intro) card.appendChild(el("p", "lw-intro", intro));
     var form = el("form");
     form.noValidate = true;
     var rows = {};
-    spec.fields.forEach(function (field) {
-      var row = el("div", "lw-field" + (field.input === "checkbox" ? " lw-check" : ""));
-      var control = fieldInput(field);
-      var label = el("label", null, field.label);
+    spec.columns.forEach(function (column) {
+      var check = inputFor(column) === "checkbox";
+      var row = el("div", "lw-field" + (check ? " lw-check" : ""));
+      var control = fieldInput(column);
+      var label = el("label", null, column.description || spoken(column.name));
       label.htmlFor = control.id;
-      if (!field.required && field.input !== "checkbox") label.appendChild(el("span", "lw-req", " (optional)"));
-      if (field.input === "checkbox") {
+      if (!column.required && !check) label.appendChild(el("span", "lw-req", " (optional)"));
+      if (check) {
         row.appendChild(control);
         row.appendChild(label);
       } else {
         row.appendChild(label);
         row.appendChild(control);
       }
-      if (field.hint) row.appendChild(el("small", null, field.hint));
       var error = el("div", "lw-err");
       row.appendChild(error);
-      rows[field.name] = { row: row, control: control, error: error, field: field };
+      rows[column.name] = { row: row, control: control, error: error, column: column };
       form.appendChild(row);
     });
     var problem = el("div", "lw-err");
@@ -847,6 +910,19 @@
     form.appendChild(problem);
     form.appendChild(submit);
     card.appendChild(form);
+    fillers.push({
+      table: spec.table,
+      fill: function (values) {
+        Object.keys(values).forEach(function (name) {
+          var hit = rows[name];
+          if (!hit) return;
+          setValue(hit.control, values[name]);
+          hit.row.classList.remove("lw-filled");
+          void hit.row.offsetWidth;
+          hit.row.classList.add("lw-filled");
+        });
+      },
+    });
 
     function clearErrors() {
       problem.textContent = "";
@@ -855,8 +931,12 @@
         rows[name].error.textContent = "";
       });
     }
-    function mark(name, message) {
-      var hit = rows[name];
+    function mark(message) {
+      var named = Object.keys(rows).filter(function (name) {
+        var said = spoken(name);
+        return message.indexOf(said) === 0 || message.toLowerCase().indexOf(said.toLowerCase()) >= 0;
+      })[0];
+      var hit = named && rows[named];
       if (!hit) {
         problem.textContent = message;
         return;
@@ -878,26 +958,28 @@
       for (var i = 0; i < names.length; i++) {
         var hit = rows[names[i]];
         var control = hit.control;
-        if (hit.field.required && (control.type === "checkbox" ? !control.checked : !control.value.trim())) {
-          return [names[i], hit.field.label + " is required"];
+        var said = hit.column.description || spoken(hit.column.name);
+        if (hit.column.required && (control.type === "checkbox" ? !control.checked : !control.value.trim())) {
+          return [hit, said + " is required"];
         }
         if (control.value && control.validity && !control.validity.valid) {
-          return [names[i], "Check " + hit.field.label.toLowerCase()];
+          return [hit, "Check " + said.toLowerCase()];
         }
       }
       return null;
     }
-    function done(message) {
+    function done() {
       card.textContent = "";
       var box = el("div", "lw-done");
       var tick = el("div", "lw-tick");
       tick.appendChild(icon(ICON_TICK));
       box.appendChild(tick);
-      box.appendChild(el("p", null, message || spec.confirmation));
+      box.appendChild(el("p", null, script.getAttribute("data-lemma-thanks") || "Thanks, we've got it."));
       var again = el("button", "lw-link", "Send another response");
       again.onclick = function () {
         into.textContent = "";
-        renderForm(into);
+        fillers = fillers.filter(function (filler) { return filler.table !== spec.table; });
+        renderForm(into, spec);
       };
       box.appendChild(again);
       card.appendChild(box);
@@ -905,87 +987,108 @@
     function deliver() {
       submit.disabled = true;
       submit.textContent = "Sending…";
-      return call("/submit", { session: state.session, input: values() })
-        .then(function (data) {
-          done(data.result && data.result.message);
-        })
+      return addRow(spec.table, values())
+        .then(done)
         .catch(function (error) {
           submit.disabled = false;
           submit.textContent = "Send";
-          var named = Object.keys(rows).filter(function (name) {
-            return error.message.indexOf(rows[name].field.label) === 0;
-          })[0];
-          mark(named, error.message);
+          if (error.code === "needs_contact") {
+            state.isContact = false;
+            confirmFirst();
+            return;
+          }
+          mark(error.message);
         });
+    }
+    function confirmFirst() {
+      askForCode(function (box) {
+        card.insertBefore(box, form);
+      }, deliver);
     }
     form.onsubmit = function (event) {
       event.preventDefault();
       clearErrors();
       var local = localProblem();
       if (local) {
-        mark(local[0], local[1]);
+        local[0].row.classList.add("lw-bad");
+        local[0].error.textContent = local[1];
+        local[0].control.focus();
         return;
       }
-      if (state.requiresCode && !state.isContact) {
-        submit.disabled = true;
-        askForCode(function (box) {
-          card.insertBefore(box, form);
-        }, function () {
-          deliver();
-        });
-        submit.disabled = false;
+      if (spec.contacts_only && !state.isContact) {
+        confirmFirst();
         return;
       }
       deliver();
     };
   }
 
-  function placeForm() {
+  function placeForm(table) {
     var wrap = el("div", pageMode ? "lw-pagewrap" : "lw-inlinewrap");
     shell.appendChild(wrap);
     var target = pageMode && document.getElementById("lemma-page");
     if (target) target.appendChild(host);
     else script.parentNode.insertBefore(host, script.nextSibling);
-    renderForm(wrap);
+    return describeTable(table).then(function (spec) {
+      renderForm(wrap, spec);
+    }).catch(function (error) {
+      wrap.appendChild(el("div", "lw-fc", error.message));
+    });
   }
 
-  function bindForms() {
-    var forms = document.querySelectorAll("form[data-lemma-form]");
+  /** A plain <form data-lemma-table="signups"> on the page: send its fields. */
+  function bindPageForms() {
+    var forms = document.querySelectorAll("form[data-lemma-table]");
     Array.prototype.forEach.call(forms, function (form) {
-      var target = form.getAttribute("data-lemma-form");
-      if (target && target !== key) return;
+      var table = form.getAttribute("data-lemma-table");
+      fillers.push({
+        table: table,
+        fill: function (values) {
+          Object.keys(values).forEach(function (name) {
+            var control = form.elements.namedItem(name);
+            if (control && control.nodeName) setValue(control, values[name]);
+          });
+        },
+      });
       form.addEventListener("submit", function (event) {
         event.preventDefault();
         var values = {};
         new FormData(form).forEach(function (value, name) {
           if (typeof value === "string") values[name] = value;
         });
-        function deliver() {
-          return call("/submit", { session: state.session, input: values })
-            .then(function (data) {
-              form.dispatchEvent(new CustomEvent("lemma:submitted", { detail: data.result }));
-              form.reset();
-            })
-            .catch(function (error) {
-              form.dispatchEvent(new CustomEvent("lemma:error", { detail: error.message }));
-            });
-        }
-        ensureSession().then(function () {
-          if (state.requiresCode && !state.isContact) {
-            shell.classList.add("lw-inline");
-            form.parentNode.insertBefore(host, form.nextSibling);
-            askForCode(function (card) {
-              shell.appendChild(card);
-            }, deliver);
-          } else {
-            deliver();
-          }
-        });
+        addRow(table, values)
+          .then(function () {
+            form.dispatchEvent(new CustomEvent("lemma:added", { bubbles: true }));
+            form.reset();
+          })
+          .catch(function (error) {
+            form.dispatchEvent(
+              new CustomEvent("lemma:error", { bubbles: true, detail: { code: error.code, message: error.message } })
+            );
+          });
       });
     });
   }
 
-  window.LemmaChat = {
+  function onFill(frame) {
+    fillers.forEach(function (filler) {
+      if (filler.table === frame.table) filler.fill(frame.values || {});
+    });
+    window.dispatchEvent(new CustomEvent("lemma:fill", { detail: { table: frame.table, values: frame.values } }));
+  }
+
+  // What a page of its own can call: an app, or any website with the script.
+  window.Lemma = window.LemmaChat = {
+    addRow: addRow,
+    describeTable: describeTable,
+    openChat: function () {
+      launchOpen();
+    },
+    onFill: function (callback) {
+      window.addEventListener("lemma:fill", function (event) {
+        callback(event.detail);
+      });
+    },
     identify: function (token) {
       hostToken = token;
       state.session = null;
@@ -996,10 +1099,12 @@
   function boot() {
     ensureSession()
       .then(function () {
-        if (state.kind === "form") {
-          var own = document.querySelector("form[data-lemma-form]");
-          if (state.form && (pageMode || !own)) placeForm();
-          else bindForms();
+        var table = script.getAttribute("data-lemma-table");
+        var chat = script.getAttribute("data-lemma-chat") !== "off";
+        bindPageForms();
+        if (table) {
+          placeForm(table);
+          if (chat) buildChat();
           return;
         }
         var target = pageMode && document.getElementById("lemma-page");

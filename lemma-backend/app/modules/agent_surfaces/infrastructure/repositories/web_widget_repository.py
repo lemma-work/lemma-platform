@@ -9,12 +9,10 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto.factory import get_secret_cipher
-from app.modules.agent_surfaces.domain.web_forms import FormSpec
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebSession,
     WebWidget,
     WidgetAnswer,
-    WidgetKind,
     digest,
 )
 from app.modules.agent_surfaces.infrastructure.web_widget_models import (
@@ -33,14 +31,10 @@ def _widget(row: WebWidgetModel) -> WebWidget:
         pod_id=row.pod_id,
         agent_id=row.agent_id,
         name=row.name,
-        kind=WidgetKind(row.kind),
         public_key=row.public_key,
         allowed_origins=tuple(row.allowed_origins or ()),
         answer=WidgetAnswer(row.answer),
         looked_after_by=row.looked_after_by,
-        form_function=row.form_function,
-        form_requires_code=row.form_requires_code,
-        form=FormSpec.model_validate(row.form_spec) if row.form_spec else None,
         created_at=row.created_at,
     )
 
@@ -68,29 +62,21 @@ class WebWidgetRepository:
         pod_id: UUID,
         agent_id: UUID,
         name: str,
-        kind: WidgetKind,
         public_key: str,
         secret: str,
         allowed_origins: list[str],
         answer: WidgetAnswer,
         looked_after_by: UUID | None,
-        form_function: str | None,
-        form_requires_code: bool,
-        form: FormSpec | None = None,
     ) -> WebWidget:
         row = WebWidgetModel(
             pod_id=pod_id,
             agent_id=agent_id,
             name=name,
-            kind=kind.value,
             public_key=public_key,
             signing_secret=get_secret_cipher().encrypt_str(secret),
             allowed_origins=allowed_origins,
             answer=answer.value,
             looked_after_by=looked_after_by,
-            form_function=form_function,
-            form_requires_code=form_requires_code,
-            form_spec=form.model_dump(mode="json") if form else None,
         )
         self.session.add(row)
         await self.session.flush()

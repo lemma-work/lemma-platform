@@ -17,7 +17,6 @@ import pytest
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
     WidgetAnswer,
-    WidgetKind,
     mint_public_key,
     mint_secret,
 )
@@ -87,13 +86,10 @@ def _widget(origins: tuple[str, ...]) -> WebWidget:
         pod_id=uuid4(),
         agent_id=uuid4(),
         name="Shop chat",
-        kind=WidgetKind.CHAT,
         public_key=KEY,
         allowed_origins=origins,
         answer=WidgetAnswer.ANYONE,
         looked_after_by=None,
-        form_function=None,
-        form_requires_code=False,
         created_at=datetime.now(timezone.utc),
     )
 

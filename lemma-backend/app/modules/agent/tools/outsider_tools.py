@@ -41,6 +41,9 @@ OUTSIDER_TOOL_NAMES = frozenset(
         # from the model.
         "contact_records",
         "contact_function",
+        # FORM -- offered only to a web visitor's run (``tools/form_tools``):
+        # fills fields of a form on their page; writes nothing.
+        "fill_form",
     }
 )
 

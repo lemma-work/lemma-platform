@@ -1,4 +1,4 @@
-"""Web widgets: a pod's chat bubbles and forms on other people's web pages.
+"""Web widgets: a pod's chat on other people's web pages.
 
 A widget answers as one of the pod's agents and is reached by its public key,
 which anybody can read off the page that embeds it. The key names the widget
@@ -32,7 +32,6 @@ class WebWidgetModel(UUIDAuditBase):
         ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    kind: Mapped[str] = mapped_column(String(20), nullable=False)
     public_key: Mapped[str] = mapped_column(String(64), nullable=False)
     #: Encrypted at rest; shown once when minted or rotated.
     signing_secret: Mapped[str] = mapped_column(Text, nullable=False)
@@ -43,14 +42,6 @@ class WebWidgetModel(UUIDAuditBase):
     looked_after_by: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    form_function: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    form_requires_code: Mapped[bool] = mapped_column(
-        default=False, server_default="false", nullable=False
-    )
-    #: A form built from a table: which table, which of its columns to ask
-    #: for, and what to say. See ``domain/web_forms``. Null for a chat, and
-    #: for a form that runs ``form_function`` instead.
-    form_spec: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
 
 
 class WebSessionModel(UUIDAuditBase):

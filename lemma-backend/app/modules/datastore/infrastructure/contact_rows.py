@@ -22,10 +22,8 @@ from sqlalchemy.exc import DBAPIError
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreQueryError
 from app.modules.datastore.domain.ports import DatastoreSchemaPort
+from app.modules.datastore.domain.public_rows import CONTACT_COLUMN
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
-
-#: The column a contact-owned table names its contact in.
-CONTACT_COLUMN = "contact_id"
 
 #: The most rows one contact read returns.
 MAX_CONTACT_ROWS = 200

@@ -5,7 +5,8 @@ tool calls and their results, a private note and the run that answers it. A
 visitor on a web page may see none of that. This is the same rule
 ``visible_messages`` applies to history, applied to the live frames: the answer's
 text as it is written, a "typing" signal while the run works on anything else,
-the finished message, and "done".
+the finished message, fields the agent filled on the visitor's form, and
+"done".
 
 Every frame is translated rather than filtered, so a field added to the
 member's frames later reaches no visitor by accident.
@@ -27,6 +28,7 @@ from app.modules.agent.domain.private_notes import is_private_note, run_is_priva
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 from app.modules.agent.services.realtime import conversation_channel
+from app.modules.agent.tools.form_tools import FILL_FORM_TOOL
 
 __all__ = ["VisitorFrame", "visitor_frame", "visitor_frames"]
 
@@ -79,6 +81,8 @@ def _token_frame(payload: Mapping[str, object]) -> VisitorFrame | None:
 
 
 def _message_frame(message: Mapping[str, object]) -> VisitorFrame | None:
+    if message.get("kind") == MessageKind.TOOL_RETURN.value:
+        return _fill_frame(message)
     if message.get("role") != "assistant":
         return None
     metadata = message.get("metadata")
@@ -92,6 +96,24 @@ def _message_frame(message: Mapping[str, object]) -> VisitorFrame | None:
     if not text.strip():
         return None
     return {"type": "message", "text": text, "sequence": message.get("sequence")}
+
+
+def _fill_frame(message: Mapping[str, object]) -> VisitorFrame | None:
+    """Fields the agent filled on the visitor's form, from ``fill_form``'s result.
+
+    The result, not the call: ``tools/form_tools`` has already kept only the
+    table's open columns and values that fit them.
+    """
+    if message.get("tool_name") != FILL_FORM_TOOL:
+        return None
+    result = message.get("tool_result")
+    if not isinstance(result, Mapping) or result.get("success") is not True:
+        return None
+    filled = result.get("filled")
+    table = result.get("table")
+    if not isinstance(filled, Mapping) or not isinstance(table, str) or not filled:
+        return None
+    return {"type": "fill", "table": table, "values": dict(filled)}
 
 
 def _private_run_lookup(

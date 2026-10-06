@@ -37,6 +37,7 @@ from app.modules.agent.domain.outsiders import (
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools import registry
 from app.modules.agent.tools.contact_tools import build_contact_toolset
+from app.modules.agent.tools.form_tools import build_form_toolset
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher, UnknownToolError
 from app.modules.agent.tools.outsider_tools import (
@@ -58,8 +59,10 @@ def _kept_tool_names() -> set[str]:
         static = registry._TOOLSET_BY_NAME.get(toolset)
         if static is not None:
             names |= set(static.tools)
-    # Built per run rather than registered, and only on a contact's run.
+    # Built per run rather than registered: on a contact's run, and on a web
+    # visitor's run.
     names |= set(build_contact_toolset(uow_factory=lambda: None).tools)
+    names |= set(build_form_toolset(uow_factory=lambda: None).tools)
     return names
 
 

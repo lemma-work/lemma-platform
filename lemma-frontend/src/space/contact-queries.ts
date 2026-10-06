@@ -28,16 +28,6 @@ export function useReach(podId: string, enabled = true) {
     return useQuery({ queryKey: reachKey(podId), enabled, queryFn: () => source.contactReach(podId), staleTime: 60_000 });
 }
 
-/** The columns a form on ``table`` may ask for; idle until a table is chosen. */
-export function useFormColumns(podId: string, table: string) {
-    return useQuery({
-        queryKey: ["form-columns", podId, table] as const,
-        enabled: Boolean(table),
-        queryFn: () => source.formColumns(podId, table),
-        staleTime: 30_000,
-    });
-}
-
 export function useContactsCap(orgId: string, enabled = true) {
     return useQuery({ queryKey: capKey(orgId), enabled, queryFn: () => source.contactsCap(orgId), staleTime: 60_000 });
 }

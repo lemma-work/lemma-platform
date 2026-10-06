@@ -25,6 +25,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | Storage | Meaning |
 | --- | --- |
 | `datastore_tables` | Registry and JSON column schema for each logical table |
+| `datastore_public_rows` | Tables open to people outside the pod: one grant per table saying who may add rows (`contacts` or `anyone`), which columns, and the member who opened it. Rows are added as that member, through `RecordService`. A form is any page that adds such a row; see `domain/public_rows.py` and `PUT /pods/{pod_id}/datastore/tables/{table}/public-rows` |
 | Per-pod PostgreSQL schema | Physical record tables, constraints, indexes, and RLS policies. Born readable by the ad-hoc query role (schema `USAGE` plus a per-schema default privilege for its tables); a schema from before that heals on its first query |
 | `datastore_files` | Hierarchical metadata, ownership, processing status, Markdown/index metadata |
 | Object storage/local store | Original bytes, derived Markdown, images, and page renders |

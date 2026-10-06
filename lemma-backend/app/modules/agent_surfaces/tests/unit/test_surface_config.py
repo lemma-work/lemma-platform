@@ -98,6 +98,7 @@ EXPECTED = [
         "SURFACE_WEB_SUBMISSIONS_PER_WIDGET_PER_DAY",
         500,
     ),
+    ("surface_web_stream_seconds", "SURFACE_WEB_STREAM_SECONDS", 300),
     (
         "surface_new_contacts_per_surface_per_day",
         "SURFACE_NEW_CONTACTS_PER_SURFACE_PER_DAY",

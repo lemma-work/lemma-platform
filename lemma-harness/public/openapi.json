@@ -6319,22 +6319,6 @@
         "title": "FeedbackCategory",
         "type": "string"
       },
-      "FieldInput": {
-        "description": "What a visitor types into a field. Chosen from the column, adjustable.",
-        "enum": [
-          "text",
-          "long",
-          "email",
-          "phone",
-          "number",
-          "date",
-          "datetime",
-          "checkbox",
-          "choice"
-        ],
-        "title": "FieldInput",
-        "type": "string"
-      },
       "FileChildSchema": {
         "description": "A derived child artifact of a processed document (converted markdown,\nan extracted figure, or a renderable page). Fetch its bytes from\n``GET …/files/children/content?path=<child path>``.",
         "properties": {
@@ -7128,193 +7112,6 @@
         "title": "ForgetResponse",
         "type": "object"
       },
-      "FormColumnResponse": {
-        "properties": {
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "inputs": {
-            "items": {
-              "$ref": "#/components/schemas/FieldInput"
-            },
-            "title": "Inputs",
-            "type": "array"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "options": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Options",
-            "type": "array"
-          },
-          "required": {
-            "title": "Required",
-            "type": "boolean"
-          },
-          "suggested_input": {
-            "$ref": "#/components/schemas/FieldInput"
-          },
-          "type": {
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "type",
-          "required",
-          "options",
-          "description",
-          "suggested_input",
-          "inputs"
-        ],
-        "title": "FormColumnResponse",
-        "type": "object"
-      },
-      "FormColumnsResponse": {
-        "properties": {
-          "columns": {
-            "items": {
-              "$ref": "#/components/schemas/FormColumnResponse"
-            },
-            "title": "Columns",
-            "type": "array"
-          },
-          "contact_owned": {
-            "title": "Contact Owned",
-            "type": "boolean"
-          },
-          "table": {
-            "title": "Table",
-            "type": "string"
-          }
-        },
-        "required": [
-          "table",
-          "contact_owned",
-          "columns"
-        ],
-        "title": "FormColumnsResponse",
-        "type": "object"
-      },
-      "FormField": {
-        "properties": {
-          "column": {
-            "title": "Column",
-            "type": "string"
-          },
-          "column_type": {
-            "title": "Column Type",
-            "type": "string"
-          },
-          "hint": {
-            "anyOf": [
-              {
-                "maxLength": 300,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hint"
-          },
-          "input": {
-            "$ref": "#/components/schemas/FieldInput"
-          },
-          "label": {
-            "maxLength": 200,
-            "title": "Label",
-            "type": "string"
-          },
-          "options": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Options",
-            "type": "array"
-          },
-          "required": {
-            "default": false,
-            "title": "Required",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "column",
-          "label",
-          "input",
-          "column_type"
-        ],
-        "title": "FormField",
-        "type": "object"
-      },
-      "FormFieldRequest": {
-        "properties": {
-          "column": {
-            "maxLength": 255,
-            "title": "Column",
-            "type": "string"
-          },
-          "hint": {
-            "anyOf": [
-              {
-                "maxLength": 300,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hint"
-          },
-          "input": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/FieldInput"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "label": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Label"
-          },
-          "required": {
-            "default": false,
-            "title": "Required",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "column"
-        ],
-        "title": "FormFieldRequest",
-        "type": "object"
-      },
       "FormNode": {
         "description": "Form node for user input. The run waits on it until the form is\nsubmitted via the form-submit endpoint.",
         "properties": {
@@ -7464,103 +7261,6 @@
           "config"
         ],
         "title": "FormNodeResponse",
-        "type": "object"
-      },
-      "FormRequest": {
-        "description": "A form on one table: the columns to ask for, in order.",
-        "properties": {
-          "confirmation": {
-            "anyOf": [
-              {
-                "maxLength": 1000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Confirmation"
-          },
-          "fields": {
-            "items": {
-              "$ref": "#/components/schemas/FormFieldRequest"
-            },
-            "maxItems": 30,
-            "minItems": 1,
-            "title": "Fields",
-            "type": "array"
-          },
-          "intro": {
-            "anyOf": [
-              {
-                "maxLength": 1000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Intro"
-          },
-          "table": {
-            "maxLength": 255,
-            "title": "Table",
-            "type": "string"
-          }
-        },
-        "required": [
-          "table",
-          "fields"
-        ],
-        "title": "FormRequest",
-        "type": "object"
-      },
-      "FormSpec": {
-        "description": "What a form asks for, and what it says before and after.",
-        "properties": {
-          "confirmation": {
-            "anyOf": [
-              {
-                "maxLength": 1000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Confirmation"
-          },
-          "fields": {
-            "items": {
-              "$ref": "#/components/schemas/FormField"
-            },
-            "maxItems": 30,
-            "minItems": 1,
-            "title": "Fields",
-            "type": "array"
-          },
-          "intro": {
-            "anyOf": [
-              {
-                "maxLength": 1000,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Intro"
-          },
-          "table": {
-            "title": "Table",
-            "type": "string"
-          }
-        },
-        "required": [
-          "table",
-          "fields"
-        ],
-        "title": "FormSpec",
         "type": "object"
       },
       "FunctionActionResponse": {
@@ -11240,6 +10940,61 @@
         "title": "OAuth2DefaultsResponseSchema",
         "type": "object"
       },
+      "OpenTableRequest": {
+        "properties": {
+          "audience": {
+            "$ref": "#/components/schemas/PublicAudience"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "minItems": 1,
+            "title": "Columns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "audience",
+          "columns"
+        ],
+        "title": "OpenTableRequest",
+        "type": "object"
+      },
+      "OpenTableSummary": {
+        "properties": {
+          "audience": {
+            "$ref": "#/components/schemas/PublicAudience"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "audience"
+        ],
+        "title": "OpenTableSummary",
+        "type": "object"
+      },
+      "OpenTablesResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OpenTableSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "OpenTablesResponse",
+        "type": "object"
+      },
       "OperationDetail": {
         "description": "Full operation metadata including input and output schemas.",
         "properties": {
@@ -13342,6 +13097,59 @@
           }
         },
         "title": "PodUpdateRequest",
+        "type": "object"
+      },
+      "PublicAudience": {
+        "description": "Who outside the pod may add rows.",
+        "enum": [
+          "contacts",
+          "anyone"
+        ],
+        "title": "PublicAudience",
+        "type": "string"
+      },
+      "PublicColumnResponse": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "required": {
+            "description": "The table needs it, so it must be open.",
+            "title": "Required",
+            "type": "boolean"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "required",
+          "options",
+          "description"
+        ],
+        "title": "PublicColumnResponse",
         "type": "object"
       },
       "PublishMode": {
@@ -16239,6 +16047,61 @@
         "title": "TableListResponse",
         "type": "object"
       },
+      "TableOpeningResponse": {
+        "properties": {
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicAudience"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who outside may add rows; null when the table is closed."
+          },
+          "columns": {
+            "description": "The open columns, in order.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "contact_owned": {
+            "description": "A confirmed contact's row names them in contact_id.",
+            "title": "Contact Owned",
+            "type": "boolean"
+          },
+          "offered": {
+            "description": "The columns people outside could be asked to fill.",
+            "items": {
+              "$ref": "#/components/schemas/PublicColumnResponse"
+            },
+            "title": "Offered",
+            "type": "array"
+          },
+          "per_user": {
+            "description": "Each member sees only their own rows, so it can't be opened.",
+            "title": "Per User",
+            "type": "boolean"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "per_user",
+          "contact_owned",
+          "offered",
+          "audience",
+          "columns"
+        ],
+        "title": "TableOpeningResponse",
+        "type": "object"
+      },
       "TableSummaryResponse": {
         "description": "Lean table shape for list responses.\n\nOmits the full `columns` definitions and `config` — fetch those from\n`table.get`. Exposes a cheap `column_count` for list views.",
         "properties": {
@@ -18724,38 +18587,6 @@
             "$ref": "#/components/schemas/WidgetAnswer",
             "default": "anyone"
           },
-          "form": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/FormRequest"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "A form built from a table: submitting it adds one row. Takes the place of form_function."
-          },
-          "form_function": {
-            "anyOf": [
-              {
-                "maxLength": 255,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Form Function"
-          },
-          "form_requires_code": {
-            "default": false,
-            "title": "Form Requires Code",
-            "type": "boolean"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/WidgetKind",
-            "default": "chat"
-          },
           "looked_after_by": {
             "anyOf": [
               {
@@ -18804,42 +18635,14 @@
             "type": "string"
           },
           "embed": {
-            "description": "The script tag that puts the widget on a page.",
+            "description": "The script tag that puts the chat on a page.",
             "title": "Embed",
             "type": "string"
-          },
-          "form": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/FormSpec"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "form_function": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Form Function"
-          },
-          "form_requires_code": {
-            "title": "Form Requires Code",
-            "type": "boolean"
           },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/WidgetKind"
           },
           "looked_after_by": {
             "anyOf": [
@@ -18858,7 +18661,7 @@
             "type": "string"
           },
           "page_url": {
-            "description": "A page Lemma hosts with the form or chat on it, to share as a link.",
+            "description": "A page Lemma hosts with the chat on it, to share as a link.",
             "title": "Page Url",
             "type": "string"
           },
@@ -18876,13 +18679,10 @@
           "id",
           "name",
           "agent_id",
-          "kind",
           "public_key",
           "allowed_origins",
           "answer",
           "looked_after_by",
-          "form_function",
-          "form_requires_code",
           "created_at",
           "embed",
           "page_url",
@@ -18930,42 +18730,14 @@
             "type": "string"
           },
           "embed": {
-            "description": "The script tag that puts the widget on a page.",
+            "description": "The script tag that puts the chat on a page.",
             "title": "Embed",
             "type": "string"
-          },
-          "form": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/FormSpec"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "form_function": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Form Function"
-          },
-          "form_requires_code": {
-            "title": "Form Requires Code",
-            "type": "boolean"
           },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/WidgetKind"
           },
           "looked_after_by": {
             "anyOf": [
@@ -18984,7 +18756,7 @@
             "type": "string"
           },
           "page_url": {
-            "description": "A page Lemma hosts with the form or chat on it, to share as a link.",
+            "description": "A page Lemma hosts with the chat on it, to share as a link.",
             "title": "Page Url",
             "type": "string"
           },
@@ -18997,13 +18769,10 @@
           "id",
           "name",
           "agent_id",
-          "kind",
           "public_key",
           "allowed_origins",
           "answer",
           "looked_after_by",
-          "form_function",
-          "form_requires_code",
           "created_at",
           "embed",
           "page_url"
@@ -19051,39 +18820,6 @@
               }
             ]
           },
-          "form": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/FormRequest"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "form_function": {
-            "anyOf": [
-              {
-                "maxLength": 255,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Form Function"
-          },
-          "form_requires_code": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Form Requires Code"
-          },
           "looked_after_by": {
             "anyOf": [
               {
@@ -19122,14 +18858,6 @@
         ],
         "title": "WidgetEmbedUrlResponse",
         "type": "object"
-      },
-      "WidgetKind": {
-        "enum": [
-          "chat",
-          "form"
-        ],
-        "title": "WidgetKind",
-        "type": "string"
       },
       "WorkflowCreateRequest": {
         "properties": {
@@ -29931,6 +29659,56 @@
         }
       }
     },
+    "/pods/{pod_id}/datastore/public-rows": {
+      "get": {
+        "operationId": "table.public_rows.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenTablesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tables Open To People Outside",
+        "tags": [
+          "tables"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "table.public_rows",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/pods/{pod_id}/datastore/query": {
       "post": {
         "description": "Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected. Results are capped at the deployment's row limit: `total` is how many rows came back, and `truncated` says whether more matched.",
@@ -30478,6 +30256,189 @@
           "resource": "table.column",
           "result": "void",
           "verb": "remove"
+        }
+      }
+    },
+    "/pods/{pod_id}/datastore/tables/{table_name}/public-rows": {
+      "delete": {
+        "operationId": "table.public_rows.close",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop People Outside Adding Rows",
+        "tags": [
+          "tables"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "table.public_rows"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "table.public_rows",
+          "result": "void",
+          "verb": "close"
+        }
+      },
+      "get": {
+        "operationId": "table.public_rows.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableOpeningResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Who Outside May Add Rows",
+        "tags": [
+          "tables"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "table.public_rows",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "put": {
+        "description": "Open the table to rows from people outside the pod -- confirmed contacts, or anyone -- for the chosen columns only. Rows are added as the member opening it, who must be able to change the table.",
+        "operationId": "table.public_rows.open",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenTableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableOpeningResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Let People Outside Add Rows",
+        "tags": [
+          "tables"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "table.public_rows"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "table.public_rows",
+          "result": "entity",
+          "verb": "open"
         }
       }
     },
@@ -36090,67 +36051,6 @@
         }
       }
     },
-    "/pods/{pod_id}/web-widgets/form-columns": {
-      "get": {
-        "description": "The columns of a table a form may ask for, and how each can be asked.",
-        "operationId": "agent.web_widget.form_columns",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "pod_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Pod Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "table",
-            "required": true,
-            "schema": {
-              "maxLength": 255,
-              "title": "Table",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FormColumnsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Form Columns",
-        "tags": [
-          "Agent Surfaces"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.web_widget",
-          "result": "entity",
-          "verb": "form_columns"
-        }
-      }
-    },
     "/pods/{pod_id}/web-widgets/{widget_id}": {
       "delete": {
         "operationId": "agent.web_widget.delete",
@@ -37759,6 +37659,57 @@
         }
       }
     },
+    "/public/web/{public_key}/rows": {
+      "post": {
+        "description": "Add one row to a table the pod opened to visitors. Nothing is read back.",
+        "operationId": "public.web.row.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Add Row",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "public.web.row"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "public.web.row",
+          "result": "entity",
+          "verb": "add"
+        }
+      }
+    },
     "/public/web/{public_key}/session": {
       "post": {
         "operationId": "public.web.session.start",
@@ -37860,9 +37811,10 @@
         }
       }
     },
-    "/public/web/{public_key}/submit": {
+    "/public/web/{public_key}/table": {
       "post": {
-        "operationId": "public.web.form.submit",
+        "description": "What a page may ask for on a table the pod opened to visitors.\n\nThe open columns only, in order: enough to draw a form, and nothing else\nabout the table or its rows.",
+        "operationId": "public.web.table.read",
         "parameters": [
           {
             "in": "path",
@@ -37894,19 +37846,19 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Web Submit Form",
+        "summary": "Web Read Table",
         "tags": [
           "Agent Surfaces (Web)"
         ],
         "x-lemma": {
           "invalidates": [
-            "public.web.form"
+            "public.web.table"
           ],
           "kind": "mutation",
           "paginates": false,
-          "resource": "public.web.form",
+          "resource": "public.web.table",
           "result": "entity",
-          "verb": "submit"
+          "verb": "read"
         }
       }
     },

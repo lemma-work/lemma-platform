@@ -5,12 +5,10 @@ from uuid import UUID
 from ..openapi_client.api.agent_surfaces import (
     agent_web_widget_create,
     agent_web_widget_delete,
-    agent_web_widget_form_columns,
     agent_web_widget_list,
     agent_web_widget_rotate_secret,
     agent_web_widget_update,
 )
-from ..openapi_client.models.form_columns_response import FormColumnsResponse
 from ..openapi_client.models.web_widget_create_request import WebWidgetCreateRequest
 from ..openapi_client.models.web_widget_created_response import (
     WebWidgetCreatedResponse,
@@ -23,7 +21,7 @@ from .base import BoundResource, as_uuid
 
 
 class PodWebWidgets(BoundResource):
-    """A pod's chat bubbles and forms for other people's web pages.
+    """A pod's chat on other people's web pages, and its visitors' door into open tables.
 
     A widget's public key goes in the page and names the widget, nothing more:
     anonymous visitors chat as outsiders. Its signing secret stays on the
@@ -61,14 +59,6 @@ class PodWebWidgets(BoundResource):
         return self._call(
             agent_web_widget_rotate_secret, self._pod_uuid(), as_uuid(widget_id)
         )
-
-    def form_columns(self, table: str) -> FormColumnsResponse:
-        """The columns of ``table`` a form may ask for, and how each can be asked.
-
-        Pass the chosen columns as ``form`` when creating a form widget: a
-        submission then adds one row to the table, with no function to write.
-        """
-        return self._call(agent_web_widget_form_columns, self._pod_uuid(), table=table)
 
     def delete(self, widget_id: str | UUID) -> None:
         self._call(agent_web_widget_delete, self._pod_uuid(), as_uuid(widget_id))

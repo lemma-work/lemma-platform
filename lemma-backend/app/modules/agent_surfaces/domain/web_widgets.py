@@ -1,9 +1,10 @@
-"""A pod's web widgets: chat bubbles and forms on web pages it does not own.
+"""A pod's web widgets: its chat on web pages it does not own.
 
 See ``infrastructure/web_widget_models`` for what is stored and
 ``services/web_chat`` for what a visitor can do. The public key is not a
 credential: anybody can copy it off the page, so whatever it allows, the
-internet gets -- starting an anonymous chat, and submitting the widget's form.
+internet gets -- starting an anonymous chat, and adding rows to whichever of
+the pod's tables are open to visitors (see ``datastore/contracts/public_rows``).
 """
 
 from __future__ import annotations
@@ -16,15 +17,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.agent_surfaces.domain.web_forms import FormSpec
-
 PUBLIC_KEY_PREFIX = "pk_"
 SECRET_PREFIX = "sk_"
-
-
-class WidgetKind(StrEnum):
-    CHAT = "chat"
-    FORM = "form"
 
 
 class WidgetAnswer(StrEnum):
@@ -47,14 +41,10 @@ class WebWidget(BaseModel):
     pod_id: UUID
     agent_id: UUID
     name: str
-    kind: WidgetKind
     public_key: str
     allowed_origins: tuple[str, ...]
     answer: WidgetAnswer
     looked_after_by: UUID | None
-    form_function: str | None
-    form_requires_code: bool
-    form: FormSpec | None = None
     created_at: datetime
 
     def allows_origin(self, origin: str | None) -> bool:

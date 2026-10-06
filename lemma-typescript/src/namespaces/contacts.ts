@@ -75,7 +75,7 @@ export class ContactsNamespace {
   }
 
   /**
-   * Web widgets: chat bubbles and forms for other people's pages. The public key
+   * Web widgets: the pod's chat on other people's pages, and the key a form page adds rows with. The public key
    * goes in the page and names the widget only; the signing secret, returned by
    * `create` and `rotateWidgetSecret` once, stays on the customer's server.
    */
@@ -94,8 +94,5 @@ export class ContactsNamespace {
       ),
     remove: (podId: string, widgetId: string) =>
       this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId)),
-    /** The columns of a table a form may ask for, and how each can be asked. */
-    formColumns: (podId: string, table: string) =>
-      this.client.request(() => AgentSurfacesService.agentWebWidgetFormColumns(podId, table)),
   };
 }

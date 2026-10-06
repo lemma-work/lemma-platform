@@ -213,7 +213,6 @@ _NAME_TO_MODULE = {
     'ExpressionInputBinding': 'expression_input_binding',
     'FastapiCompatV2BodyPodBundleUpload': 'fastapi_compat_v2_body_pod_bundle_upload',
     'FeedbackCategory': 'feedback_category',
-    'FieldInput': 'field_input',
     'FileChildSchema': 'file_child_schema',
     'FileChildrenResponse': 'file_children_response',
     'FileDetailResponse': 'file_detail_response',
@@ -235,10 +234,6 @@ _NAME_TO_MODULE = {
     'FollowUpResponse': 'follow_up_response',
     'ForeignKeySpec': 'foreign_key_spec',
     'ForgetResponse': 'forget_response',
-    'FormColumnResponse': 'form_column_response',
-    'FormColumnsResponse': 'form_columns_response',
-    'FormField': 'form_field',
-    'FormFieldRequest': 'form_field_request',
     'FormNode': 'form_node',
     'FormNodeConfig': 'form_node_config',
     'FormNodeConfigInputSchema': 'form_node_config_input_schema',
@@ -246,8 +241,6 @@ _NAME_TO_MODULE = {
     'FormNodePositionType0': 'form_node_position_type_0',
     'FormNodeResponse': 'form_node_response',
     'FormNodeResponsePositionType0': 'form_node_response_position_type_0',
-    'FormRequest': 'form_request',
-    'FormSpec': 'form_spec',
     'FunctionActionResponse': 'function_action_response',
     'FunctionContactAccessRequest': 'function_contact_access_request',
     'FunctionDetailResponse': 'function_detail_response',
@@ -336,6 +329,9 @@ _NAME_TO_MODULE = {
     'NotifyMemberRequest': 'notify_member_request',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
+    'OpenTableRequest': 'open_table_request',
+    'OpenTableSummary': 'open_table_summary',
+    'OpenTablesResponse': 'open_tables_response',
     'OperationDetail': 'operation_detail',
     'OperationDetailInputSchema': 'operation_detail_input_schema',
     'OperationDetailOutputSchemaType0': 'operation_detail_output_schema_type_0',
@@ -394,6 +390,8 @@ _NAME_TO_MODULE = {
     'PodRoleResourcePermissionResponse': 'pod_role_resource_permission_response',
     'PodRoleResponse': 'pod_role_response',
     'PodUpdateRequest': 'pod_update_request',
+    'PublicAudience': 'public_audience',
+    'PublicColumnResponse': 'public_column_response',
     'PublishMode': 'publish_mode',
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
@@ -495,6 +493,7 @@ _NAME_TO_MODULE = {
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
     'TableListResponse': 'table_list_response',
+    'TableOpeningResponse': 'table_opening_response',
     'TableSummaryResponse': 'table_summary_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
@@ -562,7 +561,6 @@ _NAME_TO_MODULE = {
     'WebWidgetUpdateRequest': 'web_widget_update_request',
     'WidgetAnswer': 'widget_answer',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
-    'WidgetKind': 'widget_kind',
     'WorkflowCreateRequest': 'workflow_create_request',
     'WorkflowDetailResponse': 'workflow_detail_response',
     'WorkflowEdge': 'workflow_edge',
@@ -798,7 +796,6 @@ if TYPE_CHECKING:
     from .expression_input_binding import ExpressionInputBinding
     from .fastapi_compat_v2_body_pod_bundle_upload import FastapiCompatV2BodyPodBundleUpload
     from .feedback_category import FeedbackCategory
-    from .field_input import FieldInput
     from .file_child_schema import FileChildSchema
     from .file_children_response import FileChildrenResponse
     from .file_detail_response import FileDetailResponse
@@ -820,10 +817,6 @@ if TYPE_CHECKING:
     from .follow_up_response import FollowUpResponse
     from .foreign_key_spec import ForeignKeySpec
     from .forget_response import ForgetResponse
-    from .form_column_response import FormColumnResponse
-    from .form_columns_response import FormColumnsResponse
-    from .form_field import FormField
-    from .form_field_request import FormFieldRequest
     from .form_node import FormNode
     from .form_node_config import FormNodeConfig
     from .form_node_config_input_schema import FormNodeConfigInputSchema
@@ -831,8 +824,6 @@ if TYPE_CHECKING:
     from .form_node_position_type_0 import FormNodePositionType0
     from .form_node_response import FormNodeResponse
     from .form_node_response_position_type_0 import FormNodeResponsePositionType0
-    from .form_request import FormRequest
-    from .form_spec import FormSpec
     from .function_action_response import FunctionActionResponse
     from .function_contact_access_request import FunctionContactAccessRequest
     from .function_detail_response import FunctionDetailResponse
@@ -921,6 +912,9 @@ if TYPE_CHECKING:
     from .notify_member_request import NotifyMemberRequest
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
+    from .open_table_request import OpenTableRequest
+    from .open_table_summary import OpenTableSummary
+    from .open_tables_response import OpenTablesResponse
     from .operation_detail import OperationDetail
     from .operation_detail_input_schema import OperationDetailInputSchema
     from .operation_detail_output_schema_type_0 import OperationDetailOutputSchemaType0
@@ -979,6 +973,8 @@ if TYPE_CHECKING:
     from .pod_role_resource_permission_response import PodRoleResourcePermissionResponse
     from .pod_role_response import PodRoleResponse
     from .pod_update_request import PodUpdateRequest
+    from .public_audience import PublicAudience
+    from .public_column_response import PublicColumnResponse
     from .publish_mode import PublishMode
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
@@ -1080,6 +1076,7 @@ if TYPE_CHECKING:
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
     from .table_list_response import TableListResponse
+    from .table_opening_response import TableOpeningResponse
     from .table_summary_response import TableSummaryResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
@@ -1147,7 +1144,6 @@ if TYPE_CHECKING:
     from .web_widget_update_request import WebWidgetUpdateRequest
     from .widget_answer import WidgetAnswer
     from .widget_embed_url_response import WidgetEmbedUrlResponse
-    from .widget_kind import WidgetKind
     from .workflow_create_request import WorkflowCreateRequest
     from .workflow_detail_response import WorkflowDetailResponse
     from .workflow_edge import WorkflowEdge
@@ -1396,7 +1392,6 @@ __all__ = [
     'ExpressionInputBinding',
     'FastapiCompatV2BodyPodBundleUpload',
     'FeedbackCategory',
-    'FieldInput',
     'FileChildSchema',
     'FileChildrenResponse',
     'FileDetailResponse',
@@ -1418,10 +1413,6 @@ __all__ = [
     'FollowUpResponse',
     'ForeignKeySpec',
     'ForgetResponse',
-    'FormColumnResponse',
-    'FormColumnsResponse',
-    'FormField',
-    'FormFieldRequest',
     'FormNode',
     'FormNodeConfig',
     'FormNodeConfigInputSchema',
@@ -1429,8 +1420,6 @@ __all__ = [
     'FormNodePositionType0',
     'FormNodeResponse',
     'FormNodeResponsePositionType0',
-    'FormRequest',
-    'FormSpec',
     'FunctionActionResponse',
     'FunctionContactAccessRequest',
     'FunctionDetailResponse',
@@ -1519,6 +1508,9 @@ __all__ = [
     'NotifyMemberRequest',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
+    'OpenTableRequest',
+    'OpenTableSummary',
+    'OpenTablesResponse',
     'OperationDetail',
     'OperationDetailInputSchema',
     'OperationDetailOutputSchemaType0',
@@ -1577,6 +1569,8 @@ __all__ = [
     'PodRoleResourcePermissionResponse',
     'PodRoleResponse',
     'PodUpdateRequest',
+    'PublicAudience',
+    'PublicColumnResponse',
     'PublishMode',
     'PublishStartRequest',
     'PublishStatus',
@@ -1678,6 +1672,7 @@ __all__ = [
     'TableDetailResponse',
     'TableDetailResponseConfigType0',
     'TableListResponse',
+    'TableOpeningResponse',
     'TableSummaryResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
@@ -1745,7 +1740,6 @@ __all__ = [
     'WebWidgetUpdateRequest',
     'WidgetAnswer',
     'WidgetEmbedUrlResponse',
-    'WidgetKind',
     'WorkflowCreateRequest',
     'WorkflowDetailResponse',
     'WorkflowEdge',

@@ -12,14 +12,12 @@ response then names the page's origin itself -- only when the widget allows it.
 
 from __future__ import annotations
 
-import html
 import json
 from collections.abc import AsyncIterator
-from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from app.core.api.dependencies import get_uow_factory
@@ -27,14 +25,12 @@ from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frames
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.web_forms import public_form
 from app.modules.agent_surfaces.domain.web_widgets import WebWidget, normalize_origin
 from app.modules.agent_surfaces.services.web_chat import WebChat, WebChatRefused
 
 router = APIRouter(prefix="/public/web", tags=["Agent Surfaces (Web)"])
 
 _MAX_BODY_BYTES = 65_536
-_WIDGET_JS = Path(__file__).resolve().parents[2] / "public" / "widget.js"
 
 
 class SessionRequest(BaseModel):
@@ -64,9 +60,13 @@ class VerifyRequest(CodeRequest):
     code: str = Field(max_length=12)
 
 
-class SubmitRequest(BaseModel):
+class TableRequest(BaseModel):
     session: str | None = Field(default=None, max_length=128)
-    input: dict[str, object] = Field(default_factory=dict)
+    table: str = Field(max_length=255)
+
+
+class RowRequest(TableRequest):
+    values: dict[str, object] = Field(default_factory=dict)
 
 
 def _chat(uow_factory: UnitOfWorkFactory = Depends(get_uow_factory)) -> WebChat:
@@ -131,85 +131,6 @@ def _refusal(
     )
 
 
-@router.get(
-    "/widget.js", operation_id="public.web.widget_script", include_in_schema=False
-)
-async def web_widget_script() -> Response:
-    return Response(
-        _WIDGET_JS.read_bytes(),
-        media_type="text/javascript; charset=utf-8",
-        headers={"Cache-Control": "public, max-age=300"},
-    )
-
-
-_PAGE_HEADERS = {
-    "Content-Security-Policy": (
-        "default-src 'none'; script-src 'self'; connect-src 'self'; "
-        "style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; "
-        "form-action 'none'"
-    ),
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-    "Cache-Control": "public, max-age=60",
-}
-
-
-def _page(title: str, public_key: str, *, embedded: bool) -> str:
-    safe_title = html.escape(title)
-    safe_key = html.escape(public_key, quote=True)
-    chrome = (
-        ""
-        if embedded
-        else (
-            '<footer>Made with <a href="https://lemma.work" rel="noopener">Lemma</a>'
-            " &middot; Don't share passwords or card numbers here.</footer>"
-        )
-    )
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
-<title>{safe_title}</title>
-<style>
-:root{{color-scheme:light dark}}
-html,body{{margin:0;min-height:100%;background:#f6f4f1;
-font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#6f6a62}}
-@media (prefers-color-scheme:dark){{html,body{{background:#141312;color:#a29d95}}}}
-footer{{text-align:center;font-size:12px;padding:20px 16px 28px}}
-footer a{{color:inherit}}
-</style></head>
-<body><main id="lemma-page"></main>{chrome}
-<script src="/public/web/widget.js" data-lemma-key="{safe_key}" data-lemma-page></script>
-</body></html>"""
-
-
-@router.get(
-    "/{public_key}/page", operation_id="public.web.page", include_in_schema=False
-)
-async def web_hosted_page(
-    public_key: str, request: Request, chat: WebChat = Depends(_chat)
-) -> Response:
-    """The form or chat on a page of its own, for a link rather than a website.
-
-    Rendered by Lemma only: the page carries the widget and nothing a member
-    can write markup into, so one widget's page can never script another's.
-    """
-    try:
-        widget = await chat.widget_for_key(public_key)
-        title = await chat.widget_title(widget)
-    except WebChatRefused:
-        return HTMLResponse(
-            "<!doctype html><title>Not available</title><p>This page is not available.</p>",
-            status_code=404,
-            headers=_PAGE_HEADERS,
-        )
-    page_title = widget.name if widget.form else title
-    embedded = request.query_params.get("embed") == "1"
-    return HTMLResponse(
-        _page(page_title, widget.public_key, embedded=embedded), headers=_PAGE_HEADERS
-    )
-
-
 @router.post("/{public_key}/session", operation_id="public.web.session.start")
 async def web_start_session(
     public_key: str, request: Request, chat: WebChat = Depends(_chat)
@@ -229,12 +150,7 @@ async def web_start_session(
             "session": started.token,
             "is_contact": started.is_contact,
             "display_name": started.display_name,
-            "kind": widget.kind.value,
-            "requires_code": widget.form_requires_code,
             "title": title,
-            "form": public_form(widget.form, title=widget.name)
-            if widget.form
-            else None,
         },
         headers=_cors(request, widget),
     )
@@ -363,20 +279,59 @@ async def web_verify_code(
     )
 
 
-@router.post("/{public_key}/submit", operation_id="public.web.form.submit")
-async def web_submit_form(
+@router.post("/{public_key}/table", operation_id="public.web.table.read")
+async def web_read_table(
     public_key: str, request: Request, chat: WebChat = Depends(_chat)
 ) -> JSONResponse:
+    """What a page may ask for on a table the pod opened to visitors.
+
+    The open columns only, in order: enough to draw a form, and nothing else
+    about the table or its rows.
+    """
     widget = None
     try:
         widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, SubmitRequest)
-        public = await chat.submit_visitor_form(
+        body = await _body(request, TableRequest)
+        opened, contacts_only = await chat.visitor_table(
+            widget, token=body.session, table=body.table
+        )
+    except WebChatRefused as exc:
+        return _refusal(request, widget, exc)
+    return JSONResponse(
+        {
+            "table": opened.name,
+            "contacts_only": contacts_only,
+            "columns": [
+                {
+                    "name": column.name,
+                    "type": column.type,
+                    "required": column.required,
+                    "options": list(column.options),
+                    "description": column.description,
+                }
+                for column in opened.columns
+            ],
+        },
+        headers=_cors(request, widget),
+    )
+
+
+@router.post("/{public_key}/rows", operation_id="public.web.row.add")
+async def web_add_row(
+    public_key: str, request: Request, chat: WebChat = Depends(_chat)
+) -> JSONResponse:
+    """Add one row to a table the pod opened to visitors. Nothing is read back."""
+    widget = None
+    try:
+        widget = await _widget_for(request, chat, public_key)
+        body = await _body(request, RowRequest)
+        await chat.add_visitor_row(
             widget,
             token=body.session,
-            input_data=body.input,
+            table=body.table,
+            answers=body.values,
             address=_address(request),
         )
     except WebChatRefused as exc:
         return _refusal(request, widget, exc)
-    return JSONResponse({"ok": True, "result": public}, headers=_cors(request, widget))
+    return JSONResponse({"ok": True}, status_code=201, headers=_cors(request, widget))

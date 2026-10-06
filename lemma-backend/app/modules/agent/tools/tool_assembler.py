@@ -19,6 +19,7 @@ from app.modules.agent.domain.outsiders import (
     conversation_contact_id,
 )
 from app.modules.agent.tools.contact_tools import build_contact_toolset
+from app.modules.agent.tools.form_tools import build_form_toolset
 from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
@@ -235,10 +236,7 @@ class RunToolAssembler:
             )
         if not for_outsider:
             toolsets.extend(await self._surface_toolsets(conversation))
-        if conversation_contact_id(conversation) is not None and callable(
-            self.uow_factory
-        ):
-            toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
+        toolsets.extend(self._outside_toolsets(conversation))
         toolsets.extend(
             self._final_answer_toolsets(
                 agent=agent,
@@ -250,6 +248,20 @@ class RunToolAssembler:
         # sandbox.
         if not for_outsider:
             _add_view_image(toolsets, vision_mode)
+        return toolsets
+
+    def _outside_toolsets(
+        self, conversation: Conversation | None
+    ) -> list[AbstractToolset[ConversationContext]]:
+        """What a run answering somebody outside the pod adds: a contact's own
+        rows and functions, and filling the form on a web visitor's page."""
+        if not callable(self.uow_factory):
+            return []
+        toolsets: list[AbstractToolset[ConversationContext]] = []
+        if conversation_contact_id(conversation) is not None:
+            toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
+        if _on_a_web_page(conversation):
+            toolsets.append(build_form_toolset(uow_factory=self.uow_factory))
         return toolsets
 
     async def _surface_toolsets(
@@ -292,3 +304,12 @@ def _add_view_image(
 
     if view_image_toolset not in toolsets:
         toolsets.append(view_image_toolset)
+
+
+def _on_a_web_page(conversation: Conversation | None) -> bool:
+    """A visitor chatting on a web page, where a form may sit beside the chat."""
+    return bool(
+        conversation is not None
+        and answers_outsiders(conversation)
+        and (conversation.metadata or {}).get("source") == "web_widget"
+    )

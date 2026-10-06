@@ -63,7 +63,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | `agent.surface.setup` | Get Surface Setup |
 | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
 | GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
-| GET | `/pods/{pod_id}/web-widgets/form-columns` | `agent.web_widget.form_columns` | List Form Columns |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
@@ -89,9 +88,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/public/web/{public_key}/code/verify` | `public.web.code.verify` | Web Verify Code |
 | POST | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
+| POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
 | POST | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
-| POST | `/public/web/{public_key}/submit` | `public.web.form.submit` | Web Submit Form |
+| POST | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
@@ -168,6 +168,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/datastore/files/signed-urls/{code}` | `file.signed_url.revoke` | Revoke a public signed URL |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.delete` | Delete Table |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.remove` | Remove Column |
+| DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.close` | Stop People Outside Adding Rows |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.delete` | Delete Record |
 | GET | `/pods/{pod_id}/datastore/files` | `file.list` | List Files |
 | GET | `/pods/{pod_id}/datastore/files/by-path` | `file.get` | Get File |
@@ -178,8 +179,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/files/tree` | `file.tree` | Get Directory Tree |
 | GET | `/pods/{pod_id}/datastore/files/url` | `file.url` | Get a short-lived URL for a file |
 | GET | `/pods/{pod_id}/datastore/files/{file_id}` | `file.get_by_id` | Get File by ID |
+| GET | `/pods/{pod_id}/datastore/public-rows` | `table.public_rows.list` | Tables Open To People Outside |
 | GET | `/pods/{pod_id}/datastore/tables` | `table.list` | List Tables |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.get` | Get Table |
+| GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.get` | Who Outside May Add Rows |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records` | `record.list` | List Records |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.get` | Get Record |
 | PATCH | `/pods/{pod_id}/datastore/files/by-path` | `file.update` | Update File |
@@ -198,6 +201,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/delete` | `record.bulk_delete` | Bulk Delete |
 | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/update` | `record.bulk_update` | Bulk Update |
 | PUT | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.attach` | Attach Document Markdown |
+| PUT | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.open` | Let People Outside Add Rows |
 
 ## function
 

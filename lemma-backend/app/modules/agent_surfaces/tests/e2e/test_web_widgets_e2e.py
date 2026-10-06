@@ -6,7 +6,7 @@ the pod made Public; a signed-in customer of the shop, named by a token the
 shop's server signed, is answered as a contact; an anonymous visitor who proves
 an email address becomes one, keeping the conversation. And the refusals: a
 page on another site, a forged or long-lived token, a known-only widget's
-strangers, a form that needs a code.
+strangers.
 """
 
 from __future__ import annotations
@@ -337,7 +337,7 @@ async def test_a_visitor_who_proves_an_email_becomes_a_contact_in_the_same_chat(
     assert str(identity.contact_id) == metadata.get(CONTACT_KEY)
 
 
-async def test_a_known_only_widget_and_a_coded_form_refuse_strangers(
+async def test_a_known_only_widget_refuses_strangers(
     authenticated_client: AsyncClient, test_pod
 ):
     pod_id = test_pod["id"]
@@ -348,33 +348,6 @@ async def test_a_known_only_widget_and_a_coded_form_refuse_strangers(
         **_text({"session": session["session"], "text": "Hello?"}),
     )
     assert refused.status_code == 403
-
-    form = await _widget(
-        authenticated_client,
-        pod_id,
-        name="Support form",
-        kind="form",
-        form_function="create_ticket",
-        form_requires_code=True,
-    )
-    anonymous = await authenticated_client.post(
-        f"/public/web/{form['public_key']}/submit",
-        **_text({"input": {"subject": "Broken"}}),
-    )
-    assert anonymous.status_code == 403
-
-    open_form = await _widget(
-        authenticated_client,
-        pod_id,
-        name="Feedback",
-        kind="form",
-        form_function="not_opened_to_contacts",
-    )
-    unavailable = await authenticated_client.post(
-        f"/public/web/{open_form['public_key']}/submit",
-        **_text({"input": {"text": "Nice"}}),
-    )
-    assert unavailable.status_code == 404
 
     off = await authenticated_client.patch(
         f"/pods/{pod_id}/web-widgets/{known['id']}", json={"answer": "off"}

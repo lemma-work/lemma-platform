@@ -87,6 +87,27 @@ export class AgentSurfacesWebService {
         });
     }
     /**
+     * Web Add Row
+     * Add one row to a table the pod opened to visitors. Nothing is read back.
+     * @param publicKey
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static publicWebRowAdd(
+        publicKey: string,
+    ): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/public/web/{public_key}/rows',
+            path: {
+                'public_key': publicKey,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Web Start Session
      * @param publicKey
      * @returns any Successful Response
@@ -132,17 +153,21 @@ export class AgentSurfacesWebService {
         });
     }
     /**
-     * Web Submit Form
+     * Web Read Table
+     * What a page may ask for on a table the pod opened to visitors.
+     *
+     * The open columns only, in order: enough to draw a form, and nothing else
+     * about the table or its rows.
      * @param publicKey
      * @returns any Successful Response
      * @throws ApiError
      */
-    public static publicWebFormSubmit(
+    public static publicWebTableRead(
         publicKey: string,
     ): CancelablePromise<any> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/public/web/{public_key}/submit',
+            url: '/public/web/{public_key}/table',
             path: {
                 'public_key': publicKey,
             },

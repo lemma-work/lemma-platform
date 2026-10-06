@@ -7,8 +7,9 @@ import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
-import { formRequest, readCap, readContact, readContacts, readFormColumns, readOrigins, readWidget } from "./contacts";
-import type { WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
+import { readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
+import { readOpening } from "./public-rows";
+import type { OpenTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
     agentRows,
@@ -664,11 +665,8 @@ export const liveSource: PodSource = {
     async createWidget(podId, draft) {
         const made = await lemma(podId).contacts.widgets.create(podId, {
             name: draft.name.trim(),
-            kind: draft.kind as WebWidgetCreateRequest["kind"],
             allowed_origins: readOrigins(draft.origins),
             answer: draft.answer as WebWidgetCreateRequest["answer"],
-            form_requires_code: draft.kind === "form" && draft.formRequiresCode,
-            form: draft.kind === "form" ? (formRequest(draft) as WebWidgetCreateRequest["form"]) : null,
         });
         return { ...readWidget(made), signingSecret: made.signing_secret };
     },
@@ -684,8 +682,14 @@ export const liveSource: PodSource = {
     async deleteWidget(podId, widgetId) {
         await lemma(podId).contacts.widgets.remove(podId, widgetId);
     },
-    async formColumns(podId, table) {
-        return readFormColumns(await lemma(podId).contacts.widgets.formColumns(podId, table));
+    async tableOpening(podId, table) {
+        return readOpening(await lemma(podId).tables.publicRows.get(table));
+    },
+    async openTable(podId, table, audience, columns) {
+        return readOpening(await lemma(podId).tables.publicRows.open(table, { audience: audience as OpenTableRequest["audience"], columns }));
+    },
+    async closeTable(podId, table) {
+        await lemma(podId).tables.publicRows.close(table);
     },
     async contactReach(podId) {
         const client = lemma(podId);
