@@ -15,6 +15,7 @@ import { useLibraryWrites } from "@/library/library-writes";
 import { emptyFor, type EmptyPlace } from "./empty-copy";
 import { SpaceEmpty, type EmptyHandlers } from "./empty-state";
 import { AppIdeas } from "@/stage/apps";
+import { AppCover } from "@/stage/app-cover";
 import { guideTitle } from "@/tour/guides";
 import { readableName } from "@/library/reading";
 
@@ -27,6 +28,8 @@ type Row = {
     file?: string;
     /** Where a file is, for reading a page's first lines into its card. */
     path?: string;
+    /** Where an app is served, for showing its cover on its card. */
+    appUrl?: string;
     detail: string;
     updated: string | null;
     access: Access;
@@ -243,7 +246,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
         }
         if (wanted.has("app")) {
             for (const app of apps) {
-                out.push({ key: app.id, kind: "app", name: app.label, detail: app.status ? app.status.charAt(0) + app.status.slice(1).toLowerCase() : "App", updated: app.updated ?? null, access: accessOf(app.visibility), open: () => onOpenApp(app.id) });
+                out.push({ key: app.id, kind: "app", name: app.label, appUrl: app.url, detail: app.status ? app.status.charAt(0) + app.status.slice(1).toLowerCase() : "App", updated: app.updated ?? null, access: accessOf(app.visibility), open: () => onOpenApp(app.id) });
             }
         }
         if (wanted.has("table")) {
@@ -364,7 +367,9 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
                     {rows.map((row) => (
                         <button key={row.key} className="all__card" onClick={row.open} title={row.file}>
                             <span className="all__card-top" data-kind={row.kind}>
-                                {row.kind === "page" && row.path ? <PagePreview podId={podId} path={row.path} /> : <Glyph kind={row.kind} />}
+                                {row.kind === "page" && row.path ? <PagePreview podId={podId} path={row.path} />
+                                    : row.kind === "app" && row.appUrl ? <AppCover url={row.appUrl} fallback={<Glyph kind="app" />} />
+                                    : <Glyph kind={row.kind} />}
                             </span>
                             <span className="all__card-body">
                                 <b>{row.name}</b>

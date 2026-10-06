@@ -1,0 +1,83 @@
+<!doctype html>
+<!--
+  Lemma app cover: WINDOW. The default. The app's first screen at desktop
+  width, in a window on the app's own colour, cut off by the right and bottom
+  edges.
+
+  Open at a 1200x630 viewport with
+    ?name=Deals&description=...&address=deals.lemma.work&slug=deals&screen=screen.png
+  `screen` is a 1280x800 screenshot of the app rendered with sample rows
+  (see references/cover.md), next to this file. Wait until
+  document.body.dataset.ready is set: "yes" means draw it, anything else means
+  the screenshot did not load.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cover</title>
+<style>
+  html, body { margin: 0; }
+  body {
+    position: relative; width: 1200px; height: 630px; overflow: hidden;
+    background: hsl(var(--hue, 248) 70% 95%);
+    color: #181816;
+    font: 400 28px/1.42 Inter, "DejaVu Sans", "Liberation Sans", Arial, sans-serif;
+  }
+  .mark { position: absolute; left: 64px; top: 56px; height: 36px; display: flex; align-items: flex-end; gap: 6px; }
+  .mark i { display: block; width: 8px; border-radius: 4px; background: #5a3fd4; }
+  .mark i:nth-child(1) { height: 15px; }
+  .mark i:nth-child(2) { height: 24px; }
+  .mark i:nth-child(3) { height: 36px; }
+  .copy { position: absolute; left: 64px; top: 176px; width: 440px; }
+  h1 {
+    margin: 0; font-size: 84px; line-height: 1.04; letter-spacing: -0.02em; font-weight: 500;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  }
+  p {
+    margin: 26px 0 0; color: #3c3b38;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  }
+  .address { position: absolute; left: 64px; bottom: 42px; font-size: 22px; color: #6f6d68; }
+  .window {
+    position: absolute; left: 556px; top: 84px; width: 760px; height: 640px; overflow: hidden;
+    background: #ffffff; border: 2px solid rgba(24, 24, 22, 0.14); border-radius: 18px;
+  }
+  .window img { display: block; width: 960px; height: auto; }
+</style>
+</head>
+<body>
+  <div class="mark" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="copy"><h1 id="name"></h1><p id="description"></p></div>
+  <div class="address" id="address"></div>
+  <div class="window"><img id="screen" alt=""></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  // The same colour the app's icon and drawn cover take from its slug.
+  let digest = 0;
+  for (const ch of q.get("slug") || "") digest = (digest * 31 + ch.codePointAt(0)) % 4294967296;
+  document.documentElement.style.setProperty("--hue", String((248 + (digest % 12) * 30) % 360));
+
+  document.getElementById("name").textContent = q.get("name") || "";
+  document.getElementById("description").textContent = q.get("description") || "";
+  document.getElementById("address").textContent = q.get("address") || "";
+
+  // The largest size at which the whole name fits two lines.
+  const title = document.getElementById("name");
+  function fit() {
+    for (const size of [84, 72, 62, 54]) {
+      title.style.fontSize = size + "px";
+      title.style.webkitLineClamp = "unset";
+      const fits = title.scrollHeight <= size * 1.04 * 2 + 2;
+      title.style.webkitLineClamp = "2";
+      if (fits) return;
+    }
+  }
+
+  const screen = document.getElementById("screen");
+  screen.src = q.get("screen") || "screen.png";
+  Promise.all([document.fonts.ready, screen.decode()])
+    .then(() => { fit(); document.body.dataset.ready = "yes"; })
+    .catch(() => { document.body.dataset.ready = "no-screen"; });
+</script>
+</body>
+</html>

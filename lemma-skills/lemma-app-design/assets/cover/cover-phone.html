@@ -1,0 +1,78 @@
+<!doctype html>
+<!--
+  Lemma app cover: PHONE. For an app people use on their phones -- check-ins,
+  field work, anything installed to a home screen. The app's first screen in a
+  phone, on the near-black plate the app's icon uses, cut off by the bottom
+  edge.
+
+  Open at a 1200x630 viewport with
+    ?name=Standup&description=...&address=standup.lemma.work&slug=standup&screen=screen.png
+  `screen` is a 390x844 screenshot of the app rendered with sample rows
+  (see references/cover.md), next to this file. Wait until
+  document.body.dataset.ready is set: "yes" means draw it, anything else means
+  the screenshot did not load.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cover</title>
+<style>
+  html, body { margin: 0; }
+  body {
+    position: relative; width: 1200px; height: 630px; overflow: hidden;
+    background: #141413; color: #ffffff;
+    font: 400 28px/1.42 Inter, "DejaVu Sans", "Liberation Sans", Arial, sans-serif;
+  }
+  .mark { position: absolute; left: 64px; top: 56px; height: 36px; display: flex; align-items: flex-end; gap: 6px; }
+  .mark i { display: block; width: 8px; border-radius: 4px; background: #8b7af5; }
+  .mark i:nth-child(1) { height: 15px; }
+  .mark i:nth-child(2) { height: 24px; }
+  .mark i:nth-child(3) { height: 36px; }
+  .copy { position: absolute; left: 64px; top: 176px; width: 540px; }
+  h1 {
+    margin: 0; font-size: 84px; line-height: 1.04; letter-spacing: -0.02em; font-weight: 500;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  }
+  p {
+    margin: 26px 0 0; color: rgba(255, 255, 255, 0.62);
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  }
+  .address { position: absolute; left: 64px; bottom: 42px; font-size: 22px; color: rgba(255, 255, 255, 0.45); }
+  .phone {
+    position: absolute; left: 700px; top: 70px; width: 400px; height: 640px; overflow: hidden;
+    box-sizing: border-box; background: #ffffff; border: 14px solid #2c2c2a; border-radius: 58px;
+  }
+  .phone img { display: block; width: 100%; height: auto; }
+</style>
+</head>
+<body>
+  <div class="mark" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="copy"><h1 id="name"></h1><p id="description"></p></div>
+  <div class="address" id="address"></div>
+  <div class="phone"><img id="screen" alt=""></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  document.getElementById("name").textContent = q.get("name") || "";
+  document.getElementById("description").textContent = q.get("description") || "";
+  document.getElementById("address").textContent = q.get("address") || "";
+
+  // The largest size at which the whole name fits two lines.
+  const title = document.getElementById("name");
+  function fit() {
+    for (const size of [84, 72, 62, 54]) {
+      title.style.fontSize = size + "px";
+      title.style.webkitLineClamp = "unset";
+      const fits = title.scrollHeight <= size * 1.04 * 2 + 2;
+      title.style.webkitLineClamp = "2";
+      if (fits) return;
+    }
+  }
+
+  const screen = document.getElementById("screen");
+  screen.src = q.get("screen") || "screen.png";
+  Promise.all([document.fonts.ready, screen.decode()])
+    .then(() => { fit(); document.body.dataset.ready = "yes"; })
+    .catch(() => { document.body.dataset.ready = "no-screen"; });
+</script>
+</body>
+</html>

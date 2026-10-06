@@ -305,6 +305,13 @@ adopt any one design system.
   the **view-image** capability on a screenshot to actually *see* the rendered app;
   and view-image works directly on pod/workspace files too (a `…/pages/page_0001.jpg`
   child, an uploaded image) — see `file-viewer.md`.
+- **Ship a cover.** Before the final deploy, make the app's 1200×630 cover — the
+  picture its links unfurl with and its card shows — and put it in the build at
+  `.lemma/cover.png` (`public/.lemma/cover.png` for Vite). It is the first
+  screen with **invented sample rows, never real data**: follow
+  `lemma-app-design`'s `references/cover.md`
+  (`load_skill(name="lemma-app-design", resource_path="references/cover.md")`).
+  Without one the host serves a plain lettered cover.
 - Deploy, then `lemma apps open <slug>` and repeat the core scenario served.
 - **Confirm the deploy landed** — don't trust CLI "success": note the release
   id/timestamp, re-`lemma apps get <name>`, hard-refresh with cache-busting, and

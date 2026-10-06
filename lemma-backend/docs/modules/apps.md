@@ -40,7 +40,7 @@ during pod-bundle import use the sandbox runtime from the bundle module.
 | `/public/apps...` | Host-based public app entrypoint/assets |
 | `/apps/access/tickets` | One-minute ticket for the app host named by `Origin` (not in OpenAPI) |
 | `/_lemma/app-access/redeem` | Trade a ticket for the app host's access cookie (not in OpenAPI) |
-| `/.lemma/...` | Manifest, icons, service worker and offline page (on the app host) |
+| `/.lemma/...` | Manifest, icons, service worker, offline page and cover (on the app host) |
 | `/public/sdk/*` | Browser SDK and web-component bundles |
 
 ## Release and serve flow
@@ -98,6 +98,24 @@ moment they asked for a tab; everyone else is asked on a second visit. Inside
 the workspace's app frame the pill still appears, but installing is a top-level
 operation, so it asks the workspace to open the app itself
 (`lemma-harness/lib/app/app-install.ts`).
+
+## Cover
+
+Every public entrypoint's Open Graph and Twitter image is the app's own
+`/.lemma/cover.png`, 1200×630: what a shared link unfurls with, and what the
+workspace's app cards show. Unlike the install assets it is not claimed
+outright. A build that ships `.lemma/cover.png` is served that file, and only
+when it does not does `services/app_cover` draw one from the app's name,
+description and slug — the icon's letter and colour at cover size. Either way
+the address is fixed while the picture changes with each release and rename, so
+the cover takes the entrypoint's revalidating cache policy, with an ETag over
+the release and what the drawing shows.
+
+The host never photographs a running app. A cover leaves Lemma for good, and
+any one person's view would show others rows they may not open, so an app's own
+cover is rendered by the agent that builds it, from invented sample rows,
+through `lemma-skills/lemma-app-design/scripts/cover_serve.py`, which gives the
+page a localhost API and no credentials (`references/cover.md` in that skill).
 
 ## Authorization and security
 

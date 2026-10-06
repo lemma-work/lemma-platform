@@ -33,6 +33,11 @@ SERVICE_WORKER_PATH = f"/{RESERVED_ASSET_PREFIX}sw.js"
 OFFLINE_PATH = f"/{RESERVED_ASSET_PREFIX}offline.html"
 ICON_PATH_TEMPLATE = f"/{RESERVED_ASSET_PREFIX}icon-{{size}}.png"
 
+# The large picture a shared link unfurls with. Unlike the paths above it is
+# not claimed outright: a build that ships its own cover here is served first,
+# and the host draws one only when it does not. (``apps.services.app_cover``)
+COVER_PATH = f"/{RESERVED_ASSET_PREFIX}cover.png"
+
 # The branding badge's plate, so the icon, the install pill and the "Remix on
 # Lemma" pill are one visual family. Also the standalone status-bar colour.
 PLATE_COLOR = "#141413"
