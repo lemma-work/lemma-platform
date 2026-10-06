@@ -77,10 +77,12 @@ def surface_setup_message() -> str:
 
 
 def _pod_access_message(pod_id: UUID) -> str:
+    # The space itself: to somebody outside it, the workspace answers that
+    # address with its Request button (`lemma-frontend/src/shell/not-yours.tsx`).
     base = settings.frontend_url.rstrip("/")
     return (
         "You're signed up, but don't have access to this workspace yet. "
-        f"Request access here: {base}/pod/{pod_id}"
+        f"Request access here: {base}/t/{pod_id}"
     )
 
 
