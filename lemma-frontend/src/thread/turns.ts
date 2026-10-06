@@ -438,7 +438,10 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
             }
 
             if (isDisplayResourceTool(message.tool_name, metadata)) {
-                const resource = parseDisplayResource(message.tool_args);
+                const resource = parseDisplayResource(
+                    message.tool_args,
+                    message.tool_call_id ? returns.get(message.tool_call_id)?.tool_result : undefined,
+                );
                 if (resource) {
                     /* A widget the harness rejected has nothing to show, and
                        seven rows saying so is worse than the silence. The

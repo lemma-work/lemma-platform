@@ -9,6 +9,9 @@ the file, and summarize the finding in chat.
 - `WIDGET`: use `path` to a pod file containing an HTML fragment. Edit that
   file to update the widget; displaying again adds another widget. Use an app
   for React, routing, or persistent state.
+- `fallback`: one or two plain lines saying what it shows, with the names and
+  numbers that matter. Slack, WhatsApp, Teams and email cannot draw a widget and
+  show this instead, so write one for every widget.
 
 ### Widgets, the quick way
 

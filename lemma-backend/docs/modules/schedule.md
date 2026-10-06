@@ -2,9 +2,10 @@
 
 ## Purpose
 
-`app/modules/schedule` turns time, webhooks, datastore changes, and application
-events into normalized `schedule.fired` events. Targets are agents, workflows,
-or surfaces; target modules decide how to execute the fire.
+`app/modules/schedule` turns time, webhooks and datastore changes into
+normalized `schedule.fired` events. Targets are agents (the pod's own assistant
+included) or workflows, exactly one per schedule; target modules decide how to
+execute the fire.
 
 ## Runtime contributions
 
@@ -33,9 +34,13 @@ standing one to fall back on. `schedule_runs` is the
 durable idempotency/delivery ledger keyed by schedule plus source event; it
 records the run's single user owner, attempts, target run, payload, and terminal
 outcome. RLS datastore events assign that ownership to the row owner; other
-schedule sources assign it to the schedule owner. Supported logical
-types include time/cron or once, webhook, datastore, and application-triggered
-schedules.
+schedule sources assign it to the schedule owner. The three types are TIME
+(cron, or once with `scheduled_at`), WEBHOOK and DATASTORE.
+
+A DATASTORE schedule can narrow what fires it with `when` conditions over the
+written row (`domain/match_conditions.py`: equals, not equals, in, not in,
+changed, written, from, to). They are checked before any LLM filter, so a row
+that fails them costs no model call.
 
 A TIME schedule's config carries `cron` or `scheduled_at`, and optionally
 `timezone` — an IANA name the wall-clock times are read in. The key absent
@@ -65,10 +70,11 @@ claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
 ## Webhook sources
 
 `POST /webhooks/{source}` takes its source from the URL, so the *sender* picks
-it. The registry in `app/modules/schedule/domain/webhook_source.py` is the
+it. The registry in `app/modules/schedule/contracts/webhook_source.py` is the
 allow-list that makes that safe: a source with no plugin is refused before
 anything reaches matching, a run, or an agent's first message. Plugins live in
-`app/composition/webhook_sources/` — `composio` and `github` today.
+`app/modules/connectors/infrastructure/webhook_sources/` — `composio` and
+`github` today.
 
 Each plugin does two things, and they are separate because they fail
 differently. `verify` proves the delivery came from the source and parses it; a
@@ -125,11 +131,13 @@ flowchart LR
     F -- yes --> J["streaq filter task"] --> E
     E --> A["agent target"]
     E --> W["workflow target"]
-    E --> S["surface target"]
 ```
 
 The service mirrors provider-backed webhook schedules into the connector through
-an adapter. Each `schedule.fired` trigger claims one durable schedule run;
+an adapter. Editing such a schedule's config makes a new subscription from it
+before the row is written and drops the old one after the commit
+(`services/trigger_resubscription.py`); keys provisioning wrote into the config
+(`provider_trigger_id`, a GitHub routing key) survive an edit that left them out. Each `schedule.fired` trigger claims one durable schedule run;
 PostgreSQL deduplicates target dispatch and tracks retry/dead-letter state.
 `DISPATCHED` means the target run was created, not that the target completed.
 Consecutive-failure policy is durable on the schedule row, and a

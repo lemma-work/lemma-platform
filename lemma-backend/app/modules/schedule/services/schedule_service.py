@@ -49,6 +49,7 @@ from app.modules.schedule.services.schedule_target_policy import (
     workflow_target_fields,
 )
 from app.modules.schedule.services.schedule_naming import schedule_name_for
+from app.modules.schedule.services import trigger_resubscription as resub
 from app.modules.schedule.services.schedule_update_policy import (
     is_explicit_reactivation,
     validate_schedule_update_policies,
@@ -347,19 +348,14 @@ class ScheduleService:
         return workflow is not None and workflow.is_global_workflow
 
     async def _get_workflow_by_name(self, *, pod_id: UUID, workflow_name: str):
-        workflow = await self.target_resolver.get_workflow_by_name(
-            pod_id,
-            normalize_resource_name(workflow_name),
-        )
+        name = normalize_resource_name(workflow_name)
+        workflow = await self.target_resolver.get_workflow_by_name(pod_id, name)
         if workflow is None:
             raise ScheduleValidationError("Workflow target not found in pod")
         return workflow
 
     async def _get_agent_by_name(self, *, pod_id: UUID, agent_name: str):
-        agent = await self.target_resolver.get_agent_by_name(
-            pod_id,
-            agent_name.strip(),
-        )
+        agent = await self.target_resolver.get_agent_by_name(pod_id, agent_name.strip())
         if agent is None:
             raise ScheduleValidationError("Agent target not found in pod")
         return agent
@@ -448,7 +444,7 @@ class ScheduleService:
                 validate_global_workflow_is_unclaimed(
                     [item for item in existing_for_workflow if item.id != schedule_id]
                 )
-        updated = await self.schedule_repository.update(schedule_id, **update_data)
+        updated = await resub.update_schedule_resubscribing(existing, update_data, self)
 
         if is_explicit_reactivation(existing, updated, update_data):
             # Reactivating a schedule clears its circuit-breaker failure streak so

@@ -39,6 +39,10 @@ class DisplayResourceType(str, Enum):
         return None
 
 
+#: Fits WhatsApp's 1024-character interactive body with the title and link.
+FALLBACK_MAX_CHARS = 600
+
+
 class DisplayResourceRequest(BaseModel):
     type: DisplayResourceType = Field(
         description="Kind of resource the user should see."
@@ -81,6 +85,16 @@ class DisplayResourceRequest(BaseModel):
         default_factory=list,
         max_length=4,
         description="Messages shown while a WIDGET renders.",
+    )
+    fallback: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=FALLBACK_MAX_CHARS,
+        description=(
+            "What this shows, as plain text, for chat apps that cannot draw it "
+            "(Slack, WhatsApp, Teams, email): one or two lines carrying the "
+            "names and numbers that matter. Write one for every WIDGET."
+        ),
     )
     filters: list[RecordFilter] | None = Field(
         default=None,

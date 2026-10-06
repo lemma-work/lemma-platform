@@ -1,11 +1,11 @@
-import { AppsIcon, FileIcon, TableIcon, AgentIcon, CodeIcon, WorkflowIcon, ClockIcon, ExternalIcon } from "@/ui/icons";
+import { AppsIcon, FileIcon, TableIcon, AgentIcon, CodeIcon, WorkflowIcon, ClockIcon, ExternalIcon, GlobeIcon } from "@/ui/icons";
 import { siteUrl } from "@/session/client";
 import { FileView } from "./file-view";
 import { DataView } from "./data-view";
 import { WidgetView } from "./widget-view";
 import { resourceHref, resourceLabel, type DisplayResource } from "./display-resource";
 
-const RESOURCE_ICONS = { WIDGET: AppsIcon, FILE: FileIcon, TABLE: TableIcon, APP: AppsIcon, AGENT: AgentIcon, FUNCTION: CodeIcon, WORKFLOW: WorkflowIcon, SCHEDULE: ClockIcon };
+const RESOURCE_ICONS = { BROWSER: GlobeIcon, WIDGET: AppsIcon, FILE: FileIcon, TABLE: TableIcon, APP: AppsIcon, AGENT: AgentIcon, FUNCTION: CodeIcon, WORKFLOW: WorkflowIcon, SCHEDULE: ClockIcon };
 
 /** What the agent put on screen.
  *
@@ -85,10 +85,13 @@ export function ResourceCard({
         return <div className="resource">{common}</div>;
     }
 
+    /* A live browser is somewhere else; everything else is a place in this
+       app, and opening it in a second window would be two of the same app. */
+    const elsewhere = resource.type === "BROWSER";
     return (
-        <a className="resource resource--link" href={href} target="_blank" rel="noreferrer">
+        <a className="resource resource--link" href={href} {...(elsewhere ? { target: "_blank", rel: "noreferrer" } : {})}>
             {common}
-            <span className="resource__go">Open <ExternalIcon size={14} /></span>
+            <span className="resource__go">{elsewhere ? <>Watch <ExternalIcon size={14} /></> : "Open"}</span>
         </a>
     );
 }
