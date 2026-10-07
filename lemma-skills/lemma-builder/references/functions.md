@@ -371,6 +371,47 @@ conv = pod.conversations.create_for_agent("triage-agent", title="Triage")
 pod.conversations.send(str(conv.id), "Classify ticket " + rid)
 ```
 
+### Decisions (classify, route, triage)
+
+`pod.decisions.make` answers closed questions about one piece of evidence: a
+choice, several choices, yes/no, or a short integer scale. Use it instead of an
+agent run when the output is a label you will branch on or store. Nothing is
+stored; write the answer wherever it matters (a record field, say). It needs no
+grant: any function in the pod may ask.
+
+```python
+QUESTIONS = {
+    "type": "object",
+    "properties": {
+        "category": {"type": "string", "description": "What is the ticket about?",
+                     "oneOf": [{"const": "billing", "description": "Charges, refunds"},
+                               {"const": "bug", "description": "Something broken"},
+                               {"const": "other", "description": "Anything else"}]},
+        "urgent": {"type": "boolean", "description": "Does it need a reply today?"},
+    },
+}
+result = pod.decisions.make(
+    instruction="Triage incoming support tickets for the billing team.",
+    evidence={"subject": ticket["subject"], "body": ticket["body"][:20_000]},
+    schema=QUESTIONS,
+    examples=[{"evidence": "Refund my last invoice", "answers": {"category": "billing"}}],
+)
+category = result.answers["category"].value   # "billing", or None when unsure
+```
+
+- Each property's `description` is the question. Allowed shapes only: a string
+  `enum` (or `oneOf` of `{const, description}`), an array of one with
+  `uniqueItems: true`, `boolean`, or `integer` with `minimum`/`maximum` (2-11
+  levels). Free text and open-ended numbers are refused (422).
+- `value` is `None` when the evidence did not support an answer — route that to
+  a person rather than guessing. `confidence` is set only by providers that
+  measure it.
+- Evidence over 64 KiB is refused, not cut: send the part that matters.
+- Examples are how answers improve: keep corrected cases in a table and pass the
+  recent ones in `examples`.
+- 429 and 503 mean ask again later; for a table of rows, loop in a JOB function
+  or a workflow `loop`, one decision per row.
+
 ## Permissions (workload grants)
 
 **A newly created function can access nothing** — zero default access, no matter what

@@ -62,6 +62,7 @@ async def resolve_system_runtime(
     user_id: UUID | None = None,
     organization_id: UUID | None = None,
     pod_id: UUID | None = None,
+    model_name: str | None = None,
 ) -> SystemModelRuntime:
     """The system model, ready to run under `usage_limits`.
 
@@ -74,11 +75,17 @@ async def resolve_system_runtime(
     `workspace_model_fallback`), which needs the organization -- and the pod,
     when there is one, so its chosen default wins. Without an organization that
     case raises `model_not_configured`, as it always did.
+
+    `model_name` asks for one model of the profile by public name, for a caller
+    with its own setting (a fast model for decisions, say). A name the profile
+    does not know falls back to its default rather than failing, so read the
+    model that ran off `runtime_profile`, not off what was asked for.
     """
     resolved = await resolve_system_or_workspace_runtime(
         organization_id=organization_id,
         user_id=user_id or uuid4(),
         pod_id=pod_id,
+        model_name=model_name,
     )
     runtime_profile = resolved.public_snapshot()
     model = require_pydantic_ai_model_from_runtime_profile(

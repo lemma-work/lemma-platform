@@ -86,6 +86,7 @@ SETTINGS_SOURCES = {
     "app.modules.apps.config": ("apps_settings",),
     "app.modules.connectors.config": ("connector_settings",),
     "app.modules.datastore.config": ("datastore_settings",),
+    "app.modules.decisions.config": ("decisions_settings",),
     "app.modules.function.config": ("function_settings", "revision_settings"),
     "app.modules.icon.config": ("icon_settings",),
     "app.modules.identity.config": ("identity_settings",),
