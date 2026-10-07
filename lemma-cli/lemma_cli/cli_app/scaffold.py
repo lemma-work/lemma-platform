@@ -93,6 +93,7 @@ TABLE_JSON = _fill_enums("""{
   "primary_key_column": "id",   // an auto UUID "id" is added; never declare id/created_at/updated_at/user_id
   "enable_rls": __RLS__,           // true = per-user private rows (default); false = shared team data
   "visibility": "POD",          // one of: __VISIBILITY__
+  // "contact_owned": true,     // rows about the pod's contacts: adds contact_id; each contact reads only their own. Needs enable_rls: false
   "columns": [
     { "name": "title", "type": "TEXT", "required": true, "max_length": 240 },
     { "name": "status", "type": "ENUM", "required": true, "default": "open",

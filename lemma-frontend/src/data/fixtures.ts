@@ -2525,6 +2525,13 @@ function sampleContacts(podId: string): Contact[] {
     return CONTACTS.get(podId) ?? [];
 }
 
+/** A sample widget's signing secret. Shaped like the real thing, so it is made
+ *  the way a secret must be made, even though nothing ever checks it. */
+function sampleSecret(): string {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return "sk_sample_" + Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** What each sample table offers people outside, and what is open. */
 const SAMPLE_OFFERED: Record<string, OfferedColumn[]> = {
     orders: [
@@ -2986,7 +2993,7 @@ export const fixtureSource: PodSource = {
             pageUrl: `https://api.example.invalid/public/web/${key}/page`,
         };
         WIDGETS.set(podId, [...(WIDGETS.get(podId) ?? []), widget]);
-        return { ...widget, signingSecret: "sk_sample_" + Math.random().toString(16).slice(2) };
+        return { ...widget, signingSecret: sampleSecret() };
     },
     async updateWidget(podId: string, widgetId: string, change: { answer?: WidgetAnswer; origins?: string[] }) {
         await wait(300);
@@ -2998,7 +3005,7 @@ export const fixtureSource: PodSource = {
     },
     async rotateWidgetSecret() {
         await wait(300);
-        return "sk_sample_" + Math.random().toString(16).slice(2);
+        return sampleSecret();
     },
     async deleteWidget(podId: string, widgetId: string) {
         await wait(300);
