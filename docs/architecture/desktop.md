@@ -738,9 +738,10 @@ each card saving one operator section:
   falls back to for a pod with no default runtime. locald also names the
   side jobs' models from it: `VISION_MODEL` (the image model, which it adds
   to the vision names, or the default model when that reads images),
-  `CONVERSATION_TITLE_MODEL` (the fast model, else the default) and
-  `HISTORY_SUMMARIZATION_MODEL` (the fast model, when there is one). Test lists
-  the provider's models and asks the default one for a one-word answer.
+  `CONVERSATION_TITLE_MODEL` (the fast model, else the default), and
+  `HISTORY_SUMMARIZATION_MODEL` and `DECISION_MODEL` (the fast model, when
+  there is one). Test lists the provider's models and asks the default one for
+  a one-word answer.
 - **Email** writes the `email` section (`none`, `resend` or `smtp`, a sender
   address, and the SMTP server with its password in the vault). Until it is
   set up the host pack's `EMAIL_TRANSPORT=smtp` names no server, so the
@@ -766,10 +767,14 @@ each card saving one operator section:
   proven contact matches that unverified profile number and the chat reaches
   their pod's agent with no email
   ([chat onboarding](../operators/chat-onboarding.md)).
-- **Voice** is the Deepgram key for voice notes, and the voice-call keys
-  (Gemini for the voice, TypeSafe for routing) that the workspace's own server
-  reads: locald keeps those in the frontend's environment, never the
-  backend's, and restarts only the frontend when they change; **Web search** works with no key (DuckDuckGo)
+- **Voice** is the Deepgram key for voice notes, and the voice-call keys. The
+  Gemini key is the voice, which the workspace's own server carries: locald
+  keeps it in the frontend's environment, never the backend's, and restarts
+  the frontend when it changes. The optional TypeSafe key is the backend's:
+  calls are routed by the [decisions API](../configuration.md#decisions), and
+  with the key stored locald sets `TYPESAFE_API_KEY` and
+  `DECISION_PROVIDER=typesafe`, so decisions take a third of a second rather
+  than the AI model's few. **Web search** works with no key (DuckDuckGo)
   and switches to Brave Search when a Brave key is stored.
 
 Tests are read-only requests locald makes (`config.test`): with the typed

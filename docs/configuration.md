@@ -741,6 +741,14 @@ DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization; 0 for none
 Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
 wherever your deployment names the processors its users' data reaches.
 
+Live voice calls route everything the caller says through this API, with
+`priority: interactive`: whether it is conversation, a question about work
+already running, or new work, and for which conversation. Someone is waiting
+on every one of those, so `typesafe` is the recommended provider for a
+deployment with calls: it answers in about a third of a second, a language
+model in several. With no provider able to answer, a call carries on with the
+voice alone and dispatches nothing.
+
 ## Spend limits
 
 Nothing is limited by default: usage is metered but never refused. Set any of
