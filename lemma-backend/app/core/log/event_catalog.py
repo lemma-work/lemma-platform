@@ -681,6 +681,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'function.runtime.quarantine_failed': EventSpec('warning', frozenset({'pod_id'})),
     'function.runtime.reresolved_after_refused_connection': EventSpec('info', frozenset({'pod_id', 'run_id'})),
     'function.runtime.sandbox_quarantined': EventSpec('info', frozenset({'pod_id'})),
+    'function.session_token.shorter_than_window': EventSpec('warning', frozenset({'expires_at', 'function_id', 'pod_id', 'required_until'})),
     'function.use_cases.legacy_revision_backfilled': EventSpec('info', frozenset({'function_id', 'pod_id', 'revision_hash'})),
     'function.use_cases.revision_retention.degraded': EventSpec('warning', frozenset({'function_id'})),
     'function.use_cases.run_enqueue_deferred.degraded': EventSpec('warning', frozenset({'error_type', 'run_id'})),

@@ -26,6 +26,7 @@ from app.core.runtime_config import (
     runtime_config_token,
 )
 from app.core.config import settings
+from app.modules.apps.config import apps_settings
 from app.modules.apps.services.app_service import AppService
 from app.modules.test_support.authz import allow_all_context
 
@@ -492,6 +493,52 @@ async def test_public_app_entrypoint_includes_share_metadata(monkeypatch):
     assert 'property="og:title" content="Research Desk"' in body
     assert 'name="twitter:card" content="summary_large_image"' in body
     assert 'rel="canonical" href="https://research-desk.apps.lemma.work"' in body
+    # The "Remix on Lemma" pill is off by default until remix is rethought.
+    assert APP_BRANDING_SENTINEL not in body
+    assert "Remix on Lemma" not in body
+    expected_token = runtime_config_token(
+        app.pod_id,
+        app={
+            "name": app.name,
+            "description": app.description,
+            "url": "https://research-desk.apps.lemma.work",
+        },
+        api_url=app_api_url(),
+    )
+    assert asset.etag == f'"version.{expected_token}"'
+
+
+@pytest.mark.asyncio
+async def test_public_app_branding_shows_when_enabled(monkeypatch):
+    repo = AsyncMock()
+    storage = AsyncMock()
+    service = AppService(repo, Mock(return_value=storage), AsyncMock())
+    app = AppEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="Research Desk",
+        description="Evidence-backed research for the team.",
+        public_slug="research-desk",
+        current_release_id=uuid4(),
+        visibility="PUBLIC",
+    )
+    release = AppReleaseEntity(
+        id=app.current_release_id,
+        app_id=app.id,
+        version="version",
+        dist_root_path="releases/version/dist/",
+    )
+    repo.get_by_public_slug.return_value = app
+    repo.get_release.return_value = release
+    storage.read_file.return_value = b"<html><head></head><body>desk</body></html>"
+    monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.work")
+    monkeypatch.setattr(settings, "api_url", "https://api.lemma.work")
+    monkeypatch.setattr(apps_settings, "app_branding_enabled", True)
+
+    asset = await _get_public_app_asset(service, "research-desk")
+    body = asset.content.decode()
+
     assert APP_BRANDING_SENTINEL in body
     assert "Remix on Lemma" in body
     branding = build_app_branding("https://research-desk.apps.lemma.work")
@@ -540,6 +587,7 @@ async def test_public_app_branding_can_be_removed_by_org_entitlement(monkeypatch
     storage.read_file.return_value = b"<html><head></head><body>paid</body></html>"
     monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.work")
     monkeypatch.setattr(settings, "api_url", "https://api.lemma.work")
+    monkeypatch.setattr(apps_settings, "app_branding_enabled", True)
 
     asset = await _get_public_app_asset(service, "paid-app")
     body = asset.content.decode()
@@ -585,6 +633,7 @@ async def test_public_app_branding_fails_closed_when_entitlement_lookup_fails(
     storage.read_file.return_value = b"<html><head></head><body>fallback</body></html>"
     monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.work")
     monkeypatch.setattr(settings, "api_url", "https://api.lemma.work")
+    monkeypatch.setattr(apps_settings, "app_branding_enabled", True)
 
     asset = await _get_public_app_asset(service, "fallback-app")
     body = asset.content.decode()

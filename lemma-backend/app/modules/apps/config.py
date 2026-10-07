@@ -68,11 +68,12 @@ class AppsSettings(BaseSettings):
 
     # Moved from `app/core/config.py`: read only by this module's asset resolver.
     app_branding_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Show the host-owned 'Remix on Lemma' attribution on public app "
-            "entrypoints. Enabled by default in OSS and cloud; cloud billing may "
-            "remove it for entitled organizations."
+            "entrypoints. Off by default while remix is rethought; when on, "
+            "cloud billing may remove it for entitled organizations. "
+            "Env: ``APP_BRANDING_ENABLED``."
         ),
     )
 
