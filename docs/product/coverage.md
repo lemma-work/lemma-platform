@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **205** |
 
-Scenario tests declaring a promise: 428.
+Scenario tests declaring a promise: 430.
 
 ## Contract coverage
 
@@ -219,7 +219,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire`, `test_the_schedule_outlives_its_deleted_target` |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
-| `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused` |
+| `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused`, `test_a_judged_skip_keeps_the_answer_that_decided_it`, `test_a_time_schedule_refuses_a_condition` |
 | `PS-SCHED-020` Work fires once, however many times the trigger arrives | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |

@@ -16,7 +16,11 @@ from app.modules.schedule.domain.interfaces import (
     DatastoreSchedulePolicy,
     ScheduleRepository,
 )
-from app.modules.schedule.domain.schedule import DatastoreScheduleConfig, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    DatastoreScheduleConfig,
+    ScheduleRunStatus,
+    ScheduleType,
+)
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
@@ -36,7 +40,14 @@ class ScheduleRunService:
         self.run_repository = ScheduleRunRepository(uow)
 
     async def list_schedule_runs(
-        self, *, pod_id: UUID, schedule_id: UUID, ctx: Context, limit: int
+        self,
+        *,
+        pod_id: UUID,
+        schedule_id: UUID,
+        ctx: Context,
+        limit: int,
+        status: ScheduleRunStatus | None = None,
+        skipped: bool | None = None,
     ):
         schedule = await self.schedule_repository.get(schedule_id, ctx=ctx)
         if schedule is None or schedule.pod_id != pod_id:
@@ -48,7 +59,11 @@ class ScheduleRunService:
             schedule=schedule, pod_id=pod_id, ctx=ctx
         )
         return await self.run_repository.list_for_schedule(
-            schedule_id, limit=limit, user_id=run_user_id
+            schedule_id,
+            limit=limit,
+            user_id=run_user_id,
+            status=status,
+            skipped=skipped,
         )
 
     async def _visible_run_user_id(

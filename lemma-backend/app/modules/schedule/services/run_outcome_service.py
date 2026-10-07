@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from app.modules.schedule.domain.events.schedule import (
 )
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
+    ScheduleFireStatus,
     ScheduleRunStatus,
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
@@ -79,12 +81,43 @@ class ScheduleRunOutcomeService:
         await self._apply_breaker(schedule)
         return True
 
+    async def record_filtered(
+        self,
+        schedule: ScheduleEntity,
+        *,
+        source_event_id: str,
+        user_id: UUID,
+        metadata: Mapping[str, object] | None,
+        llm_output: Mapping[str, object] | None,
+    ) -> bool:
+        """Record an event the schedule's filter skipped, with its answers.
+
+        A skip is an outcome the owner is owed (PS-SCHED-012): told apart from
+        an event that never arrived and from one that failed. It is not a
+        failure, so the breaker is left alone. Returns whether a row was
+        written; a redelivered event writes nothing the second time.
+        """
+        recorded = await self.run_repository.insert_filtered(
+            schedule_id=schedule.id,
+            user_id=user_id,
+            source_event_id=source_event_id,
+            target_kind=_target_kind_of(schedule),
+            metadata=metadata,
+            llm_output=llm_output,
+        )
+        await self.schedule_repository.record_fire(
+            schedule.id, status=ScheduleFireStatus.FILTERED
+        )
+        return recorded
+
     async def record_pre_dispatch_failure(
         self,
         schedule: ScheduleEntity,
         *,
         source_event_id: str,
         error_type: str,
+        payload: Mapping[str, object] | None = None,
+        metadata: Mapping[str, object] | None = None,
     ) -> bool:
         """Record a fire that never reached a target, and count it on the breaker.
 
@@ -103,14 +136,18 @@ class ScheduleRunOutcomeService:
 
         Returns whether a new failure was recorded; a repeat of the same
         ``source_event_id`` is a no-op, so a redelivery cannot inflate the streak.
+
+        The event itself is kept when the caller has it: a person retrying the
+        run by hand starts the target from this row, and an empty payload made
+        that retry start the target with nothing.
         """
         run = await self.run_repository.claim(
             schedule_id=schedule.id,
             user_id=schedule.user_id,
             source_event_id=source_event_id,
-            target_kind="WORKFLOW" if schedule.workflow_id is not None else "AGENT",
-            payload={},
-            metadata=None,
+            target_kind=_target_kind_of(schedule),
+            payload=dict(payload or {}),
+            metadata=dict(metadata) if metadata else None,
             llm_output=None,
         )
         if run is None:
@@ -190,3 +227,7 @@ class ScheduleRunOutcomeService:
             consecutive_failures=count,
         )
         return True
+
+
+def _target_kind_of(schedule: ScheduleEntity) -> str:
+    return "WORKFLOW" if schedule.workflow_id is not None else "AGENT"

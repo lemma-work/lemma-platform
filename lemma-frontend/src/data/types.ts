@@ -822,8 +822,11 @@ export interface PodSource {
      *  profile header counts. This carries what fires each one, what it runs,
      *  and whether the last fire worked — the fields the profile threw away. */
     listSchedules(podId: string): Promise<StandingJob[]>;
-    /** Recent firings of one schedule, newest first. */
-    listScheduleRuns(podId: string, scheduleId: string): Promise<ScheduleRun[]>;
+    /** Recent firings of one schedule, newest first. `skipped: false` (the
+     *  default) leaves out the events the schedule's filter skipped, which on a
+     *  busy webhook would otherwise crowd out every real firing; `true` lists
+     *  only those. */
+    listScheduleRuns(podId: string, scheduleId: string, options?: { skipped?: boolean }): Promise<ScheduleRun[]>;
     /** Pause or resume. One PATCH, and resuming clears the failure count the
      *  breaker was holding — see `is_explicit_reactivation` in the schedule
      *  service — so the row is re-read from what comes back. */

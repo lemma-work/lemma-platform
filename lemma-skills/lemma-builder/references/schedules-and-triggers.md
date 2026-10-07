@@ -205,8 +205,7 @@ no `start`). JMESPath expressions in workflow nodes reference it:
 
   Bulk writes are no exception: a row inserted by `bulk_create` carries the same
   whole-row payload as one created on its own.
-- `start.llm_output.*` — the structured output of the LLM filter, if you set one
-  (below).
+- `start.llm_output.*` — the filter's answers, if you set a filter (below).
 
 For an **agent** target, the event is delivered as the message that wakes the agent
 — write the instruction to read that message.
@@ -276,13 +275,42 @@ lemma schedules create --workflow fulfil-ticket --datastore tickets --on update 
   --data '{"config": {"when": {"status": {"to": "approved"}}}}'
 ```
 
-## LLM event filtering — drop the noise
+## Event filtering — drop the noise
 
 Chatty webhook/datastore sources fire constantly. A `filter_instruction` is a
-**natural-language predicate evaluated per event before the target fires**; events
-that fail it are dropped (status `FILTERED`, not `TRIGGERED`). Add an optional
-`filter_output_schema` to capture structured output the run can read at
-`start.llm_output.*`.
+**natural-language predicate judged per event before the target fires** — asked as
+a *decision* (see `functions.md` → Decisions), on whichever provider the
+deployment chose. An event it says no to is **skipped**: recorded as a run with
+status `FILTERED` carrying the answer, and the schedule's `last_fire_status`
+becomes `FILTERED`. An event the filter **cannot tell** about is skipped too.
+
+`filter_output_schema` asks extra **closed** questions alongside the yes/no, and
+their answers reach the target at `start.llm_output.*`:
+
+```json
+"filter_output_schema": {
+  "type": "object",
+  "properties": {
+    "category": { "type": "string", "enum": ["bug", "billing", "other"], "description": "What is it about?" },
+    "urgent":   { "type": "boolean", "description": "Does it need a reply today?" }
+  }
+}
+```
+
+- Allowed: a string `enum` (or `oneOf` of `{const, description}`), an array of one
+  with `uniqueItems`, `boolean`, or `integer` with `minimum`/`maximum` (2-11
+  levels). **Free text and open-ended numbers are not asked** — such fields are
+  left out and logged; there is no `reason` field any more.
+- `start.llm_output` is `{ should_proceed: true, <your answers>, _decision:
+  { provider, model, unsure, confidence: {question: number|null} } }`.
+- If no decision provider answers, the event is retried with backoff and then
+  recorded **`DEAD_LETTERED`** (`ScheduleFilterUnavailable`) — never sent past the
+  filter. A person can retry it by hand (`lemma schedules runs retry`).
+- **Not on a `TIME` schedule**: it fires on the clock, so there is no event to
+  judge, and a filter there is refused (422).
+- History: `lemma schedules runs list <schedule> --no-skipped` shows the firings
+  only; `--skipped` shows only the skips (`?skipped=` on
+  `GET /pods/{pod}/schedules/{id}/runs`).
 
 > On a `DATASTORE` trigger, prefer a `when` block for anything a comparison can
 > decide. The filter costs a model call **per event**; a `when` block costs

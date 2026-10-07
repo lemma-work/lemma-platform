@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     CADENCES, MINIMUM_MINUTES, RETRYABLE, SCHEDULE_EDIT,
-    agoOf, blankDraft, canRetry, createRequest, describeCron, draftProblems, healthOf, may,
+    agoOf, blankDraft, canRetry, copyRequest, createRequest, describeCron, draftProblems, healthOf, judgementOf, may,
     readRun, readRuns, readSchedule, readSchedules, triggerOf,
 } from "../src/schedule/schedules.ts";
 
@@ -329,4 +329,34 @@ test("an empty instruction is left off, not sent as an empty string", () => {
     const bare = createRequest({ ...blankDraft(), name: "Digest", agentName: "a", instruction: "   " });
     assert.equal("instruction" in bare, false);
     assert.equal(createRequest({ ...blankDraft(), name: "D", agentName: "a", instruction: "Do it" }).instruction, "Do it");
+});
+
+test("a skipped event says what the filter concluded, and how sure it was", () => {
+    const skip = readRun({
+        id: "r9",
+        status: "FILTERED",
+        llm_output: {
+            should_proceed: false,
+            _decision: { provider: "typesafe", unsure: false, confidence: { should_proceed: 0.82 } },
+        },
+    });
+    assert.equal(skip.judgement, "The filter said no (82% sure).");
+
+    assert.equal(
+        judgementOf({ should_proceed: false, _decision: { unsure: true, confidence: { should_proceed: null } } }),
+        "The filter could not tell from this event, so it was skipped.",
+    );
+    assert.equal(judgementOf({}), "", "a run nothing judged has no verdict");
+});
+
+test("a filter that could not be asked is said in words, not as a class name", () => {
+    const run = readRun({ id: "r10", status: "DEAD_LETTERED", error_type: "ScheduleFilterUnavailable" });
+    assert.match(run.error, /no decision provider answered/);
+});
+
+test("a time schedule is copied without the filter it never asked", () => {
+    const job = readSchedule({ ...wire, filter_instruction: "only weekdays", filter_output_schema: { type: "object" } });
+    const body = copyRequest(job) ?? {};
+    assert.equal("filter_instruction" in body, false);
+    assert.equal("filter_output_schema" in body, false);
 });

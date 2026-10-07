@@ -3339,9 +3339,10 @@ export const fixtureSource: PodSource = {
             ? { ...job, target: { ...job.target, label: teammate } }
             : job));
     },
-    async listScheduleRuns(_podId: string, scheduleId: string) {
+    async listScheduleRuns(_podId: string, scheduleId: string, options: { skipped?: boolean } = {}) {
         await wait(140);
-        return readRuns(SCHEDULE_RUNS[scheduleId] ?? []);
+        const skipped = options.skipped ?? false;
+        return readRuns((SCHEDULE_RUNS[scheduleId] ?? []).filter((row) => (row["status"] === "FILTERED") === skipped));
     },
     async setScheduleActive(_podId: string, scheduleId: string, active: boolean) {
         await wait(320);

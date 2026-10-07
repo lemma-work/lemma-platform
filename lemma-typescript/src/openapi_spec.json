@@ -33849,6 +33849,42 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "description": "Only runs that report this status -- the target's outcome once there is one.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ScheduleRunStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only runs that report this status -- the target's outcome once there is one.",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "true: only events the schedule's filter skipped. false: leave them out, which is what a busy webhook schedule's history usually needs. Omitted: both.",
+            "in": "query",
+            "name": "skipped",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true: only events the schedule's filter skipped. false: leave them out, which is what a busy webhook schedule's history usually needs. Omitted: both.",
+              "title": "Skipped"
+            }
           }
         ],
         "responses": {

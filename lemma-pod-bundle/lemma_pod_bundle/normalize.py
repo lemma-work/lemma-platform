@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .apply_fields import without_time_schedule_filter
 from .diff import _is_system_table_column
 from .layout import FORMAT_VERSION, _parse_function_headers
 
@@ -264,6 +265,8 @@ def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
     portable = {"provider_trigger_id", "installation_id"}
     if isinstance(config, dict) and portable & set(config):
         stripped = {**stripped, "config": _strip_keys(config, portable)}
+    # A filter on a time schedule was never asked and is refused on import.
+    stripped, _ = without_time_schedule_filter(stripped)
     return stripped
 
 

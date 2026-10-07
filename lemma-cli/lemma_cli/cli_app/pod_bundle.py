@@ -98,7 +98,11 @@ from lemma_pod_bundle.portability import (
     GRANT_METADATA_KEYS,
     require_account_variable_metadata,
 )
-from lemma_pod_bundle.apply_fields import SCHEDULE_APPLY_FIELDS, SURFACE_APPLY_FIELDS
+from lemma_pod_bundle.apply_fields import (
+    SCHEDULE_APPLY_FIELDS,
+    SURFACE_APPLY_FIELDS,
+    without_time_schedule_filter,
+)
 
 from lemma_sdk import Lemma
 from lemma_sdk.errors import LemmaAPIError
@@ -2806,7 +2810,14 @@ def import_pod_bundle(
     )
     for resource_dir in schedule_dirs:
         schedule_name = resource_dir.name
-        payload = apply_variables(load_resource_payload(resource_dir, schedule_name))
+        payload, dropped_filter = without_time_schedule_filter(
+            apply_variables(load_resource_payload(resource_dir, schedule_name))
+        )
+        if dropped_filter:
+            console.print(
+                f"[yellow]schedule[/yellow] {schedule_name}: a time schedule's "
+                "filter was left out, because nothing would ever ask it"
+            )
         payload.setdefault("name", schedule_name)
         existing = existing_schedules.get(schedule_name)
         existing_id = str(existing.get("id") or "") if existing else ""

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -21,6 +22,10 @@ from app.modules.schedule.infrastructure.models.run import ScheduleRun
 # against it: a threshold past the scan depth is a breaker that can never trip,
 # and two copies of the number is how that becomes true silently.
 _BREAKER_SCAN_LIMIT = BREAKER_STREAK_SCAN_LIMIT
+
+#: The error a filtered fire is dead-lettered with when no decision provider
+#: answered after every retry. An outage, not the schedule's failure.
+FILTER_UNAVAILABLE = "ScheduleFilterUnavailable"
 
 
 class ScheduleRunRepository:
@@ -114,6 +119,59 @@ class ScheduleRunRepository:
         model.error_code = None
         await self.session.flush()
         return model.to_entity()
+
+    async def has_run_for_event(
+        self, *, schedule_id: UUID, source_event_id: str
+    ) -> bool:
+        """Whether this event already has a run, whatever became of it."""
+        found = await self.session.scalar(
+            select(ScheduleRun.id)
+            .where(
+                ScheduleRun.schedule_id == schedule_id,
+                ScheduleRun.source_event_id == source_event_id,
+            )
+            .limit(1)
+        )
+        return found is not None
+
+    async def insert_filtered(
+        self,
+        *,
+        schedule_id: UUID,
+        user_id: UUID,
+        source_event_id: str,
+        target_kind: str,
+        metadata: Mapping[str, object] | None,
+        llm_output: Mapping[str, object] | None,
+    ) -> bool:
+        """Record an event the filter skipped, as a run that finished there.
+
+        No payload and no target run: nothing was started, and a skipped
+        event's body is the bulk of the row for no reader. The filter's answers
+        are what the owner needs to see why. A repeat of the same event writes
+        nothing, so a redelivery cannot count twice.
+        """
+        now = datetime.now(timezone.utc)
+        created_id = await self.session.scalar(
+            insert(ScheduleRun)
+            .values(
+                schedule_id=schedule_id,
+                user_id=user_id,
+                source_event_id=source_event_id,
+                status=ScheduleRunStatus.FILTERED.value,
+                attempts=1,
+                target_kind=target_kind,
+                target_run_id=None,
+                payload={},
+                fire_metadata=dict(metadata or {}),
+                llm_output=dict(llm_output or {}),
+                started_at=now,
+                completed_at=now,
+            )
+            .on_conflict_do_nothing(constraint="uq_schedule_run_source_event")
+            .returning(ScheduleRun.id)
+        )
+        return created_id is not None
 
     async def mark_dispatched(self, run_id: UUID) -> None:
         """Mark launch complete unless a synchronous target outcome won the race.
@@ -262,6 +320,13 @@ class ScheduleRunRepository:
         is the one that is actually true of the schedule. The cost is that a
         rarely-firing schedule takes a long wall-clock time to trip -- which is
         the correct amount of patience for something that rarely fires.
+
+        Two kinds of row are not the schedule's doing and are passed over. A
+        FILTERED run is an event the filter skipped -- not a failure, and not a
+        success either; left in the scan, a schedule that skips most events
+        would push its real failures out of the window. A fire dead-lettered
+        because no decision provider answered is an outage of this deployment,
+        and counting it would deactivate every filtered schedule at once.
         """
         rows = (
             await self.session.execute(
@@ -269,6 +334,8 @@ class ScheduleRunRepository:
                 .where(
                     ScheduleRun.schedule_id == schedule_id,
                     ScheduleRun.completed_at.is_not(None),
+                    ScheduleRun.status != ScheduleRunStatus.FILTERED.value,
+                    ScheduleRun.error_type.is_distinct_from(FILTER_UNAVAILABLE),
                 )
                 .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())
                 .limit(_BREAKER_SCAN_LIMIT)
@@ -347,10 +414,23 @@ class ScheduleRunRepository:
         *,
         limit: int = 100,
         user_id: UUID | None = None,
+        status: ScheduleRunStatus | None = None,
+        skipped: bool | None = None,
     ) -> list[ScheduleRunEntity]:
+        """Newest first. `status` matches what a run reports -- its target's
+        outcome once there is one -- and `skipped` keeps only, or leaves out,
+        the events the filter skipped."""
         stmt = select(ScheduleRun).where(ScheduleRun.schedule_id == schedule_id)
         if user_id is not None:
             stmt = stmt.where(ScheduleRun.user_id == user_id)
+        if status is not None:
+            stmt = stmt.where(
+                func.coalesce(ScheduleRun.target_outcome, ScheduleRun.status)
+                == status.value
+            )
+        if skipped is not None:
+            filtered = ScheduleRun.status == ScheduleRunStatus.FILTERED.value
+            stmt = stmt.where(filtered if skipped else ~filtered)
         rows = await self.session.scalars(
             stmt.order_by(ScheduleRun.created_at.desc(), ScheduleRun.id.desc()).limit(
                 limit

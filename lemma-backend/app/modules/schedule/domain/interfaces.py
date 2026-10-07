@@ -52,6 +52,18 @@ class DatastoreSchedulePolicy(Protocol):
     ) -> bool: ...
 
 
+@dataclass(frozen=True)
+class FilterVerdict:
+    """What a filter decided about one event, and the answers it decided from.
+
+    `output` is kept whichever way the verdict went: a fire passes it on as the
+    run's `llm_output`, and a skip is recorded with it so the owner can see why.
+    """
+
+    proceed: bool
+    output: dict[str, object]
+
+
 class ScheduleEventFilter(Protocol):
     """Evaluate an optional schedule filter without exposing model infrastructure."""
 
@@ -62,7 +74,7 @@ class ScheduleEventFilter(Protocol):
         output_schema: dict[str, Any] | None,
         event_payload: dict[str, Any],
         schedule: ScheduleEntity,
-    ) -> tuple[bool, dict[str, Any] | None]: ...
+    ) -> FilterVerdict: ...
 
 
 class ScheduleRepository(ABC):

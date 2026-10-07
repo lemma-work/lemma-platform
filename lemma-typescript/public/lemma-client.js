@@ -16989,10 +16989,12 @@ var LemmaClient = (() => {
      * @param podId
      * @param scheduleId
      * @param limit
+     * @param status Only runs that report this status -- the target's outcome once there is one.
+     * @param skipped true: only events the schedule's filter skipped. false: leave them out, which is what a busy webhook schedule's history usually needs. Omitted: both.
      * @returns ScheduleRunListResponse Successful Response
      * @throws ApiError
      */
-    static scheduleRunList(podId, scheduleId, limit = 100) {
+    static scheduleRunList(podId, scheduleId, limit = 100, status, skipped) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/schedules/{schedule_id}/runs",
@@ -17001,7 +17003,9 @@ var LemmaClient = (() => {
           "schedule_id": scheduleId
         },
         query: {
-          "limit": limit
+          "limit": limit,
+          "status": status,
+          "skipped": skipped
         },
         errors: {
           422: `Validation Error`
@@ -17066,6 +17070,31 @@ var LemmaClient = (() => {
     }
     delete(scheduleId) {
       return this.client.request(() => SchedulesService.scheduleDelete(this.podId(), scheduleId));
+    }
+    /**
+     * A schedule's runs, newest first. `status` keeps runs reporting that status
+     * (a target's outcome once it has one); `skipped: true` keeps only events the
+     * schedule's filter skipped and `skipped: false` leaves them out.
+     */
+    runs(scheduleId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b;
+          return SchedulesService.scheduleRunList(
+            this.podId(),
+            scheduleId,
+            (_a = options.limit) != null ? _a : 100,
+            (_b = options.status) != null ? _b : void 0,
+            options.skipped
+          );
+        }
+      );
+    }
+    /** Run a failed or dead-lettered run again with the same event; answers the new run. */
+    retryRun(scheduleId, runId) {
+      return this.client.request(
+        () => SchedulesService.scheduleRunRetry(this.podId(), scheduleId, runId)
+      );
     }
   };
 

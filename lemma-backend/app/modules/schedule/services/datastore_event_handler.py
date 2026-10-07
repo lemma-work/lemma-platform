@@ -14,6 +14,7 @@ from app.modules.schedule.domain.value_objects import (
     parse_datastore_operation,
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
+from app.modules.schedule.services.run_outcome_service import ScheduleRunOutcomeService
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 from app.core.infrastructure.db.session_uow import commit_now
 from app.core.log.log import get_logger
@@ -29,9 +30,11 @@ class DatastoreEventHandler:
         self,
         schedule_repository: ScheduleRepository,
         schedule_processor: ScheduleProcessor,
+        outcomes: ScheduleRunOutcomeService | None = None,
     ):
         self.schedule_repository = schedule_repository
         self.schedule_processor = schedule_processor
+        self.outcomes = outcomes or ScheduleRunOutcomeService(schedule_repository.uow)
 
     async def handle_datastore_event(
         self,
@@ -98,7 +101,7 @@ class DatastoreEventHandler:
                 # changed, and DATA_TRIGGER is the honest answer for everything
                 # raised from here down.
                 with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
-                    fired = await self.schedule_processor.process_event(
+                    processed = await self.schedule_processor.process_event(
                         schedule=schedule,
                         payload=event.payload or {},
                         user_id=event.owner_user_id or schedule.user_id,
@@ -124,15 +127,28 @@ class DatastoreEventHandler:
                 schedule_id=str(schedule.id),
                 latency_ms=latency_ms,
             )
+            if processed.outcome == "filtered":
+                # Judged and skipped by the filter: a run of its own, carrying
+                # the answers, so the owner can see why. A row condition that
+                # did not match (above) only marks the schedule; nothing was
+                # judged there.
+                await self.outcomes.record_filtered(
+                    schedule,
+                    source_event_id=str(event.event_id),
+                    user_id=event.owner_user_id or schedule.user_id,
+                    metadata=metadata,
+                    llm_output=processed.llm_output,
+                )
+                continue
             await self._record_fire(
                 schedule.id,
                 status=(
                     ScheduleFireStatus.TRIGGERED
-                    if fired
+                    if processed.fired
                     else ScheduleFireStatus.FILTERED
                 ),
             )
-            if fired:
+            if processed.fired:
                 fired_schedule_ids.append(schedule.id)
 
         return fired_schedule_ids

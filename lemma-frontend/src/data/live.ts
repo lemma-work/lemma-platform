@@ -1494,14 +1494,14 @@ export const liveSource: PodSource = {
             : job));
     },
 
-    async listScheduleRuns(podId: string, scheduleId: string): Promise<ScheduleRun[]> {
+    async listScheduleRuns(podId: string, scheduleId: string, options: { skipped?: boolean } = {}): Promise<ScheduleRun[]> {
         /* Newest first is the server's order (`list_for_schedule` orders by
            `created_at DESC`), so nothing here sorts. Twenty is a screenful of
            history; the route's own ceiling is a thousand. */
         return readRuns(await lemma(podId).request(
             "GET",
             `/pods/${podId}/schedules/${scheduleId}/runs`,
-            { params: { limit: 20 } },
+            { params: { limit: 20, skipped: options.skipped ?? false } },
         ));
     },
 
