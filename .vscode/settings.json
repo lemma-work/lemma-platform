@@ -6,8 +6,7 @@
   },
   "python.defaultInterpreterPath": "${workspaceFolder}/lemma-backend/.venv/bin/python",
   "eslint.workingDirectories": [
-    { "directory": "lemma-frontend", "changeProcessCWD": true },
-    { "directory": "lemma-harness", "changeProcessCWD": true }
+    { "directory": "lemma-frontend", "changeProcessCWD": true }
   ],
   "rust-analyzer.linkedProjects": ["desktop/Cargo.toml"],
   "rust-analyzer.check.command": "clippy",

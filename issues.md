@@ -66,8 +66,8 @@ anything is published** — because a `trigger_id` expires in about three second
 — and `app_event_handler.py` consults `status` nowhere. So a disabled Slack
 surface still opens its channel-setup modal.
 
-Nothing in `lemma-harness/src` mentions the status, so there is no way to see or
-unset it from the product.
+`lemma-frontend` shows the status as "Disabled" and can switch it back
+(`src/data/surface-settings.ts`), but nothing tells a person why the surface went quiet.
 **Why it matters:** the platform side keeps working — the bot is still in the
 channel, the number still receives — so a person messaging a disabled surface
 sees their message delivered and simply never answered, indistinguishable from

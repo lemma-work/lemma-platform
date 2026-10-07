@@ -1,7 +1,0 @@
-@custom-variant dark (&:is(.dark *));
-
-/* ────────────────────────────────────────────
-   TAILWIND THEME — design token bridge
-   Maps Lemma CSS custom properties into
-   Tailwind's color/font/radius systems.
-   ──────────────────────────────────────────── */
