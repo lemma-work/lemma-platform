@@ -15,6 +15,7 @@ from supertokens_python.recipe.session.asyncio import (
     create_new_session_without_request_response,
     refresh_session_without_request_response,
 )
+from supertokens_python.recipe.session.interfaces import SessionContainer
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.authorization.delegation import (
@@ -34,6 +35,17 @@ logger = get_logger(__name__)
 class IssuedUserToken:
     value: str
     expires_at: datetime
+
+
+def _access_token_expires_at_ms(session: SessionContainer) -> int:
+    """The access token's own ``exp``, in the epoch milliseconds the CLI uses.
+
+    Not ``session.get_expiry()``, which reads like the same thing and is not: it
+    is the *session's* expiry, which lasts as long as the refresh token -- months
+    by default, against the access token's hour -- and it costs a second round
+    trip to the core to learn it. The ``exp`` is already in the token we hold.
+    """
+    return session.get_access_token_payload()["exp"] * 1000
 
 
 async def _assert_local_user_can_authenticate(user_id: UUID) -> None:
@@ -121,7 +133,7 @@ async def create_cli_session_tokens(
     return {
         "access_token": tokens["accessToken"],
         "refresh_token": tokens["refreshToken"],
-        "access_token_expires_at": await session.get_expiry(),
+        "access_token_expires_at": _access_token_expires_at_ms(session),
         "session_handle": session.get_handle(),
         "user_id": str(user_id),
     }
@@ -186,7 +198,7 @@ async def refresh_cli_session_tokens(refresh_token: str) -> dict:
     return {
         "access_token": tokens["accessToken"],
         "refresh_token": tokens["refreshToken"],
-        "access_token_expires_at": await session.get_expiry(),
+        "access_token_expires_at": _access_token_expires_at_ms(session),
         "session_handle": session.get_handle(),
         "user_id": session.get_user_id(),
     }

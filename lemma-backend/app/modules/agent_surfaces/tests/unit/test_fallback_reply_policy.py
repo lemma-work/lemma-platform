@@ -134,7 +134,7 @@ def test_whatsapp_names_the_number_it_did_not_recognise(monkeypatch) -> None:
     assert reply is not None
     message, _metadata = reply
     assert "+14155552671" in message
-    assert "https://app.example.test/profile" in message
+    assert "https://app.example.test/t?settings=account" in message
     # Saying either answer would tell any sender whether a number is registered.
     assert "sign up" not in message.lower()
 
