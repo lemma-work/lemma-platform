@@ -313,7 +313,6 @@ NODE_PACKAGES = (
         ("src", "server", "scripts", "tests", "server.mjs"),
         ("npx", "--no-install", "tsc", "--noEmit"),
     ),
-    NodePackage("lemma-harness", (".",), ("npm", "run", "--silent", "typecheck")),
     NodePackage(
         "lemma-typescript",
         None,

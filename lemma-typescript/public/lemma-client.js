@@ -16812,6 +16812,53 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/DecisionsService.ts
+  var DecisionsService = class {
+    /**
+     * Make a decision
+     * Answer closed questions -- a choice, several choices, yes or no, a point on a scale -- about one piece of evidence. Nothing is stored: record the answer wherever it matters to you. An answer of null means the evidence did not support one. 422 means the request cannot be asked as sent; 429 and 503 mean ask again later.
+     * @param podId
+     * @param requestBody
+     * @returns DecisionResponse Successful Response
+     * @throws ApiError
+     */
+    static decisionMake(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/decisions",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          413: `The request body is too large.`,
+          422: `The questions, evidence or examples are not valid.`,
+          429: `Rate or spend limit reached; see Retry-After.`,
+          503: `The decision provider did not answer; retry.`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/decisions.ts
+  var DecisionsNamespace = class {
+    constructor(client, podId) {
+      __publicField(this, "client", client);
+      __publicField(this, "podId", podId);
+    }
+    /**
+     * Answers come back per question key; `value` is `null` when the evidence did
+     * not support an answer. A provider that could not answer rejects instead
+     * (503, or 429 with Retry-After), so "unsure" and "failed" never look alike.
+     */
+    make(payload) {
+      return this.client.request(
+        () => DecisionsService.decisionMake(this.podId(), payload)
+      );
+    }
+  };
+
   // src/openapi_client/services/SchedulesService.ts
   var SchedulesService = class {
     /**
@@ -18318,6 +18365,7 @@ var LemmaClient = (() => {
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
       __publicField(this, "schedules");
+      __publicField(this, "decisions");
       __publicField(this, "datastore");
       /** Alias of {@link datastore}, matching the Python SDK's `pod.queries`. */
       __publicField(this, "queries");
@@ -18376,6 +18424,7 @@ var LemmaClient = (() => {
       this.connectors = new ConnectorsNamespace(this._generated, this._http);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
       this.schedules = new SchedulesNamespace(this._generated, podIdFn);
+      this.decisions = new DecisionsNamespace(this._generated, podIdFn);
       this.datastore = new DatastoreNamespace(
         this._generated,
         podIdFn,

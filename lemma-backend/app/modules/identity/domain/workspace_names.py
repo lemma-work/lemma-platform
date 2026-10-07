@@ -1,11 +1,11 @@
 """What a person's first organization and pod are called when nobody typed a name.
 
-Ported from `lemma-harness/components/onboarding/account-onboarding-helpers.ts`,
-which did all of this in TypeScript because signing up through the app was the
-only way in. Chat surfaces onboard people who never load the app at all, and a
-second copy of "what is this workspace called" would drift from the first inside
-one release -- so this is the implementation, and the web onboarding is being
-moved onto it rather than kept beside it.
+Ported from the web app's onboarding helpers, which did all of this in
+TypeScript because signing up through the app was the only way in. Chat
+surfaces onboard people who never load the app at all, and a second copy of
+"what is this workspace called" would drift from the first inside one release
+-- so this is the implementation, and the web onboarding is being moved onto it
+rather than kept beside it.
 
 The generated names are deterministic on the address, not random. Someone whose
 first attempt half-failed and who tries again lands on the same name, instead of

@@ -16,7 +16,6 @@ npm run dev
 
 Open http://localhost:3000. Set `NEXT_PUBLIC_API_URL` for live data, or
 `NEXT_PUBLIC_DATA=sample` for a local demo without a backend.
-The sibling `lemma-harness` provides operator tools and the desktop web runtime.
 
 See [.env.example](.env.example) for configuration. Voice calls require
 server-only `GEMINI_API_KEY` and `TYPESAFE_API_KEY`; never expose secrets through

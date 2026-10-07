@@ -81,7 +81,6 @@ pub(crate) fn run() {
             agent_host_ui::agent_host_open_log,
             agent_host_ui::agent_host_own_settings,
             operator_settings::discover_provider_models,
-            operator_settings::configure_ai_provider,
             pod_app_alias::app_frame_url,
             operator_settings::sharing_action,
             operator_settings::close_local_settings,

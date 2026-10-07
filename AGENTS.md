@@ -11,8 +11,7 @@ would only let the two drift apart.
 | Directory | What it is |
 |---|---|
 | `lemma-backend/` | The API, the worker, and every module. Python, FastAPI, Postgres |
-| `lemma-frontend/` | The user-facing workspace |
-| `lemma-harness/` | Operator tools, auth portal and desktop web runtime |
+| `lemma-frontend/` | The web app: workspace, sign-in, and public site |
 | `lemma-cli/`, `lemma-python/`, `lemma-typescript/` | The clients we ship |
 | `desktop/` | The desktop app and the agent host |
 | `docs/` | Documentation, indexed by [docs/README.md](docs/README.md) |
