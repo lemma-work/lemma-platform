@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 170 |
+| `covered` | 171 |
 | `gap` | 2 |
 | `manual` | 21 |
 | `planned` | 11 |
 | `withdrawn` | 0 |
-| **total** | **204** |
+| **total** | **205** |
 
-Scenario tests declaring a promise: 425.
+Scenario tests declaring a promise: 426.
 
 ## Contract coverage
 
@@ -317,4 +317,5 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-DATA-042` One person's bulk upload does not stall everyone else | `covered` | `test_backpressure_is_legible`, `test_a_declined_upload_can_be_retried`, `test_a_burst_does_not_starve_another_pod`, `test_every_accepted_upload_survives` |
 | `PS-DATA-043` A person searches what is in their documents | `covered` | `test_documents_are_searchable` |
 | `PS-DATA-050` A person gets a link to a file that works and then stops | `covered` | `test_a_file_has_a_link`, `test_a_signed_link_is_issued` |
+| `PS-DATA-051` A shared page is live and carries what it shows | `covered` | `test_a_shared_page_is_live_and_carries_its_pictures` |
 | `PS-DATA-060` A person sees records change as they change | `covered` | `test_a_new_record_arrives_live`, `test_updates_and_deletions_arrive`, `test_a_stranger_is_sent_nothing`, `test_a_reconnecting_watcher_resumes` |

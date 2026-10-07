@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.waiting import eventually
+
+#: A public link reuses its live answer for a short while (the API's
+#: `LIVE_CACHE_SECONDS`), so an edit reaches a reader within that, not at once.
+UNTIL_A_SHARED_LINK_CATCHES_UP = 30.0
 
 pytestmark = [journey("Working with data"), capability("Put documents in")]
 
@@ -146,3 +151,51 @@ async def test_an_outsider_cannot_read_files(world, pod):
     outsider = await world.person("hannah")
 
     await outsider.is_refused_file(uploaded["path"], in_pod=the_pod)
+
+
+@scenario("A shared page is live and carries the pictures it shows")
+@proves("PS-DATA-051")
+@covers("file.signed_url", "file.update", "file.upload")
+async def test_a_shared_page_is_live_and_carries_its_pictures(pod):
+    alice, the_pod, home = pod
+    chart = b"\x89PNG\r\n\x1a\n" + bytes(range(32))
+    await alice.uploads(
+        content=chart,
+        named="chart.png",
+        directory=home,
+        in_pod=the_pod,
+        content_type="image/png",
+    )
+    await alice.uploads(
+        content=b"# Plan", named="plan.md", directory=home, in_pod=the_pod
+    )
+    page = await alice.uploads(
+        content=b"![chart](chart.png)\n\nSee [the plan](plan.md).\n",
+        named="report.md",
+        directory=home,
+        in_pod=the_pod,
+        content_type="text/markdown",
+    )
+
+    link = await alice.signed_link_to(page["path"], in_pod=the_pod)
+
+    # Whoever holds the link sees the page and the picture in it — not the
+    # document it links to, which is not what was shared.
+    assert await alice.a_stranger_loads_from(link, embedded="chart.png") == chart
+    assert await alice.a_stranger_loads_from(link, embedded="plan.md") is None
+
+    # And the page is the page as it is now: an edit reaches the link, and a
+    # picture taken out of the page stops travelling with it.
+    await alice.rewrites_file(page["path"], content=b"No pictures now.", in_pod=the_pod)
+    await eventually(
+        lambda: alice.a_stranger_opens(link),
+        until=lambda served: served == b"No pictures now.",
+        describe="the edit to reach the shared link",
+        timeout=UNTIL_A_SHARED_LINK_CATCHES_UP,
+    )
+    await eventually(
+        lambda: alice.a_stranger_loads_from(link, embedded="chart.png"),
+        until=lambda served: served is None,
+        describe="the removed picture to stop travelling with the page",
+        timeout=UNTIL_A_SHARED_LINK_CATCHES_UP,
+    )

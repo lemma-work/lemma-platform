@@ -325,9 +325,27 @@ put it there having to think about it on every operation.
 - When a signed link expires, the system shall refuse it.
 - If a file is deleted, then the system shall refuse links to it that have not
   yet expired.
-- The system shall keep a signed link scoped to the one file it was made for.
+- The system shall keep a signed link scoped to the file it was made for and
+  what that file embeds (PS-DATA-051).
 
 **Contracts:** `file.signed_url`, `file.url`, `file.download`
+
+### PS-DATA-051 — A shared page is live and carries what it shows
+**Status:** covered
+
+- While a signed link is live, the system shall serve the file as it is now,
+  not as it was when the link was made.
+- When a shared page embeds pictures, stylesheets or scripts from the pod, the
+  system shall serve them to whoever holds the link, without counting them as
+  opens of the page.
+- The system shall serve through a page's link only what the page embeds now,
+  and never the documents it only links to.
+- The system shall serve through a link only what the person who made it can
+  still read, and, when an agent made it, only what that agent can also read.
+- If a page that others can edit embeds a personal or restricted file, then the
+  system shall not serve that file through the page's link.
+
+**Contracts:** `file.signed_url`, `file.update`
 
 ---
 

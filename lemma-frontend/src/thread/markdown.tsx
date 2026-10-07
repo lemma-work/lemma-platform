@@ -101,6 +101,19 @@ const schema = {
     },
 };
 
+/** The same, with pictures. Only for a caller that says where a picture's
+ *  bytes come from: in chat an `<img>` an agent wrote would fetch from
+ *  wherever it pointed the moment the message drew, which is why the default
+ *  drops them. */
+const schemaWithImages = {
+    ...schema,
+    tagNames: [...schema.tagNames, "img"],
+    attributes: {
+        ...schema.attributes,
+        img: ["src", "alt", "title", "width", "height"],
+    },
+};
+
 function codeText(node: Element | Root["children"][number]): string {
     if (node.type === "text") return node.value;
     return "children" in node ? node.children.map(codeText).join("") : "";
@@ -141,28 +154,52 @@ function Table({ children, node, ...props }: Positioned & ComponentProps<"table"
     return <CopySection text={sliceOf(useContext(Source), node)}><table {...props}>{children}</table></CopySection>;
 }
 
-const COMPONENTS: Components = { pre: CodeBlock, blockquote: Quote, details: Disclosure, table: Table };
+/** Where a picture written as `src` is fetched from, or null to drop it. */
+type ImageSource = (src: string) => string | null;
+
+/** Read from context for the same reason as `Source`. Only reached at all
+ *  when the caller gave one: without it the sanitiser has already removed
+ *  every `<img>`. */
+const Pictures = createContext<ImageSource | null>(null);
+
+function Picture({ node: _node, src, alt, ...props }: Positioned & ComponentProps<"img">) {
+    const imageSource = useContext(Pictures);
+    const resolved = imageSource && typeof src === "string" ? imageSource(src) : null;
+    return resolved ? <img {...props} src={resolved} alt={alt ?? ""} loading="lazy" /> : null;
+}
+
+const COMPONENTS: Components = { pre: CodeBlock, blockquote: Quote, details: Disclosure, table: Table, img: Picture };
 const REMARK_PLUGINS = [remarkGfm];
 const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [rehypeRaw, [rehypeSanitize, schema], narrowStyles];
+const REHYPE_PLUGINS_WITH_IMAGES: NonNullable<Options["rehypePlugins"]> = [rehypeRaw, [rehypeSanitize, schemaWithImages], narrowStyles];
 
 /** The rendered markdown alone, without the `.md` box: a streaming reply puts
  *  several of these in one box, and the box's first- and last-child rules have
  *  to see one run of blocks. */
-const Rendered = memo(function Rendered({ text }: { text: string }) {
+const Rendered = memo(function Rendered({ text, imageSource }: { text: string; imageSource?: ImageSource }) {
     return (
         <Source.Provider value={text}>
-            <Markdown components={COMPONENTS} remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
-                {text}
-            </Markdown>
+            <Pictures.Provider value={imageSource ?? null}>
+                <Markdown
+                    components={COMPONENTS}
+                    remarkPlugins={REMARK_PLUGINS}
+                    rehypePlugins={imageSource ? REHYPE_PLUGINS_WITH_IMAGES : REHYPE_PLUGINS}
+                >
+                    {text}
+                </Markdown>
+            </Pictures.Provider>
         </Source.Provider>
     );
 });
 
 /** Markdown, rendered once per text. Memoised: a transcript re-renders for
  *  every few tokens of the reply being written, and every message above it
- *  used to be parsed again each time. */
-export const Prose = memo(function Prose({ text }: { text: string }) {
-    return <div className="md"><Rendered text={text} /></div>;
+ *  used to be parsed again each time.
+ *
+ *  Pictures are drawn only when `imageSource` says where their bytes come
+ *  from; chat passes none. */
+export const Prose = memo(function Prose({ text, imageSource }: { text: string; imageSource?: ImageSource }) {
+    return <div className="md"><Rendered text={text} imageSource={imageSource} /></div>;
 });
 
 /** A reply still being written. The blocks it has finished are rendered once

@@ -284,6 +284,7 @@ class DatastoreSignedLinkEntity(BaseModel):
     code: str
     pod_id: UUID
     created_by_user_id: UUID | None = None
+    minted_by_workload: str | None = None
     path: str
     object_key: str
     content_type: str
