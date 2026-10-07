@@ -26,7 +26,6 @@
     "allow-agent-host-open-log",
     "allow-agent-host-own-settings",
     "allow-discover-provider-models",
-    "allow-configure-ai-provider",
     "allow-app-frame-url",
     "allow-local-settings-snapshot",
     "allow-apply-local-settings",

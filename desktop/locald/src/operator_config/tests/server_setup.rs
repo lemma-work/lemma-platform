@@ -60,23 +60,6 @@ fn store_with(
     (root, store)
 }
 
-fn section(
-    store: &OperatorConfigStore,
-    name: &str,
-    value: Value,
-    secrets: Value,
-) -> io::Result<Value> {
-    let revision = store.snapshot().unwrap()["config"]["revision"].clone();
-    store.update(
-        serde_json::from_value(json!({
-            "expected_revision": revision,
-            "section": {"name": name, "value": value},
-            "secrets": secrets,
-        }))
-        .unwrap(),
-    )
-}
-
 fn loopback_ai(default_model: &str, image: &str, fast: &str) -> Value {
     json!({
         "protocol": "openai_compat",
