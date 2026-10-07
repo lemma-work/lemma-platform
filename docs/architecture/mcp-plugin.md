@@ -86,7 +86,7 @@ servers and need a publicly reachable API.
 | 4 | Waiting-form and approval card | medium | two new pod tools, `pod:write` |
 | 5 | Claude Code plugin in a marketplace repository | small | MCP-first skill text; Deepak's go-ahead to publish |
 | 6 | Directory listings | — | the decision in [§d](#d-directory-listings-and-one-url-per-pod), submission assets |
-| 7 | A pod's own app, framed, in ChatGPT then Claude | medium | a delegated token per connection, an embedded SDK mode, token-gated private app files — [§b](#b-a-pods-own-app-inside-the-host); probed in ChatGPT, works |
+| 7 | A pod's own app, framed, in ChatGPT then Claude | built | Claude to lift its `frameDomains` restriction — [§b](#b-a-pods-own-app-inside-the-host) |
 
 ### a. More views
 
@@ -102,7 +102,7 @@ app-only write tool (`_meta.ui.visibility: ["app"]`, hidden from the model) and
 folder as a list and a document as its pages, the same way the table view shows
 records.
 
-**"Open in Lemma".** Until apps are framed in the host (§b), this is how a person gets from a chat to one. `ui/open-link` is standard and both hosts implement it
+**"Open in Lemma".** `ui/open-link` is standard and both hosts implement it
 (Claude always asks the person to confirm for a custom connector; a directory
 listing can allowlist its destinations). It needs a stable
 in-app URL for a table, a record and a file, passed in the result's `_meta`,
@@ -150,74 +150,75 @@ signed in with a token the connection mints, not rebuilt as a view.
   WebSocket, which a browser cannot give headers, as an `access_token` query
   parameter — so the framed app signs in with a token instead.
 
-**The token is a delegated one.** Lemma already mints pod-scoped delegated
-tokens for agents and functions (`app/core/authorization/delegation.py`,
-`mint_delegated_token`). One minted with the pod's own agent as the actor is the
-person acting through Lem, the standing the MCP tools already run with: refused
-for any other pod (`Delegated pod mismatch`), refused for organization-level
-actions, destructive actions gated, row-level security and the person's current
-roles applied on every request. Four things to add around it:
+**Built.** Each app the person may open is a tool of its own and a view of
+its own (`app/modules/agent/services/pod_mcp_apps.py`, the view in
+`pod_mcp_app_view.html` beside it):
 
-1. **Read-only connections.** The `scope` claim is enforced only for named
-   workloads (`workload_authority.py`), not for the pod's own agent, so a token
-   for a `pod:read` connection could still write. Enforce it on that path too,
-   or offer apps only to connections allowed to write.
-2. **Revocation.** It is an ordinary access token and lives until it expires.
-   Every mint re-checks the connection and the view re-mints as it goes, so
-   ending a connection reaches a framed app within one token lifetime; a
-   per-request check would close even that.
-3. **Delivery.** The view asks for the token through an app-only tool
-   (`_meta.ui.visibility: ["app"]`), so it is never in the transcript or seen by
-   the model, and hands it to the framed app by `postMessage`. The SDK gains an
-   embedded mode that asks its parent for a token and asks again on a 401.
-4. **Private apps' files.** They sit behind the app-access cookie too, so they
-   need a token-based gate of their own.
+- **`lemma_open_app_<slug>`**, titled "Open ⟨app⟩" and described from the app's
+  own description, for the model to pick and ChatGPT's suggestions to rank. It
+  names `ui://lemma/apps/<slug>`, whose CSP lets the view frame exactly that
+  app's host (`frameDomains`) and reach nothing else. Listed for the pod's
+  ready apps the person may read, on a deployment that serves app hosts, up to
+  twenty.
+- **`lemma_app_session`**, which only a view can call (`visibility: ["app"]`),
+  mints the framed app's token: a delegated token for the pod's own agent,
+  `session_id` `mcp:<connection>`, no actor name (any other name demotes it to
+  a named workload with only its own grants). It is the person, in this pod:
+  their roles and row-level security, refused for any other pod, destructive
+  actions gated. It travels in the result's `_meta`, which hosts give the view
+  and keep from the model; ChatGPT shows the model `structuredContent` too.
+- **`lemma_app_access`**, also view-only, mints a private app's one-minute
+  ticket from the connection instead of a Lemma session, bound to the person,
+  the app's origin, a fresh delegated session and the connection. Redeemed with
+  `embedded: true`, it sets a `SameSite=None; Partitioned` cookie — sent from
+  the frame, kept to that embedding. Only a connection's ticket earns that
+  cookie, and a connection's ticket earns no other.
 
-**How a person meets it.** Tools are listed per pod, so each app can be its own
-tool ("Open Customers"), described from the app's own description, for the
-model to pick and for ChatGPT's suggestions to rank. It opens inline with
-Expand to full screen, and on ChatGPT, behind a feature check, as a sidebar app
-(`openai/ui`). The SDK's existing compose bridge, which fills Lemma's chat
-composer, maps onto `ui/message` and `ui/update-model-context`, so an app talks
-to the conversation with no change of its own.
+The SDK (`lemma-typescript/src/embedded.ts`) finds itself framed by the
+`lemma_embed=mcp` mark the view adds to the app's address, remembers it for the
+frame's life, and asks the view for a token before its first request, again a
+minute before the token expires, and once more on a 401. The private app's
+sign-in page asks the view for its ticket the same way. The view answers only
+the frame it made, and only at that app's origin.
 
-**Probed in ChatGPT, 2026-10-06: it works.** A throwaway branch
-(`probe/chatgpt-app-frame`, not merged) added an open-app tool, an app-only
-tool minting the delegated token, and a view framing a real deployed pod app
-twice — once from the MCP server's own host, once from another site. Run from
-ChatGPT's desktop app (host `chatgpt` 26.930) through a developer-mode
-connector, with a `pod:read pod:write` grant:
+**What it deliberately does not do.**
 
-- **ChatGPT framed both origins.** It echoed both in its sandbox's
-  `frameDomains`, with no CSP violation — the same-registrable-domain rule was
-  not enforced for a developer-mode connector, so expect it only at review.
-- **The frame is a normal, same-origin-capable page.** Its own origin, secure
-  context, `localStorage`, `sessionStorage` and IndexedDB all worked, and
-  `SameSite=None` cookies (partitioned or not) were kept; `SameSite=Lax` ones
-  were not, as expected.
-- **The token did everything an app needs.** Read records (200), wrote one
-  (201), another pod refused (403), the datastore WebSocket opened with
-  `?access_token`, and the browser SDK loaded and listed rows with `token`.
-  Both frames reported within about three seconds.
-- **ChatGPT's host offers** `serverTools`, `openLinks`, `updateModelContext`,
-  `message`, and `inline`/`fullscreen` display modes, plus its own
-  `openai/modelContext`, `openai/files` and `openai/message` extensions.
+- **A read-only connection is shown no apps.** The token a framed app holds is
+  not narrowed by the connection's scopes — the `scope` claim is enforced only
+  for named workloads (`workload_authority.py`), and widening that would also
+  change how the pod's agent runs functions — so apps are offered only where
+  the person allowed changes. A read-only connection still has every view.
+- **Compose is not offered.** An app's "ask in the conversation"
+  (`composeInConversation`) fills the composer and never sends. Neither host
+  documents a way to offer text without sending it (`ui/message` sends;
+  ChatGPT's `openai/message` only adds a target), so the view does not answer
+  and the SDK reports the offer as not taken.
+- **`GET /organizations` answers** for the token, listing the person's own
+  organizations. Organization-level actions are refused. The same app opened
+  in Lemma holds the person's whole session, so this is no wider than what it
+  already sees; left as it is.
 
-What the probe and its local run also showed:
+**How access ends.** A framed private app's cookie is re-checked at most every
+`app_access_cache_ttl_seconds`, and the check now asks whether the connection
+still stands, so revoking it, a replay ending it, the pod's deletion or its age
+ceiling all end the app's files within that window. The API token is an
+ordinary access token and lasts until it expires (the core's access-token
+lifetime); every new one is minted only for a live connection.
 
-- **The actor name must stay empty.** A delegated token counts as the pod's
-  own agent only if its actor name is empty or `pod_default`; any other name —
-  the client's, for attribution — demotes it to a named workload with only its
-  own grants, and reads fail. Attribute through the session claim
-  (`mcp:<connection id>`) instead.
-- **`GET /organizations` answers** for such a token. Organization-level
-  *actions* are refused, but that listing is not confined to the pod; close it
-  before shipping.
-- **The pod app's "Remix on Lemma" badge shows inside the frame**; an embedded
-  app should not carry it.
-- Not covered: chatgpt.com in a browser (the run was the desktop app), Claude
-  (still restricts `frameDomains`), a private app (its files are still behind
-  the cookie), and a read-only connection (gap 1 above, expected to write).
+**Apps built before this SDK.** A no-build app loads the SDK from
+`/public/sdk/lemma-client.js` and is framed-ready as soon as this deploys. A Vite
+app bundles the SDK it was built with and needs a rebuild to ask the view for
+its token.
+
+**Probed in ChatGPT first, 2026-10-06.** A throwaway branch framed a real pod
+app in ChatGPT's desktop app through a developer-mode connector before any of
+this was written. ChatGPT framed both the MCP server's own host and another
+site (the same-registrable-domain rule is for review, not enforced in
+developer mode); the frame had its own origin, `localStorage`, IndexedDB, and
+kept `SameSite=None` cookies; the delegated token read and wrote records, was
+refused for another pod, opened the datastore WebSocket and drove the SDK.
+ChatGPT's host offered `serverTools`, `openLinks`, `updateModelContext`,
+`message`, inline and fullscreen. Claude still restricts `frameDomains`.
 
 ### c. Packaging Lemma as one plugin
 

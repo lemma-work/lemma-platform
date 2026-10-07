@@ -265,6 +265,32 @@ rights than the person who asked.
 > view and the payloads it draws (`mcp_access/tests/e2e`,
 > `agent/tests/unit/test_pod_mcp_views.py`).
 
+### PS-ACCESS-043 — A connected tool opens a pod's app, and the person uses it there as themselves
+**Status:** manual
+
+- When a connected tool lists what it can do, the system shall offer each of
+  the pod's apps the person can open.
+- Where the person allowed the tool to read only, the system shall not offer
+  the pod's apps.
+- Where the tool can show interactive views, when the person opens an app, the
+  system shall show the app itself.
+- Where the tool cannot show interactive views, when the person opens an app,
+  the system shall give the tool the app's address.
+- While an app is open in the tool, the system shall let it read and change
+  only what the person may read and change in that pod.
+- While an app is open in the tool, the system shall refuse it anything in
+  another pod.
+- When the person opens a private app in the tool, the system shall open it
+  only if it is shared with them.
+- When the tool is disconnected, the system shall stop serving a private app's
+  files to it within a minute.
+- The system shall not show the tool's model the app's credentials.
+
+> **Manual:** the app runs framed in ChatGPT's own page, so proving it needs
+> ChatGPT. The module suites cover the tools, the view, the token's pod
+> boundary and the private app's cookie (`mcp_access/tests/e2e`,
+> `apps/tests/e2e/test_app_access_embedded_e2e.py`).
+
 ## Capability: Understand and audit access
 
 ### PS-ACCESS-030 — A person can see who can reach a resource
