@@ -1,4 +1,4 @@
-"""A webhook schedule's filter, asked as a decision, through the real task.
+"""A schedule's filter, asked as a decision, through the real task.
 
 The e2e stand-in model answers every yes/no with no, so every event here is
 skipped -- which is the half of PS-SCHED-012 this suite can prove without a
@@ -16,8 +16,11 @@ from pydantic import SecretStr
 from sqlalchemy import func, select
 from streaq import StreaqRetry
 
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.request_context import bind_job_context
 from app.modules.decisions.config import decisions_settings
+from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.schedule import ScheduleRunStatus
 from app.modules.schedule.handlers.schedule_consumer import (
     FILTER_MAX_TRIES,
@@ -25,12 +28,19 @@ from app.modules.schedule.handlers.schedule_consumer import (
 )
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
+from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
+from app.modules.schedule.repositories.schedule_run_repository import (
+    FILTER_NOT_CONFIGURED,
+)
+from app.modules.schedule.services.run_outcome_service import ScheduleRunOutcomeService
 from app.modules.schedule.tests.e2e.test_schedule_e2e import (
     _create_agent,
+    _create_datastore_table,
     _create_pod,
     _create_schedule,
     _seed_connector_trigger,
 )
+from app.modules.test_support.e2e.function_helpers import seed_user
 from app.modules.usage.infrastructure.models import UsageRecord
 
 pytestmark = pytest.mark.e2e
@@ -167,6 +177,100 @@ async def test_an_unanswered_filter_is_retried_then_dead_lettered_not_sent_on(
     await db_session.refresh(stored)
     assert stored.is_active is True
     assert stored.consecutive_failures == 0, "an outage is not the schedule's failure"
+
+
+async def test_a_filter_keeps_working_on_the_model_without_a_typesafe_key(
+    authenticated_client, fixed_test_org, db_session, monkeypatch
+):
+    """Typesafe chosen but its key never set: the deployment's own model
+    answers, rather than every filtered schedule dead-lettering."""
+    pod_id, schedule = await _webhook_schedule(
+        authenticated_client, fixed_test_org, db_session
+    )
+    monkeypatch.setattr(decisions_settings, "decision_provider", "typesafe")
+    monkeypatch.setattr(decisions_settings, "typesafe_api_key", None)
+
+    await _judge(schedule, "evt-no-typesafe-1")
+
+    runs = (
+        await authenticated_client.get(
+            f"/pods/{pod_id}/schedules/{schedule['id']}/runs",
+            params={"skipped": True},
+        )
+    ).json()["items"]
+    assert [run["status"] for run in runs] == [ScheduleRunStatus.FILTERED.value]
+    assert runs[0]["llm_output"]["_decision"]["provider"] == "model"
+
+
+async def test_a_deployment_without_a_provider_is_not_counted_against_a_schedule(
+    authenticated_client, fixed_test_org, db_session
+):
+    """No decision provider at all is the operator's to fix, not any owner's:
+    counting it would switch off every filtered schedule at once. A filter that
+    is the schedule's own problem is still counted."""
+    _pod_id, created = await _webhook_schedule(
+        authenticated_client, fixed_test_org, db_session
+    )
+    uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+    for index in range(schedule_settings.schedule_max_consecutive_failures + 1):
+        async with uow_factory() as uow:
+            schedule = await ScheduleRepository(uow=uow).get(UUID(created["id"]))
+            await ScheduleRunOutcomeService(uow).record_pre_dispatch_failure(
+                schedule,
+                source_event_id=f"evt-unconfigured-{index}",
+                error_type=FILTER_NOT_CONFIGURED,
+            )
+
+    stored = await db_session.get(Schedule, UUID(created["id"]))
+    await db_session.refresh(stored)
+    assert stored.is_active is True
+    assert stored.consecutive_failures == 0
+
+    async with uow_factory() as uow:
+        schedule = await ScheduleRepository(uow=uow).get(UUID(created["id"]))
+        await ScheduleRunOutcomeService(uow).record_pre_dispatch_failure(
+            schedule,
+            source_event_id="evt-invalid-1",
+            error_type="ScheduleFilterInvalid",
+        )
+    await db_session.refresh(stored)
+    assert stored.consecutive_failures == 1
+
+
+async def test_a_table_change_is_judged_as_the_owner_of_the_row(
+    authenticated_client, fixed_test_org, db_session
+):
+    """Table changes are judged by this same task now, not inline on the
+    stream, and run as the changed row's owner (PS-SCHED-011)."""
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    agent = await _create_agent(authenticated_client, pod_id)
+    table = f"signups_{uuid4().hex[:8]}"
+    await _create_datastore_table(authenticated_client, pod_id, table)
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type="DATASTORE",
+        agent_name=agent["name"],
+        config={"table_name": table, "operations": ["INSERT"]},
+        filter_instruction="Only signups from large companies",
+    )
+    row_owner = await seed_user(db_session)
+
+    await handle_llm_filter_task.fn(
+        payload={"id": "r1", "source": "web"},
+        metadata={"table_name": table, "record_id": "r1", "operation": "INSERT"},
+        schedule_id=schedule["id"],
+        source_event_id="evt-row-1",
+        user_id=str(row_owner.id),
+    )
+
+    run = await db_session.scalar(
+        select(ScheduleRun).where(ScheduleRun.schedule_id == UUID(schedule["id"]))
+    )
+    assert run is not None
+    assert run.status == ScheduleRunStatus.FILTERED.value
+    assert run.user_id == row_owner.id
+    assert run.llm_output["should_proceed"] is False
 
 
 async def test_a_time_schedule_refuses_a_new_filter_but_keeps_an_old_one_editable(

@@ -30,6 +30,7 @@ from app.modules.schedule.infrastructure.adapters.decision_filter import (
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.repositories.schedule_run_repository import (
+    FILTER_NOT_CONFIGURED,
     FILTER_UNAVAILABLE,
     ScheduleRunRepository,
 )
@@ -54,8 +55,15 @@ async def handle_llm_filter_task(
     metadata: dict[str, Any],
     schedule_id: str | None = None,
     source_event_id: str | None = None,
+    user_id: str | None = None,
 ) -> None:
-    """Judge a webhook event against its schedule's filter, then fire or record the skip.
+    """Judge an event against its schedule's filter, then fire or record the skip.
+
+    Webhook events and table changes both come here, so a filter gets the same
+    retries, dead letter and redelivery guard whichever way its event arrived,
+    and no event stream waits on a model. `user_id` is the changed row's owner
+    for a table change, whose authority the fire runs with (PS-SCHED-011); a
+    webhook has none, and its schedule's owner runs it.
 
     Loads the schedule in a short-lived DB session, then asks the decision with
     no DB session held -- it can take seconds and must not hold a pooled
@@ -90,13 +98,17 @@ async def handle_llm_filter_task(
         )
         return
 
+    owner = UUID(user_id) if user_id else schedule.user_id
+    # Known and accepted: two deliveries of one event racing each other can
+    # both pass the check above and both be judged, so the decision may be
+    # billed twice. Only one row is kept -- the run is claimed per event, and a
+    # second skip is ON CONFLICT DO NOTHING. The window is the length of one
+    # decision, and closing it would mean holding a lock across that call.
     try:
         processed = await create_schedule_processor().process_event(
             schedule=schedule,
             payload=payload,
-            # Only webhook fires are deferred to this queue, and they carry no row
-            # owner, so the schedule owner is the authoritative owner here.
-            user_id=schedule.user_id,
+            user_id=owner,
             metadata=metadata,
             source_event_id=source_event_id,
         )
@@ -109,6 +121,7 @@ async def handle_llm_filter_task(
             schedule,
             source_event_id=source_event_id,
             error_type=failure or FILTER_UNAVAILABLE,
+            user_id=owner,
             payload=payload,
             metadata=metadata,
         )
@@ -125,6 +138,7 @@ async def handle_llm_filter_task(
                 if isinstance(exc, UsageLimitExceededError)
                 else "ScheduleFilterInvalid"
             ),
+            user_id=owner,
             payload=payload,
             metadata=metadata,
         )
@@ -135,7 +149,7 @@ async def handle_llm_filter_task(
             await ScheduleRunOutcomeService(uow).record_filtered(
                 schedule,
                 source_event_id=source_event_id,
-                user_id=schedule.user_id,
+                user_id=owner,
                 metadata=metadata,
                 llm_output=processed.llm_output,
             )
@@ -151,7 +165,7 @@ def _unretryable(exc: DecisionUnavailableError | DecisionLimitedError) -> str | 
         if exc.reason == "token_limit":
             return "ScheduleFilterEventTooLarge"
         if exc.reason == "not_configured":
-            return "ScheduleFilterNotConfigured"
+            return FILTER_NOT_CONFIGURED
     return None
 
 
@@ -173,6 +187,7 @@ async def _dead_letter(
     *,
     source_event_id: str,
     error_type: str,
+    user_id: UUID,
     payload: Mapping[str, object],
     metadata: Mapping[str, object],
 ) -> None:
@@ -188,6 +203,7 @@ async def _dead_letter(
             schedule,
             source_event_id=source_event_id,
             error_type=error_type,
+            user_id=user_id,
             payload=payload,
             metadata=metadata,
         )

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -26,6 +26,12 @@ _BREAKER_SCAN_LIMIT = BREAKER_STREAK_SCAN_LIMIT
 #: The error a filtered fire is dead-lettered with when no decision provider
 #: answered after every retry. An outage, not the schedule's failure.
 FILTER_UNAVAILABLE = "ScheduleFilterUnavailable"
+#: ... and when the deployment has no decision provider to ask at all.
+FILTER_NOT_CONFIGURED = "ScheduleFilterNotConfigured"
+#: Filter failures that belong to the deployment rather than to any schedule:
+#: the breaker passes over them. A spent budget, an event too large to judge
+#: and an invalid filter are the pod's or the schedule's, and are counted.
+DEPLOYMENT_FILTER_FAILURES = (FILTER_UNAVAILABLE, FILTER_NOT_CONFIGURED)
 
 
 class ScheduleRunRepository:
@@ -325,8 +331,11 @@ class ScheduleRunRepository:
         FILTERED run is an event the filter skipped -- not a failure, and not a
         success either; left in the scan, a schedule that skips most events
         would push its real failures out of the window. A fire dead-lettered
-        because no decision provider answered is an outage of this deployment,
-        and counting it would deactivate every filtered schedule at once.
+        because no decision provider answered, or because the deployment has
+        none, is the deployment's failure, not the schedule's: no owner can fix
+        it, and counting it would deactivate every filtered schedule at once.
+        The operator hears of it instead, from
+        ``schedule.filter.dead_lettered.degraded``.
         """
         rows = (
             await self.session.execute(
@@ -335,7 +344,10 @@ class ScheduleRunRepository:
                     ScheduleRun.schedule_id == schedule_id,
                     ScheduleRun.completed_at.is_not(None),
                     ScheduleRun.status != ScheduleRunStatus.FILTERED.value,
-                    ScheduleRun.error_type.is_distinct_from(FILTER_UNAVAILABLE),
+                    or_(
+                        ScheduleRun.error_type.is_(None),
+                        ScheduleRun.error_type.not_in(DEPLOYMENT_FILTER_FAILURES),
+                    ),
                 )
                 .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())
                 .limit(_BREAKER_SCAN_LIMIT)

@@ -149,9 +149,15 @@ question -- `should_proceed`, a yes or no -- together with any closed questions
 the schedule's `filter_output_schema` declares (free-text and open-ended fields
 are left out and logged). The answers become the fire's `llm_output`, with a
 `_decision` block naming the provider, the model, whether it could not tell, and
-each answer's confidence. Webhook events are judged in the `handle_llm_filter_task`
-streaq task; table-change events inline in the datastore consumer, after their
-`when` conditions.
+each answer's confidence. Every filter is judged in the `handle_llm_filter_task`
+streaq task, whichever way its event arrived: a webhook event straight from the
+webhook handler, a table change from the datastore consumer once its `when`
+conditions match, carrying the changed row's owner so the fire runs as them.
+No event stream waits on a model, and both paths get the outcomes below.
+
+The provider is the deployment's (`DECISION_PROVIDER`); with no Typesafe key
+it is the deployment's own model, so filters need nothing beyond a configured
+model.
 
 | Outcome | Recorded as |
 | --- | --- |
@@ -160,10 +166,15 @@ streaq task; table-change events inline in the datastore consumer, after their
 | Provider unavailable or rate-limited | retried with backoff (up to six tries), then `DEAD_LETTERED` as `ScheduleFilterUnavailable` -- never `FAILED`, which run recovery would send past the filter |
 | Spend limit, event too large, no provider, invalid questions | `DEAD_LETTERED` at once (`ScheduleFilterQuotaExhausted`, `ScheduleFilterEventTooLarge`, `ScheduleFilterNotConfigured`, `ScheduleFilterInvalid`) |
 
-A redelivered event that already has a run is not judged again. The failure
-breaker passes over `FILTERED` runs and `ScheduleFilterUnavailable` dead letters:
-a skip is not a failure, and a provider outage is the deployment's, not the
-schedule's. The run list takes `status` and `skipped` filters; partial indexes
+A redelivered event that already has a run is not judged again. (Two
+deliveries racing each other can both be judged, and billed, within the length
+of one decision; only one run is kept.) The failure breaker passes over
+`FILTERED` runs and over `ScheduleFilterUnavailable` and
+`ScheduleFilterNotConfigured` dead letters: a skip is not a failure, and a
+provider outage or a deployment with no provider is the operator's to fix, not
+the schedule's -- counting either would switch off every filtered schedule at
+once. A spent budget, an event too large to judge and an invalid filter are the
+pod's or the schedule's, and are counted. The run list takes `status` and `skipped` filters; partial indexes
 on `status <> 'FILTERED'` keep the breaker's streak and a history without skips
 from walking past them. A `TIME` schedule refuses a new filter -- no event ever
 reaches it -- while one saved before stays editable and can be cleared.

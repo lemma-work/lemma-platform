@@ -257,5 +257,10 @@ class ScheduleFilterTaskQueue(ABC):
         payload: Dict[str, Any],
         metadata: Dict[str, Any],
         source_event_id: str,
+        user_id: UUID | None = None,
     ) -> None:
-        """Enqueue background LLM filter work for a schedule."""
+        """Enqueue background LLM filter work for a schedule.
+
+        `user_id` is whose authority the fire runs with: the changed row's
+        owner for a table change, or None for the schedule owner.
+        """

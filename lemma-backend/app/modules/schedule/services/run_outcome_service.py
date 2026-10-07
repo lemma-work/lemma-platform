@@ -116,6 +116,7 @@ class ScheduleRunOutcomeService:
         *,
         source_event_id: str,
         error_type: str,
+        user_id: UUID | None = None,
         payload: Mapping[str, object] | None = None,
         metadata: Mapping[str, object] | None = None,
     ) -> bool:
@@ -143,7 +144,9 @@ class ScheduleRunOutcomeService:
         """
         run = await self.run_repository.claim(
             schedule_id=schedule.id,
-            user_id=schedule.user_id,
+            # A table change runs as the changed row's owner, and so does a
+            # retry of it by hand.
+            user_id=user_id or schedule.user_id,
             source_event_id=source_event_id,
             target_kind=_target_kind_of(schedule),
             payload=dict(payload or {}),

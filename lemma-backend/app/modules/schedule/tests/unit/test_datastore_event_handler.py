@@ -276,11 +276,10 @@ def _repository_on(journal: _Journal) -> AsyncMock:
 async def test_the_connection_is_handed_back_before_each_schedule_is_processed():
     """Per iteration, not once before the loop.
 
-    A schedule carrying a `filter_instruction` runs an LLM inference inline, so
-    holding the transaction across it keeps a pooled connection idle for the
-    length of every call in the loop. One release before the loop would not do:
+    Holding the transaction across the loop keeps a pooled connection idle
+    across every schedule's awaits. One release before the loop would not do:
     the FILTERED/TRIGGERED fire row written for schedule N re-dirties the
-    session before schedule N+1's inference.
+    session before schedule N+1 is processed.
 
     The property is an ordering, so the assertion is on the sequence. A commit
     *count* would pass just as well with the commit in the wrong place.
@@ -329,16 +328,25 @@ async def test_the_connection_is_handed_back_before_each_schedule_is_processed()
     ]
 
 
+class _FilterQueue:
+    """The filter task's queue: what was handed to it, and as whom."""
+
+    def __init__(self) -> None:
+        self.enqueued: list[dict] = []
+
+    async def enqueue(self, **kwargs) -> None:
+        self.enqueued.append(kwargs)
+
+
 @pytest.mark.asyncio
-async def test_a_skip_the_filter_judged_is_recorded_as_a_run_with_its_answers():
-    """PS-SCHED-012: a judged skip is told apart from a row that never matched.
-    It is a run of its own, carrying the filter's answers, rather than only a
-    `last_fire_status` on the schedule."""
+async def test_a_filtered_schedule_is_judged_by_the_filter_task_as_the_row_owner():
+    """PS-SCHED-012 and PS-SCHED-011 together: a table change with a filter is
+    not judged inline on the event stream. It goes to the task a webhook's
+    filter goes to -- retried, dead-lettered, redelivery-safe, and recording a
+    skip as a run with its answers -- carrying the row owner it runs as."""
     repo = AsyncMock()
     processor = AsyncMock()
-    outcomes = AsyncMock()
-    answers = {"should_proceed": False, "_decision": {"provider": "model"}}
-    processor.process_event.return_value = ProcessedEvent("filtered", answers)
+    queue = _FilterQueue()
     schedule = ScheduleEntity(
         id=uuid4(),
         user_id=uuid4(),
@@ -348,7 +356,7 @@ async def test_a_skip_the_filter_judged_is_recorded_as_a_run_with_its_answers():
         filter_instruction="Only VIP signups",
     )
     repo.find_by_pod_table_event.return_value = [schedule]
-    handler = DatastoreEventHandler(repo, processor, outcomes=outcomes)
+    handler = DatastoreEventHandler(repo, processor, filter_task_queue=queue)
     owner = uuid4()
     event = DatastoreRecordEvent.create(
         pod_id=schedule.pod_id,
@@ -363,8 +371,10 @@ async def test_a_skip_the_filter_judged_is_recorded_as_a_run_with_its_answers():
     fired = await handler.handle_datastore_event(event)
 
     assert fired == []
-    outcomes.record_filtered.assert_awaited_once()
-    kwargs = outcomes.record_filtered.await_args.kwargs
-    assert kwargs["llm_output"] == answers
-    assert kwargs["user_id"] == owner
-    assert kwargs["source_event_id"] == str(event.event_id)
+    processor.process_event.assert_not_called()
+    [handed] = queue.enqueued
+    assert handed["schedule_id"] == schedule.id
+    assert handed["user_id"] == owner
+    assert handed["payload"] == {"id": "r1"}
+    assert handed["source_event_id"] == str(event.event_id)
+    assert handed["metadata"]["record_id"] == "r1"
