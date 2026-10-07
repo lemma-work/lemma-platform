@@ -204,6 +204,7 @@ class ResumeToolReturnBuilder:
                     record_session_approvals,
                     conversation_id=conversation.id,
                     agent_id=conversation.agent_id,
+                    pod_id=conversation.pod_id,
                     tool_args=tool_args,
                     user_id=user_id,
                 )

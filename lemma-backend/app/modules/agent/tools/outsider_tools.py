@@ -45,6 +45,8 @@ OUTSIDER_TOOLS_WITHHELD: dict[str, str] = {
     "pod_write_file": "writes; a stranger's run is read-only",
     "pod_edit_file": "writes; a stranger's run is read-only",
     "list_pod_members": "the directory is not the stranger's to read",
+    "list_teammates": "lists the owner's other pods, which are not the stranger's to see",
+    "ask_teammate": "another pod would answer with the owner's access there",
 }
 
 

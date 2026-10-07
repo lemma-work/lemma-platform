@@ -2504,6 +2504,76 @@
         "title": "ApprovalDecisionResponse",
         "type": "object"
       },
+      "AskablePodListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AskablePodResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AskablePodListResponse",
+        "type": "object"
+      },
+      "AskablePodResponse": {
+        "properties": {
+          "connected": {
+            "description": "It linked itself to this pod, so it can be asked with nobody present.",
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the pod is for.",
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "through_you": {
+            "description": "The caller is in it too, so it can be asked as them.",
+            "title": "Through You",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pod_id",
+          "name",
+          "through_you",
+          "connected"
+        ],
+        "title": "AskablePodResponse",
+        "type": "object"
+      },
       "AuthConfigCreateSchema": {
         "properties": {
           "config": {
@@ -3236,6 +3306,20 @@
           "type"
         ],
         "title": "ColumnSchema",
+        "type": "object"
+      },
+      "ConnectPodRequest": {
+        "properties": {
+          "shares": {
+            "description": "What the asking pod may read here, past what is Public.",
+            "items": {
+              "$ref": "#/components/schemas/SharedResourceBody"
+            },
+            "title": "Shares",
+            "type": "array"
+          }
+        },
+        "title": "ConnectPodRequest",
         "type": "object"
       },
       "ConnectRequestInitiateSchema": {
@@ -12044,6 +12128,96 @@
         "title": "PodJoinRequestStatus",
         "type": "string"
       },
+      "PodLinkListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PodLinkResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "PodLinkListResponse",
+        "type": "object"
+      },
+      "PodLinkResponse": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pod_id": {
+            "description": "The other pod.",
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "shared": {
+            "items": {
+              "$ref": "#/components/schemas/SharedResourceBody"
+            },
+            "title": "Shared",
+            "type": "array"
+          },
+          "steward_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steward Name"
+          },
+          "steward_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who connected it, and looks after it.",
+            "title": "Steward User Id"
+          }
+        },
+        "required": [
+          "pod_id",
+          "name",
+          "shared"
+        ],
+        "title": "PodLinkResponse",
+        "type": "object"
+      },
       "PodListResponse": {
         "description": "Pod list response.",
         "properties": {
@@ -14273,6 +14447,33 @@
           "profile_id"
         ],
         "title": "SetOrganizationDefaultRuntimeRequest",
+        "type": "object"
+      },
+      "SharedResourceBody": {
+        "properties": {
+          "permission_ids": {
+            "description": "Reading only: datastore.table.read and datastore.record.read for a table, folder.read for a folder.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Permission Ids",
+            "type": "array"
+          },
+          "resource_name": {
+            "description": "The table's name, or the folder's path.",
+            "title": "Resource Name",
+            "type": "string"
+          },
+          "resource_type": {
+            "$ref": "#/components/schemas/ResourceType"
+          }
+        },
+        "required": [
+          "resource_type",
+          "resource_name",
+          "permission_ids"
+        ],
+        "title": "SharedResourceBody",
         "type": "object"
       },
       "SignInOutcomeResponse": {
@@ -25434,6 +25635,57 @@
         }
       }
     },
+    "/pods/{pod_id}/askable-pods": {
+      "get": {
+        "description": "The other pods this pod's assistant can ask: those the caller is also a member of, which it asks as the caller, and those connected to this pod, which it can ask with nobody present.",
+        "operationId": "agent.askable_pod.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskablePodListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pods This Pod Can Ask",
+        "tags": [
+          "agent_asks"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.askable_pod",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/pods/{pod_id}/available-surfaces": {
       "get": {
         "description": "The connectable-surface catalog: every surface platform with its connector,\nsupported credential modes, the schema to connect an account, and whether this\npod's org can still claim the platform's Lemma-managed bot/number. Otherwise\nplatform-level \u2014 no surface need exist.",
@@ -32696,6 +32948,209 @@
           "resource": "pod.permissions",
           "result": "entity",
           "verb": "me"
+        }
+      }
+    },
+    "/pods/{pod_id}/pod-links": {
+      "get": {
+        "description": "The other pods connected to this one: each may ask this pod's assistant with nobody present, and read what is Public here plus what this pod shared with it.",
+        "operationId": "agent.pod_link.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodLinkListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pods That Can Ask This Pod",
+        "tags": [
+          "agent_asks"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.pod_link",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/pod-links/{asking_pod_id}": {
+      "delete": {
+        "description": "Stop another pod asking this one, and take back what it was shared.",
+        "operationId": "agent.pod_link.disconnect",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asking_pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asking Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "That pod is not connected to this one"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disconnect A Pod From This One",
+        "tags": [
+          "agent_asks"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.pod_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.pod_link",
+          "result": "void",
+          "verb": "disconnect"
+        }
+      },
+      "put": {
+        "description": "Let another pod in this organization ask this one, sharing the tables and folders named for reading. Connecting again replaces what is shared. Needs pod.member.manage here, and membership of the other pod; the caller looks after the link.",
+        "operationId": "agent.pod_link.connect",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asking_pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asking Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectPodRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Something named can't be shared, or not for that"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The two pods can't be connected"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Connect A Pod To This One",
+        "tags": [
+          "agent_asks"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.pod_link"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.pod_link",
+          "result": "void",
+          "verb": "connect"
         }
       }
     },

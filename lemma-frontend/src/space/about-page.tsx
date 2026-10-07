@@ -17,12 +17,13 @@ import { AgentMark } from "./agent-mark";
 import { WhatItRemembers } from "./what-it-remembers";
 import { sayHired } from "./teammates";
 import { TeammateFace } from "./teammate-face";
+import { AskedBy, ConnectTeammate } from "./connect-teammate";
 import { DeleteTeammate } from "./delete-teammate";
 
 /** Where a link into About lands. Each is a section of the one page. */
-export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "model";
+export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "works-with" | "model";
 
-const SECTIONS: readonly string[] = ["people", "channels", "skills", "memory", "schedules", "agents", "model"] satisfies AboutSection[];
+const SECTIONS: readonly string[] = ["people", "channels", "skills", "memory", "schedules", "agents", "works-with", "model"] satisfies AboutSection[];
 
 /** Whether a word from an address is one of About's sections. */
 export function isAboutSection(value: string | null | undefined): value is AboutSection {
@@ -39,7 +40,7 @@ export function isAboutSection(value: string | null | undefined): value is About
  *  is the same working component Settings stacked before — nothing here is a
  *  second copy of how a schedule or a channel works. What is left in
  *  Settings is about the space rather than the teammate. */
-export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onAskFor, onOpenRun, onOpenConversation, onFile, onSettings, onDeleted }: {
+export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onOpenTeammate, onAskFor, onOpenRun, onOpenConversation, onFile, onSettings, onDeleted }: {
     pod: Pod;
     orgId: string | null;
     orgName: string;
@@ -51,6 +52,8 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
     /** Start a new conversation with this teammate. */
     onAsk: () => void;
     onOpenAgent: (name: string) => void;
+    /** Go to another teammate. */
+    onOpenTeammate: (podId: string) => void;
     /** Put words in the composer for the teammate to act on. */
     onAskFor: (text: string) => void;
     onOpenRun: (runId: string, label: string) => void;
@@ -61,6 +64,7 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
     onDeleted: () => void;
 }) {
     const page = useRef<HTMLDivElement>(null);
+    const [connecting, setConnecting] = useState(false);
     useEffect(() => {
         if (!section) return;
         page.current?.querySelector(`[data-about="${section}"]`)?.scrollIntoView({ block: "start" });
@@ -113,6 +117,17 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
                     <AgentList pod={pod} onOpen={onOpenAgent} />
                 </Section>
 
+                <Section
+                    id="works-with"
+                    title="Works with"
+                    note={"Through you: " + pod.name + " asks with your access there, and checks with you first. Connected: it asks with nobody present, reading what was shared."}
+                    action={<button className="aboutpage__action" onClick={() => setConnecting(true)}><PlusIcon size={14} /> Let a teammate ask {pod.name}</button>}
+                >
+                    <WorksWith pod={pod} onOpen={onOpenTeammate} />
+                    <AskedBy pod={pod} onOpen={onOpenTeammate} />
+                </Section>
+                {connecting && <ConnectTeammate pod={pod} onClose={() => setConnecting(false)} />}
+
                 <Section id="model" title="Runs on" note={"What " + pod.name + " thinks with, unless an agent names its own."}>
                     <RunsOn podId={pod.id} orgId={pod.orgId} />
                 </Section>
@@ -141,6 +156,7 @@ const JUMPS: { id: AboutSection; label: string }[] = [
     { id: "memory", label: "Remembers" },
     { id: "schedules", label: "Standing work" },
     { id: "agents", label: "Hands work to" },
+    { id: "works-with", label: "Works with" },
     { id: "model", label: "Runs on" },
 ];
 
@@ -309,6 +325,48 @@ function AgentList({ pod, onOpen }: { pod: Pod; onOpen: (name: string) => void }
                     </li>
                 );
             })}
+        </ul>
+    );
+}
+
+/** The other teammates this one can ask: through you, or connected.
+ *
+ *  Partly yours: through you means you are in both, so someone else opening
+ *  this page sees their own. The same list the teammate reads before it asks,
+ *  so nothing here is something it would be refused. */
+function WorksWith({ pod, onOpen }: { pod: Pod; onOpen: (podId: string) => void }) {
+    const askable = useQuery({
+        queryKey: ["askable-pods", pod.id],
+        queryFn: () => source.askablePods(pod.id),
+        staleTime: 60_000,
+    });
+    if (askable.isPending) return <p className="aboutpage__quiet">Loading…</p>;
+    if (askable.isError) {
+        return (
+            <p className="aboutpage__quiet" role="alert">
+                Couldn’t load who {pod.name} can ask.{" "}
+                <button className="linkish" onClick={() => void askable.refetch()}>Try again</button>
+            </p>
+        );
+    }
+    if (askable.data.length === 0) {
+        return <p className="aboutpage__quiet">Nobody yet. {pod.name} can ask any other teammate you’re in, or one that lets it.</p>;
+    }
+    return (
+        <ul className="agentlist">
+            {askable.data.map((other) => (
+                <li key={other.id}>
+                    <button className="agentlist__row" onClick={() => onOpen(other.id)}>
+                        <TeammateFace pod={other} size={32} />
+                        <span className="agentlist__body">
+                            <span className="agentlist__title"><b>{other.name}</b></span>
+                            <small>{other.description || "No job written down yet."}</small>
+                        </span>
+                        <span className="agentlist__can">{[other.throughYou && "Through you", other.connected && "Connected"].filter(Boolean).join(" · ")}</span>
+                        <ChevronRightIcon size={16} />
+                    </button>
+                </li>
+            ))}
         </ul>
     );
 }

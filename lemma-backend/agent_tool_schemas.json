@@ -1,5 +1,146 @@
 [
   {
+    "tool_name": "ask_teammate",
+    "toolset": "MESSAGING",
+    "description": "Ask another pod to find something out or look something up.\n\nIt works on it in its own conversation -- with the person's access there\nwhen they are in both pods, or with what that pod shared over a link -- and\nits final message is the answer. A quick answer comes back in this call;\notherwise end your turn: the answer arrives here as a new message, and you\ncontinue from there. Don't wait or poll for it.",
+    "input_schema": {
+      "properties": {
+        "teammate": {
+          "description": "The pod's exact name, or its `teammate` id from list_teammates.",
+          "type": "string"
+        },
+        "request": {
+          "description": "Everything the other pod needs, in one self-contained message. It sees nothing of this conversation: name the record, the date, the customer, and say what answer you want back.",
+          "maxLength": 8000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "wait_seconds": {
+          "default": 20.0,
+          "description": "How long to wait here for a quick answer. If it takes longer, end your turn: the answer arrives in this conversation by itself.",
+          "maximum": 45.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "teammate",
+        "request"
+      ],
+      "title": "AskTeammateRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "teammate": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "teammate_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "conversation_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The other pod's conversation for this request."
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ANSWERED (read `answer`) / WORKING (end your turn; the answer comes here) / WAITING (it needs the person first) / UNFINISHED."
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "needs_approval": {
+          "default": false,
+          "type": "boolean"
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AskTeammateResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "ask_user",
     "toolset": "USER_INTERACTION",
     "description": "Ask the user one or more multiple-choice questions and wait for their answers.\n\nUse it for a decision you genuinely cannot infer. Each question carries 2-4\nconcrete options; mark the one you recommend. The run pauses, and answers come\nback in `answers` keyed by each question's `header`.\n\nPrefer this over a prose question whenever the answer is a choice among known\noptions. For free-form input, ask in prose and end your turn. Only ask when it\nchanges what you do next \u2014 otherwise take the obvious default and proceed.",
@@ -1255,6 +1396,95 @@
         }
       },
       "title": "SkillListResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "list_teammates",
+    "toolset": "MESSAGING",
+    "description": "List the other pods this one can ask: ones the person is also in, and\nones connected to this pod.\n\nEach is a teammate with its own job, tools and data; `ask_teammate` asks one.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "TeammateSummary": {
+          "properties": {
+            "teammate": {
+              "description": "Pass this verbatim as ask_teammate's `teammate`.",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "job": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "What this pod is for."
+            },
+            "reach": {
+              "description": "'through the person': asked as them, with their access there. 'connected': asked as this pod, over a link that pod's people made -- also when nobody is here.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "teammate",
+            "name"
+          ],
+          "title": "TeammateSummary",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "teammates": {
+          "items": {
+            "$ref": "#/$defs/TeammateSummary"
+          },
+          "type": "array"
+        }
+      },
+      "title": "ListTeammatesResponse",
       "type": "object"
     }
   },

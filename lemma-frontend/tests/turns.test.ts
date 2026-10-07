@@ -293,3 +293,51 @@ test("the running indicator does not repeat a call that has already landed", () 
     // A streamed call that has not landed yet still gets its live row.
     assert.equal(liveNote({ ...streaming, tool: { ...streaming.tool, toolCallId: "x2" } }, turn.notes).length, 1);
 });
+
+test("another teammate's answer is theirs, not the person's", () => {
+    const turns = buildTurns([
+        {
+            id: "m1",
+            role: "user",
+            kind: "TEXT",
+            sequence: 1,
+            text: "Billing answered your request:\n\nThe card expired.",
+            metadata: {
+                source: "pod_ask_answer",
+                asked_pod_id: "pod-b",
+                asked_pod_name: "Billing",
+                ask_conversation_id: "conv-b",
+            },
+        },
+    ] satisfies RawMessage[]);
+    const human = turns[0].human;
+    assert.deepEqual(human?.answeredBy, { name: "Billing", podId: "pod-b", conversationId: "conv-b" });
+    // The name is on the message; the line telling the model whose it is is not.
+    assert.equal(human?.text, "The card expired.");
+});
+
+test("a request another teammate put here is its, and says whether it asked for you", () => {
+    const asked = (mode?: string) =>
+        buildTurns([
+            {
+                id: "m1",
+                role: "user",
+                kind: "TEXT",
+                sequence: 1,
+                text: "Which invoices are overdue?",
+                metadata: {
+                    source: "pod_ask",
+                    ask_from_pod_id: "pod-a",
+                    ask_from_pod_name: "Support",
+                    ask_from_conversation_id: "conv-a",
+                    ...(mode ? { ask_mode: mode } : {}),
+                },
+            },
+        ] satisfies RawMessage[])[0].human;
+    assert.deepEqual(asked("AS_PERSON")?.askedBy, { name: "Support", podId: "pod-a", conversationId: "conv-a", forYou: true });
+    // Over a connection nobody here typed it, and it did not ask as anyone.
+    assert.equal(asked("LINK")?.askedBy?.forYou, false);
+    // Asks from before the mode was written down were all asked as the person.
+    assert.equal(asked()?.askedBy?.forYou, true);
+    assert.equal(asked("LINK")?.text, "Which invoices are overdue?");
+});

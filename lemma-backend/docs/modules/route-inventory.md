@@ -12,6 +12,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.archive` | Archive Agent Runtime Profile |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
 | DELETE | `/pods/{pod_id}/conversations/{conversation_id}/messages/{message_id}` | `agent.conversation.message.withdraw` | Withdraw Queued Conversation Message |
+| DELETE | `/pods/{pod_id}/pod-links/{asking_pod_id}` | `agent.pod_link.disconnect` | Disconnect A Pod From This One |
 | GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
 | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
 | GET | `/organizations/{organization_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |
@@ -19,11 +20,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/agents` | `agent.list` | List Agents |
 | GET | `/pods/{pod_id}/agents/{agent_name}` | `agent.get` | Get Agent |
 | GET | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.get` | Get Agent Resource Permissions |
+| GET | `/pods/{pod_id}/askable-pods` | `agent.askable_pod.list` | List Pods This Pod Can Ask |
 | GET | `/pods/{pod_id}/conversations` | `agent.conversation.list` | List Pod Agent Conversations |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.get` | Get Pod Conversation |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
+| GET | `/pods/{pod_id}/pod-links` | `agent.pod_link.list` | List Pods That Can Ask This Pod |
 | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
 | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.update` | Update Pod Conversation |
@@ -43,6 +46,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/tools/web-search` | `agent.tool.web_search` | Agent Web Search |
 | PUT | `/organizations/{organization_id}/agent-runtime/default` | `agent.runtime.default.set` | Set the Organization's Default Model |
 | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.replace` | Replace Agent Resource Permissions |
+| PUT | `/pods/{pod_id}/pod-links/{asking_pod_id}` | `agent.pod_link.connect` | Connect A Pod To This One |
 
 ## agent_surfaces
 

@@ -921,3 +921,53 @@ test("the pod agent's richer web shapes still read as before", () => {
     const fetch = call("web_fetch", { urls: ["https://a.example"] }, { pages: [{ url: "https://a.example", success: true, files: { markdown: "/w/a.md" } }] });
     assert.equal(fetch?.kind === "sources" && fetch.sources[0]?.savedAs, "/w/a.md");
 });
+
+/* ── a request put to another teammate ───────────────────────────────── */
+
+test("an ask reads what was asked, and what came back", () => {
+    const args = { teammate: "Billing", request: "Why did invoice 42 fail?", wait_seconds: 20 };
+    const asking = call("ask_teammate", args);
+    assert.equal(asking?.kind, "ask");
+    assert.equal(asking && asking.kind === "ask" && asking.pending, true);
+
+    const answered = call("ask_teammate", args, {
+        success: true,
+        teammate: "pod-b",
+        teammate_name: "Billing",
+        conversation_id: "conv-b",
+        status: "ANSWERED",
+        answer: "The card expired.",
+    });
+    assert.ok(answered && answered.kind === "ask");
+    assert.equal(answered.answer, "The card expired.");
+    assert.equal(answered.podId, "pod-b");
+    assert.equal(answered.conversationId, "conv-b");
+    assert.equal(answered.failed, false);
+});
+
+test("an ask waiting on the person's OK is not a failure", () => {
+    const card = call(
+        "ask_teammate",
+        { teammate: "Billing", request: "Anything overdue?" },
+        { success: false, needs_approval: true, error: "Asking Billing needs the person's OK first." },
+    );
+    assert.ok(card && card.kind === "ask");
+    assert.equal(card.needsApproval, true);
+    assert.equal(card.failed, false);
+    assert.equal(card.error, "");
+});
+
+test("an ask reads a return that arrived serialised", () => {
+    const card = call(
+        "ask_teammate",
+        { teammate: "Billing", request: "Anything overdue?" },
+        JSON.stringify({ success: true, teammate_name: "Billing", status: "WORKING", message: "It is working on it." }),
+    );
+    assert.ok(card && card.kind === "ask");
+    assert.equal(card.status, "WORKING");
+    assert.equal(card.note, "It is working on it.");
+});
+
+test("an ask with no request falls back to the plain step", () => {
+    assert.equal(call("ask_teammate", { teammate: "Billing" }), null);
+});

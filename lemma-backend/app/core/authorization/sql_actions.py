@@ -106,6 +106,17 @@ def allowed_actions_expr(
             pod_id=ctx.pod_id,
         )
 
+    if ctx.actor_type == ActorType.POD:
+        return _pod_allowed_actions_expr(
+            ctx=ctx,
+            resource_type=resource_type,
+            resource_actions=resource_actions,
+            resource_id_col=resource_id_col,
+            pod_id_col=pod_id_col,
+            visibility_col=visibility_col,
+            resource_path_col=resource_path_col,
+        )
+
     if (
         ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
         and ctx.workload_principal_refs
@@ -220,6 +231,47 @@ def _anonymous_allowed_actions_expr(
         (is_public, _text_array(public_read_actions)),
         else_=_text_array([]),
     )
+
+
+def _pod_allowed_actions_expr(
+    *,
+    ctx: Context,
+    resource_type: ResourceType,
+    resource_actions: Sequence[str],
+    resource_id_col,
+    pod_id_col,
+    visibility_col,
+    resource_path_col=None,
+) -> ColumnElement:
+    """Another pod's reach, row by row: what `Authorizer._pod_decision` allows.
+
+    Its grants on anything but a personal row, Public reads on top, and nothing
+    outside the pod the context is pinned to. Grants apply whatever the row's
+    visibility, as the authorizer's grant path does: a pod is granted a table
+    by name, not by the table first being made restricted.
+    """
+    if pod_id_col is None or ctx.pod_id is None:
+        return _text_array([])
+    granted = _grant_actions_array_expr(
+        ctx=ctx,
+        resource_type=resource_type,
+        resource_id_col=resource_id_col,
+        pod_id_col=pod_id_col,
+        principal_sets=ctx.grant_principal_sets or (ctx.principal_refs,),
+        candidate_actions=resource_actions,
+        resource_path_col=resource_path_col,
+    )
+    public_reads = [action for action in resource_actions if action.endswith(".read")]
+    whens = [(pod_id_col != ctx.pod_id, _text_array([]))]
+    if visibility_col is not None:
+        whens.append((visibility_col == "PERSONAL", _text_array([])))
+        whens.append(
+            (
+                visibility_col == "PUBLIC",
+                func.array_cat(granted, _text_array(public_reads)),
+            )
+        )
+    return case(*whens, else_=granted)
 
 
 def _delegated_allowed_actions_expr(

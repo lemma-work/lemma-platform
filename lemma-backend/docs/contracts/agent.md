@@ -10,6 +10,7 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `agent.askable_pod.list` | GET | `/pods/{pod_id}/askable-pods` | List Pods This Pod Can Ask |
 | `agent.conversation.approval.list` | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | List Agent Run Approvals |
 | `agent.conversation.approval.resolve` | POST | `/pods/{pod_id}/conversations/{conversation_id}/approvals/{approval_id}/decision` | Resolve User Approval |
 | `agent.conversation.create` | POST | `/pods/{pod_id}/conversations` | Create Pod Agent Conversation |
@@ -33,6 +34,9 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.list` | GET | `/pods/{pod_id}/agents` | List Agents |
 | `agent.permissions.get` | GET | `/pods/{pod_id}/agents/{agent_name}/permissions` | Get Agent Resource Permissions |
 | `agent.permissions.replace` | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | Replace Agent Resource Permissions |
+| `agent.pod_link.connect` | PUT | `/pods/{pod_id}/pod-links/{asking_pod_id}` | Connect A Pod To This One |
+| `agent.pod_link.disconnect` | DELETE | `/pods/{pod_id}/pod-links/{asking_pod_id}` | Disconnect A Pod From This One |
+| `agent.pod_link.list` | GET | `/pods/{pod_id}/pod-links` | List Pods That Can Ask This Pod |
 | `agent.runtime.default.clear` | DELETE | `/organizations/{organization_id}/agent-runtime/default` | Clear the Organization's Default Model |
 | `agent.runtime.default.set` | PUT | `/organizations/{organization_id}/agent-runtime/default` | Set the Organization's Default Model |
 | `agent.runtime.profiles.archive` | DELETE | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | Archive Agent Runtime Profile |

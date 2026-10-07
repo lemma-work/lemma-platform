@@ -360,6 +360,71 @@ no OpenAPI operation)
 
 ---
 
+## Capability: Ask another pod
+
+A pod's assistant can put a request to another pod's assistant and carry on
+with the answer. It asks either as the person it is working for, with their
+access, or, where the other pod has been connected to it, on its own with
+nobody present.
+
+### PS-AGENT-042 — A pod's assistant asks another pod as the person it works for
+**Status:** planned
+
+- Where a person is a member of both pods, the system shall let one pod's
+  assistant ask the other's on that person's behalf, from a conversation the
+  person is in.
+- The system shall answer that request with the person's own access in the
+  other pod.
+- The system shall keep the other pod's side of the request as a conversation
+  of the person's own there.
+- The system shall ask the person before the first request to each other pod
+  in a conversation.
+- When the other pod answers, the system shall bring the answer back into the
+  conversation that asked, exactly once.
+- If the conversation is one the person is not present in, such as a schedule's
+  or a subagent's, then the system shall not ask on their behalf.
+- If a request would reach a pod already asked earlier in the same chain, or go
+  more than three pods deep, then the system shall refuse it.
+
+**Contracts:** `agent.conversation.get`, `agent.conversation.approval.resolve`
+
+### PS-AGENT-043 — A person can see which other pods a pod can ask
+**Status:** planned
+
+- The system shall show a person, on a pod's page, the other pods its assistant
+  can ask, and whether each is asked through them, over a connection, or both.
+- The system shall tell a pod's assistant which other pods it can ask, without a
+  person having to name them.
+- The system shall list only pods in the same organization that the person is
+  in, or that were connected to the pod.
+
+**Contracts:** `agent.askable_pod.list`
+
+### PS-ACCESS-042 — An admin lets another pod ask theirs, sharing only what they choose
+**Status:** planned
+
+- Where a person administers a pod and is a member of another pod in the same
+  organization, the system shall let them connect that other pod so it may ask
+  theirs.
+- While two pods are connected, the system shall let the connected pod ask with
+  nobody present.
+- The system shall let a connected pod read only what is Public in the pod it
+  asks, plus the tables and folders shared with it.
+- The system shall share with a connected pod for reading only.
+- The system shall show, on the pod's page, which pods can ask it, what each
+  reads, and who connected it.
+- If someone who does not administer the pod tries to connect another, then the
+  system shall refuse.
+- If the person connecting is not a member of the other pod, then the system
+  shall refuse.
+- When a pod is disconnected, the system shall stop its asks and take back what
+  was shared with it.
+
+**Contracts:** `agent.pod_link.connect`, `agent.pod_link.list`,
+`agent.pod_link.disconnect`
+
+---
+
 ## Not covered here
 
 | Concern | Where it lives |

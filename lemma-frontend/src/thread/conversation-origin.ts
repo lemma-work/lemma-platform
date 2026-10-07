@@ -10,10 +10,12 @@
  *  - a notification:      `source: "notification"`, `surface_platform`
  *  - a schedule firing:   `source: "SCHEDULE"`, `schedule_name`, `schedule_type`
  *  - a workflow's agent:  `source: "WORKFLOW_RUN"`, `workflow_run_id`
+ *  - another teammate:    `source: "pod_ask"`, `ask.from_pod_name` — a
+ *                         request it put to this one, as you
  *  - a doc/table's chat:  `lemma_resource: "file:/path"` (type PROJECT)
  *  - anything else TASK:  a run nobody typed into
  */
-export type OriginKind = "chat" | "channel" | "notification" | "schedule" | "workflow" | "resource" | "task";
+export type OriginKind = "chat" | "channel" | "notification" | "schedule" | "workflow" | "resource" | "task" | "ask";
 
 export interface ConversationOrigin {
     kind: OriginKind;
@@ -69,6 +71,10 @@ export function originOf(metadata: Record<string, unknown> | null | undefined, t
         /* The server keeps schedule names as slugs; a slug is not a label. */
         const said = name ? name.replace(/[-_]+/g, " ").replace(/^./, (one) => one.toUpperCase()) : null;
         return { kind: "schedule", label: "Schedule" + (said ? " · " + said : "") };
+    }
+    if (source === "pod_ask") {
+        const ask = meta.ask && typeof meta.ask === "object" ? (meta.ask as Record<string, unknown>) : {};
+        return { kind: "ask", label: "From " + (text(ask.from_pod_name) ?? "another teammate") };
     }
     if (source === "WORKFLOW_RUN") {
         return { kind: "workflow", label: "Workflow run", runId: text(meta.workflow_run_id) ?? undefined };

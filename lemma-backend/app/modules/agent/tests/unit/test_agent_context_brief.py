@@ -105,6 +105,9 @@ class _FakeBriefRepo:
     async def get_user_profile(self, user_id):
         return UserProfile(email="a@b.co")
 
+    async def list_askable_pods(self, *, pod_id, user_id):
+        return []
+
     async def get_agent_grants(self, **kwargs):
         return []
 

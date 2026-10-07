@@ -137,6 +137,7 @@ async def record_session_approvals(
     *,
     conversation_id: UUID,
     agent_id: UUID | None,
+    pod_id: UUID,
     tool_args: JsonObject,
     user_id: UUID,
 ) -> None:
@@ -156,39 +157,55 @@ async def record_session_approvals(
     for why anything looser, e.g. a prefix match, would be a shell-injection
     vector).
     """
-    from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
     from app.core.authorization.session_approvals import (
         exact_command_permission_id,
         record_session_approval,
     )
 
-    workload_actor_id = f"agent:{agent_id or DEFAULT_POD_AGENT_ID}"
-
+    permission_ids: list[str] = []
     inner_tool_name = tool_args.get("tool_name")
     if isinstance(inner_tool_name, str) and inner_tool_name:
         inner_args = tool_args.get("args")
-        await record_session_approval(
-            session_id=str(conversation_id),
-            workload_actor_id=workload_actor_id,
-            permission_id=exact_command_permission_id(
+        permission_ids.append(
+            exact_command_permission_id(
                 inner_tool_name,
                 inner_args if isinstance(inner_args, dict) else {},
-            ),
-            resolved_by_user_id=user_id,
+            )
         )
+    requested = tool_args.get("permission_ids")
+    if isinstance(requested, list):
+        permission_ids.extend(p for p in requested if isinstance(p, str) and p)
 
-    permission_ids = tool_args.get("permission_ids")
-    if not isinstance(permission_ids, list):
-        return
-    for permission_id in permission_ids:
-        if not isinstance(permission_id, str) or not permission_id:
-            continue
-        await record_session_approval(
-            session_id=str(conversation_id),
-            workload_actor_id=workload_actor_id,
-            permission_id=permission_id,
-            resolved_by_user_id=user_id,
-        )
+    for workload_actor_id in _approving_actor_ids(agent_id, pod_id=pod_id):
+        for permission_id in permission_ids:
+            await record_session_approval(
+                session_id=str(conversation_id),
+                workload_actor_id=workload_actor_id,
+                permission_id=permission_id,
+                resolved_by_user_id=user_id,
+            )
+
+
+def _approving_actor_ids(agent_id: UUID | None, *, pod_id: UUID) -> tuple[str, ...]:
+    """Every actor id the approved agent is checked under, so the approval sticks.
+
+    A run checks session approvals under its own actor id,
+    ``agent:{workload_id}`` (``tools/authority.workload_actor_id``). For the
+    pod's assistant that is its row -- whose id is the pod's -- while a
+    conversation started without naming an agent stores no ``agent_id`` at all,
+    and a run that carries no workload falls back to the old sentinel. Keyed by
+    one of those alone, "approve for this conversation" was recorded under a
+    name the assistant's next check never asked about. Recording under each
+    shape ``is_pod_default_agent`` accepts covers all of them.
+    """
+    from app.core.authorization.delegation import (
+        DEFAULT_POD_AGENT_ID,
+        is_pod_default_agent,
+    )
+
+    if is_pod_default_agent(agent_id, pod_id=pod_id):
+        return (f"agent:{pod_id}", f"agent:{DEFAULT_POD_AGENT_ID}")
+    return (f"agent:{agent_id}",)
 
 
 async def agent_host_permission_tool_return(

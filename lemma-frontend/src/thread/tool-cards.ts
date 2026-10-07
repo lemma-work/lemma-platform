@@ -32,7 +32,8 @@ export type ToolCard =
     | FileRead
     | FileChange
     | FileSearch
-    | SubTask;
+    | SubTask
+    | TeammateAsk;
 
 /** A paused `browser_sign_in`: the run is stopped until somebody goes and signs
  *  in to a site, in the agent's own browser. */
@@ -267,6 +268,29 @@ export interface SubTask {
     prompt: string;
     /** What it came back with. */
     output: string;
+    pending: boolean;
+    failed: boolean;
+    error: string;
+}
+
+/** One `ask_teammate`: a request put to another teammate, as the person, and
+ *  what came of it. A quick answer lands on the card; a slow one arrives later
+ *  as a message of its own, and the card says that is what it is waiting for. */
+export interface TeammateAsk {
+    kind: "ask";
+    /** Its name once the call returns; what the agent typed until then. */
+    teammate: string;
+    /** Where its side of the request lives, for "Open its conversation". */
+    podId: string;
+    conversationId: string;
+    request: string;
+    /** ANSWERED, WORKING, WAITING or UNFINISHED. Empty while the call runs. */
+    status: string;
+    answer: string;
+    /** What the server said about where it stands, when it said anything. */
+    note: string;
+    /** Stopped for the person's OK before anything was sent. */
+    needsApproval: boolean;
     pending: boolean;
     failed: boolean;
     error: string;
@@ -1250,6 +1274,41 @@ function taskCard(args: unknown, result: unknown, answered: boolean): SubTask | 
     };
 }
 
+/** A pydantic tool return can arrive serialised; read it either way. */
+function parsedRecord(result: unknown): unknown {
+    if (typeof result !== "string") return result;
+    try {
+        return JSON.parse(result);
+    } catch {
+        return {};
+    }
+}
+
+function askCard(args: unknown, result: unknown, answered: boolean): TeammateAsk | null {
+    const record = asRecord(args);
+    const request = asString(record.request);
+    if (!request) return null;
+    const out = answered ? parsedRecord(result) : undefined;
+    const needsApproval = resultField(out, "needs_approval") === true;
+    const failure = failureOf(out, answered);
+    return {
+        kind: "ask",
+        teammate: asString(resultField(out, "teammate_name")) || asString(record.teammate),
+        podId: asString(resultField(out, "teammate")),
+        conversationId: asString(resultField(out, "conversation_id")),
+        request,
+        status: asString(resultField(out, "status")),
+        answer: asString(resultField(out, "answer")),
+        note: asString(resultField(out, "message")),
+        needsApproval,
+        pending: !answered,
+        /* Waiting for the person's OK is a step in a working flow, not a
+           failure; the approval card beside it is where it gets answered. */
+        failed: failure.failed && !needsApproval,
+        error: needsApproval ? "" : failure.error,
+    };
+}
+
 /** The one entry point: a tool call, and the card it deserves — or `null`,
  *  which is the existing grey note and has to stay reachable for every one of
  *  the thirty-odd tools nothing here claims. */
@@ -1320,6 +1379,8 @@ export function parseToolCard({
             return searchCard("grep", args, result, answered, toolTitle(metadata));
         case "task":
             return taskCard(args, result, answered);
+        case "ask_teammate":
+            return askCard(args, result, answered);
         default:
             return null;
     }
