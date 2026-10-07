@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 170 |
+| `covered` | 171 |
 | `gap` | 2 |
 | `manual` | 21 |
 | `planned` | 18 |
 | `withdrawn` | 0 |
-| **total** | **211** |
+| **total** | **212** |
 
-Scenario tests declaring a promise: 425.
+Scenario tests declaring a promise: 428.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 243 | 302 |
+| OpenAPI operations | 244 | 303 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -99,6 +99,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_live_run_stops_it`, `test_cancelling_a_finished_run_is_refused` |
 | `PS-FLOW-014` A workflow run carries the authority of whoever started it | `covered` | `test_a_step_beyond_the_runs_authority_is_refused_readably` |
 | `PS-FLOW-020` A person follows a run as it goes | `covered` | `test_a_run_can_be_watched` |
+| `PS-FUNC-020` A closed question about some evidence gets one allowed answer per question | `covered` | `test_every_question_gets_an_allowed_answer`, `test_an_open_question_is_refused`, `test_an_outsider_is_refused` |
 
 ## [Building a pod](journeys/building-a-pod.md)
 

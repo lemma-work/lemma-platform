@@ -746,6 +746,12 @@ async def test_surface_setup_actions_depend_on_auth_config_source(
         "slack_signing_secret",
         "slack_event_subscriptions",
     }
+    repair = next(
+        action
+        for action in custom_setup["actions"]
+        if action["key"] == "slack_signing_secret"
+    )
+    assert repair["link"].endswith(f"/t/{pod_id}?settings=connectors")
     action = next(
         action
         for action in custom_setup["actions"]

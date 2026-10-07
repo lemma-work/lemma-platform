@@ -1,6 +1,6 @@
 """Public usage DTOs consumed by model runtimes."""
 
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from pydantic import BaseModel
 
@@ -47,9 +47,22 @@ def run_source_type(*, answers_outsider: bool, answers_contact: bool) -> str:
     return "agent_run"
 
 
+class MeteredRequest(Protocol):
+    """One paid non-model request being metered; see `metering.metered_request`."""
+
+    def settle(self, *, input_tokens: int, output_tokens: int = 0) -> None:
+        """The provider answered and reported this usage."""
+        ...
+
+    def reject(self) -> None:
+        """The provider refused the request outright, so it cost nothing."""
+        ...
+
+
 __all__ = [
     "AgentRunUsage",
     "run_source_type",
+    "MeteredRequest",
     "ModelPricing",
     "UsageContextMissingError",
     "UsageLimitExceededError",

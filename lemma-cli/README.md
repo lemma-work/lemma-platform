@@ -33,6 +33,7 @@ From there, the command surface mirrors the resource model — `lemma <resource>
 lemma tables list
 lemma files ls /knowledge
 lemma agent chat            # talk to the pod's default agent
+lemma decision run -i "Is it urgent?" -e - --schema-file questions.json < email.txt
 lemma pod init my-pod       # scaffold a new pod bundle on disk to import
 ```
 

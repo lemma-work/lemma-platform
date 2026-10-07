@@ -6,11 +6,13 @@ import {
   type CreateAgentRuntimeProfileRequest,
 } from "../namespaces/agent-runtime.js";
 import { AgentsNamespace } from "../namespaces/agents.js";
+import { DecisionsNamespace } from "../namespaces/decisions.js";
 import { FunctionsNamespace } from "../namespaces/functions.js";
 import { RecordsNamespace } from "../namespaces/records.js";
 import type { ConversationsNamespace } from "../namespaces/conversations.js";
 import { AgentHostService } from "../openapi_client/services/AgentHostService.js";
 import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeService.js";
+import { DecisionsService } from "../openapi_client/services/DecisionsService.js";
 import { FunctionsService } from "../openapi_client/services/FunctionsService.js";
 import { RecordsService } from "../openapi_client/services/RecordsService.js";
 
@@ -240,5 +242,32 @@ describe("RecordsNamespace.listAll", () => {
     for (const call of spy.mock.calls) {
       expect(call[4]).toEqual(['{"field":"status","op":"eq","value":"open"}']);
     }
+  });
+});
+
+describe("DecisionsNamespace.make", () => {
+  it("asks the bound pod, sending the literal priority", async () => {
+    const makeSpy = vi
+      .spyOn(DecisionsService, "decisionMake")
+      .mockResolvedValue({ answers: {}, provider: "model", model: null, usage: {} } as never);
+    const decisions = new DecisionsNamespace(passthroughAdapter, () => "pod-1");
+    const schema = {
+      type: "object",
+      properties: { urgent: { type: "boolean", description: "Reply today?" } },
+    };
+
+    await decisions.make({
+      instruction: "Is it urgent?",
+      evidence: { subject: "Server down" },
+      schema,
+      priority: "interactive",
+    });
+
+    expect(makeSpy).toHaveBeenCalledWith("pod-1", {
+      instruction: "Is it urgent?",
+      evidence: { subject: "Server down" },
+      schema,
+      priority: "interactive",
+    });
   });
 });

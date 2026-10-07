@@ -179,12 +179,18 @@ _NAME_TO_MODULE = {
     'DatastoreQueryRequest': 'datastore_query_request',
     'DatastoreQueryResponse': 'datastore_query_response',
     'DatastoreQueryResponseItemsItem': 'datastore_query_response_items_item',
+    'DecisionAnswerResponse': 'decision_answer_response',
+    'DecisionExampleBody': 'decision_example_body',
+    'DecisionExampleBodyAnswers': 'decision_example_body_answers',
     'DecisionNode': 'decision_node',
     'DecisionNodeConfig': 'decision_node_config',
     'DecisionNodePositionType0': 'decision_node_position_type_0',
     'DecisionNodeResponse': 'decision_node_response',
     'DecisionNodeResponsePositionType0': 'decision_node_response_position_type_0',
+    'DecisionResponse': 'decision_response',
+    'DecisionResponseAnswers': 'decision_response_answers',
     'DecisionRule': 'decision_rule',
+    'DecisionUsageResponse': 'decision_usage_response',
     'DirectoryTreeNode': 'directory_tree_node',
     'DirectoryTreeResponse': 'directory_tree_response',
     'DisplaySizeRequest': 'display_size_request',
@@ -304,6 +310,9 @@ _NAME_TO_MODULE = {
     'LoopNodePositionType0': 'loop_node_position_type_0',
     'LoopNodeResponse': 'loop_node_response',
     'LoopNodeResponsePositionType0': 'loop_node_response_position_type_0',
+    'MakeDecisionRequest': 'make_decision_request',
+    'MakeDecisionRequestPriority': 'make_decision_request_priority',
+    'MakeDecisionRequestSchema': 'make_decision_request_schema',
     'ManualWorkflowStartInput': 'manual_workflow_start_input',
     'ManualWorkflowStartOutput': 'manual_workflow_start_output',
     'McpEndpointResponse': 'mcp_endpoint_response',
@@ -765,12 +774,18 @@ if TYPE_CHECKING:
     from .datastore_query_request import DatastoreQueryRequest
     from .datastore_query_response import DatastoreQueryResponse
     from .datastore_query_response_items_item import DatastoreQueryResponseItemsItem
+    from .decision_answer_response import DecisionAnswerResponse
+    from .decision_example_body import DecisionExampleBody
+    from .decision_example_body_answers import DecisionExampleBodyAnswers
     from .decision_node import DecisionNode
     from .decision_node_config import DecisionNodeConfig
     from .decision_node_position_type_0 import DecisionNodePositionType0
     from .decision_node_response import DecisionNodeResponse
     from .decision_node_response_position_type_0 import DecisionNodeResponsePositionType0
+    from .decision_response import DecisionResponse
+    from .decision_response_answers import DecisionResponseAnswers
     from .decision_rule import DecisionRule
+    from .decision_usage_response import DecisionUsageResponse
     from .directory_tree_node import DirectoryTreeNode
     from .directory_tree_response import DirectoryTreeResponse
     from .display_size_request import DisplaySizeRequest
@@ -890,6 +905,9 @@ if TYPE_CHECKING:
     from .loop_node_position_type_0 import LoopNodePositionType0
     from .loop_node_response import LoopNodeResponse
     from .loop_node_response_position_type_0 import LoopNodeResponsePositionType0
+    from .make_decision_request import MakeDecisionRequest
+    from .make_decision_request_priority import MakeDecisionRequestPriority
+    from .make_decision_request_schema import MakeDecisionRequestSchema
     from .manual_workflow_start_input import ManualWorkflowStartInput
     from .manual_workflow_start_output import ManualWorkflowStartOutput
     from .mcp_endpoint_response import McpEndpointResponse
@@ -1364,12 +1382,18 @@ __all__ = [
     'DatastoreQueryRequest',
     'DatastoreQueryResponse',
     'DatastoreQueryResponseItemsItem',
+    'DecisionAnswerResponse',
+    'DecisionExampleBody',
+    'DecisionExampleBodyAnswers',
     'DecisionNode',
     'DecisionNodeConfig',
     'DecisionNodePositionType0',
     'DecisionNodeResponse',
     'DecisionNodeResponsePositionType0',
+    'DecisionResponse',
+    'DecisionResponseAnswers',
     'DecisionRule',
+    'DecisionUsageResponse',
     'DirectoryTreeNode',
     'DirectoryTreeResponse',
     'DisplaySizeRequest',
@@ -1489,6 +1513,9 @@ __all__ = [
     'LoopNodePositionType0',
     'LoopNodeResponse',
     'LoopNodeResponsePositionType0',
+    'MakeDecisionRequest',
+    'MakeDecisionRequestPriority',
+    'MakeDecisionRequestSchema',
     'ManualWorkflowStartInput',
     'ManualWorkflowStartOutput',
     'McpEndpointResponse',

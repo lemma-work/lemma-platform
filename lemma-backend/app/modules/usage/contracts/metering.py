@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.usage.contracts import MeteredRequest
 from app.modules.usage.services.usage_context import UsageExecutionContext
 
 from pydantic_ai.models import Model
@@ -81,6 +82,24 @@ def meter_model(
             )
         )
     return MeteredModel(model, profile, source=source)
+
+
+@asynccontextmanager
+async def metered_request(
+    profile: Mapping[str, object], *, source: str | None = None
+) -> AsyncIterator[MeteredRequest]:
+    """Meter one paid request that is not a model call, inside `metering_execution`.
+
+    `profile` names what is being paid for the way a runtime profile snapshot
+    does (`profile_id`, `scope`, `model_name`), which is also what its price is
+    looked up by. Before anything is sent the request is admitted against the
+    execution's limits; call `settle` with what the provider reported, or
+    `reject` when it refused, before the block ends.
+    """
+    from app.modules.usage.services.external_request import metered_external_request
+
+    async with metered_external_request(profile, source=source) as outcome:
+        yield outcome
 
 
 def with_external_stream_retries(model: Model) -> Model:

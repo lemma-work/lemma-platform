@@ -203,6 +203,12 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PUT | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.attach` | Attach Document Markdown |
 | PUT | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.open` | Let People Outside Add Rows |
 
+## decisions
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| POST | `/pods/{pod_id}/decisions` | `decision.make` | Make a decision |
+
 ## function
 
 | Method | Path | Operation ID | Summary |

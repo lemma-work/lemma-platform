@@ -27,6 +27,24 @@ POSTGRES_PASSWORD = "test"
 POSTGRES_DB = "test"
 
 
+def _model_environment() -> dict[str, str]:
+    """The model the server answers with: the backend e2e suite's stand-in.
+
+    Without one, anything that asks a model -- a decision, say -- fails with
+    "no model configured". The stand-in is the deterministic FunctionModel the
+    backend's own e2e runs use, so a command's wiring is tested without a key.
+    `E2E_REAL=1` (with the LEMMA_OPENAI_* settings exported) uses a real model.
+    """
+    if os.environ.get("E2E_REAL", "").lower() in ("1", "true", "yes"):
+        return {"E2E_LLM_MODE": "real"}
+    return {
+        "E2E_LLM_MODE": "mock",
+        "LEMMA_OPENAI_API_KEY": "e2e-mock-key-not-used",
+        "LEMMA_OPENAI_DEFAULT_MODEL": "e2e-mock-model",
+        "LEMMA_OPENAI_MODEL_NAMES": "e2e-mock-model",
+    }
+
+
 def _free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -233,6 +251,7 @@ def backend_server(postgres_container, redis_container, supertokens_container):
         "AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED": "false",
         "AUTH_ABUSE_PROTECTION_ENABLED": "false",
         "AUTH_ALTCHA_ENABLED": "false",
+        **_model_environment(),
     }
 
     # Apply the DB schema before starting the server. The uvicorn lifespan does

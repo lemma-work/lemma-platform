@@ -713,6 +713,34 @@ BRAVE_SEARCH_API_KEY=
 SEARXNG_URL=
 ```
 
+### Decisions
+
+`POST /pods/{pod_id}/decisions` answers closed questions -- a choice, several
+choices, yes or no, a point on a scale -- about some evidence. One provider
+answers them for the whole deployment. By default it is the language model
+configured above, so decisions need no setting at all.
+
+```dotenv
+DECISION_PROVIDER=model       # model | typesafe
+# The model the `model` provider asks, by public name. Empty: the default model.
+# A small, fast model is a good choice; decisions are short.
+DECISION_MODEL=
+
+# Typesafe System One, a classifier built for this. Opt-in: nothing is sent to
+# it unless DECISION_PROVIDER=typesafe.
+TYPESAFE_API_KEY=
+TYPESAFE_MODEL=jev-latest
+# Set so its calls count toward the spend limits below.
+TYPESAFE_PRICE_PER_MILLION_INPUT_TOKENS_USD=
+
+DECISION_INTERACTIVE_TIMEOUT_SECONDS=8
+DECISION_BACKGROUND_TIMEOUT_SECONDS=25
+DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization; 0 for none
+```
+
+Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
+wherever your deployment names the processors its users' data reaches.
+
 ## Spend limits
 
 Nothing is limited by default: usage is metered but never refused. Set any of
@@ -970,6 +998,7 @@ authoritative answer for anything this document does not name.
 | Pod bundles | `lemma-backend/app/modules/pod_bundle/config.py` |
 | Apps, icons, schedules | `app/modules/{apps,icon,schedule}/config.py` |
 | Outside MCP clients | `lemma-backend/app/modules/mcp_access/config.py` |
+| Decisions | `lemma-backend/app/modules/decisions/config.py` |
 | Event transport | `lemma-backend/app/core/infrastructure/events/config.py` |
 
 Settings whose description begins with `TEST HOOK ONLY` exist for the end-to-end

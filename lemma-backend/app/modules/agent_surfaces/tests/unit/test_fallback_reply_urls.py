@@ -37,7 +37,7 @@ def test_shared_surface_fallback_urls_use_their_matching_frontends(monkeypatch):
     )
     assert _pod_access_message(pod_id) == (
         "You're signed up, but don't have access to this workspace yet. "
-        f"Request access here: https://app.example.test/pod/{pod_id}"
+        f"Request access here: https://app.example.test/t/{pod_id}"
     )
 
 
@@ -82,5 +82,5 @@ def test_pod_access_url_is_shared_across_every_surface_platform(
     assert context.reply_kind == "pod_access"
     assert context.reply_message == (
         "You're signed up, but don't have access to this workspace yet. "
-        f"Request access here: https://app.example.test/pod/{pod_id}"
+        f"Request access here: https://app.example.test/t/{pod_id}"
     )

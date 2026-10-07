@@ -55,6 +55,9 @@ OVERRIDES: dict[str, dict[str, Any]] = {
     "record.bulk_create": {"invalidates": ["record"]},
     "record.bulk_update": {"invalidates": ["record"]},
     "record.bulk_delete": {"invalidates": ["record"]},
+    # A POST that stores nothing: asking a decision changes no resource, so no
+    # cached query is stale afterwards.
+    "decision.make": {"invalidates": []},
 }
 
 
