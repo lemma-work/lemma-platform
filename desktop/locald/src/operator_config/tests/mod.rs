@@ -76,6 +76,37 @@ impl SecretVault for CountingVault {
     }
 }
 
+/// Save one section the way the workspace's settings page does, at the
+/// store's current revision.
+pub(super) fn section(
+    store: &OperatorConfigStore,
+    name: &str,
+    value: Value,
+    secrets: Value,
+) -> io::Result<Value> {
+    let revision = store.snapshot().unwrap()["config"]["revision"].clone();
+    section_at(store, revision, name, value, secrets)
+}
+
+/// `section`, at a revision read earlier -- for a test that must not touch the
+/// store between deciding to save and saving.
+pub(super) fn section_at(
+    store: &OperatorConfigStore,
+    revision: Value,
+    name: &str,
+    value: Value,
+    secrets: Value,
+) -> io::Result<Value> {
+    store.update(
+        serde_json::from_value(json!({
+            "expected_revision": revision,
+            "section": {"name": name, "value": value},
+            "secrets": secrets,
+        }))
+        .unwrap(),
+    )
+}
+
 pub(super) struct FixedModelProviderProbe;
 
 impl ModelProviderProbe for FixedModelProviderProbe {

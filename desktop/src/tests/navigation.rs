@@ -7,13 +7,9 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
     // capability its Local settings button is silently rejected by the ACL.
     //
     // What it may reach is deliberately short: Local settings, this
-    // computer's Agent Host, the AI provider, and how the sandbox image
-    // download is going. The provider one was added because onboarding
-    // cannot honestly ask "which model?" and then send the user to a
-    // different window for the answer — and it is safe to add precisely
-    // because `configure_ai_provider` reaches `config.set-ai`, which merges
-    // that one section. `allow-apply-operator-config`, which would let the
-    // same page rewrite sharing and surfaces, stays out.
+    // computer's Agent Host, the AI provider's model list, and how the
+    // sandbox image download is going. `allow-apply-operator-config`, which
+    // would let the same page rewrite sharing and surfaces, stays out.
     //
     // `allow-sandbox-image-status` is the mildest: it reads two strings the
     // shell already holds and changes nothing at all. It is here because the
@@ -43,7 +39,6 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
             permission.as_str(),
             "allow-open-control-center"
                 | "allow-discover-provider-models"
-                | "allow-configure-ai-provider"
                 | "allow-app-frame-url"
                 | "allow-sandbox-image-status"
                 | "allow-conversation-folder"

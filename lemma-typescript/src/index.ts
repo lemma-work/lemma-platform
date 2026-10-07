@@ -261,6 +261,7 @@ export type { PodGroupsNamespace } from "./namespaces/pod-groups.js";
 export type { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 export type { RecordsNamespace } from "./namespaces/records.js";
 export type { ResourceAccessNamespace } from "./namespaces/resource-access.js";
+export type { DecisionPayload, DecisionsNamespace } from "./namespaces/decisions.js";
 export type { ScheduleListOptions, SchedulesNamespace } from "./namespaces/schedules.js";
 export type { TablesNamespace } from "./namespaces/tables.js";
 export type { UsersNamespace } from "./namespaces/users.js";
