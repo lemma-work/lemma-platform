@@ -101,11 +101,13 @@ visualization.
 ```mermaid
 stateDiagram-v2
     [*] --> RUNNING: manual/event/schedule start
-    RUNNING --> RUNNING: synchronous decision/loop/end step
-    RUNNING --> WAITING: agent/function/form/time/decision-question step
-    WAITING --> RUNNING: terminal event or human submission
+    RUNNING --> RUNNING: decision/loop/end step, or an agent/function/time/decision-question wait and its terminal event
+    RUNNING --> WAITING: form step
+    WAITING --> RUNNING: human submission
     RUNNING --> COMPLETED: end output
     RUNNING --> FAILED: validation/executor error
+    WAITING --> FAILED: form expired
+    RUNNING --> CANCELLED: cancel API
     WAITING --> CANCELLED: cancel API
 ```
 
