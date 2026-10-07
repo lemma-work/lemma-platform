@@ -271,8 +271,15 @@ class DecisionPort(Protocol):
     a wait that is not stored yet.
     """
 
-    def ask_once_committed(self, external_ref: str) -> None:
-        """Ask the decision waited on under `external_ref`, once it is stored."""
+    def ask_once_committed(self, external_ref: str, *, requeue: int = 0) -> None:
+        """Ask the decision waited on under `external_ref`, once it is stored.
+
+        `requeue` counts the sweep's queueings of a job that was lost.
+        """
+
+    async def job_alive(self, external_ref: str, *, requeue: int = 0) -> bool | None:
+        """Whether the job asking this decision will still ask it: queued,
+        waiting out a retry, or running. None when the queue cannot say."""
 
 
 class SchedulePort(ABC):

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from streaq.task import TaskStatus
 
 from app.modules.decisions.contracts import (
     Answer,
@@ -120,10 +121,17 @@ class _Ports:
 
     def __init__(self) -> None:
         self.asked: list[str] = []
+        self.requeues: list[int] = []
         self.functions: list[str] = []
+        #: What the queue says of the job: lost (False), alive, or unknown.
+        self.alive: bool | None = False
 
-    def ask_once_committed(self, external_ref: str) -> None:
+    def ask_once_committed(self, external_ref: str, *, requeue: int = 0) -> None:
         self.asked.append(external_ref)
+        self.requeues.append(requeue)
+
+    async def job_alive(self, external_ref: str, *, requeue: int = 0) -> bool | None:
+        return self.alive
 
     async def execute_function(self, function_name, inputs, pod_id, user_id, ctx=None):
         self.functions.append(function_name)
@@ -598,9 +606,25 @@ async def test_a_lost_decision_is_queued_again_and_counted():
     assert await _service(engine).recover_lost(engine.wait) is True
 
     assert engine.decision_adapter.asked == ["ref"]
+    assert engine.decision_adapter.requeues == [1], "under a job id of its own"
     assert engine.updated[-1]["requeues"] == 1
     assert engine.uow.commits == 1
     assert engine.failed == []
+
+
+@pytest.mark.parametrize("alive", [True, None], ids=["alive", "unknown"])
+async def test_a_decision_whose_job_may_still_answer_is_not_requeued_or_counted(alive):
+    """Slow is not lost: a job behind a backlog or waiting out a retry is left to
+    answer, and a queue that cannot say is asked again by the next sweep, so no
+    run is failed for a backlog."""
+    engine = _Engine(_flow(_question()))
+    engine.decision_adapter.alive = alive
+
+    assert await _service(engine).recover_lost(engine.wait) is False
+
+    assert engine.decision_adapter.asked == []
+    assert engine.updated == engine.failed == []
+    assert engine.uow.commits == 0, "the run's lock was never taken"
 
 
 async def test_a_decision_answered_meanwhile_is_left_alone():
@@ -623,7 +647,7 @@ async def test_a_decision_lost_too_often_fails_the_run():
     assert await _service(engine).recover_lost(engine.wait) is True
 
     assert engine.decision_adapter.asked == []
-    assert "was not answered after" in engine.failed[0]["error"]
+    assert "was lost" in engine.failed[0]["error"]
 
 
 async def test_the_sweep_recovers_a_stale_decision_wait():
@@ -648,14 +672,65 @@ class _AfterCommitUow:
 
 
 class _JobQueue:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        error: Exception | None = None,
+        statuses: dict[str, TaskStatus] | None = None,
+    ) -> None:
         self.error = error
         self.enqueued: list[dict] = []
+        self.statuses = statuses or {}
 
     async def enqueue(self, job_name: str, **kwargs: object) -> None:
         if self.error is not None:
             raise self.error
         self.enqueued.append({"job_name": job_name, **kwargs})
+
+    async def status(self, job_id: str) -> TaskStatus:
+        if self.error is not None:
+            raise self.error
+        return self.statuses.get(job_id, TaskStatus.NOT_FOUND)
+
+    async def abort(self, job_id: str, *, timeout_seconds: float | None = None) -> bool:
+        return False
+
+
+async def test_a_requeued_job_gets_an_id_of_its_own():
+    """A finished job's result outlives it under its id, so a requeue under the
+    same id would read as finished while it still waits its turn."""
+    uow = _AfterCommitUow()
+    queue = _JobQueue()
+
+    AfterCommitDecisionQueue(uow, queue=queue).ask_once_committed("ref", requeue=2)
+    for callback in uow.callbacks:
+        await callback()
+
+    assert queue.enqueued[0]["_job_id"] == "workflow-decision:ref:2"
+
+
+@pytest.mark.parametrize(
+    ("status", "alive"),
+    [
+        (TaskStatus.QUEUED, True),
+        (TaskStatus.SCHEDULED, True),
+        (TaskStatus.RUNNING, True),
+        (TaskStatus.DONE, False),
+        (TaskStatus.NOT_FOUND, False),
+    ],
+)
+async def test_a_job_is_alive_while_it_will_still_ask(status, alive):
+    queue = _JobQueue(statuses={"workflow-decision:ref:1": status})
+    adapter = AfterCommitDecisionQueue(_AfterCommitUow(), queue=queue)
+
+    assert await adapter.job_alive("ref", requeue=1) is alive
+
+
+async def test_a_queue_that_cannot_be_reached_cannot_say_whether_a_job_is_alive():
+    adapter = AfterCommitDecisionQueue(
+        _AfterCommitUow(), queue=_JobQueue(ConnectionRefusedError())
+    )
+
+    assert await adapter.job_alive("ref") is None
 
 
 async def test_the_job_is_queued_only_once_the_wait_is_committed():

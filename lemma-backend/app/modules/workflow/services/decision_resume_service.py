@@ -152,12 +152,24 @@ class DecisionResumeService:
     async def recover_lost(self, wait: WorkflowRunWaitEntity) -> bool:
         """Queue a decision again whose job was lost, a bounded number of times.
 
-        Takes the run's row lock first and re-reads the wait under it: the job
+        A wait this old usually means its job is gone -- never queued, or ended
+        without answering. But it may only be slow: behind a backlog, or
+        waiting out a retry. So the queue is asked first, and a job that is
+        still alive is left to answer and not counted; only a lost one is
+        queued again and counted towards giving up. When the queue cannot say,
+        the next sweep asks again rather than count a loss that may not be one.
+
+        Then takes the run's row lock and re-reads the wait under it: the job
         may be answering this very decision, and resuming takes the same lock,
         so whichever comes second sees what the first did.
         """
         external_ref = wait.external_ref
         if not external_ref:
+            return False
+        alive = await self._engine.decision_adapter.job_alive(
+            external_ref, requeue=_requeues_of(wait)
+        )
+        if alive is not False:
             return False
         run = await self._engine.run_repo.get_for_update(wait.run_id)
         current = await self._engine.wait_repo.find_active_by_external_ref(
@@ -173,14 +185,17 @@ class DecisionResumeService:
             await self._engine.fail_for_wait(
                 current,
                 error=(
-                    "The question this step asks was not answered after "
-                    f"{requeues + 1} tries, so the run was stopped."
+                    "The job asking this step's question was lost "
+                    f"{requeues + 1} times before it could answer, so the run "
+                    "was stopped."
                 ),
             )
             return True
         current.payload = {**current.payload, _REQUEUES: requeues + 1}
         await self._engine.wait_repo.update(current)
-        self._engine.decision_adapter.ask_once_committed(external_ref)
+        self._engine.decision_adapter.ask_once_committed(
+            external_ref, requeue=requeues + 1
+        )
         await self._engine.uow.commit()
         logger.warning(
             "workflow.decision_resume.lost_decision_requeued.degraded",

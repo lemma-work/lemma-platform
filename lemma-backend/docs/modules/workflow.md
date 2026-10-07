@@ -82,9 +82,12 @@ attempts, then the run fails naming the cause. An invalid question, a spent
 usage limit, too much evidence for one decision (`token_limit`) or no configured
 provider (`not_configured`) fail the run at once, as does an answer with no
 route and no default edge. A cancelled run's job finds no active wait and does
-nothing. A `DECISION` wait older than the reconciliation grace period means its
-job was lost: the sweep queues it again, up to three times (counted in the
-wait's `requeues`), then fails the run.
+nothing. A `DECISION` wait older than the reconciliation grace period has a job
+that is lost or held up, and the sweep asks the queue which. A job still
+queued, waiting out a retry or running is left to answer; one that is gone is
+queued again under a job id of its own, up to three times (counted in the
+wait's `requeues`), and the run then fails saying the job was lost. A queue
+that cannot be reached is asked again by the next sweep.
 
 ## API groups
 

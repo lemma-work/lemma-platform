@@ -137,9 +137,10 @@ class RunResumeService:
         there is no external source to poll (a timer just needs to fire), so a
         past-due TIME wait whose scheduler wake was lost is fired here.
 
-        A DECISION wait this old means its job was lost -- every attempt of it
-        fits well inside the grace period -- so the same job is queued again, a
-        bounded number of times (`DecisionResumeService.recover_lost`).
+        A DECISION wait this old has outlived every attempt its job makes, so
+        the job is either lost or held up. The queue is asked which: a lost job
+        is queued again, a bounded number of times, and a live one is left to
+        answer (`DecisionResumeService.recover_lost`).
 
         HUMAN waits are swept for the ceiling alone. Nothing can be polled: a
         form is resolved by somebody answering it. But a form assigned to
