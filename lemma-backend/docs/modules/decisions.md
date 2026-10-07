@@ -52,7 +52,11 @@ from the instruction.
 ## Providers
 
 `DECISION_PROVIDER` picks one per deployment. Each provider answers every kind;
-there is no fallback from one to another.
+there is no fallback from one to another when a provider fails, so a caller
+retries the same judgement rather than getting a different one. `typesafe`
+chosen without `TYPESAFE_API_KEY` is not a failure but a deployment that cannot
+use it: the `model` provider answers instead, and
+`decisions.registry.typesafe_unconfigured.degraded` is logged once.
 
 | Provider | How it answers | Confidence |
 | --- | --- | --- |

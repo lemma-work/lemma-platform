@@ -727,7 +727,8 @@ DECISION_PROVIDER=model       # model | typesafe
 DECISION_MODEL=
 
 # Typesafe System One, a classifier built for this. Opt-in: nothing is sent to
-# it unless DECISION_PROVIDER=typesafe.
+# it unless DECISION_PROVIDER=typesafe. Chosen without its key, the `model`
+# provider answers instead (with a warning), so decisions keep working.
 TYPESAFE_API_KEY=
 TYPESAFE_MODEL=jev-latest
 # Set so its calls count toward the spend limits below.
