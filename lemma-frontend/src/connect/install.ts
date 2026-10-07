@@ -146,9 +146,9 @@ export function ownAppKinds(entry: CatalogEntry): ConnectorKind[] {
 
 /** The kind a fresh install should take when nobody picked one.
  *
- *  Composio first where it is on offer, the same default the backend and the
- *  harness use. Returning nothing for a connector with two kinds — the old
- *  rule — left every such connector at "has not described what it needs". */
+ *  Composio first where it is on offer, the same default the backend uses.
+ *  Returning nothing for a connector with two kinds — the old rule — left
+ *  every such connector at "has not described what it needs". */
 export function primaryKind(entry: CatalogEntry): ConnectorKind | null {
     const kinds = entry.kinds ?? [];
     return kinds.find((one) => one.kind === COMPOSIO) ?? kinds[0] ?? null;
@@ -260,9 +260,8 @@ export function isStaleDefault(install: Install | null, kind: ConnectorKind | nu
  *
  *  Never for a managed Composio toolkit: it runs on Lemma's Composio account
  *  and the backend refuses an org-supplied install of it. Otherwise both
- *  halves, as in the harness — an organization's client id and secret are
- *  useless without endpoints to send people through, and those come from the
- *  catalogue. */
+ *  halves — an organization's client id and secret are useless without
+ *  endpoints to send people through, and those come from the catalogue. */
 export function canBringOwnApp(kind: ConnectorKind | null): boolean {
     if (!kind) return false;
     if (kind.kind === COMPOSIO) return needsOwnApp(kind) && hasProperties(installSchema(kind));
@@ -276,8 +275,7 @@ export function canBringOwnApp(kind: ConnectorKind | null): boolean {
  *  URL the provider must allow is Composio's — and it already arrives in the
  *  toolkit's own form, as an `oauth_redirect_uri` field with its default
  *  filled in. Showing Lemma's beside it put two redirect URLs on one form,
- *  and the one this app drew was the wrong one to register. The harness
- *  draws the same line. */
+ *  and the one this app drew was the wrong one to register. */
 export function registersLemmaRedirect(kind: ConnectorKind | null): boolean {
     return Boolean(kind && kind.kind !== COMPOSIO && kind.auth_scheme === "OAUTH2");
 }

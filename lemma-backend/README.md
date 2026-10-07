@@ -30,7 +30,6 @@ The repository does not use submodules. Backend code depends on sibling packages
 
 | Path | Purpose |
 |------|---------|
-| `../lemma-harness/` | Next.js frontend used by the local app runner |
 | `../lemma-python/` | `lemma-sdk`, the Python SDK (the `lemma` CLI is `lemma-terminal`, in `../lemma-cli/`) |
 | `../lemma-pod-bundle/` | The pod bundle format, shared with the CLI |
 | `../lemma-typescript/` | TypeScript SDK used by apps |
@@ -61,7 +60,7 @@ make stop-all           # also bring down the infra containers
 make logs               # tail backend logs
 ```
 
-- Frontend: `http://localhost:3710`
+- Frontend: `http://localhost:3000`
 - API: `http://localhost:8710`
 - API docs (Scalar): `http://localhost:8710/scalar`
 

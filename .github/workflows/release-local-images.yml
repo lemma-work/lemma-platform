@@ -235,9 +235,6 @@ jobs:
           - name: lemma-frontend
             context: .
             dockerfile: lemma-frontend/Dockerfile
-          - name: lemma-harness
-            context: .
-            dockerfile: lemma-harness/Dockerfile
           # Reproducible: pinned bases, SOURCE_DATE_EPOCH and rewritten
           # timestamps, so the same inputs build the same layers.
           - name: lemma-workspace
@@ -326,7 +323,6 @@ jobs:
         image:
           - lemma-backend
           - lemma-frontend
-          - lemma-harness
           - lemma-workspace
           - lemma-function
     steps:

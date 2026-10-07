@@ -123,19 +123,6 @@ pub(crate) fn sharing_environment(
         ("NEXT_PUBLIC_API_URL".into(), api_url),
         ("NEXT_PUBLIC_AUTH_URL".into(), auth_url),
         ("NEXT_PUBLIC_SITE_URL".into(), origin.into()),
-        ("NEXT_PUBLIC_AUTH_WEBSITE_BASE_PATH".into(), "/auth".into()),
-        (
-            "NEXT_PUBLIC_SUPERTOKENS_API_BASE_PATH".into(),
-            "/auth".into(),
-        ),
-        (
-            "NEXT_PUBLIC_SUPERTOKENS_API_GATEWAY_PATH".into(),
-            "/_lemma/api/st".into(),
-        ),
-        (
-            "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI".into(),
-            format!("{origin}/"),
-        ),
         ("NEXT_PUBLIC_SESSION_TOKEN_DOMAIN".into(), String::new()),
         (
             "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED".into(),

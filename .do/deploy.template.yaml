@@ -109,7 +109,7 @@ spec:
       image:
         registry_type: GHCR
         registry: lemma-work
-        repository: lemma-harness
+        repository: lemma-frontend
         tag: v0.9.0
       http_port: 8080
       instance_size_slug: basic-xs

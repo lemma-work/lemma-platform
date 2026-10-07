@@ -23,7 +23,7 @@ Everything in the repo exists to serve one of four jobs:
 
 | Job | Components |
 |---|---|
-| Run the platform | `lemma-backend`, `lemma-frontend`, `lemma-harness` |
+| Run the platform | `lemma-backend`, `lemma-frontend` |
 | Install and operate it locally | `desktop`, `lemma-stack` |
 | Build and operate pods | `lemma-cli`, `lemma-skills`, `lemma-pod-bundle` |
 | Build on top of it | `lemma-python`, `lemma-typescript` |
@@ -34,7 +34,6 @@ Everything in the repo exists to serve one of four jobs:
 flowchart TB
     subgraph clients["People and agents"]
         WEB["lemma-frontend<br/>Conversations + teammate apps"]
-        HARNESS["lemma-harness<br/>Operator tools + desktop web runtime"]
         CLI["lemma-cli<br/>lemma terminal"]
         SURF["Surfaces<br/>Slack · Teams · Telegram · WhatsApp · Email"]
         SDK["lemma-python · lemma-typescript"]
@@ -58,7 +57,6 @@ flowchart TB
     end
 
     WEB --> API
-    HARNESS --> API
     CLI --> API
     SDK --> API
     SURF -->|webhooks| API
@@ -106,17 +104,13 @@ event path are identical.
 → [Module guide](lemma-backend/docs/modules/README.md) · one document per module,
 each naming the tables it owns.
 
-### lemma-frontend — the workspace
+### lemma-frontend — the web app
 
 The user-facing Next.js app runs conversations, teammate apps, files, workflows
-and voice calls. It uses the TypeScript SDK and a custom WebSocket server.
-See [its README](lemma-frontend/README.md) for setup and checks.
-
-### lemma-harness — operator tools and desktop runtime
-
-Next.js 16 / React 19. The pod workspace, the operator UI, and the public site.
-Pod **apps** are separate deployable frontends that talk to the same pod APIs
-through the TypeScript SDK.
+and voice calls, plus sign-in and the public site. It uses the TypeScript SDK
+and a custom WebSocket server. See [its README](lemma-frontend/README.md) for
+setup and checks. Pod **apps** are separate deployable frontends that talk to
+the same pod APIs through the TypeScript SDK.
 
 ### Sandboxes — where untrusted code runs
 
@@ -233,7 +227,7 @@ by review.
 
 The split is deliberate and follows the deployment boundary:
 
-- **AGPLv3** — `lemma-backend`, `lemma-frontend`, `lemma-harness`, `desktop`. Server-delivered
+- **AGPLv3** — `lemma-backend`, `lemma-frontend`, `desktop`. Server-delivered
   core: modify and offer it over a network, and your modifications are
   AGPL too.
 - **Apache-2.0** — `lemma-stack`, `lemma-cli`, `lemma-python`,

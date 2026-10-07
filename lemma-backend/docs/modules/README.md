@@ -25,7 +25,7 @@ flowchart LR
 
 The canonical registration order is identity, pod, pod bundle, datastore,
 schedule, connectors, agent, function, apps, workflow, agent surfaces, icon,
-usage, workspace, web login, MCP access, and analytics. Order affects router and lifespan registration, but
+usage, workspace, web login, MCP access, decisions, and analytics. Order affects router and lifespan registration, but
 modules should communicate through explicit ports or domain events rather than
 depending on import order.
 
@@ -48,6 +48,7 @@ depending on import order.
 | [usage](usage.md) | Model-usage metering, reservations, limits, and reporting | `usage_records`, `usage_limit_counters` |
 | [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |
 | [mcp_access](mcp_access.md) | Outside MCP clients: the OAuth authorization server, consent, and connected clients | `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens`; pending authorizations and codes are short-lived Redis keys |
+| [decisions](decisions.md) | Stateless closed-question decisions over pluggable providers | None; the per-organization rate window is a short-lived Redis counter |
 
 ## Tables owned by core
 

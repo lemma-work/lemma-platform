@@ -163,7 +163,7 @@ class DevWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(tunnel.stdout.count("cloudflared tunnel"), 1)
             self.assertIn("--url http://127.0.0.1:8710", tunnel.stdout)
-            self.assertNotIn("--url http://127.0.0.1:3710", tunnel.stdout)
+            self.assertNotIn("--url http://127.0.0.1:3000", tunnel.stdout)
 
             backend = self.run_make(
                 tmp,
@@ -185,20 +185,20 @@ class DevWorkflowTests(unittest.TestCase):
                 "NEXT_PUBLIC_API_URL=https://public-api.example.test",
                 frontend.stdout,
             )
-            self.assertIn("NEXT_PUBLIC_SITE_URL=http://localhost:3710", frontend.stdout)
-            self.assertIn("NEXT_PUBLIC_AUTH_URL=http://localhost:3000", frontend.stdout)
+            self.assertIn("NEXT_PUBLIC_SITE_URL=http://localhost:3000", frontend.stdout)
+            self.assertIn("NEXT_PUBLIC_AUTH_URL=http://localhost:3000/auth", frontend.stdout)
 
 
-    def test_custom_workspace_port_aligns_backend_auth_and_new_frontend(self):
+    def test_custom_frontend_port_aligns_backend_auth_and_new_frontend(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             backend = tmp / "backend"
             backend.mkdir()
-            workspace = tmp / "lemma-frontend"
+            frontend_dir = tmp / "lemma-frontend"
             variables = {
                 "BACKEND_DIR": str(backend),
-                "WORKSPACE_DIR": str(workspace),
-                "DEV_WORKSPACE_PORT": "13009",
+                "FRONTEND_DIR": str(frontend_dir),
+                "DEV_FRONTEND_PORT": "13009",
             }
             self.run_make(tmp, "_init-backend-env", variables=variables)
             backend_env = self.env_values(backend / ".env")
@@ -207,24 +207,25 @@ class DevWorkflowTests(unittest.TestCase):
             running_backend = self.run_make(tmp, "-n", "_run-backend", variables=variables)
             self.assertIn("AUTH_FRONTEND_URL=http://localhost:13009", running_backend.stdout)
             frontend = self.run_make(tmp, "-n", "dev-frontend", variables=variables)
-            self.assertIn(str(workspace / ".env.local"), frontend.stdout)
-            self.assertIn(f"cd {workspace} && npm run dev -- --port 13009", frontend.stdout)
+            self.assertIn(f"cd {frontend_dir} &&", frontend.stdout)
+            self.assertIn("npm run dev -- --port 13009", frontend.stdout)
+            self.assertIn("NEXT_PUBLIC_AUTH_URL=http://localhost:13009/auth", frontend.stdout)
 
-    def test_workspace_setup_preserves_custom_configuration(self):
+    def test_frontend_setup_preserves_custom_configuration(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
-            workspace = tmp / "lemma-frontend"
-            variables = {"WORKSPACE_DIR": str(workspace)}
-            self.run_make(tmp, "_init-workspace-env", variables=variables)
-            config = workspace / ".env.local"
-            self.assertEqual(
-                self.env_values(config)["NEXT_PUBLIC_API_URL"], "http://localhost:8710"
-            )
+            frontend_dir = tmp / "lemma-frontend"
+            variables = {"FRONTEND_DIR": str(frontend_dir)}
+            self.run_make(tmp, "_init-frontend-env", variables=variables)
+            config = frontend_dir / ".env.local"
+            created = self.env_values(config)
+            self.assertEqual(created["NEXT_PUBLIC_API_URL"], "http://localhost:8710")
+            self.assertEqual(created["NEXT_PUBLIC_AUTH_URL"], "http://localhost:3000/auth")
             config.write_text("NEXT_PUBLIC_API_URL=https://api.example.test\n")
-            self.run_make(tmp, "_init-workspace-env", variables=variables)
-            self.assertEqual(
-                config.read_text(), "NEXT_PUBLIC_API_URL=https://api.example.test\n"
-            )
+            self.run_make(tmp, "_ensure-frontend-env-keys", variables=variables)
+            lines = config.read_text().splitlines()
+            self.assertEqual(sum(line.startswith("NEXT_PUBLIC_API_URL=") for line in lines), 1)
+            self.assertIn("NEXT_PUBLIC_API_URL=https://api.example.test", lines)
 
 
 if __name__ == "__main__":

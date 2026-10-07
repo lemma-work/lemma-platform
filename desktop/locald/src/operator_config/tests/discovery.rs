@@ -9,17 +9,21 @@ fn discovery_never_sends_a_saved_key_to_a_changed_destination() {
     let vault = Arc::new(MemoryVault::default());
     let store =
         OperatorConfigStore::load_with_vault(root.path().join("operator.json"), vault).unwrap();
-    store
-        .set_ai(json!({"ai": {
-        "protocol": "openai_compat", "base_url": "https://saved.example/v1",
-        "default_model": "test", "models": ["test"], "vision_models": []
-    }, "api_key": "saved-secret"}))
-        .unwrap();
+    section(
+        &store,
+        "ai",
+        json!({
+            "protocol": "openai_compat", "base_url": "https://saved.example/v1",
+            "default_model": "test", "models": ["test"], "vision_models": []
+        }),
+        json!({"ai.api_key": {"action": "replace", "value": "saved-secret"}}),
+    )
+    .unwrap();
     let mut ai = store.snapshot().unwrap()["config"]["ai"].clone();
     assert!(store.discover_models(json!({"ai": ai})).is_ok());
     ai["base_url"] = json!("https://changed.example/v1");
     assert!(store.discover_models(json!({"ai": ai})).is_err());
-    assert!(store.set_ai(json!({"ai": ai})).is_err());
+    assert!(section(&store, "ai", ai.clone(), json!({})).is_err());
     assert!(store
         .discover_models(json!({"ai": ai, "api_key": "new-secret"}))
         .is_ok());
@@ -108,6 +112,9 @@ fn discovering_models_does_not_hold_up_the_settings_that_are_being_saved() {
         }),
     )
     .unwrap();
+    // Read before the probe starts, so the save below is the only thing that
+    // touches the store while it waits.
+    let revision = store.snapshot().unwrap()["config"]["revision"].clone();
 
     std::thread::scope(|scope| {
         let probing = scope.spawn(|| {
@@ -134,15 +141,19 @@ fn discovering_models_does_not_hold_up_the_settings_that_are_being_saved() {
         let (saved_sender, saved) = std::sync::mpsc::sync_channel(1);
         let store_for_save = &store;
         let saving = scope.spawn(move || {
-            let outcome = store_for_save.set_ai(json!({
-                "ai": {
+            let outcome = section_at(
+                store_for_save,
+                revision,
+                "ai",
+                json!({
                     "protocol": "openai_compat",
                     "base_url": "http://127.0.0.1:1234/v1",
                     "default_model": "zeta-model",
                     "models": ["zeta-model"],
                     "vision_models": [],
-                },
-            }));
+                }),
+                json!({}),
+            );
             let _ = saved_sender.send(outcome.is_ok());
         });
         let in_time = saved.recv_timeout(Duration::from_secs(5));

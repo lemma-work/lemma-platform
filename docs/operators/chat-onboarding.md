@@ -29,12 +29,10 @@ required; CORS configuration alone does not authorize an email-code request.
 `EMAIL_LOGIN_ORIGIN_NOT_ALLOWED` indicates a deployment configuration mismatch,
 not that the address belongs to a Google account.
 
-Root Makefile defaults now point backend auth and frontend URLs at the workspace
-on port 3000. Start the backend with the normal local stack and run
-`make dev-frontend` for `lemma-frontend`; override `DEV_WORKSPACE_PORT` consistently
-in both commands when choosing another port. The operator harness remains on
-`DEV_FRONTEND_PORT` and is not the user auth frontend. Existing custom environment
-files or deployment overrides must also use the new frontend's origin.
+Root Makefile defaults point backend auth and frontend URLs at `lemma-frontend`
+on port 3000, which `make dev` starts. Override `DEV_FRONTEND_PORT` to choose
+another port; the backend and frontend follow it together. Existing custom
+environment files or deployment overrides must also use the frontend's origin.
 
 Email-code failures expose a stable top-level `code` alongside `message`.
 Clients should use `EMAIL_LOGIN_EXPIRED` to restart the browser binding,
