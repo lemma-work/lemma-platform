@@ -124,6 +124,13 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     name: "Fireworks",
   },
   {
+    id: "nebius",
+    title: "Nebius Token Factory",
+    providerKind: "openai",
+    baseUrl: "https://api.tokenfactory.nebius.com/v1",
+    name: "Nebius Token Factory",
+  },
+  {
     id: "custom",
     title: "Custom",
     providerKind: "openai",
