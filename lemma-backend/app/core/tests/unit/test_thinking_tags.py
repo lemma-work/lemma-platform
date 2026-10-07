@@ -196,12 +196,13 @@ def test_a_stream_with_no_tags_passes_straight_through():
 def test_a_run_of_unfinished_tags_is_read_in_linear_time():
     """Text a model was made to repeat -- ``<think<think=<think=...`` -- once made
     every ``<think`` scan to the end of the message: 0.2s at 32k characters and
-    quadratic beyond. A tag never contains another ``<``, so each attempt now
-    stops at the next one. The bound is generous; the old shape takes ~8s here."""
+    quadratic beyond. Blocks are now found by walking forward from each open
+    tag to its close. The bound is generous; the old shape takes ~8s here."""
     import time
 
-    text = "<think" + "<think=" * 30_000
-    started = time.perf_counter()
-    split_thinking_segments(text)
-    strip_thinking_tokens(text)
-    assert time.perf_counter() - started < 1.0
+    for repeated in (OPEN, "<think="):
+        text = "<think" + repeated * 30_000
+        started = time.perf_counter()
+        split_thinking_segments(text)
+        strip_thinking_tokens(text)
+        assert time.perf_counter() - started < 1.0, repeated
