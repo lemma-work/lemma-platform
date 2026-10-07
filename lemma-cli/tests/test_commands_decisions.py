@@ -176,3 +176,20 @@ def test_a_bad_priority_or_unknown_field_is_refused(runner, patch_run, json_stat
     assert unknown.exit_code == 2
     assert "subject" in unknown.stderr
     assert fake.asked == []
+
+
+def test_a_priority_that_is_not_a_string_is_a_usage_error(
+    runner, patch_run, json_state
+):
+    fake = FakeDecisions()
+    patch_run(decisions, client=_client(fake), state=json_state)
+    payload = {"instruction": "x", "evidence": "y", "schema": SCHEMA}
+
+    for priority in ([], {}):
+        result = runner.invoke(
+            app,
+            ["decision", "run", "-d", json.dumps({**payload, "priority": priority})],
+        )
+        assert result.exit_code == 2, result.stderr
+        assert "--priority" in result.stderr
+    assert fake.asked == []

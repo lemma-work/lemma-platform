@@ -14,8 +14,9 @@ from app.modules.decisions.services.decision_service import DecisionService
 
 #: Comfortably above the largest valid body -- 64 KiB of evidence, 32 KiB of
 #: examples, a 16 KiB schema and an 8,000-character instruction, all escaped --
-#: and far below the server-wide ceiling, so an oversize body is refused before
-#: it is parsed.
+#: and far below the server-wide ceiling. A body that *declares* more is refused
+#: before it is read. A chunked body declares nothing, so it is read under the
+#: server-wide ceiling and then refused by the per-field caps (a 422) instead.
 MAX_BODY_BYTES = 512 * 1024
 
 _WORKLOAD_ACTOR = re.compile(

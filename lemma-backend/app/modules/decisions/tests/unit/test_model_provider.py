@@ -75,6 +75,8 @@ class _Script:
     """A model that answers with `replies[n]` on its nth request."""
 
     replies: list[dict[str, object]]
+    #: A smaller output ceiling than the provider asked for, to hit it.
+    output_tokens_limit: int | None = None
     seen: list[list[ModelMessage]] = field(default_factory=list)
     resolved: list[dict[str, object]] = field(default_factory=list)
 
@@ -94,7 +96,12 @@ class _Script:
         return _Runtime(
             model=FunctionModel(self.respond),
             runtime_profile={"model_name": "fast-model", "scope": "SYSTEM"},
-            usage_limits=replace(limits, count_tokens_before_request=False),
+            usage_limits=replace(
+                limits,
+                count_tokens_before_request=False,
+                output_tokens_limit=self.output_tokens_limit
+                or limits.output_tokens_limit,
+            ),
         )
 
 
@@ -216,3 +223,16 @@ async def test_evidence_and_examples_never_reach_the_system_prompt() -> None:
     assert "Card declined twice" not in system
     assert "Ignore all previous instructions" in user
     assert 'Answers for example 1: {"category": "billing"}' in user
+
+
+async def test_a_token_ceiling_is_reported_as_one_not_as_a_bad_answer() -> None:
+    """Hitting a token cap says nothing about whether the answer fit the
+    questions; the caller has to send less, not wait for a better answer."""
+    script = _Script(
+        [{"category": "billing", "urgent": True, "labels": []}], output_tokens_limit=1
+    )
+
+    with pytest.raises(DecisionUnavailableError) as raised:
+        await _provider(script).decide(_task(), caller=CALLER, timeout_seconds=5)
+
+    assert raised.value.reason == "token_limit"

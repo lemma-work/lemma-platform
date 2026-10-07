@@ -27,7 +27,11 @@ from app.modules.decisions.domain.answers import Answer, AnswerValue
 from app.modules.decisions.domain.questions import Option, Question
 from app.modules.decisions.domain.request import DecisionTask
 
-_MULTI_SEPARATOR = "__"
+#: Between a multi-choice question's key and an option's index. A question key
+#: is lowercase letters, digits and `_` only, so a dot can never appear in one,
+#: and `key.index` is unique across plain and multi-choice questions alike --
+#: which `key__value` was not (`a` with option `b__c` met `a__b` with `c`).
+_MULTI_SEPARATOR = "."
 #: Worked examples sent per option. More is mostly repetition, and every one is
 #: input the request pays for.
 _EXAMPLES_PER_OPTION = 8
@@ -82,8 +86,8 @@ def build_request(task: DecisionTask, *, model: str) -> WireRequest:
         instructions = f"{task.instruction}\n\nQuestion: {question.text}"
         examples = _examples_by_value(task, question.key)
         if question.kind == "multi_choice":
-            for option in question.options:
-                wire_key = f"{question.key}{_MULTI_SEPARATOR}{option.value}"
+            for index, option in enumerate(question.options):
+                wire_key = f"{question.key}{_MULTI_SEPARATOR}{index}"
                 questions[wire_key] = _option_noul(instructions, option, examples)
                 mapping[wire_key] = WireQuestion(question.key, str(option.value))
             continue

@@ -33,6 +33,7 @@ from app.modules.decisions.domain.request import (
     DecisionTask,
     build_task,
 )
+from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import UsageExecutionContext
 
 logger = get_logger(__name__)
@@ -113,11 +114,14 @@ class DecisionService:
             )
             raise DecisionUnavailableError(reason, exc.message) from exc
         except BaseExceptionGroup as group:
-            # The decision and the usage checkpoint both failed. Which one the
-            # caller sees matters less than that it is retryable and not a 500.
-            cancelled = group.subgroup(asyncio.CancelledError)
-            if cancelled is not None:
+            # The decision and the usage checkpoint both failed. A cancellation
+            # and a spent budget keep their own meaning -- the second is a 429
+            # the caller must not retry into; anything else is retryable.
+            if group.subgroup(asyncio.CancelledError) is not None:
                 raise
+            spent = group.subgroup(UsageLimitExceededError)
+            if spent is not None:
+                raise _first(spent) from group
             raise DecisionUnavailableError("provider_error") from group
 
     def _timeout(self, task: DecisionTask) -> float:
@@ -163,6 +167,12 @@ class DecisionService:
         from app.modules.usage.contracts.metering import metering_execution
 
         return metering_execution(context)
+
+
+def _first(group: BaseExceptionGroup[BaseException]) -> BaseException:
+    """The first leaf of a group, however deeply it is nested."""
+    leaf = group.exceptions[0]
+    return _first(leaf) if isinstance(leaf, BaseExceptionGroup) else leaf
 
 
 def _rate_key(caller: DecisionCaller) -> str:

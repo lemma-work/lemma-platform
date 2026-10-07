@@ -69,8 +69,8 @@ FULL = {
     "category": {"choice": "billing", "probabilities": {"billing": 0.9, "bug": 0.1}},
     "urgent": {"noul": 0.3},
     "severity": {"probabilities": {"0": 0.2, "1": 0.8}},
-    "labels__vip": {"noul": 0.1},
-    "labels__refund": {"noul": 0.95},
+    "labels.0": {"noul": 0.1},
+    "labels.1": {"noul": 0.95},
 }
 
 
@@ -86,13 +86,13 @@ def test_each_kind_becomes_its_system_one_type() -> None:
     }
     assert questions["urgent"]["type"] == "noul"  # type: ignore[index]
     assert questions["severity"]["criteria"] == ["Cosmetic", "Blocking"]  # type: ignore[index]
-    assert questions["labels__vip"]["type"] == "noul"  # type: ignore[index]
+    assert questions["labels.0"]["type"] == "noul"  # type: ignore[index]
     assert set(request.questions) == {
         "category",
         "urgent",
         "severity",
-        "labels__vip",
-        "labels__refund",
+        "labels.0",
+        "labels.1",
     }
     assert request.body["state"] == {"subject": "Charged twice"}
     assert request.body["model"] == "jev-latest"
@@ -123,7 +123,7 @@ def test_examples_are_filed_under_the_option_they_were_answered_with() -> None:
     assert questions["urgent"]["criteria"]["true"]["examples"] == [  # type: ignore[index]
         "Server down"
     ]
-    assert questions["labels__vip"]["criteria"]["true"]["examples"] == [  # type: ignore[index]
+    assert questions["labels.0"]["criteria"]["true"]["examples"] == [  # type: ignore[index]
         "Big client"
     ]
 
@@ -163,7 +163,7 @@ def test_a_score_without_a_distribution_rounds_to_a_level() -> None:
         {"urgent": {"noul": 1.4}},
         {"urgent": {"noul": None}},
         {"severity": {"score": 7}},
-        {"labels__vip": None},
+        {"labels.0": None},
     ],
     ids=[
         "choice-not-offered",
@@ -188,3 +188,38 @@ def test_an_unreadable_body_is_refused() -> None:
 
     with pytest.raises(WireAnswerError):
         parse_response(b"<html>", task, build_request(task, model="m").questions)
+
+
+def test_wire_keys_stay_unique_whatever_the_questions_are_called() -> None:
+    """`key__value` let question `a` with option `b__c` and question `a__b` with
+    option `c` share one wire key, so one answer overwrote the other."""
+    task = build_task(
+        DecisionRequest(
+            instruction="x",
+            evidence="y",
+            schema={
+                "type": "object",
+                "properties": {
+                    "a": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["b__c", "d"]},
+                        "uniqueItems": True,
+                        "description": "Which?",
+                    },
+                    "a__b": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["c", "e"]},
+                        "uniqueItems": True,
+                        "description": "Which else?",
+                    },
+                    "a_0": {"type": "boolean", "description": "Yes?"},
+                },
+            },
+        )
+    )
+
+    request = build_request(task, model="m")
+
+    assert set(request.questions) == {"a.0", "a.1", "a__b.0", "a__b.1", "a_0"}
+    assert request.questions["a.0"].option == "b__c"
+    assert request.questions["a__b.0"].option == "c"

@@ -13,7 +13,12 @@ from typing import Literal
 from app.core.domain.errors import DomainError
 
 UnavailableReason = Literal[
-    "timeout", "transport", "provider_error", "invalid_output", "not_configured"
+    "timeout",
+    "transport",
+    "provider_error",
+    "invalid_output",
+    "token_limit",
+    "not_configured",
 ]
 
 
@@ -67,5 +72,9 @@ _MESSAGES: dict[UnavailableReason, str] = {
     "transport": "The decision provider could not be reached.",
     "provider_error": "The decision provider failed to answer.",
     "invalid_output": "The decision provider's answer did not fit the questions.",
+    "token_limit": (
+        "The decision needed more model tokens than one decision may use. "
+        "Send less evidence or fewer examples."
+    ),
     "not_configured": "No decision provider is configured on this server.",
 }

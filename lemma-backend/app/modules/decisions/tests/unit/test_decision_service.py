@@ -205,3 +205,52 @@ async def test_a_person_without_an_organization_is_limited_on_their_own() -> Non
     await _service(_Provider(GOOD), limiter=limiter).decide(REQUEST, caller)
 
     assert limiter.keys == [f"user:{caller.user_id}"]
+
+
+async def test_a_spent_budget_survives_a_failed_usage_checkpoint() -> None:
+    """When the provider is refused for spend and the usage checkpoint fails
+    too, the metering scope raises both as a group. The caller must still see
+    the spend limit -- a 429 it should not retry into -- not a retryable 503."""
+
+    @asynccontextmanager
+    async def failing_checkpoint(_: UsageExecutionContext) -> AsyncIterator[object]:
+        try:
+            yield object()
+        except UsageLimitExceededError as failure:
+            raise BaseExceptionGroup(
+                "Execution and usage finalization failed",
+                [failure, RuntimeError("checkpoint lost")],
+            ) from None
+
+    service = DecisionService(
+        settings=DecisionsSettings(),
+        provider=lambda _: _Provider(raises=UsageLimitExceededError()),
+        limiter=_Limiter(),
+        metering=failing_checkpoint,
+    )
+
+    with pytest.raises(UsageLimitExceededError):
+        await service.decide(REQUEST, CALLER)
+
+
+async def test_any_other_double_failure_is_retryable() -> None:
+    @asynccontextmanager
+    async def failing_checkpoint(_: UsageExecutionContext) -> AsyncIterator[object]:
+        try:
+            yield object()
+        except DecisionUnavailableError as failure:
+            raise BaseExceptionGroup(
+                "Execution and usage finalization failed",
+                [failure, RuntimeError("checkpoint lost")],
+            ) from None
+
+    service = DecisionService(
+        settings=DecisionsSettings(),
+        provider=lambda _: _Provider(raises=DecisionUnavailableError("transport")),
+        limiter=_Limiter(),
+        metering=failing_checkpoint,
+    )
+
+    with pytest.raises(DecisionUnavailableError) as raised:
+        await service.decide(REQUEST, CALLER)
+    assert raised.value.reason == "provider_error"

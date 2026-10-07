@@ -25,8 +25,9 @@ Answers closed questions about one piece of evidence and stores nothing.
   multi-choice, yes/no and integer-scale properties, each with a `description`;
   the evidence is at most 64 KiB and the examples at most 20 totalling 32 KiB.
   Anything else is a 422 listing every problem (`DECISION_INVALID_REQUEST`, or
-  `DECISION_INPUT_TOO_LARGE` when a cap was the problem). A body over 512 KiB is
-  a 413 before it is read.
+  `DECISION_INPUT_TOO_LARGE` when a cap was the problem). A body that declares
+  a `Content-Length` over 512 KiB is a 413 before it is read; a chunked body is
+  read under the server-wide ceiling and then held to the same caps.
 - **Changes:** nothing but the organization's per-minute counter and the usage
   ledger, where the call is metered like a model call.
 - **Answers:** one per question, `{value, confidence}`. `value: null` means the
@@ -35,5 +36,7 @@ Answers closed questions about one piece of evidence and stores nothing.
 - **Refusals:** 429 `DECISION_RATE_LIMITED` with `Retry-After` when the
   organization is over its rate; 429 `USAGE_LIMIT_EXCEEDED` when spend has run
   out; 503 `DECISION_PROVIDER_UNAVAILABLE` (`details.reason`: `timeout`,
-  `transport`, `provider_error`, `invalid_output`, `not_configured`) when the
-  provider did not answer. 429 and 503 are worth retrying; a 422 is not.
+  `transport`, `provider_error`, `invalid_output`, `token_limit`,
+  `not_configured`) when the provider did not answer. 429 `DECISION_RATE_LIMITED`
+  and most 503s are worth retrying; `token_limit` asks for less evidence, and a
+  422 is not worth retrying unchanged.

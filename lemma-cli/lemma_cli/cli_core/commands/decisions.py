@@ -118,7 +118,8 @@ def _request(
     )
     if unknown:
         raise typer.BadParameter(f"Unknown request field(s): {', '.join(unknown)}.")
-    if merged.get("priority", "background") not in {"interactive", "background"}:
+    # A list or object from --data would make the membership test itself raise.
+    if merged.get("priority", "background") not in ("interactive", "background"):
         raise typer.BadParameter("--priority is `interactive` or `background`.")
     return merged
 

@@ -134,7 +134,11 @@ class ModelDecisionProvider:
 
         try:
             result = await agent.run(prompt.user, usage_limits=runtime.usage_limits)
-        except (UnexpectedModelBehavior, UsageLimitExceeded) as exc:
+        except UsageLimitExceeded as exc:
+            # A token or request ceiling, possibly hit before the model was
+            # asked at all -- not an answer that failed to fit the questions.
+            raise DecisionUnavailableError("token_limit") from exc
+        except UnexpectedModelBehavior as exc:
             raise DecisionUnavailableError("invalid_output") from exc
         usage = result.usage
         return DecisionResult(
