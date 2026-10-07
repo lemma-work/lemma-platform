@@ -251,7 +251,7 @@ operating use the same CLI.
     <td align="center" width="112"><img src="docs/Assets/Logos/codex.svg" height="36" alt="Codex"><br><sub>Codex</sub></td>
     <td align="center" width="112"><img src="docs/Assets/Logos/opencode-logo-light.svg" height="36" alt="OpenCode"><br><sub>OpenCode</sub></td>
     <td align="center" width="112"><img src="docs/Assets/Logos/cursor.svg" height="36" alt="Cursor"><br><sub>Cursor</sub></td>
-    <td align="center" width="112"><img src="lemma-harness/public/harnesslogos/antigravity.png" height="36" alt="Antigravity"><br><sub>Antigravity</sub></td>
+    <td align="center" width="112"><img src="docs/Assets/Logos/antigravity.png" height="36" alt="Antigravity"><br><sub>Antigravity</sub></td>
   </tr>
 </table>
 
@@ -450,8 +450,7 @@ some provider validates.
 | Path | Package | License |
 |------|---------|---------|
 | `lemma-backend/` | FastAPI backend, sandbox images and runtime, migrations, and infra Docker Compose | AGPLv3 |
-| `lemma-frontend/` | User-facing workspace | AGPLv3 |
-| `lemma-harness/` | Operator tools and desktop web runtime | AGPLv3 |
+| `lemma-frontend/` | Web app: workspace, sign-in, and public site | AGPLv3 |
 | `lemma-stack/` | `lemma-stack`, installer and manager for a self-contained local stack | Apache-2.0 |
 | `desktop/` | Tauri macOS desktop app (thin shell around the `lemma-stack` supervisor) | AGPLv3 |
 | `lemma-cli/` | `lemma-terminal`, the `lemma` CLI and terminal UI | Apache-2.0 |
@@ -481,12 +480,12 @@ make stop-all    # also stop dev infrastructure
 ```
 
 Run `make help` for the full list. The dev stack uses explicit development
-ports (frontend 3710, backend 8710). Managed Desktop installations choose
+ports (frontend 3000, backend 8710). Managed Desktop installations choose
 persistent high ports instead.
 
 `make dev-public` requires `cloudflared` and creates one temporary
 `*.trycloudflare.com` URL for the API. The frontend and auth UI stay on
-`http://localhost:3710`, while the public API URL is injected into the frontend,
+`http://localhost:3000`, while the public API URL is injected into the frontend,
 webhook callbacks, and generated API links for that run. The quick-tunnel URL
 changes on every restart and is intended only for development.
 
@@ -505,7 +504,7 @@ entries: [installation](docs/installation.md) for the full setup guide,
 [ARCHITECTURE.md](ARCHITECTURE.md) for how the components fit together,
 [CONTRIBUTING.md](CONTRIBUTING.md) for what a pull request needs, and
 [`lemma-backend/README.md`](lemma-backend/README.md) /
-[`lemma-harness/README.md`](lemma-harness/README.md) for per-component detail.
+[`lemma-frontend/README.md`](lemma-frontend/README.md) for per-component detail.
 
 ## Licensing
 
@@ -515,8 +514,7 @@ The Lemma platform uses a dual-licensing model:
 
 - `lemma-backend/`: the FastAPI backend, including the sandbox images and the
   runtime that ships inside them
-- `lemma-frontend/`: the user-facing workspace (`make dev-frontend`)
-- `lemma-harness/`: operator tools, auth portal and desktop web runtime
+- `lemma-frontend/`: the web app — workspace, sign-in, and public site
 
 These are licensed under the [GNU Affero General Public License v3](LICENSE).
 If you modify and offer the software over a network (e.g. a hosted SaaS), you

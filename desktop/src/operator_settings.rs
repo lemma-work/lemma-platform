@@ -1,7 +1,6 @@
 //! Operator commands outside the workspace's Settings: Local settings'
-//! snapshot and sharing, provider model discovery, preparing the sandbox
-//! image, and `configure_ai_provider`, which only lemma-harness's onboarding
-//! invokes. Each one is a locald round trip the page waits on. The
+//! snapshot and sharing, provider model discovery, and preparing the sandbox
+//! image. Each one is a locald round trip the page waits on. The
 //! lemma-frontend workspace writes its settings -- `ai`, `email`,
 //! `integrations` and `surfaces` -- through `apply_local_settings` in
 //! `workspace_settings.rs`.
@@ -28,22 +27,6 @@ pub(crate) fn discover_provider_models_impl(
         Duration::from_secs(30),
     )?;
     Ok(response.get("models").cloned().unwrap_or(json!([])))
-}
-
-pub(crate) fn configure_ai_provider_impl(app: AppHandle, payload: Value) -> Result<Value, String> {
-    if current_mode(&app) != "local" {
-        return Err("the local AI provider is configured only on a local install".into());
-    }
-    ensure_locald(&app)?;
-    let response = locald_request(
-        json!({
-            "cmd": "config.set-ai",
-            "id": operation_id("set-ai"),
-            "payload": payload,
-        }),
-        Duration::from_secs(180),
-    )?;
-    Ok(response.get("operator").cloned().unwrap_or(json!({})))
 }
 
 pub(crate) fn sharing_action_impl(
@@ -97,40 +80,13 @@ pub(crate) async fn discover_provider_models(
     payload: Value,
 ) -> Result<Value, String> {
     // This binds the window and checks it, where it used to take `_window` and
-    // discard it -- while `configure_ai_provider`, its sibling one screen down,
-    // has always checked. The command is granted to remote origins, and an
+    // discard it. The command is granted to remote origins, and an
     // omitted `api_key` means "use the one in the Keychain", which is then
     // attached as a bearer token to a `base_url` the *caller* chose. So one
     // invoke from any granted origin handed the user's provider key to a host
     // of the caller's choosing, with no dialog and nothing logged.
     require_agent_host_caller(&window, &app)?;
     tauri::async_runtime::spawn_blocking(move || discover_provider_models_impl(app, payload))
-        .await
-        .map_err(|error| error.to_string())?
-}
-
-/// Point this installation at an AI provider.
-///
-/// Serves lemma-harness, whose onboarding asks "which model?" and answers it
-/// in the same window (`lemma-harness/lib/desktop/local-capabilities.ts`).
-/// The lemma-frontend workspace never invokes it: it writes the `ai` section
-/// with the rest of its settings through `apply_local_settings`. This command
-/// reaches `config.set-ai`, which merges only that section.
-///
-/// Blocking on purpose. Applying a provider validates it against the provider
-/// and restarts the backend, and both of those can fail in ways the user needs
-/// the actual message for.
-#[tauri::command]
-/// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
-/// the main thread, so any command that waits on the daemon, the network or a
-/// child process freezes every window for its whole duration.
-pub(crate) async fn configure_ai_provider(
-    window: Webview,
-    app: AppHandle,
-    payload: Value,
-) -> Result<Value, String> {
-    require_agent_host_caller(&window, &app)?;
-    tauri::async_runtime::spawn_blocking(move || configure_ai_provider_impl(app, payload))
         .await
         .map_err(|error| error.to_string())?
 }

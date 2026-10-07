@@ -1,8 +1,0 @@
-[
-  {
-    "id": "reddit-warmup-manager",
-    "name": "Reddit Warmup Manager",
-    "description": "Build Reddit karma and launch readiness with a human-approved Reddit operating loop.",
-    "github": "https://github.com/lemma-work/reddit-warmup-manager"
-  }
-]

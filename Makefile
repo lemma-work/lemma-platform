@@ -38,7 +38,7 @@ SHELL := /bin/bash
         scenarios-record scenarios-replay \
         scenario-coverage scenarios-code-coverage \
         coverage coverage-backend coverage-backend-unit coverage-backend-e2e \
-        coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e coverage-frontend \
+        coverage-backend-module coverage-cli coverage-cli-unit coverage-cli-e2e \
         lint lint-clients lint-lockfiles measure-clients client-structure-record client-typecheck-record \
         quality quality-frontend check architecture pre-push codeql codeql-python codeql-javascript codeql-all migrate \
         fix format lint-python lint-frontend lint-rust lint-shell lint-ci lint-docker lint-docs lint-config \
@@ -69,8 +69,7 @@ E2E_TEMP_ROOT ?= /tmp/lemma-desktop-e2e
 UNIT_MARKERS  ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
 
 BACKEND_DIR   := lemma-backend
-FRONTEND_DIR  := lemma-harness
-WORKSPACE_DIR := lemma-frontend
+FRONTEND_DIR  := lemma-frontend
 CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
@@ -116,22 +115,20 @@ PUBLIC_TUNNEL_READY_TIMEOUT  ?= 30
 # ── Canonical dev ports + URLs ───────────────────────────────────────────────
 # These are the SINGLE source of truth for the dev stack. Infra (docker
 # compose), backend settings (API_URL / FRONTEND_URL / DATABASE_URL / …) and
-# the frontend (NEXT_PUBLIC_* + runtime-config.js) all derive from these.
+# the frontend (NEXT_PUBLIC_*) all derive from these.
 # Change one number here and the whole stack stays consistent. Picked to
 # differ from the installed lemma-stack defaults (3700/8700/4173/5432/…)
 # so a fresh platform checkout can sit alongside an installed copy.
 
 DEV_BACKEND_PORT      ?= 8710
-DEV_FRONTEND_PORT     ?= 3710
-DEV_WORKSPACE_PORT    ?= 3000
+DEV_FRONTEND_PORT     ?= 3000
 DEV_POSTGRES_PORT     ?= 5432
 DEV_REDIS_PORT        ?= 6379
 DEV_SUPERTOKENS_PORT  ?= 3567
 
 DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
-DEV_WORKSPACE_URL     := http://localhost:$(DEV_WORKSPACE_PORT)
-DEV_AUTH_FRONTEND_URL := $(DEV_WORKSPACE_URL)
+DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
 DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 # A sandbox browser needs an origin, not a path: the dashboard is a Next.js
 # app whose assets are all absolute. `*.localhost` resolves without any DNS
@@ -227,7 +224,7 @@ COMMON_DEV_ENV := \
 	DEV_SUPERTOKENS_PORT=$(DEV_SUPERTOKENS_PORT)
 
 BACKEND_API_URL                 ?= $(DEV_BACKEND_URL)
-BACKEND_FRONTEND_URL            ?= $(DEV_WORKSPACE_URL)
+BACKEND_FRONTEND_URL            ?= $(DEV_FRONTEND_URL)
 BACKEND_AUTH_FRONTEND_URL       ?= $(DEV_AUTH_FRONTEND_URL)
 BACKEND_CLI_API_URL             ?= $(DEV_BACKEND_URL)
 BACKEND_CLI_AUTH_FRONTEND_URL   ?= $(DEV_AUTH_FRONTEND_URL)
@@ -336,7 +333,7 @@ BACKEND_DEV_ENV := \
 
 FRONTEND_API_URL              ?= $(DEV_BACKEND_URL)
 FRONTEND_SITE_URL             ?= $(DEV_FRONTEND_URL)
-FRONTEND_AUTH_URL             ?= $(DEV_AUTH_FRONTEND_URL)
+FRONTEND_AUTH_URL             ?= $(DEV_AUTH_FRONTEND_URL)/auth
 FRONTEND_SESSION_TOKEN_DOMAIN ?=
 FRONTEND_APPS_DOMAIN_SUFFIX   ?= $(DEV_APPS_DOMAIN_SUFFIX)
 
@@ -378,8 +375,8 @@ help:
 	@echo "    make init               create .env files with local defaults (idempotent)"
 	@echo ""
 	@echo "  Dev stack"
-	@echo "    make dev                start infra + backend + harness"
-	@echo "    make dev-frontend       start the user-facing workspace on port 3000"
+	@echo "    make dev                start infra + backend + frontend"
+	@echo "    make dev-frontend       start only the frontend (backend running elsewhere)"
 	@echo "    make dev-public         start with an ephemeral public API tunnel"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
 	@echo "    make stop               stop app and tunnel processes"
@@ -415,7 +412,7 @@ help:
 	@echo "    make test-backend       backend unit + fast e2e"
 	@echo "    make test-backend-unit  backend unit tests only"
 	@echo "    make test-backend-e2e   backend fast e2e (E2E_WORKERS=$(E2E_WORKERS))"
-	@echo "    make test-frontend      harness vitest suite"
+	@echo "    make test-frontend      lemma-frontend test suite"
 	@echo "    make test-cli           lemma-cli unit + e2e tests"
 	@echo "    make test-cli-unit      lemma-cli unit tests only (no docker)"
 	@echo "    make test-cli-e2e       lemma-cli e2e (real backend + docker; needs docker)"
@@ -443,7 +440,6 @@ help:
 	@echo "    make coverage-cli             lemma-cli unit + e2e coverage"
 	@echo "    make coverage-cli-unit        lemma-cli unit coverage (no docker)"
 	@echo "    make coverage-cli-e2e         lemma-cli e2e coverage (needs docker)"
-	@echo "    make coverage-frontend        frontend vitest coverage"
 	@echo ""
 	@echo "  Fast loop (on what this branch changed; ALL=1 for everything, STAGED=1 for the index)"
 	@echo "    make fix                run every safe auto-fixer: ruff, eslint --fix, cargo fmt"
@@ -497,21 +493,15 @@ init:
 	@cd $(PYTHON_DIR) && uv sync --quiet
 	@cd $(TS_DIR) && npm install --silent
 	@cd $(FRONTEND_DIR) && npm install --silent
-	@cd $(WORKSPACE_DIR) && npm install --silent
 	@echo "  ✓ Dependencies installed"
 	@echo ""
 	@echo "→ Building lemma-sdk (lemma-typescript)…"
 	@cd $(TS_DIR) && npm run build --silent
 	@echo "  ✓ lemma-sdk built — dist/ ready for frontend import"
 	@echo ""
-	@# Env files come AFTER install: _init-frontend-env runs the frontend's
-	@# gen:runtime-config, which imports @next/env from node_modules. Generating
-	@# env before `npm install` aborts a fresh-clone `make init` with
-	@# ERR_MODULE_NOT_FOUND before any dependency is installed.
 	@echo "→ Creating .env files (skipped if already present)…"
 	@$(MAKE) --no-print-directory _init-backend-env
 	@$(MAKE) --no-print-directory _init-frontend-env
-	@$(MAKE) --no-print-directory _init-workspace-env
 	@echo ""
 	@$(MAKE) --no-print-directory _ensure-sandbox-images
 	@echo ""
@@ -557,7 +547,7 @@ _init-backend-env:
 			echo "LOG_LEVEL=$(DEV_LOG_LEVEL)"; \
 			echo "JSON_LOGS_ENABLED=$(DEV_JSON_LOGS_ENABLED)"; \
 			echo "API_URL=$(DEV_BACKEND_URL)"; \
-			echo "FRONTEND_URL=$(DEV_WORKSPACE_URL)"; \
+			echo "FRONTEND_URL=$(DEV_FRONTEND_URL)"; \
 			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 			echo "CLI_API_URL=$(DEV_BACKEND_URL)"; \
 			echo "CLI_AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
@@ -616,7 +606,7 @@ _ensure-backend-env-keys:
 		append LOG_LEVEL $(DEV_LOG_LEVEL); \
 		append JSON_LOGS_ENABLED $(DEV_JSON_LOGS_ENABLED); \
 		append API_URL '$(DEV_BACKEND_URL)'; \
-		append FRONTEND_URL '$(DEV_WORKSPACE_URL)'; \
+		append FRONTEND_URL '$(DEV_FRONTEND_URL)'; \
 		append AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
 		append CLI_API_URL '$(DEV_BACKEND_URL)'; \
 		append CLI_AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
@@ -647,16 +637,17 @@ _init-frontend-env:
 	@if [ ! -f $(FRONTEND_DIR)/.env.local ]; then \
 		echo "  Creating $(FRONTEND_DIR)/.env.local …"; \
 		set -e; \
+		mkdir -p $(FRONTEND_DIR); \
 		{ \
 			echo "# Lemma frontend — local dev defaults (generated by make init)."; \
 			echo "# Kept in sync with the canonical ports at the top of the Makefile."; \
+			echo "NEXT_PUBLIC_DATA=live"; \
 			echo "NEXT_PUBLIC_API_URL=$(DEV_BACKEND_URL)"; \
 			echo "NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL)"; \
-			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_AUTH_FRONTEND_URL)"; \
+			echo "NEXT_PUBLIC_AUTH_URL=$(FRONTEND_AUTH_URL)"; \
 			echo "NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(DEV_APPS_DOMAIN_SUFFIX)"; \
 			echo "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=$(DEV_FRONTEND_EMAIL_VERIFICATION)"; \
 		} > $(FRONTEND_DIR)/.env.local; \
-		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	else \
 		$(MAKE) --no-print-directory _ensure-frontend-env-keys; \
 	fi
@@ -675,10 +666,9 @@ _ensure-frontend-env-keys:
 		append() { key="$$1"; value="$$2"; grep -qE "^$${key}=" $(FRONTEND_DIR)/.env.local || printf '%s=%s\n' "$$key" "$$value" >> $(FRONTEND_DIR)/.env.local; }; \
 		append NEXT_PUBLIC_API_URL '$(DEV_BACKEND_URL)'; \
 		append NEXT_PUBLIC_SITE_URL '$(DEV_FRONTEND_URL)'; \
-		append NEXT_PUBLIC_AUTH_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+		append NEXT_PUBLIC_AUTH_URL '$(FRONTEND_AUTH_URL)'; \
 		append NEXT_PUBLIC_APPS_DOMAIN_SUFFIX '$(DEV_APPS_DOMAIN_SUFFIX)'; \
 		append NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED '$(DEV_FRONTEND_EMAIL_VERIFICATION)'; \
-		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	fi
 
 # ── Dev stack ─────────────────────────────────────────────────────────────────
@@ -1031,12 +1021,12 @@ desktop-dev:
 	@command -v node >/dev/null 2>&1 || \
 		(echo "  ✗ node not found — install Node.js $(NODE_VERSION) from https://nodejs.org"; exit 1)
 	@$(MAKE) --no-print-directory _disk-hint
-	@# locald runs $(WORKSPACE_DIR)'s server.mjs straight from the checkout, with
+	@# locald runs $(FRONTEND_DIR)'s server.mjs straight from the checkout, with
 	@# no npm in between -- so a missing install or an unbuilt SDK is not an
 	@# error message, it is a frontend health check that times out two minutes
 	@# into startup. Say so here instead.
-	@test -d $(WORKSPACE_DIR)/node_modules && test -d $(TS_DIR)/node_modules || ( \
-		echo "  ✗ run 'npm ci' in $(TS_DIR) and $(WORKSPACE_DIR) first"; exit 1)
+	@test -d $(FRONTEND_DIR)/node_modules && test -d $(TS_DIR)/node_modules || ( \
+		echo "  ✗ run 'npm ci' in $(TS_DIR) and $(FRONTEND_DIR) first"; exit 1)
 	@test -f $(TS_DIR)/dist/index.js || (cd $(TS_DIR) && npm run build --silent)
 	@$(DESKTOP_DIR)/scripts/dev-local.sh --source $(if $(filter 1,$(CONTROL)),--control,)
 
@@ -1589,7 +1579,7 @@ script-portability-check:
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-test: test-dev-workflow test-backend-unit test-backend-e2e test-cli test-python test-frontend test-workspace
+test: test-dev-workflow test-backend-unit test-backend-e2e test-cli test-python test-frontend
 	@echo ""
 	@echo "✓ All test suites complete."
 
@@ -1883,7 +1873,7 @@ scenario-coverage:
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
-coverage: coverage-backend-unit coverage-backend-e2e coverage-cli coverage-frontend
+coverage: coverage-backend-unit coverage-backend-e2e coverage-cli
 	@echo ""
 	@echo "✓ Coverage reports written:"
 	@echo "    $(BACKEND_DIR)/coverage-unit.xml"
@@ -1934,11 +1924,6 @@ coverage-cli-e2e:
 	@echo "→ lemma-cli e2e coverage (real backend + docker)…"
 	@cd $(CLI_DIR) && uv run --with pytest-cov pytest -m e2e \
 		--cov=lemma_cli --cov-report=term-missing -q
-
-coverage-frontend:
-	@echo "→ Frontend coverage…"
-	@cd $(FRONTEND_DIR) && npx vitest run --coverage 2>/dev/null || \
-		(echo "  Install @vitest/coverage-v8: npm install -D @vitest/coverage-v8"; exit 1)
 
 # Ruff cannot float. Two versions disagree about formatting output, and 0.16
 # widened the default rule selection enough to turn 1 finding into 711 on the
@@ -2240,17 +2225,16 @@ codeql-all:
 # frontend plus CodeQL" -- reported success on a machine where not one frontend
 # gate had run, and said so in a line that scrolled past.
 quality-frontend:
-	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ] || [ ! -d "$(WORKSPACE_DIR)/node_modules" ] || [ ! -d "$(TS_DIR)/node_modules" ]; then \
+	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ] || [ ! -d "$(TS_DIR)/node_modules" ]; then \
 		echo "make: *** cannot run the frontend gates: node_modules is missing."; \
-		echo "    run 'npm ci' in $(TS_DIR), $(FRONTEND_DIR) and $(WORKSPACE_DIR),"; \
+		echo "    run 'npm ci' in $(TS_DIR) and $(FRONTEND_DIR),"; \
 		echo "    or run 'make quality' if your change is Python-only."; \
 		exit 1; \
 	fi
-	@cd $(WORKSPACE_DIR) && npm run check
+	@echo "→ Frontend lint, naming, design, types, OpenAPI spec…"
+	@cd $(FRONTEND_DIR) && npm run check
 	@echo "→ TypeScript SDK test types…"
 	@cd $(TS_DIR) && npx tsc --noEmit -p tsconfig.test.json
-	@echo "→ Frontend lint, types, design audit, education anchors…"
-	@cd $(FRONTEND_DIR) && npm run --silent check
 
 # Everything a PR is judged on locally, short of the test suites themselves.
 # CodeQL is not in it: it runs in CI and reports on the pull request.
@@ -2294,17 +2278,10 @@ migrate:
 	@echo "→ Applying database migrations…"
 	@cd $(BACKEND_DIR) && uv run alembic upgrade head
 
-.PHONY: dev-frontend test-workspace _init-workspace-env
+.PHONY: dev-frontend
 
-dev-frontend: _init-workspace-env
-	@cd $(WORKSPACE_DIR) && npm run dev -- --port $(DEV_WORKSPACE_PORT)
-
-test-workspace:
-	@cd $(WORKSPACE_DIR) && npm test
-
-_init-workspace-env:
-	@mkdir -p $(WORKSPACE_DIR)
-	@if [ ! -f $(WORKSPACE_DIR)/.env.local ]; then \
-		printf 'NEXT_PUBLIC_DATA=live\nNEXT_PUBLIC_API_URL=%s\nNEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=%s\n' \
-			'$(DEV_BACKEND_URL)' '$(DEV_FRONTEND_EMAIL_VERIFICATION)' > $(WORKSPACE_DIR)/.env.local; \
-	fi
+# Only the frontend, for a backend you run some other way. `make dev` starts
+# this too.
+dev-frontend: _init-frontend-env
+	@cd $(FRONTEND_DIR) && $(COMMON_DEV_ENV) $(FRONTEND_DEV_ENV) \
+		npm run dev -- --port $(DEV_FRONTEND_PORT)

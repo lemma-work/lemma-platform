@@ -132,10 +132,10 @@ fn stale_settings_save_cannot_overwrite_a_new_revision() {
 }
 
 #[test]
-fn setting_the_ai_profile_leaves_every_other_section_alone() {
-    // Onboarding is trusted with the model and nothing else. If this took a
-    // whole configuration, a caller that echoed back a stale copy would
-    // silently reset the user's sharing and integration settings.
+fn saving_the_ai_section_leaves_every_other_section_alone() {
+    // The settings page saves one section at a time. If a save took a whole
+    // configuration, a caller that echoed back a stale copy would silently
+    // reset the user's sharing and integration settings.
     let root = tempdir().unwrap();
     let store = OperatorConfigStore::load_probing(
         root.path().join("operator.json"),
@@ -155,17 +155,19 @@ fn setting_the_ai_profile_leaves_every_other_section_alone() {
         })
         .unwrap();
 
-    let snapshot = store
-        .set_ai(json!({
-            "ai": {
-                "protocol": "openai_compat",
-                "base_url": "http://127.0.0.1:11434/v1",
-                "default_model": "",
-                "models": [],
-                "vision_models": [],
-            },
-        }))
-        .unwrap();
+    let snapshot = section(
+        &store,
+        "ai",
+        json!({
+            "protocol": "openai_compat",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "default_model": "",
+            "models": [],
+            "vision_models": [],
+        }),
+        json!({}),
+    )
+    .unwrap();
 
     assert_eq!(snapshot["config"]["ai"]["default_model"], "alpha-model");
     assert_eq!(
