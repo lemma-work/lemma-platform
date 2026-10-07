@@ -120,6 +120,7 @@ class FunctionSessionTokenCache:
             if (
                 cached is not None
                 and cached.cache_expires_at > now
+                and cached.token.expires_at > self._wall_clock()
                 and cached.token.expires_at > required_until
             ):
                 self._entries[key] = cached
