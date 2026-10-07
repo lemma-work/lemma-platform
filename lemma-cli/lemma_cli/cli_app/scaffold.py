@@ -919,6 +919,11 @@ def _decision_misroute_issues(nodes: list, edges: list) -> list[str]:
             continue
         nid = node.get("id")
         cfg = node.get("config") or {}
+        if isinstance(cfg.get("question"), dict):
+            # A decision that asks a question routes on its answer, and the
+            # server refuses to save one with an answer or an unsure result
+            # that has nowhere to go -- so none of the rule footguns apply.
+            continue
         rules = cfg.get("rules") or []
         rule_targets = {
             str(r.get("next_node_id"))
@@ -971,6 +976,25 @@ def _decision_misroute_issues(nodes: list, edges: list) -> list[str]:
                 "the intended else; an unhandled case will land here without warning."
             )
     return issues
+
+
+def _question_targets(nodes: list) -> set[str]:
+    """Nodes a DECISION's question routes to: `config.question.routes` values
+    and `unsure_next_node_id`. They are reached through the answer, not an edge,
+    so they are not entry nodes."""
+    targets: set[str] = set()
+    for node in nodes:
+        question = (node.get("config") or {}).get("question")
+        if str(node.get("type") or "").upper() != "DECISION" or not isinstance(
+            question, dict
+        ):
+            continue
+        routes = question.get("routes")
+        if isinstance(routes, dict):
+            targets.update(str(target) for target in routes.values() if target)
+        if question.get("unsure_next_node_id"):
+            targets.add(str(question["unsure_next_node_id"]))
+    return targets
 
 
 def _iter_expressions(node: object):
@@ -1031,6 +1055,7 @@ def validate_workflow(payload: dict) -> list[str]:
             issues.append(f"edge target '{dst}' is not a node id.")
         targeted.add(dst)
 
+    targeted.update(_question_targets(nodes))
     entries = [i for i in id_set if i not in targeted]
     if len(entries) == 0:
         issues.append("no entry node (every node has an incoming edge — cycle?).")

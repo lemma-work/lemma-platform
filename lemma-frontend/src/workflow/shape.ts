@@ -27,7 +27,7 @@
  *  that is one step short is worse than one with an ugly row in it.
  */
 
-import { isRecord, sayFor, str } from "./runs";
+import { isRecord, sayAnswer, sayFor, str } from "./runs";
 
 /* ── the kinds, as the backend spells them ─────────────────────────── */
 
@@ -193,7 +193,7 @@ export function readFlowStep(raw: unknown, at: number): FlowStep {
         case "FORM": return { ...base, says: "Asks a person", ...sayForm(config) };
         case "AGENT": return { ...base, says: sayTarget("Hands it to", config?.agent_name, "an agent"), ...sayInputs(config) };
         case "FUNCTION": return { ...base, says: sayTarget("Runs", config?.function_name, "a function"), ...sayInputs(config) };
-        case "DECISION": return { ...base, says: "Branches", ...sayDecision(config) };
+        case "DECISION": return { ...base, ...sayDecision(config) };
         case "LOOP": return { ...base, says: "Repeats for each item", ...sayLoop(config) };
         case "WAIT_UNTIL": return { ...base, says: "Waits", detail: sayTimeout(config), branches: [] };
         case "END": return { ...base, says: "Ends the run", detail: [], branches: [] };
@@ -275,7 +275,8 @@ function sayInputs(config: Record<string, unknown> | null): { detail: string[]; 
  *  fall-through (`domain/nodes/decision.py:26`), so the order is meaningful
  *  and the last line says what happens when none of them match.
  */
-function sayDecision(config: Record<string, unknown> | null): { detail: string[]; branches: string[] } {
+function sayDecision(config: Record<string, unknown> | null): { says: string; detail: string[]; branches: string[] } {
+    if (isRecord(config?.question)) return sayQuestion(config.question);
     const rules = Array.isArray(config?.rules) ? config.rules : [];
     const detail: string[] = [];
     const branches: string[] = [];
@@ -290,7 +291,35 @@ function sayDecision(config: Record<string, unknown> | null): { detail: string[]
         detail.push((condition ?? "on some condition the payload did not carry") + " → " + (target ?? "nowhere named"));
     }
     if (detail.length === 0) detail.push("No branches — it falls straight through.");
-    return { detail, branches };
+    return { says: "Branches", detail, branches };
+}
+
+/** A decision that asks one closed question about some evidence and branches
+ *  on the answer (`DecisionQuestion`, `domain/nodes/decision.py`).
+ *
+ *  The question is the `description` of its `answer` schema, which is what a
+ *  person would ask in the step's place, so it is what the row says. Then one
+ *  line per answer that has a route, the unsure route, and the fall-through —
+ *  the same order the run tries them in.
+ */
+function sayQuestion(question: Record<string, unknown>): { says: string; detail: string[]; branches: string[] } {
+    const answer = isRecord(question.answer) ? question.answer : null;
+    const asked = str(answer?.description);
+    const detail: string[] = [];
+    const branches: string[] = [];
+    const routes = isRecord(question.routes) ? question.routes : {};
+    for (const [key, target] of Object.entries(routes)) {
+        const next = str(target);
+        if (next) branches.push(next);
+        detail.push("If " + sayAnswer(key) + " → " + (next ?? "nowhere named"));
+    }
+    const unsure = str(question.unsure_next_node_id);
+    if (unsure) {
+        branches.push(unsure);
+        detail.push("If it cannot tell → " + unsure);
+    }
+    detail.push("Anything else takes its default path; if it cannot be answered at all, the run stops.");
+    return { says: asked ? "Asks: " + asked : "Branches on a judgement", detail, branches };
 }
 
 function sayLoop(config: Record<string, unknown> | null): { detail: string[]; branches: string[] } {

@@ -26,7 +26,7 @@ class WorkflowSettings(BaseSettings):
         default=30,
         ge=1,
         description=(
-            "How long a finished machine wait (FUNCTION/AGENT/TIME) is kept. "
+            "How long a finished machine wait (FUNCTION/AGENT/TIME/DECISION) is kept. "
             "HUMAN waits are excluded from the sweep entirely at any age -- "
             "they record who approved what, which is not scaffolding."
         ),

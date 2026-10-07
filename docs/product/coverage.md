@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 171 |
+| `covered` | 172 |
 | `gap` | 2 |
 | `manual` | 21 |
 | `planned` | 11 |
 | `withdrawn` | 0 |
-| **total** | **205** |
+| **total** | **206** |
 
-Scenario tests declaring a promise: 428.
+Scenario tests declaring a promise: 430.
 
 ## Contract coverage
 
@@ -98,6 +98,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-FLOW-012` A workflow can ask a person and wait for the answer | `covered` | `test_a_waiting_run_is_held`, `test_a_person_who_was_not_asked_cannot_answer`, `test_waiting_runs_are_listed`, `test_answering_a_run_that_is_not_waiting_is_refused` |
 | `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_live_run_stops_it`, `test_cancelling_a_finished_run_is_refused` |
 | `PS-FLOW-014` A workflow run carries the authority of whoever started it | `covered` | `test_a_step_beyond_the_runs_authority_is_refused_readably` |
+| `PS-FLOW-015` A workflow can branch on a judgement | `covered` | `test_a_run_takes_the_branch_its_answer_names`, `test_an_unrouted_answer_is_refused_at_save` |
 | `PS-FLOW-020` A person follows a run as it goes | `covered` | `test_a_run_can_be_watched` |
 | `PS-FUNC-020` A closed question about some evidence gets one allowed answer per question | `covered` | `test_every_question_gets_an_allowed_answer`, `test_an_open_question_is_refused`, `test_an_outsider_is_refused` |
 

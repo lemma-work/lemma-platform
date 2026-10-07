@@ -346,6 +346,37 @@ def test_validate_workflow_flags_problems():
     assert "agent_name" in joined  # AGENT node without target
 
 
+def test_validate_workflow_reads_a_question_decisions_routes_as_its_branches():
+    from lemma_cli.cli_app.scaffold import validate_workflow
+
+    issues = validate_workflow(
+        {
+            "nodes": [
+                {
+                    "id": "triage",
+                    "type": "DECISION",
+                    "config": {
+                        "question": {
+                            "instruction": "Triage the email.",
+                            "evidence": {"type": "literal", "value": "Refund me"},
+                            "answer": {"type": "boolean", "description": "Refund?"},
+                            "routes": {"true": "refund"},
+                            "unsure_next_node_id": "ask",
+                        }
+                    },
+                },
+                {"id": "refund", "type": "END"},
+                {"id": "ask", "type": "END"},
+                {"id": "reply", "type": "END"},
+            ],
+            "edges": [{"id": "e1", "source": "triage", "target": "reply"}],
+        }
+    )
+
+    # Its routes are not extra entry nodes, and "no rules" is not a fall-through.
+    assert issues == []
+
+
 def test_validate_workflow_flags_unknown_start_namespace():
     from lemma_cli.cli_app.scaffold import validate_workflow
 
