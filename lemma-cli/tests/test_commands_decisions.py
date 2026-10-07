@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 from lemma_cli.cli_core.app import app
@@ -16,6 +17,16 @@ ANSWER = {
     "model": "fast",
     "usage": {"input_tokens": 10, "output_tokens": 3},
 }
+
+
+#: Usage errors come back in a Rich panel: coloured, wrapped and boxed on a wide
+#: terminal such as CI's, which can split a flag like `--priority` with escape
+#: codes. Strip all of that before looking for words in it.
+_STYLING = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return " ".join(_STYLING.sub("", text).replace("\u2502", " ").split())
 
 
 class FakeDecisions:
@@ -150,7 +161,7 @@ def test_a_missing_part_is_a_usage_error_before_any_request(
     result = runner.invoke(app, ["decision", "run", "-i", "Urgent?", "-e", "x"])
 
     assert result.exit_code == 2
-    assert "schema" in result.stderr
+    assert "schema" in _plain(result.stderr)
     assert fake.asked == []
 
 
@@ -174,7 +185,7 @@ def test_a_bad_priority_or_unknown_field_is_refused(runner, patch_run, json_stat
 
     assert bad_priority.exit_code == 2
     assert unknown.exit_code == 2
-    assert "subject" in unknown.stderr
+    assert "subject" in _plain(unknown.stderr)
     assert fake.asked == []
 
 
@@ -191,5 +202,5 @@ def test_a_priority_that_is_not_a_string_is_a_usage_error(
             ["decision", "run", "-d", json.dumps({**payload, "priority": priority})],
         )
         assert result.exit_code == 2, result.stderr
-        assert "--priority" in result.stderr
+        assert "--priority" in _plain(result.stderr), result.stderr
     assert fake.asked == []
