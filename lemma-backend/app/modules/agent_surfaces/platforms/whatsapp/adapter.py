@@ -181,7 +181,8 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         if not digits:
             return None
         number = f"+{digits}"
-        profile_url = f"{settings.frontend_url.rstrip('/')}/profile"
+        # Settings, at Account: where the workspace edits the mobile number.
+        profile_url = f"{settings.frontend_url.rstrip('/')}/t?settings=account"
         return (
             (
                 f"I don't recognise {number}. Add it as the mobile number on your "

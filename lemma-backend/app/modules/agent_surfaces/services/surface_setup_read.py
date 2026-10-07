@@ -46,8 +46,11 @@ class SurfaceSetupReadMixin:
             slack_socket_mode=surface_settings.enable_slack_socket_mode,
             slack_signing_secret_missing=signing_secret_missing,
             slack_app_id_missing=app_id_missing,
+            # Connectors have no route of their own in the workspace: Settings
+            # opens at a section named in `?settings=`. The space in the path
+            # is what picks the organization whose connectors those are.
             slack_repair_url=(
-                f"{frontend_url}/pod/{surface.pod_id}/connectors"
+                f"{frontend_url}/t/{surface.pod_id}?settings=connectors"
                 if frontend_url
                 else None
             ),
