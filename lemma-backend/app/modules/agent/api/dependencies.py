@@ -1,21 +1,27 @@
 """Agent FastAPI dependencies."""
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends
 
-from app.core.api.dependencies import UoWDep
+from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.context import ResourceType
 from app.core.authorization.dependencies import (
+    PodContextDep,
     pod_from_path,
     require_action,
     require_resource_admin_or_creator,
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
+from app.modules.agent.domain.ports import ScorecardSource
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
+)
+from app.modules.agent.infrastructure.scorecard_source import (
+    DatastoreScorecardSource,
 )
 from app.modules.agent.services.agent_service import AgentService
 from app.modules.agent.services.conversation_service import ConversationService
@@ -74,3 +80,18 @@ AgentResourceDeleteDep = require_resource_admin_or_creator(
 )
 ConversationViewerDep = require_action(Permissions.CONVERSATION_READ, pod_from_path)
 ConversationWriterDep = require_action(Permissions.CONVERSATION_WRITE, pod_from_path)
+
+
+def get_scorecard_source(
+    pod_id: UUID, user: CurrentUser, ctx: PodContextDep, uow: UoWDep
+) -> ScorecardSource:
+    """The scorecard's reads, as the person asking."""
+    return DatastoreScorecardSource.for_unit_of_work(
+        uow, ctx=ctx, pod_id=pod_id, user_id=user.id
+    )
+
+
+ScorecardSourceDep = Annotated[ScorecardSource, Depends(get_scorecard_source)]
+#: Reading a scorecard is reading the pod's records; each table a measure
+#: counts is then authorized on its own, as the person, by the datastore.
+ScorecardReaderDep = require_action(Permissions.DATASTORE_RECORD_READ, pod_from_path)

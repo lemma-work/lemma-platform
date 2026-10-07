@@ -113,6 +113,20 @@ async def test_create_vs_update_classification(tmp):
     assert [s.index for s in plan.steps] == list(range(len(plan.steps)))
 
 
+async def test_the_plan_carries_the_bundle_description(tmp):
+    """What the bundle says it is for, read from ``pod.json``, so the plan can
+    show it -- and absent, rather than invented, when the bundle says nothing."""
+    root = _build_bundle(tmp)
+    manifest = json.loads((root / "pod.json").read_text(encoding="utf-8"))
+    _write(root / "pod.json", {**manifest, "description": "Tracks the pipeline."})
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert plan.description == "Tracks the pipeline."
+
+    _write(root / "pod.json", manifest)
+    plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
+    assert plan.description is None
+
+
 async def test_files_produce_folder_then_file_steps(tmp):
     root = _build_bundle(tmp)
     # files/docs/.folder.json (folder) + files/docs/guide.md (file) + manifest.

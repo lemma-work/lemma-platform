@@ -35,6 +35,7 @@ from app.core.log.log import get_logger
 from app.core.origin import OriginKind
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.events import analytics as bundle_analytics
+from app.modules.pod_bundle.events.recipe import record_recipe
 from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleStagingMissingError,
@@ -711,7 +712,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 await _checkpoint(store, state, step)
 
         await _raise_if_cancelled(store, import_id)
-        await _record_recipe(worker_ctx, state)
+        await record_recipe(worker_ctx, state)
         await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.COMPLETED
         state.completed_at = _now()
@@ -828,35 +829,6 @@ async def _resolve_importer_pod_member_id(
         )
         return None
     return str(member_id) if member_id is not None else None
-
-
-async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> None:
-    """Append a durable :class:`PodRecipe` to the pod's config in a short UoW."""
-    from datetime import datetime, timezone
-
-    from app.modules.pod.contracts import PodRecipe
-    from app.modules.pod.contracts.provisioning import append_recipe
-
-    recipe = PodRecipe(
-        kind=state.source.kind.value,
-        name=(state.plan.bundle_name if state.plan else None),
-        repo_url=state.source.repo_url or state.source.url,
-        format_version=(state.plan.format_version if state.plan else None),
-        imported_at=datetime.now(timezone.utc),
-        imported_by=state.user_id,
-    )
-    async with uow_scope(worker_ctx.uow_factory) as uow:
-        ctx = await AuthorizationDataService(uow.session).build_user_context(
-            user_id=state.user_id, pod_id=state.pod_id
-        )
-        async with context_scope(ctx):
-            await append_recipe(
-                uow,
-                pod_id=state.pod_id,
-                recipe=recipe,
-                requester_user_id=state.user_id,
-                ctx=ctx,
-            )
 
 
 def _is_retryable_import_error(exc: DomainError) -> bool:

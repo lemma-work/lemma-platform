@@ -7,6 +7,7 @@ import { AppsIcon, FileIcon, FolderIcon, GroupsIcon, PlusIcon, SettingsIcon, Tab
 import { sayWaiting, waitingTotal } from "@/data/groups";
 import { useGroups } from "./group-queries";
 import { useFeature } from "@/site/analytics/flags";
+import { useSetupState } from "@/scorecard/store";
 
 const VIEWS: { view: SpaceView; label: string; icon: React.ReactNode }[] = [
     { view: "pages", label: "Pages", icon: <FileIcon size={18} /> },
@@ -52,6 +53,7 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
     const groupsOn = useFeature("groups");
     const groups = useGroups(pod.id, false, groupsOn);
     const waiting = waitingTotal(groups.data ?? []);
+    const setup = useSetupState(pod.id);
 
     return (
         <nav className="snav" aria-label={pod.name + "’s space"}>
@@ -101,6 +103,19 @@ export function SpaceNav({ pod, activeId, recents, onPick, openChatId, onOpenCha
                             <RecentGlyph tab={tab} /><span>{tab.label}</span>
                         </button>
                     ))}
+                </div>
+            )}
+
+            {/* Only while a role's scorecard waits on its review being
+                turned on: the one step of setting up that is left to do.
+                A teammate with no scorecard is not "being set up", and one
+                whose review is on is done. */}
+            {setup === "choosing" && (
+                <div className="snav__group">
+                    <button className="side__item snav__setup" aria-current={activeId === "space:setup" ? "page" : undefined} onClick={() => onPick("space:setup")}>
+                        <span className="snav__setup-dot" aria-hidden="true" />
+                        <span>Setting up {pod.name}</span>
+                    </button>
                 </div>
             )}
 

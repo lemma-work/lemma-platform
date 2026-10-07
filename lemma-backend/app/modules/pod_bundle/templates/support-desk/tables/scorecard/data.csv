@@ -1,0 +1,8 @@
+id,key,measure,kind,counter,query,aim,target,target_label,counted_from,is_on,note,position,shape,unit_table,time_column,test,value,value_unit,label_column,link_column,proposed_from
+f0889af6-d7a1-510f-afc2-b71a6277263a,known_issues_linked,Known issues have a tracker issue,outcome,work,,higher,1,every one,Known issues,true,,1,share,known_issues,first_seen,"coalesce(linear_issue, '') <> ''",,,problem,linear_issue,
+6e778b0a-ba66-5d7c-9ee0-1e848ade9549,callbacks_on_time,Callbacks happen by their date,outcome,work,,higher,0.9,9 in 10,Callbacks,true,,2,share,callbacks,due,"coalesce(done, false)",,,customer,conversation,
+f199cc3b-ae6f-56e5-97ea-dce01418e3f0,first_reply,First reply inside an hour,outcome,work,,higher,0.9,9 in 10,Conversations,true,,3,share,conversations,started_at,first_reply_at - started_at <= interval '1 hour',,,customer,link,
+45248cb8-f027-5e61-8192-2e253f3ed3ec,closed_without_handover,Closed without handing over,outcome,work,,higher,0.6,3 in 5,Conversations,true,,4,share,conversations,started_at,"closed_at IS NOT NULL AND NOT coalesce(handed_over, false)",,,customer,link,
+0db17d65-cadb-589e-a682-423825a44117,reply_time,Median time to first reply,outcome,work,,lower,30,30 minutes,Conversations,true,,5,median,conversations,started_at,,extract(epoch from first_reply_at - started_at) / 60,minutes,customer,link,
+c2751a56-0399-5d12-9d61-91026dece10d,standing_work,Standing work runs on time,reliability,standing_work,,higher,1,every run,Run history,true,,6,share,,,,,,,,
+e28be462-97d3-54fa-9100-70d7a80a47bc,open_questions,Nothing waits on a question for a day,reliability,open_questions,,lower,0,none,Conversations,true,,7,count,,,,,,,,

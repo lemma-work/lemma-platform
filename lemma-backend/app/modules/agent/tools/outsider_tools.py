@@ -45,6 +45,14 @@ OUTSIDER_TOOLS_WITHHELD: dict[str, str] = {
     "pod_write_file": "writes; a stranger's run is read-only",
     "pod_edit_file": "writes; a stranger's run is read-only",
     "list_pod_members": "the directory is not the stranger's to read",
+    "score_week": (
+        "writes, and counts the approvals and questions of the member who looks "
+        "after the conversation"
+    ),
+    "try_measure": (
+        "drafts the teammate's own scorecard, counting as the member who looks "
+        "after the conversation"
+    ),
 }
 
 

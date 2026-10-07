@@ -5,6 +5,7 @@ import type { AgentDetail, AgentDraft, AgentRow } from "./agents";
 import type { Choice, Computer, Runtime, RuntimeTest } from "./runtimes";
 import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
 import type { ScheduleDraft, ScheduleRun, StandingJob, TargetChoice } from "@/schedule/schedules";
+import type { RoleCard } from "./roles";
 
 /** The shapes the app renders. Both sources produce exactly these, so which
  *  one is in front of you is a configuration detail rather than a rewrite. */
@@ -349,7 +350,10 @@ export interface SharedLink {
 
 /** A view of the space's own contents, filtered by kind — and `about`, the
  *  teammate the space belongs to. */
-export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "settings" | "about";
+/** `setup` is the step after a hire where how the teammate is judged is
+ *  chosen; it is reached from the reveal, the sidebar and About, never listed
+ *  among the places. */
+export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "settings" | "about" | "setup";
 
 export type Tab =
     | { id: string; kind: "space"; label: string; view: SpaceView }
@@ -562,6 +566,10 @@ export interface PodSource {
     getPod(podId: string): Promise<Pod | null>;
     listTabs(podId: string): Promise<Tab[]>;
     createPod(orgId: string, name: string, description?: string): Promise<Pod>;
+    /** The roles on the hiring shelf: the templates this server ships that
+     *  carry a card, in shelf order. Read before any pod exists, so it is
+     *  not scoped to one. */
+    listRoles(): Promise<RoleCard[]>;
     /** Set (or clear) a teammate's face. An emoji, a URL, or the
      *  `lemma-identity:N` sentinel that picks which generated creature. */
     setPodIcon(podId: string, iconUrl: string | null): Promise<void>;

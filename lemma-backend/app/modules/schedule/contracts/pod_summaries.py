@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.sql import ColumnElement
 
 from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.permissions import Permissions
@@ -56,8 +57,13 @@ class PodScheduleSummary:
     config: dict[str, object]
 
 
-def _readable(ctx: Context):
-    """The rows this context may read, as a WHERE-able expression."""
+def readable_schedules(ctx: Context) -> ColumnElement[bool]:
+    """The schedules this context may read, as a WHERE-able expression.
+
+    Public within the module so every contract that reports on schedules --
+    this listing, the standing-work count -- filters through one predicate,
+    and a change to who may see a schedule cannot reach one and miss the other.
+    """
     return allowed_actions_contains(
         allowed_actions_expr(
             ctx=ctx,
@@ -87,7 +93,7 @@ async def _readable_total(*, session, pod_id: UUID, ctx: Context) -> int:
             .where(
                 Schedule.pod_id == pod_id,
                 Schedule.is_internal.is_(False),
-                _readable(ctx),
+                readable_schedules(ctx),
             )
         )
     ).scalar_one()
@@ -110,7 +116,7 @@ async def _readable_page(
             .where(
                 Schedule.pod_id == pod_id,
                 Schedule.is_internal.is_(False),
-                _readable(ctx),
+                readable_schedules(ctx),
             )
             .order_by(Schedule.created_at.desc())
             .limit(limit)

@@ -507,9 +507,14 @@ function ConnectorCard({
  */
 type Slice = "connected" | "available" | "trouble";
 
-export function ConnectorsSection({ orgId }: { orgId: string }) {
+export function ConnectorsSection({ orgId, find = null }: {
+    orgId: string;
+    /** A connector somebody was sent here to connect — a new teammate's
+     *  first win that needs Intercom — so the list opens searched to it. */
+    find?: string | null;
+}) {
     const queryClient = useQueryClient();
-    const [query, setQuery] = useState("");
+    const [query, setQuery] = useState(find ?? "");
     /* Null until somebody picks, so the default can depend on what is there. */
     const [slice, setSlice] = useState<Slice | null>(null);
 
@@ -585,7 +590,8 @@ export function ConnectorsSection({ orgId }: { orgId: string }) {
     /* What to show before anybody chooses. An organization with nothing
        connected opens on what it could connect, because the list of what it
        has is the empty one. */
-    const active: Slice = slice ?? (connected.length ? "connected" : "available");
+    const sentFor = find ? connected.some((connector) => connector.id === find) : false;
+    const active: Slice = slice ?? (find ? (sentFor ? "connected" : "available") : connected.length ? "connected" : "available");
     const pool = active === "connected" ? connected : active === "trouble" ? ailing : unconnected;
 
     /* What an organization can point at itself, and whether any connector

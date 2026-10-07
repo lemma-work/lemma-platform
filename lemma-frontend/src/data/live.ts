@@ -6,6 +6,7 @@ import { displayAgentName, initialsOf, isPodDefaultAgent } from "./agent-names";
 import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
+import { readRoleCards, type RoleCard } from "./roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
 import {
     agentChanges,
@@ -1253,6 +1254,10 @@ export const liveSource: PodSource = {
                 kind: row.type ?? "CHAT",
             };
         });
+    },
+
+    async listRoles(): Promise<RoleCard[]> {
+        return readRoleCards(await lemma().request("GET", "/pods/bundle/templates"));
     },
 
     async createPod(orgId: string, name: string, description?: string): Promise<Pod> {

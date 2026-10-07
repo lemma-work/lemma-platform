@@ -1,0 +1,16 @@
+{
+  "name": "known_issues",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "Problems customers report more than once, with the tracker issue that owns each."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "problem", "type": "TEXT", "required": true},
+    {"name": "reports", "type": "INTEGER", "required": false},
+    {"name": "customers", "type": "TEXT", "required": false},
+    {"name": "linear_issue", "type": "TEXT", "required": false},
+    {"name": "status", "type": "TEXT", "required": false},
+    {"name": "first_seen", "type": "DATE", "required": false},
+    {"name": "last_seen", "type": "DATE", "required": false}
+  ]
+}

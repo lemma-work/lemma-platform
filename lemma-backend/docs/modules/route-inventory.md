@@ -24,6 +24,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
+| GET | `/pods/{pod_id}/scorecard/measures/{key}/rows` | `agent.scorecard.measure_rows` | List Rows Behind A Scorecard Measure |
 | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
 | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.update` | Update Pod Conversation |
@@ -38,6 +39,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/messages/append` | `agent.conversation.message.append` | Append Pod Conversation Message |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/retry` | `agent.conversation.retry` | Retry Failed Pod Conversation Run |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/stop` | `agent.conversation.stop` | Stop Pod Conversation |
+| POST | `/pods/{pod_id}/scorecard/preview` | `agent.scorecard.preview` | Preview Scorecard Weeks |
 | POST | `/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token` | `widget.embed_token` | Mint Widget Embed URL |
 | POST | `/tools/report-feedback` | `agent.tool.report_feedback` | Agent Report Feedback |
 | POST | `/tools/web-search` | `agent.tool.web_search` | Agent Web Search |
@@ -278,6 +280,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.cancel` | Cancel Pod Import |
 | GET | `/pods/bundle/download` | `pod.bundle.download` | Download A Bundle Archive |
+| GET | `/pods/bundle/templates` | `pod.bundle.templates.list` | List Role Templates |
 | GET | `/pods/{pod_id}/bundle/exports/{export_id}` | `pod.bundle.export.get` | Get Pod Export Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.get` | Get Pod Import Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}/events` | `pod.bundle.import.events` | Stream Pod Import Progress |

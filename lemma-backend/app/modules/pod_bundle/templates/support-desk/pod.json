@@ -1,0 +1,49 @@
+{
+  "name": "Support desk",
+  "description": "Answers customers and knows when to hand over.",
+  "format_version": 3,
+  "variables": {},
+  "role": {
+    "line": "Answers customers and knows when to hand over",
+    "seed": "arch/reception/13",
+    "position": 1,
+    "brings": [
+      "Skills for answering, handing over and filing bugs",
+      "Conversations, known issues and callbacks, as tables",
+      "A scorecard you check every Friday"
+    ],
+    "wins": [
+      {
+        "say": "Here is our help center. Tell me the five questions it answers worst."
+      },
+      {
+        "say": "Draft replies to the open conversations in Intercom. Don’t send anything.",
+        "needs": {
+          "connector": "intercom",
+          "label": "Intercom"
+        }
+      },
+      {
+        "say": "Read this week’s support channel and start the known issues list.",
+        "needs": {
+          "connector": "slack",
+          "label": "Slack"
+        }
+      }
+    ],
+    "offers": [
+      {
+        "title": "Morning list",
+        "detail": "Each weekday, what came in overnight that needs a person",
+        "cron": "0 9 * * 1-5",
+        "instruction": "List the customer conversations that came in since yesterday evening and need a person, newest first, one line each with a link. Draft nothing and send nothing to customers."
+      },
+      {
+        "title": "Friday themes",
+        "detail": "Each Friday, what customers asked about most",
+        "cron": "0 15 * * 5",
+        "instruction": "Write what customers asked about most this week, with counts and links, and add any problem reported more than once to known_issues using the bug-report skill."
+      }
+    ]
+  }
+}

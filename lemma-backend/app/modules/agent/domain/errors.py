@@ -102,3 +102,36 @@ class HarnessNotFoundError(AgentModuleError):
 
     def __init__(self, message: str = "No harness registered"):
         super().__init__(message, code="HARNESS_NOT_FOUND", status_code=500)
+
+
+class ScorecardNotFoundError(AgentModuleError):
+    """The pod has no ``scorecard`` table to read measures from."""
+
+    def __init__(
+        self,
+        message: str = (
+            "This pod has no `scorecard` table. A scorecard is one row per "
+            "measure: key, measure, counter, shape, aim, target, is_on."
+        ),
+    ):
+        super().__init__(message, code="SCORECARD_NOT_FOUND", status_code=404)
+
+
+class ScorecardMeasureNotFoundError(AgentModuleError):
+    """No scorecard row has the key asked for."""
+
+    def __init__(self, keys: list[str]):
+        listed = ", ".join(f"`{key}`" for key in keys)
+        super().__init__(
+            f"The scorecard has no measure with the key {listed}.",
+            code="SCORECARD_MEASURE_NOT_FOUND",
+            status_code=404,
+        )
+
+
+class ScorecardRefusedError(AgentModuleError):
+    """A window, a draft measure or a request for rows the scorecard will not
+    count, with the reason -- which names what to change."""
+
+    def __init__(self, message: str, *, code: str = "SCORECARD_REFUSED"):
+        super().__init__(message, code=code, status_code=422)

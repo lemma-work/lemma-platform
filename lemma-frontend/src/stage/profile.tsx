@@ -582,8 +582,9 @@ export interface Subject {
      *  costs one listing plus a file per skill, holds its own cache and its own
      *  failure, and a section that cannot load must not take the page.
      *
-     *  Absent on a listing: a candidate has no pod, so there is no `/skills`
-     *  to read and an empty deck would be a claim about nothing. */
+     *  On a listing, the skills its template ships, read off the template's
+     *  card; absent on one with no template, where an empty deck would be a
+     *  claim about nothing. */
     skills?: ReactNode;
     /** The schedules, rendered. A node rather than data, for the same reason
      *  `agents` is: the section reads its own list, holds its own pending and
@@ -851,10 +852,9 @@ export function ProfileView({ subject, initialSection }: { subject: Subject; ini
                         <Reach me={me} />
                     </Section>
 
-                    {/* Absent on the hiring floor, where there is no pod to
-                        read a `/skills` folder out of. A candidate showing an
-                        empty deck would be reporting a fact about a pod that
-                        does not exist yet. */}
+                    {/* On the hiring floor, the skills the role's template
+                        ships; absent for somebody new, whose empty deck would
+                        be reporting a fact about a pod that does not exist. */}
                     {subject.skills && (
                         <Section title="Skills" meta="what it has been taught">
                             {subject.skills}

@@ -1,17 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BLANK, EXPLORING_OPENERS, HIRES, blankHire, dealtName, openersFor } from "../src/data/hires.ts";
+import { BLANK, EXPLORING_OPENERS, blankHire, dealtName, openersFor } from "../src/data/hires.ts";
 import { characterForSeed } from "../src/shell/cast.ts";
-
-test("every listing offers something to say on the first morning", () => {
-    // The reveal's whole middle section comes from this. A listing that added
-    // itself to the shelf without openers would draw a card with a heading
-    // and nothing under it.
-    for (const hire of HIRES) {
-        assert.ok(hire.openers.length > 0, hire.id + " has no openers");
-        assert.ok(hire.openers.length <= 3, hire.id + " has more openers than the card shows");
-    }
-});
 
 test("a blank hire is offered the job it was described as, not an invented one", () => {
     assert.deepEqual(
@@ -38,14 +28,6 @@ test("somebody hired without a name is named after the face they were dealt", ()
     const name = dealtName(somebody);
     assert.equal(name.toLowerCase(), characterForSeed(somebody.seed));
     assert.match(name, /^[A-Z][a-z]+$/);
-});
-
-test("a listing's openers ignore whatever was typed on the shelf", () => {
-    // The job box is the road to the blank hire. Somebody who typed into it
-    // and then took Follow-ups off the shelf is getting Follow-ups.
-    const followUps = HIRES.find((hire) => hire.id === "follow-ups");
-    assert.ok(followUps);
-    assert.deepEqual(openersFor(followUps, "something else entirely"), followUps.openers);
 });
 
 test("each blank hire is dealt a face of its own", () => {

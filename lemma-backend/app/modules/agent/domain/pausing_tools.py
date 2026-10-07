@@ -35,4 +35,15 @@ USER_PAUSING_TOOL_NAMES = ("ask_user", "request_approval", "browser_sign_in")
 
 PAUSING_TOOL_NAMES = (*USER_PAUSING_TOOL_NAMES, WAIT_TOOL_NAME)
 
-__all__ = ["PAUSING_TOOL_NAMES", "USER_PAUSING_TOOL_NAMES", "WAIT_TOOL_NAME"]
+#: Set on the DENY the platform records for a pause the person moved past by
+#: sending a new message. That decision is a safety fallback, not a verdict, and
+#: anything judging how people answered -- the scorecard's approval count -- has
+#: to be able to tell the two apart.
+SUPERSEDED_BY_NEW_MESSAGE = "superseded_by_new_message"
+
+__all__ = [
+    "PAUSING_TOOL_NAMES",
+    "SUPERSEDED_BY_NEW_MESSAGE",
+    "USER_PAUSING_TOOL_NAMES",
+    "WAIT_TOOL_NAME",
+]

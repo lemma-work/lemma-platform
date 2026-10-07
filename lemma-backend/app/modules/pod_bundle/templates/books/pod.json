@@ -1,0 +1,45 @@
+{
+  "name": "Books",
+  "description": "Keeps the books reconciled and chases unpaid invoices. Proposes every correction; a person approves it.",
+  "format_version": 3,
+  "variables": {},
+  "role": {
+    "line": "Keeps the books reconciled and chases unpaid invoices",
+    "seed": "arch/books/12",
+    "position": 5,
+    "brings": [
+      "Skills for reconciling bank lines and chasing invoices",
+      "Bank lines and invoices, as tables",
+      "A scorecard you check every Friday"
+    ],
+    "wins": [
+      {
+        "say": "Here is last month’s bank statement. Tell me what will not tie."
+      },
+      {
+        "say": "List every unpaid invoice older than its terms, biggest first.",
+        "needs": {
+          "connector": "xero",
+          "label": "Xero"
+        }
+      },
+      {
+        "say": "Draft a polite reminder for each overdue invoice. Don’t send anything."
+      }
+    ],
+    "offers": [
+      {
+        "title": "Morning reconcile",
+        "detail": "Each weekday, yesterday’s bank lines matched",
+        "cron": "0 8 * * 1-5",
+        "instruction": "Use the reconcile skill on every bank line booked since the last run. Propose a match for each; change no figure and post nothing without a person's yes."
+      },
+      {
+        "title": "Overdue chase",
+        "detail": "Each weekday, a reminder drafted for anything newly overdue",
+        "cron": "0 10 * * 1-5",
+        "instruction": "Use the chase-invoices skill on every invoice that went past its due date since yesterday. Draft the reminder for a person to send; send nothing yourself."
+      }
+    ]
+  }
+}

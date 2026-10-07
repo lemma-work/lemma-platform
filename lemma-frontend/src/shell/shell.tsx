@@ -37,6 +37,7 @@ import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
 import { RunPage } from "@/space/run-page";
 import { AboutPage, isAboutSection, type AboutSection } from "@/space/about-page";
+import { ScorecardSetup } from "@/scorecard/scorecard-setup";
 import { TeammateRail } from "@/space/teammate-rail";
 import { TeammatesPage } from "@/space/teammates-page";
 import { owedFrom } from "@/space/teammates";
@@ -151,7 +152,7 @@ function Pane({ hidden, onStage, children, ...rest }: HTMLAttributes<HTMLDivElem
     return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden && onStage}>{children}</PaneVisibleContext.Provider></div>;
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["settings", "Settings"], ["about", "About"], ["setup", "Setting up"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
@@ -1115,6 +1116,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             setTabs((previous) => ({ ...previous, [podId]: "conversation" }));
             return;
         }
+        if (move.open === "scorecard") {
+            setTabs((previous) => ({ ...previous, [podId]: "space:setup" }));
+            return;
+        }
         if (move.open === "reach") setReaching(true);
         else setAddingPeople(true);
     }, []);
@@ -1860,6 +1865,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onAbout={() => openAbout(null)}
+                                            onSetup={() => pickTab("space:setup")}
                                             onAsk={(text) => startChat(text)}
                                         />
                                     ) : tab.view === "about" ? (
@@ -1876,7 +1882,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onFile={(path) => openFile(path, "space:about")}
                                             onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); }}
+                                            onSetup={() => pickTab("space:setup")}
                                             onDeleted={() => goToTeam(null)}
+                                        />
+                                    ) : tab.view === "setup" ? (
+                                        <ScorecardSetup
+                                            pod={pod}
+                                            onAbout={() => openAbout("judged")}
+                                            onAskFor={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }}
                                         />
                                     ) : tab.view === "chats" ? (
                                         <ChatsPage

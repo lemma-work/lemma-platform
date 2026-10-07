@@ -898,6 +898,13 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     assert {"say", "listen", "list_voices"} <= captured["deferred"]
     assert "Speaking and transcribing" in hint
     assert "pod_tables" not in hint
+    # The pod toolset is in view save for the scorecard's two tools, deferred
+    # on their own and listed so a person asking "how did we do this week", or
+    # what the teammate should be judged on, finds the tools that count rather
+    # than a model that guesses.
+    assert {"score_week", "try_measure"} <= captured["deferred"]
+    assert "`score_week`" in hint
+    assert "`try_measure`" in hint
 
 
 @pytest.mark.anyio

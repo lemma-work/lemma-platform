@@ -3470,6 +3470,34 @@
     }
   },
   {
+    "tool_name": "score_week",
+    "toolset": "POD",
+    "description": "Count this teammate's week against its scorecard and record the result.\n\nReads the pod's `scorecard` table, counts every measure that is on for the\nseven days before `end`, scores each against its target, and writes one row\nper measure to `scorecard_weeks`, replacing that week's rows if it was\ncounted before. Use it for the weekly review and whenever someone asks how\nthe teammate is doing against its scorecard.\n\nEvery number comes from the platform. Quote `shown`, `met` and\n`target_label` as given and never compute, round or estimate a figure\nyourself. A measure whose status is `not_counted`, `nothing_to_count` or\n`failed` has no number: say so, and give its `reason` if it has one. One\nwhose status is `too_few` was counted but had too few rows to judge: quote\nits `shown` and do not call it met or missed.",
+    "input_schema": {
+      "properties": {
+        "end": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The day the week ends, YYYY-MM-DD, not included: the week counted is the seven days before it, in UTC. Omit for the week that ended today. Cannot be after today."
+        }
+      },
+      "title": "ScoreWeekRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "search_connector_operations",
     "toolset": "CONNECTORS",
     "description": "Find operations by what they do, ranked by relevance.\n\nStart here rather than guessing an operation name: an install can expose\nhundreds of operations, and the names are provider-specific. Leave\n`auth_config` unset to search every installed connector at once -- each hit\nnames the `auth_config` to run it against, so you do not need to know which\ninstall provides a capability before searching for it.",
@@ -3610,6 +3638,165 @@
         }
       },
       "title": "SubmitWorkflowFormResponse",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "try_measure",
+    "toolset": "POD",
+    "description": "Count a draft scorecard measure over the last four weeks, saving nothing.\n\nUse it before proposing a measure, every time. A measure counts rows of a\ntable of your work: `unit_table` (one row per callback, conversation,\npromise), `time_column` (the date that places a row in a week), `test` (one\nSQL boolean over a row) and `shape` -- `share` of rows passing, `count` of\nrows passing, `median` of `value` over them, or `total`: their `value`\nadded up, for reach, views or revenue. Every target is per week; a goal\nsomeone gives per month becomes a week's part of it, said in the measure.\n\nIf the measure cannot run, the answer is `success: false` and the reason,\nnaming what to change. Never write a proposal that fails here. When the\nweeks read right, propose it by writing it into the `scorecard` table with\n`is_on` false and `proposed_from` set to the person's own words; a person\nkeeps or drops it. Quote the weeks' `shown` as given.",
+    "input_schema": {
+      "description": "A draft measure, in the columns a `scorecard` row holds it in.",
+      "properties": {
+        "key": {
+          "default": "draft",
+          "description": "The row's key, lower_case_with_underscores.",
+          "type": "string"
+        },
+        "measure": {
+          "default": "",
+          "description": "The measure as one sentence a person would say: 'Callbacks happen by their date'.",
+          "type": "string"
+        },
+        "counter": {
+          "default": "work",
+          "description": "`work` counts rows of a table of the teammate's work, and is almost always the one to use. The others are `approvals`, `standing_work`, `open_questions` and `sql`.",
+          "type": "string"
+        },
+        "shape": {
+          "description": "`share`: rows that pass `test`, out of every row in the week. `count`: rows that pass `test`. `median`: the middle `value` over rows that pass `test`. `total`: the `value` of rows that pass `test`, added up -- reach, views, revenue.",
+          "enum": [
+            "share",
+            "count",
+            "median",
+            "total"
+          ],
+          "type": "string"
+        },
+        "unit_table": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The table with one row per unit of work: one callback, one conversation."
+        },
+        "time_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The DATE or DATETIME column of `unit_table` that places a row in a week."
+        },
+        "test": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One SQL boolean expression over a row, e.g. `coalesce(done, false)` or `first_reply_at - started_at <= interval '1 hour'`. Required for a share. No subquery, no `;`, no comments."
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Median or total: one SQL number over a row, e.g. `impressions`, or `extract(epoch from first_reply_at - started_at) / 60` for minutes."
+        },
+        "value_unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What a count, median or total is in: 'minutes', 'days', 'views'."
+        },
+        "label_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The column that names a row when someone opens the number. Optional."
+        },
+        "link_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The column holding a row's link. Optional; `link` is used if the table has one."
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`sql` counter only: one SELECT returning `counted` and `total`. It must use `{end}` -- with `{start}` to count the week, e.g. `WHERE at >= '{start}' AND at < '{end}'`."
+        },
+        "aim": {
+          "description": "`higher`: met at or above the target. `lower`: met at or below it.",
+          "enum": [
+            "higher",
+            "lower"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "description": "Per week, always. A share's target is a fraction, 0.9 for 9 in 10. A count's, a median's or a total's is in its own unit: 0, 30 minutes, 25000 views. A goal said per month is turned into a week's share of it, and the measure's words say so.",
+          "type": "number"
+        },
+        "target_label": {
+          "default": "",
+          "description": "The target as a person says it: '9 in 10', 'none', '30 minutes'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "shape",
+        "aim",
+        "target"
+      ],
+      "title": "TryMeasureRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
       "type": "object"
     }
   },

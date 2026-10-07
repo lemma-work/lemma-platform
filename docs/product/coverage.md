@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 170 |
 | `gap` | 2 |
 | `manual` | 21 |
-| `planned` | 11 |
+| `planned` | 14 |
 | `withdrawn` | 0 |
-| **total** | **204** |
+| **total** | **207** |
 
 Scenario tests declaring a promise: 425.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 243 | 276 |
+| OpenAPI operations | 243 | 279 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -170,6 +170,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
 | `PS-ONB-070` A new person is shown what Lemma is and where everything is | `manual` | — |
 | `PS-ONB-071` A person can ask how the place they are in works | `manual` | — |
+| `PS-ONB-080` Hiring a role brings what the role card lists | `planned` | — |
+| `PS-ONB-081` A person chooses how a teammate is judged | `planned` | — |
+| `PS-ONB-082` The weekly review counts in code and changes nothing on its own | `planned` | — |
 | `PS-ONB-060` A visitor can learn about Lemma without signing in | `covered` | `test_public_guides_and_company_pages` |
 | `PS-ONB-061` An AI reader can discover and read the public website | `covered` | `test_machine_readable_site` |
 | `PS-ONB-062` Existing public and workspace entry links keep working | `covered` | `test_existing_links` |

@@ -77,6 +77,9 @@ def _routers():
     from app.modules.agent.api.controllers.runtime_default_controller import (
         router as runtime_default,
     )
+    from app.modules.agent.api.controllers.scorecard_controller import (
+        router as scorecard,
+    )
     from app.modules.agent.api.controllers.tool_controller import router as tool
     from app.modules.agent.api.controllers.conversation_controller import (
         router as conversation,
@@ -98,6 +101,7 @@ def _routers():
         agent_host_legacy,
         runtime_config,
         runtime_default,
+        scorecard,
         tool,
         conversation,
         conversation_queue,

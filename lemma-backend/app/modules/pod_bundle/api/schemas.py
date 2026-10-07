@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.pod_bundle.domain.state import (
+    TEMPLATE_NAME_PATTERN,
     BundleSourceKind,
     ExportState,
     ExportStatus,
@@ -20,6 +21,7 @@ from app.modules.pod_bundle.domain.state import (
     PublishStatus,
     StepStatus,
 )
+from app.modules.pod_bundle.domain.template_card import TemplateCard
 
 
 class ExportStartRequest(BaseModel):
@@ -157,6 +159,9 @@ class VariableSpecResponse(BaseModel):
 class ImportPlanResponse(BaseModel):
     format_version: int
     bundle_name: str | None = None
+    description: str | None = Field(
+        default=None, description="What the bundle says it is for (its pod.json)."
+    )
     steps: list[PlanStepResponse] = Field(default_factory=list)
     variables: list[VariableSpecResponse] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -167,6 +172,7 @@ class ImportPlanResponse(BaseModel):
         return cls(
             format_version=plan.format_version,
             bundle_name=plan.bundle_name,
+            description=plan.description,
             steps=[
                 PlanStepResponse(
                     index=s.index,
@@ -198,10 +204,14 @@ class ImportPlanResponse(BaseModel):
 
 
 class ImportStartRequest(BaseModel):
-    """Body for starting a URL-based import."""
+    """Body for starting an import."""
 
     kind: BundleSourceKind = Field(
-        ..., description="URL (a lemma signed download URL) or GITHUB (a public repo)."
+        ...,
+        description=(
+            "URL (a lemma signed download URL), GITHUB (a public repo), or "
+            "TEMPLATE (a template that ships with Lemma, by name)."
+        ),
     )
     url: str | None = Field(
         default=None,
@@ -218,6 +228,33 @@ class ImportStartRequest(BaseModel):
     account_id: UUID | None = Field(
         default=None, description="Connector account for a private GitHub repo."
     )
+    template: str | None = Field(
+        default=None,
+        pattern=TEMPLATE_NAME_PATTERN,
+        description=(
+            "For TEMPLATE: the template's name, e.g. 'support-desk'. Required "
+            "with TEMPLATE and refused with any other kind."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _source_fields_match_kind(self) -> "ImportStartRequest":
+        """A template is named, never located, so the fields that locate a
+        bundle are refused beside it rather than ignored: a request that is
+        quietly half-honoured is harder to debug than one turned away."""
+        if self.kind is not BundleSourceKind.TEMPLATE:
+            if self.template is not None:
+                raise ValueError("template is only accepted with kind=TEMPLATE.")
+            return self
+        if self.template is None:
+            raise ValueError("kind=TEMPLATE requires a template name.")
+        locating = ("url", "owner", "repo", "ref", "account_id")
+        stray = [name for name in locating if getattr(self, name) is not None]
+        if stray:
+            raise ValueError(
+                f"kind=TEMPLATE takes a template name only, not {', '.join(stray)}."
+            )
+        return self
 
 
 class UploadResponse(BaseModel):
@@ -444,3 +481,94 @@ class PublishStatusResponse(BaseModel):
             retryable=state.retryable,
             warnings=state.warnings,
         )
+
+
+class TemplateNeedResponse(BaseModel):
+    connector: str
+    label: str
+
+
+class TemplateWinResponse(BaseModel):
+    say: str
+    needs: TemplateNeedResponse | None = None
+
+
+class TemplateOfferResponse(BaseModel):
+    title: str
+    detail: str
+    cron: str
+    instruction: str
+
+
+class TemplateSkillResponse(BaseModel):
+    name: str
+    description: str
+
+
+class TemplateTableResponse(BaseModel):
+    name: str
+    description: str
+
+
+class TemplateCardResponse(BaseModel):
+    """A role on the hiring shelf, read from the template that makes it."""
+
+    template: str = Field(description="Pass as `template` to a kind=TEMPLATE import.")
+    name: str
+    role: str = Field(description="The job, in one line.")
+    about: str = Field(description="The template's description; written onto the pod.")
+    seed: str = Field(description="The archetype face's seed.")
+    brings: list[str]
+    wins: list[TemplateWinResponse]
+    offers: list[TemplateOfferResponse]
+    judged_on: list[str] = Field(
+        description="The measures its scorecard turns on, beyond the ones every teammate has."
+    )
+    skills: list[TemplateSkillResponse]
+    tables: list[TemplateTableResponse]
+
+    @classmethod
+    def from_domain(cls, card: TemplateCard) -> "TemplateCardResponse":
+        return cls(
+            template=card.template,
+            name=card.name,
+            role=card.role,
+            about=card.about,
+            seed=card.seed,
+            brings=list(card.brings),
+            wins=[
+                TemplateWinResponse(
+                    say=win.say,
+                    needs=(
+                        TemplateNeedResponse(
+                            connector=win.needs.connector, label=win.needs.label
+                        )
+                        if win.needs
+                        else None
+                    ),
+                )
+                for win in card.wins
+            ],
+            offers=[
+                TemplateOfferResponse(
+                    title=offer.title,
+                    detail=offer.detail,
+                    cron=offer.cron,
+                    instruction=offer.instruction,
+                )
+                for offer in card.offers
+            ],
+            judged_on=list(card.judged_on),
+            skills=[
+                TemplateSkillResponse(name=skill.name, description=skill.description)
+                for skill in card.skills
+            ],
+            tables=[
+                TemplateTableResponse(name=table.name, description=table.description)
+                for table in card.tables
+            ],
+        )
+
+
+class TemplateListResponse(BaseModel):
+    items: list[TemplateCardResponse]

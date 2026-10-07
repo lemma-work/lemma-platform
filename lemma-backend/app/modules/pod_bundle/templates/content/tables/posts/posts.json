@@ -1,0 +1,18 @@
+{
+  "name": "posts",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "One row per post: what it is, when it was planned for, when it went out, whether it went out as drafted, and how many views it had two days later."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "title", "type": "TEXT", "required": true},
+    {"name": "platform", "type": "TEXT", "required": false},
+    {"name": "link", "type": "TEXT", "required": false},
+    {"name": "sources", "type": "TEXT", "required": false},
+    {"name": "planned_for", "type": "DATETIME", "required": false},
+    {"name": "posted_at", "type": "DATETIME", "required": false},
+    {"name": "approved_as_drafted", "type": "BOOLEAN", "required": false},
+    {"name": "views_48h", "type": "INTEGER", "required": false},
+    {"name": "status", "type": "TEXT", "required": false}
+  ]
+}

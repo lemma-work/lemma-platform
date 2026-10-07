@@ -42,6 +42,7 @@ from app.modules.agent.domain.errors import (
     UnknownApprovalError,
 )
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pausing_tools import SUPERSEDED_BY_NEW_MESSAGE
 from app.modules.agent.domain.ports import ConversationRepository
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -499,7 +500,7 @@ class ApprovalCoordinator:
             if tool_name == "ask_user"
             else str(tool_args.get("tool_name") or "request_approval")
         )
-        response: JsonObject = {"superseded_by_new_message": True}
+        response: JsonObject = {SUPERSEDED_BY_NEW_MESSAGE: True}
         recorded = await self.conversation_repository.record_approval_decision(
             conversation_id=conversation.id,
             approval_id=tool_call_id,

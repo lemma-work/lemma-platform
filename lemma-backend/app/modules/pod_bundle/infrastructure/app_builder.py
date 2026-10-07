@@ -472,7 +472,7 @@ class AppStepRunner:
     @contextlib.asynccontextmanager
     async def _authed_scope(self, pod_id: UUID, user_id: UUID):
         """Open a short UoW + build the importing user's Context (mirrors the apply
-        job's ``_record_recipe``). The caller commits explicitly before relying on
+        job's ``record_recipe``). The caller commits explicitly before relying on
         the writes downstream."""
         from app.core.authorization.scope import context_scope, uow_scope
         from app.core.authorization.service import AuthorizationDataService

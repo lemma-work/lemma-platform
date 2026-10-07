@@ -1,0 +1,17 @@
+{
+  "name": "commitments",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "What the team promised, to whom, by when, and whether the follow-up went out."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "what", "type": "TEXT", "required": true},
+    {"name": "promised_to", "type": "TEXT", "required": false},
+    {"name": "owner", "type": "TEXT", "required": false},
+    {"name": "due", "type": "DATE", "required": false},
+    {"name": "status", "type": "TEXT", "required": false},
+    {"name": "source", "type": "TEXT", "required": false},
+    {"name": "followed_up_at", "type": "DATETIME", "required": false},
+    {"name": "done_at", "type": "DATETIME", "required": false}
+  ]
+}

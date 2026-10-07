@@ -9,6 +9,9 @@ import type { AgentMessageResponse } from '../models/AgentMessageResponse.js';
 import type { AgentPermissionsReplaceRequest } from '../models/AgentPermissionsReplaceRequest.js';
 import type { AgentPermissionsResponse } from '../models/AgentPermissionsResponse.js';
 import type { CreateAgentRequest } from '../models/CreateAgentRequest.js';
+import type { ScorecardPreviewRequest } from '../models/ScorecardPreviewRequest.js';
+import type { ScorecardPreviewResponse } from '../models/ScorecardPreviewResponse.js';
+import type { ScorecardRowsResponse } from '../models/ScorecardRowsResponse.js';
 import type { UpdateAgentRequest } from '../models/UpdateAgentRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -196,6 +199,65 @@ export class AgentsService {
             mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Rows Behind A Scorecard Measure
+     * The units of work a measure counted for the week ending `end` (default today), with whether each passed its test. Only a `work` measure has rows; any other is answered 422.
+     * @param podId
+     * @param key
+     * @param end The day the week ends, not included. Defaults to today.
+     * @param limit How many rows to list at most.
+     * @returns ScorecardRowsResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentScorecardMeasureRows(
+        podId: string,
+        key: string,
+        end?: (string | null),
+        limit: number = 50,
+    ): CancelablePromise<ScorecardRowsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/scorecard/measures/{key}/rows',
+            path: {
+                'pod_id': podId,
+                'key': key,
+            },
+            query: {
+                'end': end,
+                'limit': limit,
+            },
+            errors: {
+                404: `The pod has no scorecard, or no measure has this key`,
+                422: `The measure has no rows to show, or cannot run`,
+            },
+        });
+    }
+    /**
+     * Preview Scorecard Weeks
+     * Count scorecard measures over recent weeks without recording anything: the same seven-day windows and the same counting the weekly review uses, oldest week first. With `measure`, one unsaved measure (a dry run); with `keys`, those saved measures; with neither, every measure that is on and every proposal not yet kept. Counted as the caller.
+     * @param podId
+     * @param requestBody
+     * @returns ScorecardPreviewResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentScorecardPreview(
+        podId: string,
+        requestBody: ScorecardPreviewRequest,
+    ): CancelablePromise<ScorecardPreviewResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/scorecard/preview',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `The pod has no scorecard, or no measure has a key`,
+                422: `A draft measure or a window that cannot be counted`,
             },
         });
     }

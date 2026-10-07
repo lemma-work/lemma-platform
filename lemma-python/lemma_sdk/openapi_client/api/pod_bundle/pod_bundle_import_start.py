@@ -75,12 +75,13 @@ def sync_detailed(
 
      Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from
     POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for
-    private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the
-    plan, then apply.
+    private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is
+    none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review
+    the plan, then apply.
 
     Args:
         pod_id (UUID):
-        body (ImportStartRequest): Body for starting a URL-based import.
+        body (ImportStartRequest): Body for starting an import.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -112,12 +113,13 @@ def sync(
 
      Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from
     POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for
-    private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the
-    plan, then apply.
+    private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is
+    none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review
+    the plan, then apply.
 
     Args:
         pod_id (UUID):
-        body (ImportStartRequest): Body for starting a URL-based import.
+        body (ImportStartRequest): Body for starting an import.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -144,12 +146,13 @@ async def asyncio_detailed(
 
      Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from
     POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for
-    private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the
-    plan, then apply.
+    private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is
+    none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review
+    the plan, then apply.
 
     Args:
         pod_id (UUID):
-        body (ImportStartRequest): Body for starting a URL-based import.
+        body (ImportStartRequest): Body for starting an import.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -179,12 +182,13 @@ async def asyncio(
 
      Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from
     POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for
-    private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the
-    plan, then apply.
+    private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is
+    none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review
+    the plan, then apply.
 
     Args:
         pod_id (UUID):
-        body (ImportStartRequest): Body for starting a URL-based import.
+        body (ImportStartRequest): Body for starting an import.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

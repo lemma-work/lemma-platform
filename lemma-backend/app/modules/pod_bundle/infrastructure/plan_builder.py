@@ -191,6 +191,12 @@ def _resolved_surface_name(payload: Mapping[str, object], dir_name: str) -> str:
     return str(payload.get("platform") or dir_name).lower()
 
 
+def _manifest_text(pod_manifest: Mapping[str, object], key: str) -> str | None:
+    """A free-text ``pod.json`` field, or ``None`` when it is absent or not text."""
+    value = pod_manifest.get(key)
+    return value if isinstance(value, str) else None
+
+
 def _names_with_grants(bundle_root: Path, resource_type: str) -> list[str]:
     """Resources of this type whose manifest declares grants — the ones that
     need a deferred grants step after every referenced resource exists.
@@ -378,6 +384,7 @@ class PlanBuilder:
         return ImportPlan(
             format_version=format_version,
             bundle_name=bundle_name,
+            description=_manifest_text(pod_manifest, "description"),
             steps=steps,
             variables=variables,
             warnings=warnings,

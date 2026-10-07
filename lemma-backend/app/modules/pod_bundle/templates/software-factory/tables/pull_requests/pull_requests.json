@@ -1,0 +1,17 @@
+{
+  "name": "pull_requests",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "One row per pull request: the issue it came from, when it was opened and merged, how many rounds of review it took, and whether it was reverted."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "title", "type": "TEXT", "required": true},
+    {"name": "issue", "type": "TEXT", "required": false},
+    {"name": "link", "type": "TEXT", "required": false},
+    {"name": "opened_at", "type": "DATETIME", "required": false},
+    {"name": "merged_at", "type": "DATETIME", "required": false},
+    {"name": "review_rounds", "type": "INTEGER", "required": false},
+    {"name": "reverted", "type": "BOOLEAN", "required": false},
+    {"name": "status", "type": "TEXT", "required": false}
+  ]
+}

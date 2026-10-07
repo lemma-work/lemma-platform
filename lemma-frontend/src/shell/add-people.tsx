@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
 import { MANAGE_MEMBERS, POD_ROLES, type Pod } from "@/data";
 import { isLandingPreview } from "@/marketing/preview-mode";
-import { inviteProblem, unsentInvitation, type InvitationForInviter } from "@/org/membership";
+import { canManage, inviteProblem, unsentInvitation, type InvitationForInviter } from "@/org/membership";
 import { CopyLink } from "@/org/people";
 
 /** The picker's order: the common grant first, the one that hands over the
@@ -100,10 +100,22 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
         enabled: canAdd && Boolean(orgId),
     });
 
+    /* An invitation goes out from the organization, which takes
+       `org.invitation.manage`: an editor or an owner. Managing this pod's
+       members is not enough, so a pod admin who is a plain member of the
+       organization was offered Invite and refused with a 403. My role comes
+       from the members list already fetched; until it is known, Invite stays
+       on offer and the server still decides. */
+    const myOrgRole = useMemo(() => {
+        const listed = orgMembers.data as { items?: { user_id?: string; role?: string }[] } | undefined;
+        return listed?.items?.find((member) => member.user_id === me.data?.id)?.role ?? null;
+    }, [orgMembers.data, me.data?.id]);
+    const mayInvite = myOrgRole === null || canManage(myOrgRole);
+
     const invitations = useQuery({
         queryKey: ["org-invitations", orgId],
         queryFn: () => lemma().organizations.invitations.list(orgId as string, { limit: 50 }),
-        enabled: canAdd && !preview && Boolean(orgId),
+        enabled: canAdd && !preview && Boolean(orgId) && myOrgRole !== null && canManage(myOrgRole),
     });
 
     /* Invitations already waiting on this pod, listed with the people here so
@@ -148,7 +160,7 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
        agree. */
     const action: "add" | "invite" | null = exact
         ? "add"
-        : looksLikeEmail && !preview && !inPod && !pendingMatch
+        : looksLikeEmail && !preview && !inPod && !pendingMatch && mayInvite
           ? "invite"
           : null;
 
@@ -158,6 +170,8 @@ export function AddPeople({ pod, orgId }: { pod: Pod; orgId: string | null }) {
         ? "They’re already in this pod."
         : pendingMatch
           ? "They’ve already been invited here."
+          : looksLikeEmail && !exact && !mayInvite
+            ? "Only an owner or editor of the organization can invite someone new. Add someone who is already in it."
           : !typed && orgMembers.isSuccess && candidates.length === 0 && pendingHere.length === 0
             ? "Everyone in this organization is already here. Add someone new by email."
             : null;

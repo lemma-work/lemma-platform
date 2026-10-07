@@ -97,6 +97,9 @@ their credentials do not travel with it.
   bound is per person rather than per organization on purpose: what it guards
   is one account's worth of worker time, and a shared allowance would let one
   member's runaway loop lock out everybody else.
+- Templates the platform itself ships, which hiring a role imports, do not
+  count against that bound: they are not something a person supplied, and a
+  day of hiring should not use up a day of importing.
 
 **Contracts:** `pod.bundle.import.start`, `pod.bundle.upload`
 

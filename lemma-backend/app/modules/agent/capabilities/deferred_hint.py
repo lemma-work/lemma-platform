@@ -12,12 +12,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pydantic_ai import Tool
 from pydantic_ai.capabilities import AbstractCapability
 
 from app.modules.agent.tools.registry import (
     browser_toolset,
     connectors_toolset,
     messaging_toolset,
+    pod_toolset,
     speech_toolset,
     subagents_toolset,
     waiting_toolset,
@@ -35,6 +37,8 @@ _GROUP_LABELS: dict[int, str] = {
     id(waiting_toolset): "Pausing and resuming later",
     id(browser_toolset): "Driving a real browser",
     id(speech_toolset): "Speaking and transcribing",
+    # Visible, save for the one tool it defers; only that one is listed.
+    id(pod_toolset): "The pod's scorecard",
 }
 
 
@@ -62,12 +66,17 @@ def _summarize(description: object) -> str:
     return head
 
 
-def _tool_summaries(toolset: object) -> list[tuple[str, str]]:
+def _tool_summaries(
+    toolset: object, *, deferred_only: bool = False
+) -> list[tuple[str, str]]:
     """``(name, summary)`` for every tool in a toolset, name-sorted.
 
     Sorted because this block rides in the cached prompt prefix: a set-ordered
     listing that reshuffles between turns would invalidate the cache on every
     request, which costs far more than the tokens it saves.
+
+    ``deferred_only`` keeps just the tools deferred one by one, for a toolset
+    that is otherwise in view.
     """
     tools = getattr(toolset, "tools", None)
     if not isinstance(tools, dict):
@@ -75,6 +84,8 @@ def _tool_summaries(toolset: object) -> list[tuple[str, str]]:
     summaries: list[tuple[str, str]] = []
     for name in sorted(tools):
         tool = tools[name]
+        if deferred_only and not (isinstance(tool, Tool) and tool.defer_loading):
+            continue
         description = getattr(tool, "description", None)
         if description is None:
             definition = getattr(tool, "tool_def", None)
@@ -83,17 +94,29 @@ def _tool_summaries(toolset: object) -> list[tuple[str, str]]:
     return summaries
 
 
-def build_deferred_tools_hint(extra_toolsets: Sequence[object]) -> str | None:
+def build_deferred_tools_hint(
+    extra_toolsets: Sequence[object],
+    visible_toolsets: Sequence[object] = (),
+) -> str | None:
     """Build the instruction block listing the deferred tool groups, or None.
 
     Names alone told the model a tool existed but not when to reach for it —
     `pod_view_document_pages` reads as a filesystem call rather than "look at a
     PDF page". One line of description each costs roughly 300 tokens across the
     whole deferred set, against schemas 10-40x larger that stay withheld.
+
+    ``visible_toolsets`` contribute only the tools they defer individually --
+    the pod's ``score_week`` behind an otherwise visible pod toolset. Their
+    other tools are already callable, and listing them here would send the
+    model searching for something it has.
     """
+    groups = [(toolset, _tool_summaries(toolset)) for toolset in extra_toolsets]
+    groups += [
+        (toolset, _tool_summaries(toolset, deferred_only=True))
+        for toolset in visible_toolsets
+    ]
     sections: list[str] = []
-    for toolset in extra_toolsets:
-        summaries = _tool_summaries(toolset)
+    for toolset, summaries in groups:
         if not summaries:
             continue
         label = _GROUP_LABELS.get(id(toolset), "Additional tools")

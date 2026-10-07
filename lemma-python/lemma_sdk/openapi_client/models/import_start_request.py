@@ -15,18 +15,21 @@ T = TypeVar("T", bound="ImportStartRequest")
 
 @_attrs_define
 class ImportStartRequest:
-    """Body for starting a URL-based import.
+    """Body for starting an import.
 
     Attributes:
         kind (BundleSourceKind): Where an imported bundle comes from — a CAPS wire enum.
 
             ``URL`` covers any lemma-origin signed download URL (an export or an
             uploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public
-            repo fetched via the connector path.
+            repo fetched via the connector path; ``TEMPLATE`` is a bundle that ships
+            with the backend under ``pod_bundle/templates/``, named rather than located.
         account_id (None | Unset | UUID): Connector account for a private GitHub repo.
         owner (None | str | Unset): GITHUB repo owner.
         ref (None | str | Unset): GITHUB branch/tag/sha (optional).
         repo (None | str | Unset): GITHUB repo name.
+        template (None | str | Unset): For TEMPLATE: the template's name, e.g. 'support-desk'. Required with TEMPLATE
+            and refused with any other kind.
         url (None | str | Unset): For URL: a lemma bundle download URL (from an export or an upload). For GITHUB: the
             repo URL (alternative to owner+repo).
     """
@@ -36,6 +39,7 @@ class ImportStartRequest:
     owner: None | str | Unset = UNSET
     ref: None | str | Unset = UNSET
     repo: None | str | Unset = UNSET
+    template: None | str | Unset = UNSET
     url: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -68,6 +72,12 @@ class ImportStartRequest:
         else:
             repo = self.repo
 
+        template: None | str | Unset
+        if isinstance(self.template, Unset):
+            template = UNSET
+        else:
+            template = self.template
+
         url: None | str | Unset
         if isinstance(self.url, Unset):
             url = UNSET
@@ -89,6 +99,8 @@ class ImportStartRequest:
             field_dict["ref"] = ref
         if repo is not UNSET:
             field_dict["repo"] = repo
+        if template is not UNSET:
+            field_dict["template"] = template
         if url is not UNSET:
             field_dict["url"] = url
 
@@ -143,6 +155,15 @@ class ImportStartRequest:
 
         repo = _parse_repo(d.pop("repo", UNSET))
 
+        def _parse_template(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        template = _parse_template(d.pop("template", UNSET))
+
         def _parse_url(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -158,6 +179,7 @@ class ImportStartRequest:
             owner=owner,
             ref=ref,
             repo=repo,
+            template=template,
             url=url,
         )
 

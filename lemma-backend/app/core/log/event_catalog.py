@@ -804,6 +804,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod_bundle.sweep.archive_delete_failed.degraded': EventSpec('warning', frozenset({'job_id', 'job_kind'})),
     'pod_bundle.sweep.archive_listing_unavailable.degraded': EventSpec('warning', frozenset({'job_kind'})),
     'pod_bundle.sweep.swept': EventSpec('debug', frozenset({'purged', 'reclaimed', 'recovered'})),
+    'pod_bundle.template_cards.role_card_unreadable.skipped': EventSpec('warning', frozenset({'error', 'template'})),
     'pubsub.message.binary_parse_failed': EventSpec('debug', frozenset()),
     'pubsub.message.dropped': EventSpec('warning', frozenset()),
     'redis.memory.critical': EventSpec('error', frozenset({'max_bytes', 'ratio', 'used_bytes'})),

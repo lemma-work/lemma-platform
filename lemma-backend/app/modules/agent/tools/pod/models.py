@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -123,6 +124,107 @@ class QueryRequest(BaseModel):
             "across tables are allowed, including RLS tables (rows scoped to you "
             "unless you administer the table). Mutations are rejected."
         ),
+    )
+
+
+class ScoreWeekRequest(BaseModel):
+    end: date | None = Field(
+        default=None,
+        description=(
+            "The day the week ends, YYYY-MM-DD, not included: the week counted is "
+            "the seven days before it, in UTC. Omit for the week that ended "
+            "today. Cannot be after today."
+        ),
+    )
+
+
+class TryMeasureRequest(BaseModel):
+    """A draft measure, in the columns a `scorecard` row holds it in."""
+
+    key: str = Field(
+        default="draft",
+        description="The row's key, lower_case_with_underscores.",
+    )
+    measure: str = Field(
+        default="",
+        description=(
+            "The measure as one sentence a person would say: "
+            "'Callbacks happen by their date'."
+        ),
+    )
+    counter: str = Field(
+        default="work",
+        description=(
+            "`work` counts rows of a table of the teammate's work, and is almost "
+            "always the one to use. The others are `approvals`, `standing_work`, "
+            "`open_questions` and `sql`."
+        ),
+    )
+    shape: Literal["share", "count", "median", "total"] = Field(
+        description=(
+            "`share`: rows that pass `test`, out of every row in the week. "
+            "`count`: rows that pass `test`. `median`: the middle `value` over "
+            "rows that pass `test`. `total`: the `value` of rows that pass "
+            "`test`, added up -- reach, views, revenue."
+        ),
+    )
+    unit_table: str | None = Field(
+        default=None,
+        description="The table with one row per unit of work: one callback, one conversation.",
+    )
+    time_column: str | None = Field(
+        default=None,
+        description="The DATE or DATETIME column of `unit_table` that places a row in a week.",
+    )
+    test: str | None = Field(
+        default=None,
+        description=(
+            "One SQL boolean expression over a row, e.g. `coalesce(done, false)` "
+            "or `first_reply_at - started_at <= interval '1 hour'`. Required for "
+            "a share. No subquery, no `;`, no comments."
+        ),
+    )
+    value: str | None = Field(
+        default=None,
+        description=(
+            "Median or total: one SQL number over a row, e.g. `impressions`, or "
+            "`extract(epoch from first_reply_at - started_at) / 60` for minutes."
+        ),
+    )
+    value_unit: str | None = Field(
+        default=None,
+        description="What a count, median or total is in: 'minutes', 'days', 'views'.",
+    )
+    label_column: str | None = Field(
+        default=None,
+        description="The column that names a row when someone opens the number. Optional.",
+    )
+    link_column: str | None = Field(
+        default=None,
+        description="The column holding a row's link. Optional; `link` is used if the table has one.",
+    )
+    query: str | None = Field(
+        default=None,
+        description=(
+            "`sql` counter only: one SELECT returning `counted` and `total`. It "
+            "must use `{end}` -- with `{start}` to count the week, e.g. "
+            "`WHERE at >= '{start}' AND at < '{end}'`."
+        ),
+    )
+    aim: Literal["higher", "lower"] = Field(
+        description="`higher`: met at or above the target. `lower`: met at or below it.",
+    )
+    target: float = Field(
+        description=(
+            "Per week, always. A share's target is a fraction, 0.9 for 9 in 10. "
+            "A count's, a median's or a total's is in its own unit: 0, 30 "
+            "minutes, 25000 views. A goal said per month is turned into a week's "
+            "share of it, and the measure's words say so."
+        ),
+    )
+    target_label: str = Field(
+        default="",
+        description="The target as a person says it: '9 in 10', 'none', '30 minutes'.",
     )
 
 

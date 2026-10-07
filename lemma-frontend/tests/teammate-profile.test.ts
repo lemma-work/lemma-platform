@@ -2,7 +2,9 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { lemma } from "../src/session/client.ts";
 import { liveSource } from "../src/data/live.ts";
-import { HIRES, profileFor } from "../src/data/hires.ts";
+import { profileFor } from "../src/data/hires.ts";
+import { hireFromCard, readRoleCards } from "../src/data/roles.ts";
+import { SAMPLE_ROLES } from "../src/data/sample-roles.ts";
 
 function profileClient(context: TestContext, id: string) {
     const client = lemma(id);
@@ -52,7 +54,7 @@ test("a failed teammate read rejects rather than inventing an empty profile", as
 });
 
 test("candidate profiles describe proposals rather than active schedules or installed apps", () => {
-    for (const hire of HIRES) {
+    for (const hire of readRoleCards(SAMPLE_ROLES).map(hireFromCard)) {
         const profile = profileFor(hire);
         assert.ok(profile.commitments.every(schedule => !schedule.active));
         assert.ok(profile.projects.every(app => app.status === "suggested"));

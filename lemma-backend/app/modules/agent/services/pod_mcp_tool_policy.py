@@ -75,6 +75,12 @@ POD_TOOL_POLICIES: dict[str, ToolPolicy] = {
     "pod_edit_file": ToolPolicy(
         "Edit a file", Scope.WRITE, destructive=True, idempotent=False
     ),
+    # Writes `scorecard_weeks`, so it needs `pod:write`. Idempotent and not
+    # destructive: what it replaces is its own earlier count of the same week,
+    # recomputed from the same sources, never anything a person wrote.
+    "score_week": ToolPolicy("Count the week against the scorecard", Scope.WRITE),
+    # Counts a draft over past weeks and writes nothing.
+    "try_measure": ToolPolicy("Try a scorecard measure on past weeks", Scope.READ),
 }
 
 _WRITE_UNLESS_KNOWN = ToolPolicy(

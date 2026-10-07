@@ -139,6 +139,24 @@ A schedule whose target was deleted keeps its row (`workflow_id` and `agent_id`
 are `SET NULL`) and records each firing as failed saying the target is missing.
 Publishers use the shared transactional outbox/core Redis Streams bus.
 
+## Reporting contracts
+
+Two read contracts let other modules report on a pod's schedules, and both
+filter through one predicate, `contracts/pod_summaries.readable_schedules` —
+the same `allowed_actions_expr` the repository's listings run, against the
+reader's context — with internal schedules left out.
+
+| Contract | Answers |
+| --- | --- |
+| `pod_summaries.list_schedule_summaries` | The schedules a reader may see, for an agent's brief |
+| `standing_work.count_standing_work` | Of the runs that fell due in a window (`source_occurred_at`), how many started within `ON_TIME_ALLOWANCE` (15 minutes) and completed |
+
+`count_standing_work` is one aggregate over `schedule_runs`. A filtered run is
+not due work, and a redrive does not make its occurrence due twice, so both are
+excluded. A DATASTORE schedule's runs count only where the run's owner is the
+reader: each one reacts to somebody's row, and the run history shows another
+member's only to a reader the table's policy allows.
+
 ## Authorization and security
 
 Schedule CRUD is pod-authorized. Webhook ingress is public by necessity and

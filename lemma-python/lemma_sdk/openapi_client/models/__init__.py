@@ -68,6 +68,7 @@ _NAME_TO_MODULE = {
     'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest': 'agent_surface_slack_manifest_response_agent_surface_slack_manifest',
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
+    'Aim': 'aim',
     'AnswerSignInRequest': 'answer_sign_in_request',
     'AppBundleUploadRequest': 'app_bundle_upload_request',
     'AppBundleUploadResponse': 'app_bundle_upload_response',
@@ -291,6 +292,7 @@ _NAME_TO_MODULE = {
     'ManualWorkflowStartInput': 'manual_workflow_start_input',
     'ManualWorkflowStartOutput': 'manual_workflow_start_output',
     'McpEndpointResponse': 'mcp_endpoint_response',
+    'MeasureStatus': 'measure_status',
     'MessageKind': 'message_kind',
     'MessageListResponse': 'message_list_response',
     'MessageResponse': 'message_response',
@@ -419,6 +421,14 @@ _NAME_TO_MODULE = {
     'ScheduledWorkflowStartInput': 'scheduled_workflow_start_input',
     'ScheduledWorkflowStartOutput': 'scheduled_workflow_start_output',
     'Scope': 'scope',
+    'ScorecardMeasureHistory': 'scorecard_measure_history',
+    'ScorecardMeasureSpec': 'scorecard_measure_spec',
+    'ScorecardPreviewRequest': 'scorecard_preview_request',
+    'ScorecardPreviewResponse': 'scorecard_preview_response',
+    'ScorecardRowsResponse': 'scorecard_rows_response',
+    'ScorecardUnitRow': 'scorecard_unit_row',
+    'ScorecardWeekScore': 'scorecard_week_score',
+    'ScorecardWindow': 'scorecard_window',
     'SearchFreshness': 'search_freshness',
     'SearchMethod': 'search_method',
     'SearchResult': 'search_result',
@@ -427,6 +437,7 @@ _NAME_TO_MODULE = {
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
     'SetOrganizationDefaultRuntimeRequest': 'set_organization_default_runtime_request',
+    'Shape': 'shape',
     'SignInOutcomeResponse': 'sign_in_outcome_response',
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
@@ -476,6 +487,13 @@ _NAME_TO_MODULE = {
     'TableSummaryResponse': 'table_summary_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
+    'TemplateCardResponse': 'template_card_response',
+    'TemplateListResponse': 'template_list_response',
+    'TemplateNeedResponse': 'template_need_response',
+    'TemplateOfferResponse': 'template_offer_response',
+    'TemplateSkillResponse': 'template_skill_response',
+    'TemplateTableResponse': 'template_table_response',
+    'TemplateWinResponse': 'template_win_response',
     'Update': 'update',
     'UpdateAgentHostRuntimeProfileRequest': 'update_agent_host_runtime_profile_request',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0': 'update_agent_host_runtime_profile_request_config_selections_type_0',
@@ -624,6 +642,7 @@ if TYPE_CHECKING:
     from .agent_surface_slack_manifest_response_agent_surface_slack_manifest import AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
+    from .aim import Aim
     from .answer_sign_in_request import AnswerSignInRequest
     from .app_bundle_upload_request import AppBundleUploadRequest
     from .app_bundle_upload_response import AppBundleUploadResponse
@@ -847,6 +866,7 @@ if TYPE_CHECKING:
     from .manual_workflow_start_input import ManualWorkflowStartInput
     from .manual_workflow_start_output import ManualWorkflowStartOutput
     from .mcp_endpoint_response import McpEndpointResponse
+    from .measure_status import MeasureStatus
     from .message_kind import MessageKind
     from .message_list_response import MessageListResponse
     from .message_response import MessageResponse
@@ -975,6 +995,14 @@ if TYPE_CHECKING:
     from .scheduled_workflow_start_input import ScheduledWorkflowStartInput
     from .scheduled_workflow_start_output import ScheduledWorkflowStartOutput
     from .scope import Scope
+    from .scorecard_measure_history import ScorecardMeasureHistory
+    from .scorecard_measure_spec import ScorecardMeasureSpec
+    from .scorecard_preview_request import ScorecardPreviewRequest
+    from .scorecard_preview_response import ScorecardPreviewResponse
+    from .scorecard_rows_response import ScorecardRowsResponse
+    from .scorecard_unit_row import ScorecardUnitRow
+    from .scorecard_week_score import ScorecardWeekScore
+    from .scorecard_window import ScorecardWindow
     from .search_freshness import SearchFreshness
     from .search_method import SearchMethod
     from .search_result import SearchResult
@@ -983,6 +1011,7 @@ if TYPE_CHECKING:
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
     from .set_default_surface_request import SetDefaultSurfaceRequest
     from .set_organization_default_runtime_request import SetOrganizationDefaultRuntimeRequest
+    from .shape import Shape
     from .sign_in_outcome_response import SignInOutcomeResponse
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
@@ -1032,6 +1061,13 @@ if TYPE_CHECKING:
     from .table_summary_response import TableSummaryResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
+    from .template_card_response import TemplateCardResponse
+    from .template_list_response import TemplateListResponse
+    from .template_need_response import TemplateNeedResponse
+    from .template_offer_response import TemplateOfferResponse
+    from .template_skill_response import TemplateSkillResponse
+    from .template_table_response import TemplateTableResponse
+    from .template_win_response import TemplateWinResponse
     from .update import Update
     from .update_agent_host_runtime_profile_request import UpdateAgentHostRuntimeProfileRequest
     from .update_agent_host_runtime_profile_request_config_selections_type_0 import UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0
@@ -1193,6 +1229,7 @@ __all__ = [
     'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest',
     'AgentSurfaceStatus',
     'AgentToolset',
+    'Aim',
     'AnswerSignInRequest',
     'AppBundleUploadRequest',
     'AppBundleUploadResponse',
@@ -1416,6 +1453,7 @@ __all__ = [
     'ManualWorkflowStartInput',
     'ManualWorkflowStartOutput',
     'McpEndpointResponse',
+    'MeasureStatus',
     'MessageKind',
     'MessageListResponse',
     'MessageResponse',
@@ -1544,6 +1582,14 @@ __all__ = [
     'ScheduledWorkflowStartInput',
     'ScheduledWorkflowStartOutput',
     'Scope',
+    'ScorecardMeasureHistory',
+    'ScorecardMeasureSpec',
+    'ScorecardPreviewRequest',
+    'ScorecardPreviewResponse',
+    'ScorecardRowsResponse',
+    'ScorecardUnitRow',
+    'ScorecardWeekScore',
+    'ScorecardWindow',
     'SearchFreshness',
     'SearchMethod',
     'SearchResult',
@@ -1552,6 +1598,7 @@ __all__ = [
     'SendMessageRequestMetadataType0',
     'SetDefaultSurfaceRequest',
     'SetOrganizationDefaultRuntimeRequest',
+    'Shape',
     'SignInOutcomeResponse',
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',
@@ -1601,6 +1648,13 @@ __all__ = [
     'TableSummaryResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
+    'TemplateCardResponse',
+    'TemplateListResponse',
+    'TemplateNeedResponse',
+    'TemplateOfferResponse',
+    'TemplateSkillResponse',
+    'TemplateTableResponse',
+    'TemplateWinResponse',
     'Update',
     'UpdateAgentHostRuntimeProfileRequest',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0',

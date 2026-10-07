@@ -1,0 +1,30 @@
+{
+  "name": "scorecard",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "How this teammate is judged: one row per measure, counted by the weekly review."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "key", "type": "TEXT", "required": true, "unique": true},
+    {"name": "measure", "type": "TEXT", "required": true},
+    {"name": "kind", "type": "TEXT", "required": true},
+    {"name": "counter", "type": "TEXT", "required": true},
+    {"name": "query", "type": "TEXT", "required": false},
+    {"name": "aim", "type": "TEXT", "required": true},
+    {"name": "target", "type": "FLOAT", "required": true},
+    {"name": "target_label", "type": "TEXT", "required": true},
+    {"name": "counted_from", "type": "TEXT", "required": true},
+    {"name": "is_on", "type": "BOOLEAN", "required": true},
+    {"name": "note", "type": "TEXT", "required": false},
+    {"name": "position", "type": "INTEGER", "required": true},
+    {"name": "shape", "type": "TEXT", "required": false},
+    {"name": "unit_table", "type": "TEXT", "required": false},
+    {"name": "time_column", "type": "TEXT", "required": false},
+    {"name": "test", "type": "TEXT", "required": false},
+    {"name": "value", "type": "TEXT", "required": false},
+    {"name": "value_unit", "type": "TEXT", "required": false},
+    {"name": "label_column", "type": "TEXT", "required": false},
+    {"name": "link_column", "type": "TEXT", "required": false},
+    {"name": "proposed_from", "type": "TEXT", "required": false}
+  ]
+}

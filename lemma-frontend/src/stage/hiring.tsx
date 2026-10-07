@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Pod } from "@/data";
-import { HIRES, BLANK, blankHire, dealtName, openersFor, profileFor, type Hire } from "@/data/hires";
+import { BLANK, blankHire, dealtName, openersFor, profileFor, type Hire } from "@/data/hires";
+import { hireFromCard } from "@/data/roles";
 import { possessive } from "@/copy";
 import { ASKS, typedAt } from "./asking";
-import { ArrowRightIcon, BackIcon, CheckIcon, ChatIcon, KeyIcon, LinkIcon, PeopleIcon } from "@/ui/icons";
+import { ArrowRightIcon, BackIcon, CheckIcon, ChatIcon, ClockIcon, KeyIcon, LinkIcon, PeopleIcon } from "@/ui/icons";
 import { characterForSeed, variantForCharacter } from "@/shell/character";
 import { CharacterPuppet } from "@/shell/character-puppet";
 import { formatIdentityIcon, identityVariantSeed } from "@/shell/resource-icon";
@@ -18,6 +19,10 @@ import { modelSetupState } from "@/shell/runs-on-state";
 import { SetUpAiModelLink } from "@/desktop/set-up-on-this-mac";
 import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import { openSettings } from "@/desktop/open-settings";
+import { lemma } from "@/session/client";
+import { importTemplate, type Call } from "./template-import";
+import { useCreateSchedule } from "@/schedule/queries";
+import { humanizeName } from "@/schedule/schedules";
 
 /** One candidate.
  *
@@ -73,9 +78,9 @@ function HireCard({ hire, onPick }: { hire: Hire; onPick: (hire: Hire) => void }
  *  hire is what you get after" from a promise into a structural fact.
  *
  *  Four beats: the shelf, one candidate's profile, the making, and the
- *  meeting. The listings come from `HIRES`, a placeholder for published pod
- *  bundles; when those land only that file changes and `hire()` gains an
- *  import beside its create. */
+ *  meeting. The listings are the templates the server ships, each read with
+ *  its card (`data/roles.ts`); hiring one makes the pod and then imports its
+ *  template into it. */
 
 /** What the reveal asked the app to do after it lands on the new teammate.
  *
@@ -84,7 +89,7 @@ function HireCard({ hire, onPick }: { hire: Hire; onPick: (hire: Hire) => void }
  *  wrote is one they did not. `open` raises the dialog that belongs to the
  *  pod, which the reveal cannot raise itself: both of them read surfaces and
  *  members off a `Pod` the shell holds and this page never sees. */
-export type FirstMove = { say: string } | { open: "reach" | "people" };
+export type FirstMove = { say: string } | { open: "reach" | "people" | "scorecard" };
 
 type Stage = "shelf" | "candidate" | "making" | "met";
 
@@ -123,7 +128,7 @@ export function HiringView({
     const [name, setName] = useState(initialJob?.name ?? "");
     const [job, setJob] = useState(initialJob?.job ?? "");
     const [done, setDone] = useState<string[]>([]);
-    const [made, setMade] = useState<{ id: string; name: string; variant: number; faceSaved: boolean } | null>(null);
+    const [made, setMade] = useState<{ id: string; name: string; variant: number; faceSaved: boolean; templateProblem: string | null } | null>(null);
     const [error, setError] = useState<string | null>(null);
     /* The pod an attempt at this hire already created. Kept across a retry so
        pressing Hire again finishes that teammate instead of making a second
@@ -192,6 +197,23 @@ export function HiringView({
             });
             setDone(["made", "face"]);
 
+            /* The role's template: its skills, its tables and its scorecard.
+               A failure here does not undo the hire — the teammate exists and
+               works — so the reveal says what did not arrive instead of
+               sending the person back to a Hire button for a teammate they
+               already have. */
+            let templateProblem: string | null = null;
+            /* The sample workspace has no server to import into. */
+            if (chosen.bundle && source.label !== "sample") {
+                const call = ((method, path, body) => lemma(pod.id).request(method, path, body ? { body } : undefined)) as Call;
+                try {
+                    await importTemplate({ podId: pod.id, template: chosen.bundle, call });
+                    setDone(["made", "face", "template"]);
+                } catch (problem) {
+                    templateProblem = problem instanceof Error ? problem.message : "The role’s setup stopped before it finished.";
+                }
+            }
+
             /* Put them in the rail directly rather than asking the list to go
                and look again. The new teammate is already in hand — a whole
                `Pod` — so writing it in is instant and cannot miss, where a
@@ -210,7 +232,7 @@ export function HiringView({
             );
             void queryClient.invalidateQueries({ queryKey: ["pods", orgId] });
             created.current = null;
-            setMade({ id: pod.id, name: pod.name, variant, faceSaved });
+            setMade({ id: pod.id, name: pod.name, variant, faceSaved, templateProblem });
             setStage("met");
         } catch (problem) {
             setError(problem instanceof Error ? problem.message : "Couldn’t finish setting up this teammate. Check your teammate list before trying again.");
@@ -272,6 +294,7 @@ export function HiringView({
                     orgName={orgName}
                     needsModel={needsModel}
                     faceSaved={made.faceSaved}
+                    templateProblem={made.templateProblem}
                     onOpen={(move) => onHired(made.id, move)}
                 />
             )}
@@ -341,6 +364,10 @@ function Shelf({
        there is something in it, and stops for good once there is. */
     const [touched, setTouched] = useState(false);
     const asking = useAsking(!touched && job.length === 0);
+    /* The roles are the templates the server ships, read from it rather than
+       listed here. Long-lived: they change when the server does. */
+    const roles = useQuery({ queryKey: ["roles"], queryFn: () => source.listRoles(), staleTime: 30 * 60_000 });
+    const hires = useMemo(() => (roles.data ?? []).map(hireFromCard), [roles.data]);
 
     return (
         <div className="pane">
@@ -382,11 +409,21 @@ function Shelf({
                     Just exploring? Start with a blank teammate <ArrowRightIcon size={14} />
                 </button>
 
-                <div className="shelf__or">or start with a role</div>
-
-                <div className="shelf__grid">
-                    {HIRES.map((hire) => <HireCard key={hire.id} hire={hire} onPick={onPick} />)}
-                </div>
+                {/* A shelf that could not be read says so; the blank teammate
+                    above still works without it. */}
+                {roles.isError && (
+                    <p className="shelf__quiet" role="alert">
+                        Couldn’t load the starting roles. <button className="linkish" onClick={() => void roles.refetch()}>Try again</button>
+                    </p>
+                )}
+                {hires.length > 0 && (
+                    <>
+                        <div className="shelf__or">or start with a role</div>
+                        <div className="shelf__grid">
+                            {hires.map((hire) => <HireCard key={hire.id} hire={hire} onPick={onPick} />)}
+                        </div>
+                    </>
+                )}
             </div>
         </div>
     );
@@ -503,6 +540,21 @@ function Candidate({
                 members: [],
                 issued: false,
                 emptyVoice: "candidate",
+                /* The skills its template ships — the same deck it will hold
+                   once hired, read before there is a pod to read it from. */
+                skills: hire.taught && hire.taught.length > 0 ? (
+                    <ul className="commits">
+                        {hire.taught.map((skill) => (
+                            <li key={skill.name}>
+                                <span className="commits__dot commits__dot--off" />
+                                <span className="commits__body">
+                                    <span className="commits__title">{humanizeName(skill.name)}</span>
+                                    {skill.description && <span className="commits__detail">{skill.description}</span>}
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
+                ) : undefined,
                 action: (
                     <div className="takeon">
                         <label className="takeon__name">
@@ -522,13 +574,27 @@ function Candidate({
                 ),
                 aside: (
                     <section className="pcard">
-                        <div className="pcard__head"><h3>What you can set up together</h3></div>
-                        <p className="empty-row">This role is a starting brief. Apps, sources and schedules are set up after hiring.</p>
+                        <div className="pcard__head"><h3>{hire.bundle ? "Arrives with" : "What you can set up together"}</h3></div>
+                        <p className="empty-row">
+                            {hire.bundle
+                                ? "Hiring brings these. Connections and standing work are set up after, one tap each."
+                                : "This role is a starting brief. Apps, sources and schedules are set up after hiring."}
+                        </p>
                         <ul className="offer__brings">
                             {hire.brings.map((thing) => (
                                 <li key={thing}><ArrowRightIcon size={15} />{thing}</li>
                             ))}
                         </ul>
+                        {hire.judgedOn && (
+                            <>
+                                <div className="pcard__head"><h3>Judged on</h3></div>
+                                <ul className="offer__brings">
+                                    {hire.judgedOn.map((measure) => (
+                                        <li key={measure}><ArrowRightIcon size={15} />{measure}</li>
+                                    ))}
+                                </ul>
+                            </>
+                        )}
                     </section>
                 ),
             }}
@@ -536,15 +602,16 @@ function Candidate({
     );
 }
 
-/** The wait, said as what it is. Two steps today because two things really
- *  happen; a bundle import will add its own. */
+/** The wait, said as what it is: the steps that really happen, and a role's
+ *  template as a third when it has one. */
 function Making({ hire, name, done }: { hire: Hire; name: string; done: string[] }) {
     const steps = useMemo(
         () => [
             { id: "made", label: "Setting up " + (name || "them") },
             { id: "face", label: "Creating their identity" },
+            ...(hire.bundle ? [{ id: "template", label: "Bringing what " + hire.name + " comes with" }] : []),
         ],
-        [name],
+        [name, hire.bundle, hire.name],
     );
 
     return (
@@ -598,6 +665,7 @@ function Met({
     orgName,
     needsModel,
     faceSaved,
+    templateProblem,
     onOpen,
 }: {
     podId: string;
@@ -610,6 +678,8 @@ function Met({
     needsModel: boolean;
     /** False when the face picked on the shelf could not be stored. */
     faceSaved: boolean;
+    /** Why the role's template did not finish arriving, when it did not. */
+    templateProblem: string | null;
     onOpen: (move?: FirstMove) => void;
 }) {
     const [hello, setHello] = useState(1);
@@ -660,6 +730,9 @@ function Met({
             {!faceSaved && (
                 <p className="met__note">Couldn’t save the face you picked, so {name} kept the one they came with.</p>
             )}
+            {templateProblem && (
+                <p className="met__note" role="alert">Not everything {hire.name} comes with arrived: {templateProblem} {name} is hired, and the rest can be set up together.</p>
+            )}
 
             <button className="btn btn--primary met__door" onClick={() => onOpen()}>
                 Go to {possessive(name)} space <ArrowRightIcon size={15} />
@@ -673,16 +746,29 @@ function Met({
                     <h3><ChatIcon size={17} />{exploring ? "Or ask " + name + " something" : "Or give " + name + " a first task"}</h3>
                     <p>Opens as a draft in {possessive(name)} space. Nothing sends until you do.</p>
                     <ul className="met__openers">
-                        {openers.map((line) => (
-                            <li key={line}>
-                                <button onClick={() => onOpen({ say: line })}>
-                                    <span>{line}</span>
-                                    <ArrowRightIcon size={15} />
-                                </button>
-                            </li>
-                        ))}
+                        {openers.map((line) => {
+                            /* A first win that needs a place says which, and
+                               connects it from here — the draft alone would
+                               only get "I can't see Intercom" back. */
+                            const needs = hire.wins?.find((win) => win.say === line)?.needs;
+                            return (
+                                <li key={line} className={needs ? "met__opener--needs" : undefined}>
+                                    <button onClick={() => onOpen({ say: line })}>
+                                        <span>{line}</span>
+                                        <ArrowRightIcon size={15} />
+                                    </button>
+                                    {needs && (
+                                        <button className="linkish met__connect" onClick={() => openSettings("connectors", needs.connector)}>
+                                            Needs {needs.label}. Connect it
+                                        </button>
+                                    )}
+                                </li>
+                            );
+                        })}
                     </ul>
                 </section>
+
+                {hire.offers && hire.offers.length > 0 && <Offers podId={podId} name={name} offers={hire.offers} />}
 
                 <div className="met__pair">
                     <button className="met__side" onClick={() => onOpen({ open: "reach" })}>
@@ -696,9 +782,62 @@ function Met({
                         <span>Invite people from {orgName} to work with {name}.</span>
                     </button>
                 </div>
+
+                <button className="met__side met__judged" onClick={() => onOpen({ open: "scorecard" })}>
+                    <CheckIcon size={18} />
+                    <b>Choose how {name} is judged</b>
+                    <span>{hire.judgedOn ? "A scorecard came with the role. Keep it, and " + name + " is reviewed every Friday." : "Pick what to count, and " + name + " is reviewed every Friday."}</span>
+                </button>
             </div>
 
         </div></div>
+    );
+}
+
+/** Standing work the role offers, each turned on with one tap.
+ *
+ *  Not created by the hire: a schedule wakes the teammate on its own, and
+ *  that is something a person says yes to. Turned on here it is an ordinary
+ *  schedule, owned by whoever pressed the button, and lives in Standing work
+ *  from then on. */
+function Offers({ podId, name, offers }: { podId: string; name: string; offers: NonNullable<Hire["offers"]> }) {
+    const create = useCreateSchedule(podId);
+    const [on, setOn] = useState<string[]>([]);
+    const [failed, setFailed] = useState<string | null>(null);
+    const turnOn = (offer: NonNullable<Hire["offers"]>[number]) => {
+        setFailed(null);
+        create.mutate({
+            name: offer.title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
+            cron: offer.cron,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            target: "agent",
+            agentName: "pod_default",
+            workflowName: "",
+            instruction: offer.instruction,
+        }, {
+            onSuccess: () => setOn((previous) => [...previous, offer.title]),
+            onError: () => setFailed(offer.title),
+        });
+    };
+    return (
+        <section className="met__move">
+            <h3><ClockIcon size={17} />Or let {name} take something on</h3>
+            <p>Runs on its own once you turn it on. Change or stop it in About.</p>
+            <ul className="met__offers">
+                {offers.map((offer) => (
+                    <li key={offer.title}>
+                        <span>
+                            <b>{offer.title}</b>
+                            <small>{offer.detail}</small>
+                            {failed === offer.title && <small role="alert">Couldn’t turn this on. Try again, or ask {name}.</small>}
+                        </span>
+                        {on.includes(offer.title)
+                            ? <span className="met__on"><CheckIcon size={14} /> On</span>
+                            : <button className="btn" disabled={create.isPending} onClick={() => turnOn(offer)}>Turn on</button>}
+                    </li>
+                ))}
+            </ul>
+        </section>
     );
 }
 

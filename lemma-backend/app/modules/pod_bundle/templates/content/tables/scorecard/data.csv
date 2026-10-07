@@ -1,0 +1,6 @@
+id,key,measure,kind,counter,query,aim,target,target_label,counted_from,is_on,note,position,shape,unit_table,time_column,test,value,value_unit,label_column,link_column,proposed_from
+98196ee1-9cdf-5a19-a2e9-854488c4cc8a,on_time,Posts go out by their planned time,outcome,work,,higher,0.9,9 in 10,Posts,true,,1,share,posts,planned_for,posted_at IS NOT NULL AND posted_at <= planned_for + interval '15 minutes',,,title,link,
+98c33408-2d8a-51a4-ab06-890e18e6543a,approved_as_drafted,Posts you approve without changes,outcome,work,,higher,0.8,4 in 5,Posts,true,,2,share,posts,posted_at,"coalesce(approved_as_drafted, false)",,,title,link,
+853deb4b-7ff4-55d1-a372-81d827c4d000,views_48h,Median views two days after posting,outcome,work,,higher,3000,"at least 3,000",Posts,true,,3,median,posts,posted_at,,views_48h,views,title,link,
+e6ddb1ea-9322-5a9a-ae31-e12a4acd977f,standing_work,Standing work runs on time,reliability,standing_work,,higher,1,every run,Run history,true,,4,share,,,,,,,,
+2ac2ca54-f36a-5999-a2cf-5221afd03779,open_questions,Nothing waits on a question for a day,reliability,open_questions,,lower,0,none,Conversations,true,,5,count,,,,,,,,

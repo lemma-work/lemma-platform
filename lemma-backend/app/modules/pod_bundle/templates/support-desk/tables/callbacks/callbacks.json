@@ -1,0 +1,15 @@
+{
+  "name": "callbacks",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "Customers someone promised to get back to, and by when."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "customer", "type": "TEXT", "required": true},
+    {"name": "reason", "type": "TEXT", "required": false},
+    {"name": "owner", "type": "TEXT", "required": false},
+    {"name": "due", "type": "DATE", "required": false},
+    {"name": "done", "type": "BOOLEAN", "required": false},
+    {"name": "conversation", "type": "TEXT", "required": false}
+  ]
+}

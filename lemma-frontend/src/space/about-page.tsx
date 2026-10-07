@@ -18,11 +18,12 @@ import { WhatItRemembers } from "./what-it-remembers";
 import { sayHired } from "./teammates";
 import { TeammateFace } from "./teammate-face";
 import { DeleteTeammate } from "./delete-teammate";
+import { JudgedOn } from "@/scorecard/judged-on";
 
 /** Where a link into About lands. Each is a section of the one page. */
-export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "model";
+export type AboutSection = "people" | "channels" | "judged" | "skills" | "memory" | "schedules" | "agents" | "model";
 
-const SECTIONS: readonly string[] = ["people", "channels", "skills", "memory", "schedules", "agents", "model"] satisfies AboutSection[];
+const SECTIONS: readonly string[] = ["people", "channels", "judged", "skills", "memory", "schedules", "agents", "model"] satisfies AboutSection[];
 
 /** Whether a word from an address is one of About's sections. */
 export function isAboutSection(value: string | null | undefined): value is AboutSection {
@@ -39,7 +40,7 @@ export function isAboutSection(value: string | null | undefined): value is About
  *  is the same working component Settings stacked before — nothing here is a
  *  second copy of how a schedule or a channel works. What is left in
  *  Settings is about the space rather than the teammate. */
-export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onAskFor, onOpenRun, onOpenConversation, onFile, onSettings, onDeleted }: {
+export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onAskFor, onOpenRun, onOpenConversation, onFile, onSettings, onSetup, onDeleted }: {
     pod: Pod;
     orgId: string | null;
     orgName: string;
@@ -57,6 +58,8 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
     onOpenConversation: (id: string) => void;
     onFile: (path: string) => void;
     onSettings: () => void;
+    /** Open the step where how the teammate is judged is chosen. */
+    onSetup: () => void;
     /** The teammate has just been deleted: leave its space. */
     onDeleted: () => void;
 }) {
@@ -80,6 +83,15 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
 
                 <Section id="channels" title={"Where to reach " + pod.name} note="Channels outside the app it answers in.">
                     <Surfaces pod={pod} expanded />
+                </Section>
+
+                <Section
+                    id="judged"
+                    title={pod.name + " is judged on"}
+                    note="Counted every Friday from your tools and your people."
+                    action={<button className="aboutpage__action" onClick={onSetup}>Change</button>}
+                >
+                    <JudgedOn pod={pod} onSetup={onSetup} onFile={onFile} />
                 </Section>
 
                 <Section id="skills" title={"What " + pod.name + " has been taught"} note="Instructions it follows when a task matches.">
@@ -132,11 +144,12 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
 }
 
 /** The page's sections, as a row that stays at the top while you scroll.
- *  About grew to seven sections; this is how you get to the fifth without
+ *  About grew to eight sections; this is how you get to the fifth without
  *  scrolling past the first four. The section in view is marked. */
 const JUMPS: { id: AboutSection; label: string }[] = [
     { id: "people", label: "People" },
     { id: "channels", label: "Channels" },
+    { id: "judged", label: "Judged on" },
     { id: "skills", label: "Taught" },
     { id: "memory", label: "Remembers" },
     { id: "schedules", label: "Standing work" },

@@ -98,7 +98,24 @@ def test_pod_toolset_exposes_exactly_these_tools():
         "pod_view_document_pages",
         "pod_get_file_url",
         "pod_search_files",
+        # The two entries that cost no prefix budget: deferred, because a
+        # weekly count and drafting a scorecard are no reason to carry a schema
+        # on every turn. Here rather than in a toolset of their own so they
+        # reach the pod MCP surface with the rest.
+        # `test_only_the_scorecard_tools_are_deferred` holds the deferral.
+        "score_week",
+        "try_measure",
     }
+
+
+def test_only_the_scorecard_tools_are_deferred():
+    """Everything else in the pod toolset is visible; these must not be."""
+    deferred = {
+        name
+        for name, tool in pod_adapter.pod_toolset.tools.items()
+        if tool.defer_loading
+    }
+    assert deferred == {"score_week", "try_measure"}
 
 
 @pytest.mark.asyncio

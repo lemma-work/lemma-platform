@@ -10,6 +10,7 @@ import type { ImportStartRequest } from '../models/ImportStartRequest.js';
 import type { ImportStatusResponse } from '../models/ImportStatusResponse.js';
 import type { PublishStartRequest } from '../models/PublishStartRequest.js';
 import type { PublishStatusResponse } from '../models/PublishStatusResponse.js';
+import type { TemplateListResponse } from '../models/TemplateListResponse.js';
 import type { UploadResponse } from '../models/UploadResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -34,6 +35,18 @@ export class PodBundleService {
             errors: {
                 422: `Validation Error`,
             },
+        });
+    }
+    /**
+     * List Role Templates
+     * The templates that ship with Lemma and carry a role card, in shelf order: the job in one line, what arrives, first things to say, standing work on offer, and what the role is judged on, read from the template itself. Hire one by importing it with kind=TEMPLATE into a new pod.
+     * @returns TemplateListResponse Successful Response
+     * @throws ApiError
+     */
+    public static podBundleTemplatesList(): CancelablePromise<TemplateListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/bundle/templates',
         });
     }
     /**
@@ -87,7 +100,7 @@ export class PodBundleService {
     }
     /**
      * Start Pod Import
-     * Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
+     * Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.
      * @param podId
      * @param requestBody
      * @returns ImportStatusResponse Successful Response

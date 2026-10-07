@@ -1,37 +1,23 @@
 import type { Profile, Skill } from "./types";
 import { characterForSeed } from "../shell/cast";
 
-/** Who is on the shelf.
+/** What a listing on the shelf carries, and the one listing that is not a
+ *  role: somebody new.
  *
- *  **This file is the placeholder.** Every entry here is meant to become a
- *  published pod bundle — the backend already has the whole surface for it
- *  (`pod_bundle`: export, publish, import), so hiring one becomes an import
- *  rather than an empty `pods.create`. Until those bundles exist, the shelf
- *  runs on this list so the flow can be walked and judged.
- *
- *  When the real ones land, the shape below is what a listing has to expose:
- *  a name, one honest line about the job, the archetype face, and — the part
- *  that does the persuading — what actually arrives with them. A listing that
- *  cannot say "a table, a schedule and an app come with this" is a prompt
- *  wrapper, and a shelf of those is how the GPT store died.
+ *  The roles themselves are not here. Each is a template the backend ships,
+ *  and the shelf reads their cards from it (`roles.ts`, `GET
+ *  /pods/bundle/templates`), so a role's card cannot promise a skill or a
+ *  measure its template does not bring, and a new role is a new template with
+ *  no change to this app. What stays here is the shape both kinds of listing
+ *  are read through, and the blank teammate, which is no template at all.
  *
  *  `seed` is the archetype's face. It is not stored on the pod: it picks the
  *  character, and the hire's own id is then searched for a variant landing on
  *  the same one. See `variantForCharacter` — your Follow-ups and mine are the
- *  same role and the same character, on two different pods.
- *
- *  The seeds are searched, not typed. Six arbitrary ones gave six versions of
- *  the same round body in six colours, which is the failure this whole shelf
- *  is supposed to avoid: at the size a card draws them, silhouette separates
- *  two candidates and hue does not.
- *
- *  They were searched again when the face stopped being a generated creature
- *  and became one of twenty-four sculptures: a different hash, so the old
- *  numbers no longer held and two of the six came out as Stack. Re-run the
- *  search against `characterForSeed` if that hash or the cast ever changes —
- *  nothing here fails loudly when a shelf goes back to showing duplicates.
- *  The characters are also chosen rather than merely distinct: Moon keeps the
- *  night shift, Grid keeps the ledger, Bloom is glad you are here. */
+ *  same role and the same character, on two different pods. A template's
+ *  seed is searched against `characterForSeed` when the template is written,
+ *  so two roles do not arrive as the same sculpture; the backend's template
+ *  tests hold that no two roles share one. */
 export interface Hire {
     id: string;
     name: string;
@@ -58,16 +44,32 @@ export interface Hire {
     /* The rest is what the candidate's own page shows. A listing is read on
        the same page a hired teammate is read on, so it has to answer the same
        questions — what may it do, what runs without being asked, what did it
-       arrive with. A bundle manifest supplies exactly these; until then they
-       are written here. */
+       arrive with. `hireFromCard` fills them from the template's card. */
     skills: Skill[];
     permits: string[];
     commitments: { title: string; detail: string; cadence: string }[];
     projects: { name: string; description: string }[];
     counts: { tables: number; functions: number; workflows: number };
 
-    /** The bundle this becomes. Empty until one is published. */
+    /** The template the backend ships for this role
+     *  (`pod_bundle/templates/<bundle>/`), imported when the role is hired.
+     *  Absent only on the blank teammate. */
     bundle?: string;
+    /** First things to hand the new teammate, with the place each needs. A
+     *  win that needs a place says so on its card and connects it there; it
+     *  never pretends the place is already connected. `openers` is the same
+     *  list's words. */
+    wins?: { say: string; needs?: { connector: string; label: string } }[];
+    /** Standing work the role offers to take on, turned on with one tap
+     *  after the hire rather than created by it: nothing runs on its own
+     *  until a person has said so. */
+    offers?: { title: string; detail: string; cron: string; instruction: string }[];
+    /** What the role is judged on: the measures its template turns on. */
+    judgedOn?: string[];
+    /** The skills its template ships, by their own names. */
+    taught?: { name: string; description: string }[];
+    /** The tables its work is kept in. */
+    tables?: { name: string; description: string }[];
 }
 
 /** A listing, in the shape the profile page reads.
@@ -105,195 +107,6 @@ export function profileFor(hire: Hire): Profile {
         counts: { tables: 0, functions: 0, workflows: 0 },
     };
 }
-
-export const HIRES: Hire[] = [
-    {
-        id: "follow-ups",
-        name: "Follow-ups",
-        role: "Keeps track of commitments and prepares follow-ups",
-        seed: "arch/follow-ups/6",
-        brings: [
-            "A shared list of commitments",
-            "A weekday follow-up check",
-            "Drafts for you to review",
-        ],
-        about:
-            "Keeps track of the commitments this team shares with it. " +
-            "Reads replies, closes what landed, and raises what has gone cold. Drafts the " +
-            "follow-up but never sends it without a person saying so.",
-        openers: [
-            "Here is everything I said I would do this week.",
-            "What have I promised someone that has gone quiet?",
-            "Sweep every weekday morning and tell me what has gone cold.",
-        ],
-        skills: [
-            { id: "MEMORY", label: "Memory", blurb: "Knows what was promised three weeks ago" },
-            { id: "MESSAGING", label: "Reaches people", blurb: "Sends the nudge to the person, not the channel" },
-            { id: "TODO", label: "Keeps a plan", blurb: "One row per promise, and it closes them" },
-            { id: "USER_INTERACTION", label: "Asks first", blurb: "Drafts, then waits for your yes" },
-        ],
-        permits: ["tables.write", "messages.draft"],
-        commitments: [
-            { title: "Morning sweep", detail: "Re-reads every open loop and raises what has gone quiet", cadence: "Every weekday at 09:00" },
-            { title: "Reply watch", detail: "Checks for replies and closes resolved follow-ups", cadence: "When something arrives" },
-        ],
-        projects: [{ name: "Open loops", description: "Commitments, owners and follow-up dates" }],
-        counts: { tables: 1, functions: 2, workflows: 1 },
-    },
-    {
-        id: "research",
-        name: "Research",
-        role: "Reads your sources and helps you make sense of them",
-        seed: "arch/research/13",
-        brings: [
-            "A library of links, PDFs and notes",
-            "Answers with sources attached",
-            "A weekly digest of changes",
-        ],
-        about:
-            "Turns the documents, links and notes this team collects into answers. Always " +
-            "cites what it read. Says plainly when the sources disagree, and says nothing " +
-            "when it does not know.",
-        openers: [
-            "Here is a link. Read it and tell me what actually matters.",
-            "Watch these sources and tell me each week what changed.",
-            "Whenever you answer me, attach what you read it in.",
-        ],
-        skills: [
-            { id: "WEB_SEARCH", label: "Research", blurb: "Searches and reads the open web" },
-            { id: "SKILLS", label: "Reads what you save", blurb: "Documents, links and notes, all of it" },
-            { id: "MEMORY", label: "Memory", blurb: "Remembers what it already told you" },
-        ],
-        permits: ["files.read", "tables.write"],
-        commitments: [
-            { title: "Weekly digest", detail: "What changed in the sources this team watches", cadence: "Every Monday at 08:00" },
-        ],
-        projects: [{ name: "Library", description: "Saved sources and answers" }],
-        counts: { tables: 1, functions: 1, workflows: 0 },
-    },
-    {
-        id: "reception",
-        name: "Reception",
-        role: "Handles incoming questions and flags what needs you",
-        seed: "arch/reception/13",
-        brings: [
-            "Connected channels for incoming questions",
-            "Guidance on what to answer and when to ask",
-            "A record of replies for your team to review",
-        ],
-        about:
-            "The first reply. Handles the questions with known answers, hands over anything " +
-            "that needs a person, and never invents a commitment on the team's behalf.",
-        openers: [
-            "Take tonight's inbox. I will read what you could not answer.",
-            "Here is how to answer the three questions we get most.",
-            "Anything you are not sure about, hand straight to me.",
-        ],
-        skills: [
-            { id: "MESSAGING", label: "Reaches people", blurb: "Answers on the channel the question came in on" },
-            { id: "USER_INTERACTION", label: "Asks first", blurb: "Hands over anything it should not decide" },
-            { id: "MEMORY", label: "Memory", blurb: "Recognises somebody who wrote last week" },
-        ],
-        permits: ["messages.send", "tables.write"],
-        commitments: [
-            { title: "First reply", detail: "Drafts answers and flags questions that need a person", cadence: "When something arrives" },
-        ],
-        projects: [{ name: "Front desk log", description: "Everything said in your name, readable" }],
-        counts: { tables: 2, functions: 1, workflows: 1 },
-    },
-    {
-        id: "night-shift",
-        name: "Night shift",
-        role: "Runs the 2am job so nobody sets an alarm",
-        seed: "arch/night-shift/18",
-        brings: [
-            "A schedule for the recurring job",
-            "Retry limits and failure notifications",
-            "A morning report of results",
-        ],
-        about:
-            "Owns the recurring work that happens outside office hours. Runs it, checks the " +
-            "result, and leaves a short account of what happened for whoever opens the " +
-            "laptop first.",
-        openers: [
-            "Run this every night at two and leave me the account by seven.",
-            "Here is the job. Retry it twice, then tell me you gave up.",
-            "What would you need from me to run this unattended?",
-        ],
-        skills: [
-            { id: "WORKSPACE_CLI", label: "Works a computer", blurb: "A shell, a filesystem and a browser of its own" },
-            { id: "WAIT", label: "Patience", blurb: "Puts work down and picks it up on time" },
-            { id: "TODO", label: "Keeps a plan", blurb: "Knows what it owes tonight" },
-        ],
-        permits: ["functions.run", "files.write"],
-        commitments: [
-            { title: "The nightly run", detail: "Run a defined task at the time you choose", cadence: "Every day at 02:00" },
-            { title: "Morning report", detail: "What ran, what failed, what it gave up on", cadence: "Every day at 07:30" },
-        ],
-        projects: [],
-        counts: { tables: 1, functions: 3, workflows: 2 },
-    },
-    {
-        id: "launches",
-        name: "Launches",
-        role: "Holds the checklist and chases each owner",
-        seed: "arch/launches/5",
-        brings: [
-            "A plan with an owner against every line",
-            "Reminders for the people responsible",
-            "A shared view of progress and blockers",
-        ],
-        about:
-            "Keeps a launch honest. Tracks what is done, what is blocked and who owes what, " +
-            "and asks the person directly rather than broadcasting into a channel.",
-        openers: [
-            "Here is the plan. Put an owner against every line.",
-            "Chase whoever is late directly, not in the channel.",
-            "Where are we? One paragraph, no list.",
-        ],
-        skills: [
-            { id: "TODO", label: "Keeps a plan", blurb: "An owner against every line" },
-            { id: "MESSAGING", label: "Reaches people", blurb: "Follows up with the person responsible" },
-            { id: "SUBAGENTS", label: "Delegation", blurb: "Hands the work out and waits on it" },
-        ],
-        permits: ["tables.write", "messages.draft"],
-        commitments: [
-            { title: "Standup sweep", detail: "Asks each owner what moved, and what did not", cadence: "Every weekday at 10:00" },
-        ],
-        projects: [{ name: "Launch board", description: "Status anyone can read without asking" }],
-        counts: { tables: 2, functions: 1, workflows: 1 },
-    },
-    {
-        id: "ledger",
-        name: "Ledger",
-        role: "Reconciles the numbers and flags mismatches",
-        seed: "arch/ledger/31",
-        brings: [
-            "Source tables and a nightly reconciliation",
-            "A list of mismatched records",
-            "A review step before changing numbers",
-        ],
-        about:
-            "Pulls the numbers together from wherever they live, matches them, and raises " +
-            "the ones that do not agree. Proposes the correction; a person approves it.",
-        openers: [
-            "Here are the two sources. Tell me what will not tie.",
-            "Reconcile these every night and raise the breaks.",
-            "Never change a number without asking me first.",
-        ],
-        skills: [
-            { id: "CONNECTORS", label: "Connected accounts", blurb: "Reads the numbers where they already live" },
-            { id: "USER_INTERACTION", label: "Asks first", blurb: "Never changes a figure on its own" },
-            { id: "MEMORY", label: "Memory", blurb: "Knows what last month tied to" },
-        ],
-        permits: ["tables.write", "connectors.read"],
-        commitments: [
-            { title: "Nightly reconcile", detail: "Matches every source and flags the rows that disagree", cadence: "Every day at 01:00" },
-        ],
-        projects: [{ name: "Breaks", description: "What will not tie, and by how much" }],
-        counts: { tables: 3, functions: 2, workflows: 1 },
-    },
-];
 
 /** Not a fallback: a teammate that starts empty is the one the product's own
  *  line is about — "grows into it". Some jobs have no shelf entry, and the

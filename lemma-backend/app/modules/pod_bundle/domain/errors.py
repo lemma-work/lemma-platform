@@ -32,6 +32,21 @@ class BundleInvalidError(PodBundleDomainError):
         )
 
 
+class BundleTemplateNotFoundError(PodBundleDomainError):
+    """No template of this name ships with this server. A 404 rather than the
+    422 a malformed request gets: the request is well formed and names
+    something that is not here."""
+
+    def __init__(self, name: str, *, available: list[str]):
+        listed = ", ".join(available) or "none"
+        super().__init__(
+            f"There is no template named '{name}'. Templates available: {listed}.",
+            code="POD_BUNDLE_TEMPLATE_NOT_FOUND",
+            status_code=404,
+            details={"template": name, "available": available},
+        )
+
+
 class BundleTooLargeError(PodBundleDomainError):
     def __init__(self, message: str):
         super().__init__(message, code="POD_BUNDLE_TOO_LARGE", status_code=413)

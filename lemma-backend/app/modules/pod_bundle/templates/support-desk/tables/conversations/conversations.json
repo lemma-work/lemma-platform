@@ -1,0 +1,18 @@
+{
+  "name": "conversations",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "Customer conversations: when each started, when it was first answered, and how it ended."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "link", "type": "TEXT", "required": false},
+    {"name": "customer", "type": "TEXT", "required": false},
+    {"name": "channel", "type": "TEXT", "required": false},
+    {"name": "started_at", "type": "DATETIME", "required": true},
+    {"name": "first_reply_at", "type": "DATETIME", "required": false},
+    {"name": "closed_at", "type": "DATETIME", "required": false},
+    {"name": "handed_over", "type": "BOOLEAN", "required": false},
+    {"name": "reopened", "type": "BOOLEAN", "required": false},
+    {"name": "handled_by", "type": "TEXT", "required": false}
+  ]
+}

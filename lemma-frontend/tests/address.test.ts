@@ -35,6 +35,7 @@ const PLACES: [Address, string][] = [
     [at("group:7f3c9a2e-4b1d-4e8a"), "/t/" + POD + "/group/7f3c9a2e-4b1d-4e8a"],
     [at("space:settings"), "/t/" + POD + "/settings"],
     [at("space:about"), "/t/" + POD + "/about"],
+    [at("space:setup"), "/t/" + POD + "/setup"],
     [at("library"), "/t/" + POD + "/library"],
     [at("history"), "/t/" + POD + "/history"],
     [at("computer"), "/t/" + POD + "/computer"],

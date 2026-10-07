@@ -18,6 +18,8 @@ import {
 import { byEffort, readConnectable, type Connectable } from "./connectable";
 import type { JoinPolicy, JoinRequest, OrgJoin } from "./joining";
 import { capabilityList, POD_DEFAULT_TOOLSETS } from "@/stage/colleagues";
+import { readRoleCards } from "./roles";
+import { SAMPLE_ROLES } from "./sample-roles";
 import { readAccount, readConnector, type Connector, type ConnectorAccount } from "./accounts";
 import {
     readChoice,
@@ -2636,6 +2638,10 @@ export const fixtureSource: PodSource = {
        to judge from a screenshot, and the only one with a reveal in it, can be
        walked through with no session at all. Everything else still refuses,
        because writing a message or adding a person to nobody teaches nothing. */
+    async listRoles() {
+        await wait(160);
+        return readRoleCards(SAMPLE_ROLES);
+    },
     async createPod(orgId: string, name: string, description?: string) {
         await wait(420);
         const id = "sample-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + PODS.length;

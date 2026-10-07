@@ -43,9 +43,11 @@ class FakeStore:
 class FakeStaging:
     def __init__(self):
         self.puts: list = []
+        self.archives: dict = {}
 
     async def put_archive(self, kind, job_id, data):
         self.puts.append((kind, job_id, len(data)))
+        self.archives[(kind, job_id)] = data
         return f"{kind}/{job_id}/bundle.zip"
 
     async def delete_archive(self, kind, job_id):
@@ -100,10 +102,26 @@ def _zip_bytes() -> bytes:
     return buf.getvalue()
 
 
-def _use_cases(**kw) -> tuple[ImportUseCases, FakeStore, FakeStaging, FakeQueue]:
+class FakeRateLimiter:
+    """Records every start counted against the daily cap."""
+
+    def __init__(self):
+        self.counted: list = []
+
+    async def check_and_increment(self, *, user_id, operation, limit):
+        self.counted.append((user_id, operation))
+
+
+def _use_cases(
+    *, rate_limiter=None, **kw
+) -> tuple[ImportUseCases, FakeStore, FakeStaging, FakeQueue]:
     store, staging, queue = FakeStore(), FakeStaging(), FakeQueue(**kw)
     uc = ImportUseCases(
-        FakeUowFactory(), state_store=store, staging=staging, job_queue=queue
+        FakeUowFactory(),
+        state_store=store,
+        staging=staging,
+        job_queue=queue,
+        rate_limiter=rate_limiter or FakeRateLimiter(),
     )
     return uc, store, staging, queue
 
@@ -227,6 +245,138 @@ async def test_start_import_github_bad_repo_rejected():
             user_id=uuid4(),
             kind=BundleSourceKind.GITHUB,
             url="not-a-repo!!",
+        )
+
+
+# --- start_import: TEMPLATE --------------------------------------------------
+
+
+async def test_start_import_template_stages_the_bundle_and_enqueues_planning(
+    tmp_path,
+):
+    """A template skips fetching: it is packed and staged here, and the job
+    enqueued is the plan job itself, under the same dedup id as the others."""
+    from lemma_pod_bundle import extract_bundle
+
+    from app.modules.pod_bundle.application.import_use_cases import PLAN_JOB_NAME
+
+    uc, store, staging, queue = _use_cases()
+    pod_id, user_id = uuid4(), uuid4()
+
+    state = await uc.start_import(
+        pod_id=pod_id,
+        user_id=user_id,
+        kind=BundleSourceKind.TEMPLATE,
+        template="support-desk",
+    )
+
+    assert state.status == ImportStatus.QUEUED
+    assert state.source.kind == BundleSourceKind.TEMPLATE
+    assert state.source.template == "support-desk"
+    # What the recipe records as where the pod came from.
+    assert state.source.url == "template:support-desk"
+    assert store.imports[state.import_id] is state
+
+    staged = staging.archives[("pod-imports", state.import_id)]
+    assert state.staging_key == f"pod-imports/{state.import_id}/bundle.zip"
+    root = extract_bundle(staged, tmp_path)
+    assert (root / "tables" / "scorecard" / "data.csv").is_file()
+
+    assert queue.calls == [
+        (
+            PLAN_JOB_NAME,
+            {
+                "import_id": str(state.import_id),
+                "pod_id": str(pod_id),
+                "user_id": str(user_id),
+            },
+            import_plan_job_id(state.import_id),
+        )
+    ]
+
+
+async def test_start_import_template_is_not_counted_against_the_daily_cap():
+    """Hiring is not importing a bundle the person supplied, so it must not
+    spend the allowance they need for their own; a URL import still counts."""
+    limiter = FakeRateLimiter()
+    uc, *_ = _use_cases(rate_limiter=limiter)
+    pod_id, user_id = uuid4(), uuid4()
+
+    await uc.start_import(
+        pod_id=pod_id,
+        user_id=user_id,
+        kind=BundleSourceKind.TEMPLATE,
+        template="follow-ups",
+    )
+    assert limiter.counted == []
+
+    url, _ = await uc.stage_upload(
+        pod_id=pod_id, user_id=user_id, filename="crm.zip", data=_zip_bytes()
+    )
+    await uc.start_import(
+        pod_id=pod_id, user_id=user_id, kind=BundleSourceKind.URL, url=url
+    )
+    assert limiter.counted == [(user_id, "import")]
+
+
+@pytest.mark.parametrize(
+    "name", ["no-such-template", "../templates", "support-desk/../follow-ups", "."]
+)
+async def test_start_import_unknown_template_is_not_found(name):
+    """Unknown names are a 404 naming what does exist. The request schema
+    refuses separators already; this is the use case holding the line on its
+    own, since a name that walks out of the templates directory must not find
+    anything either."""
+    from app.modules.pod_bundle.domain.errors import BundleTemplateNotFoundError
+    from app.modules.pod_bundle.infrastructure.templates import (
+        shipped_template_names,
+    )
+
+    uc, store, staging, queue = _use_cases()
+    with pytest.raises(BundleTemplateNotFoundError) as raised:
+        await uc.start_import(
+            pod_id=uuid4(),
+            user_id=uuid4(),
+            kind=BundleSourceKind.TEMPLATE,
+            template=name,
+        )
+
+    assert raised.value.status_code == 404
+    assert "support-desk" in raised.value.details["available"]
+    assert raised.value.details["available"] == shipped_template_names()
+    assert store.imports == {} and staging.puts == [] and queue.calls == []
+
+
+def test_template_root_is_only_a_real_directory_directly_under_templates(
+    tmp_path,
+):
+    """A symlink dropped into ``templates/`` must not let a name reach the
+    directory it points at, and a directory without a manifest is no template."""
+    from app.modules.pod_bundle.infrastructure.templates import (
+        shipped_template_names,
+        template_root,
+    )
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "pod.json").write_text("{}")
+    root = tmp_path / "templates"
+    (root / "real").mkdir(parents=True)
+    (root / "real" / "pod.json").write_text("{}")
+    (root / "no-manifest").mkdir()
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+
+    assert template_root("real", root=root) == root / "real"
+    assert template_root("linked", root=root) is None
+    assert template_root("no-manifest", root=root) is None
+    assert shipped_template_names(root) == ["real"]
+
+
+async def test_start_import_template_without_a_name_is_invalid():
+    uc, *_ = _use_cases()
+    with pytest.raises(BundleInvalidError):
+        await uc.start_import(
+            pod_id=uuid4(), user_id=uuid4(), kind=BundleSourceKind.TEMPLATE
         )
 
 

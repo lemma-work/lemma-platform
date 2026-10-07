@@ -514,6 +514,7 @@ button svg, a svg { flex-shrink:0; }
 
 .shelf__or { display:flex;align-items:center;gap:14px;font-size:11.5px;color:var(--ink-3);margin-top:6px; }
 .shelf__or::before,.shelf__or::after { content:"";flex:1;height:1px;background:var(--line); }
+.shelf__quiet { margin:0;font-size:13px;color:var(--ink-3); }
 
 .shelf__grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:12px; }
 .hirecard {

@@ -1,0 +1,6 @@
+id,key,measure,kind,counter,query,aim,target,target_label,counted_from,is_on,note,position,shape,unit_table,time_column,test,value,value_unit,label_column,link_column,proposed_from
+361f3884-141d-5d05-9088-5b85117dcb51,reconciled,Bank lines reconciled within three days,outcome,work,,higher,0.95,19 in 20,Bank lines,true,,1,share,bank_lines,booked,reconciled_at IS NOT NULL AND reconciled_at < booked + interval '3 days',,,description,link,
+b50fca18-8fce-5e1f-b816-90de28d63ede,paid_on_time,Invoices paid by their due date,outcome,work,,higher,0.8,4 in 5,Invoices,true,,2,share,invoices,due,paid_at IS NOT NULL AND paid_at < due + interval '1 day',,,customer,link,
+6bbe668e-be5b-5797-899f-376137beb2bb,unreminded,Overdue invoices with no reminder the next day,outcome,work,,lower,0,none,Invoices,true,,3,count,invoices,due,due < current_date AND (paid_at IS NULL OR paid_at >= due + interval '1 day') AND (reminded_at IS NULL OR reminded_at >= due + interval '2 days'),,,customer,link,
+96147220-c010-53b9-96bc-9b6c2d31cfac,standing_work,Standing work runs on time,reliability,standing_work,,higher,1,every run,Run history,true,,4,share,,,,,,,,
+d11c874b-de60-526a-a5bd-af0d810d08a7,open_questions,Nothing waits on a question for a day,reliability,open_questions,,lower,0,none,Conversations,true,,5,count,,,,,,,,

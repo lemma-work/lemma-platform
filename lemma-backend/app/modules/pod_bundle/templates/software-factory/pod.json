@@ -1,0 +1,49 @@
+{
+  "name": "Software factory",
+  "description": "Turns issues tagged for it into pull requests your team reviews, and learns how your team likes code written.",
+  "format_version": 3,
+  "variables": {},
+  "role": {
+    "line": "Turns tagged issues into pull requests your team reviews",
+    "seed": "arch/software-factory/1",
+    "position": 4,
+    "brings": [
+      "Skills for working an issue and answering review",
+      "A pull requests table: opened, review rounds, merged, reverted",
+      "A scorecard you check every Friday"
+    ],
+    "wins": [
+      {
+        "say": "Here is our repo. Tell me how a change gets from issue to merged here.",
+        "needs": {
+          "connector": "github",
+          "label": "GitHub"
+        }
+      },
+      {
+        "say": "Read our last twenty merged pull requests and write down how we like code reviewed.",
+        "needs": {
+          "connector": "github",
+          "label": "GitHub"
+        }
+      },
+      {
+        "say": "Take the smallest issue tagged for you and open a pull request."
+      }
+    ],
+    "offers": [
+      {
+        "title": "Morning pick-up",
+        "detail": "Each weekday, one tagged issue taken to a pull request",
+        "cron": "0 9 * * 1-5",
+        "instruction": "Take the oldest open issue tagged for you that nobody is working on, and use the work-an-issue skill to open a pull request for it. Never merge, and never push to the main branch."
+      },
+      {
+        "title": "Review replies",
+        "detail": "Each weekday afternoon, answers to review comments",
+        "cron": "0 14 * * 1-5",
+        "instruction": "Use the answer-review skill on every open pull request of yours with review comments since your last reply. Never merge."
+      }
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "Content",
+  "description": "Plans, drafts and posts short videos on a schedule, and reports how each one did.",
+  "format_version": 3,
+  "variables": {},
+  "role": {
+    "line": "Plans, drafts and posts your short videos on schedule",
+    "seed": "arch/content/28",
+    "position": 3,
+    "brings": [
+      "Skills for planning posts, writing scripts and checking how they did",
+      "A posts table: planned, drafted, posted, and views after two days",
+      "A scorecard you check every Friday"
+    ],
+    "wins": [
+      {
+        "say": "Here are three accounts I like. Tell me what makes their posts work."
+      },
+      {
+        "say": "Read my last ten posts and tell me which worked and why.",
+        "needs": {
+          "connector": "instagram",
+          "label": "Instagram"
+        }
+      },
+      {
+        "say": "Plan next week’s posts and put them in the posts table."
+      }
+    ],
+    "offers": [
+      {
+        "title": "Monday plan",
+        "detail": "Each Monday, the week’s posts planned and scripted",
+        "cron": "0 9 * * 1",
+        "instruction": "Plan this week's posts using the plan-posts skill: one row per post in the posts table with a title, a planned time and the sources. Draft each script with the write-script skill. Post nothing; every draft waits for a person."
+      },
+      {
+        "title": "Two-day check",
+        "detail": "Each morning, views for what went out two days ago",
+        "cron": "0 10 * * *",
+        "instruction": "Use the check-how-it-did skill on every post published about 48 hours ago: record views_48h on its row, and say in one line what the best and worst of them did differently."
+      }
+    ]
+  }
+}

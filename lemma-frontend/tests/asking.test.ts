@@ -53,8 +53,11 @@ test("a clock that has not started, or went backwards, shows nothing rather than
 test("nothing on the shelf is offered back as a suggestion", async () => {
     // The sentence above the grid says the grid is not the menu. Repeating a
     // card here says the opposite.
-    const { HIRES } = await import("../src/data/hires.ts");
-    const listed = new Set(HIRES.map((hire) => hire.name.toLowerCase()));
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    const templates = path.resolve(import.meta.dirname, "../../lemma-backend/app/modules/pod_bundle/templates");
+    const listed = new Set(readdirSync(templates).map((name) =>
+        String(JSON.parse(readFileSync(path.join(templates, name, "pod.json"), "utf8")).name).toLowerCase()));
     for (const ask of ASKS) assert.equal(listed.has(ask.toLowerCase()), false, ask);
     assert.ok(ASKS.length >= 3);
 });

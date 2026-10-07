@@ -6,6 +6,10 @@ import type { PlanStepResponse } from './PlanStepResponse.js';
 import type { VariableSpecResponse } from './VariableSpecResponse.js';
 export type ImportPlanResponse = {
     bundle_name?: (string | null);
+    /**
+     * What the bundle says it is for (its pod.json).
+     */
+    description?: (string | null);
     format_version: number;
     has_destructive_steps?: boolean;
     steps?: Array<PlanStepResponse>;

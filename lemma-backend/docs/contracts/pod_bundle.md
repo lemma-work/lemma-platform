@@ -22,6 +22,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `pod.bundle.publish.events` | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}/events` | Stream Pod Publish Progress |
 | `pod.bundle.publish.get` | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}` | Get Pod Publish Status |
 | `pod.bundle.publish.start` | POST | `/pods/{pod_id}/bundle/publishes` | Publish Pod To GitHub |
+| `pod.bundle.templates.list` | GET | `/pods/bundle/templates` | List Role Templates |
 | `pod.bundle.upload` | POST | `/pods/{pod_id}/bundle/uploads` | Stage A Local Bundle Upload |
 
 <!-- /generated:operations -->

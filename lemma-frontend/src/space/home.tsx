@@ -9,6 +9,7 @@ import { byAge, gatherAsked, sayAsked, type AskedRow } from "@/thread/waiting-on
 import { refreshConversationLists } from "@/thread/conversation-list";
 import { lemma } from "@/session/client";
 import { agoOf } from "@/schedule/schedules";
+import { useSetupState } from "@/scorecard/store";
 import { sayStuckFor, sayWaitingOn } from "@/workflow/runs";
 import { AppIcon, ChevronRightIcon, CloseIcon, FileIcon, SearchIcon, SlidesIcon, TableIcon } from "@/ui/icons";
 import { useMaking } from "./making";
@@ -35,7 +36,7 @@ const RECENT_ROWS = 4;
  *  and a plain box to ask it. Sending from the box starts the conversation
  *  and moves you into it — Home stays a place you come back to, not a thread
  *  that grows. */
-export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAbout, onAsk }: {
+export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAbout, onSetup, onAsk }: {
     pod: Pod;
     pods: Pod[];
     onNewPage: () => Promise<void>;
@@ -43,10 +44,13 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
     onOpenConversation: (id: string) => void;
     /** The teammate's own page. */
     onAbout: () => void;
+    /** The step where how the teammate is judged is chosen. */
+    onSetup: () => void;
     /** Start a conversation with these words, in the Chat tab. */
     onAsk: (text: string) => void;
 }) {
     const mate = pod.teammate?.name || pod.name;
+    const setup = useSetupState(pod.id);
     const [fill, setFill] = useState<{ text: string; id: number } | null>(null);
     const asks = useRef(0);
 
@@ -119,6 +123,13 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
                         {pod.description && <p>{pod.description}</p>}
                     </div>
                 </header>
+
+                {setup === "choosing" && (
+                    <p className="home__setup">
+                        <span>{pod.name} arrived with a scorecard. Choose what it is judged on and turn on the Friday review.</span>
+                        <button className="pill-button" onClick={onSetup}>Finish setting up</button>
+                    </p>
+                )}
 
                 {/* Only when something is. A heading over "nothing" is a
                     section somebody has to read to learn it is empty. */}

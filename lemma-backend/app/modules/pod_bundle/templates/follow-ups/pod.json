@@ -1,0 +1,35 @@
+{
+  "name": "Follow-ups",
+  "description": "Keeps track of commitments and prepares follow-ups.",
+  "format_version": 3,
+  "variables": {},
+  "role": {
+    "line": "Keeps track of commitments and prepares follow-ups",
+    "seed": "arch/follow-ups/6",
+    "position": 2,
+    "brings": [
+      "A shared list of commitments",
+      "Skills for tracking promises and drafting follow-ups",
+      "A scorecard you check every Friday"
+    ],
+    "wins": [
+      {
+        "say": "Here is everything I said I would do this week."
+      },
+      {
+        "say": "What have I promised someone that has gone quiet?"
+      },
+      {
+        "say": "Sweep every weekday morning and tell me what has gone cold."
+      }
+    ],
+    "offers": [
+      {
+        "title": "Morning sweep",
+        "detail": "Each weekday, what has gone cold and what is due",
+        "cron": "0 9 * * 1-5",
+        "instruction": "Read the open rows in commitments. List what is overdue, then what is due in the next two days, owner by owner, and draft a follow-up for anything a week late using the draft-follow-up skill. Send nothing yourself."
+      }
+    ]
+  }
+}

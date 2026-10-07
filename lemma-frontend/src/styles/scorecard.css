@@ -1,0 +1,319 @@
+/* How a teammate is judged: the step after the hire, About's Judged on, and
+   the few marks the reveal, the sidebar and Home add for it. The page itself
+   is About's column (`.aboutpage`), so the step reads as one more page about
+   the teammate rather than a form of its own. */
+
+/* ── the step ──────────────────────────────────────────────────────── */
+.scoresetup__steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin: 0 0 28px;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.scoresetup__steps li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.scoresetup__steps li[data-state="done"] { color: var(--ink-2); }
+.scoresetup__steps li[data-state="now"] { color: var(--ink); }
+.scoresetup__steps li[data-state="now"]::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--accent);
+}
+.scoresetup__head h1 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+}
+.scoresetup__head p {
+    margin: 0 0 24px;
+    max-width: 60ch;
+    color: var(--ink-2);
+}
+.scoresetup__empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 18px;
+    border-radius: var(--r-lg);
+    background: var(--chrome);
+}
+.scoresetup__empty p { margin: 0; color: var(--ink-2); max-width: 60ch; }
+
+/* One measure a row: a switch, the sentence with its target in it, where it
+   is counted, and what kind of measure it is. A measure that cannot be
+   counted yet keeps its row, locked, with the reason. */
+.measures {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.measure {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 14px 16px;
+    border-radius: var(--r-lg);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.measure[data-off] { background: var(--chrome); }
+.measure[data-off] .measure__what { color: var(--ink-2); }
+.measure__switch {
+    position: relative;
+    flex: none;
+    width: 36px;
+    height: 22px;
+    margin-top: 1px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: var(--line-2);
+    cursor: pointer;
+    transition: background-color .14s ease;
+}
+.measure__switch span {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--paper);
+    box-shadow: var(--depth-rest);
+    transition: transform .14s ease;
+}
+.measure__switch[aria-checked="true"] { background: var(--accent); }
+.measure__switch[aria-checked="true"] span { transform: translateX(14px); }
+.measure__lock {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 36px;
+    height: 22px;
+    color: var(--ink-3);
+}
+.measure__body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+}
+.measure__what {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    font-size: 15px;
+    color: var(--ink);
+}
+.measure__body small { font-size: 12.5px; color: var(--ink-3); }
+.measure__error { color: var(--bad) !important; }
+.measure__when { font-size: 12px; color: var(--ink-3); }
+.measure__failed { color: var(--warn) !important; }
+.measure__failed .linkish { font-size: inherit; }
+
+.scoresetup__review {
+    margin-top: 28px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+}
+.scoresetup__plain { margin: 0 0 16px; max-width: 620px; color: var(--ink); }
+.scoresetup__acts { display: flex; gap: 10px; flex-wrap: wrap; }
+.scoresetup__on {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--ink);
+}
+.scoresetup__on svg { color: var(--ok); }
+
+@media (max-width: 767px) {
+    .measure { flex-wrap: wrap; }
+}
+
+/* ── About › Judged on ─────────────────────────────────────────────── */
+.judged { display: flex; flex-direction: column; gap: 14px; }
+.judged__week { margin: 0; color: var(--ink-2); }
+.judged__rows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.judged__rows li {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 9px 0;
+    border-top: 1px solid var(--line);
+}
+.judged__rows li:last-child { border-bottom: 1px solid var(--line); }
+.judged__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--line-2);
+    transform: translateY(-1px);
+}
+.judged__rows li[data-state="met"] .judged__dot { background: var(--ok); }
+.judged__rows li[data-state="missed"] .judged__dot { background: var(--wait); }
+.judged__what { flex: 1; min-width: 0; color: var(--ink); }
+.judged__shown { color: var(--ink); white-space: nowrap; }
+.judged__target { min-width: 110px; text-align: right; font-size: 13px; color: var(--ink-3); white-space: nowrap; }
+.judged__rows li[data-state="missed"] .judged__target { color: var(--warn); }
+
+.judged__suggest h3 { margin: 6px 0 2px; font-size: 15px; font-weight: 500; }
+.judged__suggest ul { margin: 10px 0 0; padding: 0; list-style: none; }
+.judged__suggest li {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 0;
+    border-top: 1px solid var(--line);
+}
+.judged__kind { flex: none; width: 104px; font-size: 13px; color: var(--ink-3); }
+.judged__said { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.judged__said small { font-size: 12.5px; color: var(--ink-3); }
+.judged__acts { display: flex; gap: 6px; flex: none; }
+
+@media (max-width: 767px) {
+    .judged__target { min-width: 0; }
+    .judged__suggest li { flex-wrap: wrap; }
+    .judged__kind { width: auto; }
+    .judged__acts { width: 100%; }
+}
+
+/* ── the reveal ────────────────────────────────────────────────────── */
+/* A first win that needs a place carries a second, quieter control under
+   its line: connect it. The row's own button keeps the full width. */
+.met__openers .met__connect {
+    width: auto;
+    margin: -6px 0 8px 14px;
+    padding: 2px 0;
+    font-size: 12.5px;
+    color: var(--ink-2);
+}
+.met__openers .met__connect:hover,
+.met__openers .met__connect:focus-visible { background: none; color: var(--ink); text-decoration: underline; }
+
+.met__offers { margin: 0; padding: 0 4px 4px; list-style: none; }
+.met__offers li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+}
+.met__offers li + li { border-top: 1px solid var(--line-2); }
+.met__offers li > span:first-child { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.met__offers b { font-size: 13.5px; font-weight: 500; color: var(--ink); }
+.met__offers small { font-size: 12.5px; color: var(--ink-3); }
+.met__offers .btn { min-height: 34px; }
+.met__on { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--ok); }
+
+.met__judged { width: 100%; }
+
+/* ── the sidebar and Home ──────────────────────────────────────────── */
+.snav__setup-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    margin-inline: 5px;
+    border-radius: 999px;
+    background: var(--accent);
+}
+.home__setup {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    margin: 0 0 24px;
+    padding: 14px 16px;
+    border-radius: var(--r-lg);
+    background: var(--chrome);
+    color: var(--ink-2);
+}
+.home__setup span { flex: 1 1 260px; }
+
+/* ── what it makes, four weeks, and the rows behind a number ───────── */
+.scoresetup__part { margin-top: 26px; }
+.scoresetup__label { margin: 0 0 8px; font-size: 13px; color: var(--ink-3); }
+.scoresetup__label span { color: var(--ink-3); }
+.units { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.units li { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: var(--r-lg); background: var(--chrome); }
+.units li > span:first-child { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.units b { font-weight: 500; color: var(--ink); }
+.units small { font-size: 12.5px; color: var(--ink-3); }
+
+.measure { align-items: center; }
+.measure__history { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; width: 150px; }
+.measure--proposal { background: var(--chrome); box-shadow: none; }
+.measure__acts { display: flex; gap: 6px; flex: none; }
+
+.spark__bars { position: relative; display: flex; align-items: flex-end; gap: 5px; height: 34px; padding: 0 4px; }
+.spark__bars i { display: block; width: 11px; border-radius: 3px 3px 1px 1px; background: var(--line-2); }
+.spark__bars i[data-state="met"] { background: var(--ink); }
+.spark__bars i[data-state="missed"] { background: var(--wait); }
+.spark__target { position: absolute; left: 0; right: 0; border-top: 1.5px dashed var(--ink-3); }
+.spark__wrap { position: relative; display: inline-flex; }
+.spark__now { font-size: 13px; color: var(--ink); white-space: nowrap; }
+.spark__now--open { padding: 0; border: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; cursor: pointer; }
+.spark__now--open:hover { text-decoration-color: var(--ink); }
+
+.unitrows {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 5;
+    width: min(340px, 80vw);
+    max-height: 320px;
+    overflow: auto;
+    padding: 12px;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+    text-align: left;
+}
+.unitrows__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 12.5px; color: var(--ink-3); }
+.unitrows__close { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: var(--r-sm); background: none; color: var(--ink-2); cursor: pointer; }
+.unitrows ul { margin: 0; padding: 0; list-style: none; }
+.unitrows li { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.unitrows__mark { display: grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 999px; }
+.unitrows li[data-passed="true"] .unitrows__mark { color: var(--ok); }
+.unitrows li[data-passed="false"] .unitrows__mark { color: var(--warn); }
+.unitrows__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.unitrows a { color: var(--ink-3); display: grid; place-items: center; }
+
+.scoresetup__words { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 6px 0 16px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line-2), var(--depth-rest); background: var(--paper); }
+.scoresetup__words input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15px; color: var(--ink); }
+.scoresetup__words button { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 999px; background: var(--accent); color: var(--on-accent); cursor: pointer; }
+.scoresetup__words button:disabled { opacity: .35; cursor: default; }
+.scoresetup__hint { margin-top: 8px !important; font-size: 13px !important; }
+.scoresetup__cant { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.scoresetup__cant li { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: var(--r-lg); border: 1px dashed var(--line-2); color: var(--ink-2); }
+.scoresetup__cant li > span { display: flex; flex-direction: column; gap: 2px; }
+.scoresetup__cant small { font-size: 12.5px; color: var(--ink-3); }
+.scoresetup__always { display: flex; align-items: center; gap: 6px; margin: 22px 0 0; font-size: 13px; color: var(--ink-3); }
+
+@media (max-width: 767px) {
+    .measure__history { width: auto; align-items: flex-start; margin-left: 50px; }
+    .measure__acts { margin-left: 0; }
+}
+.judged__always { margin: 0; font-size: 13px; color: var(--ink-3); }
+.judged__always[data-missed] { color: var(--warn); }

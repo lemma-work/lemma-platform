@@ -102,9 +102,9 @@ you talk to, the space is what you share. The app has two altitudes.
   its face, its job (the pod's `description`), one line of news (what is
   waiting on you, or its latest conversation) and the people in its space.
   Those that need you come first; there are never more than two groups.
-- About is long, so a row of jumps (People, Channels, Taught, Remembers,
-  Standing work, Hands work to, Runs on) stays at the top while it scrolls
-  and marks the section in view.
+- About is long, so a row of jumps (People, Channels, Judged on, Taught,
+  Remembers, Standing work, Hands work to, Runs on) stays at the top while it
+  scrolls and marks the section in view.
 - Zoomed in, `/t/{pod}/…`: one teammate's space. Its face and job head the
   sidebar and open About (`/t/{pod}/about`), which holds everything about how
   it works — people, channels, skills, standing work, the agents it hands work
@@ -154,6 +154,52 @@ leaves every device and stays readable under Archived.
 Memory folders are found by walking down from ones that exist (`/`, then
 `/memory`, then `agents`…; `/me` for private notes). Listing a folder nobody
 created is a 400, not an empty list, so paths are never asked for blind.
+
+## Hiring from a role, and how it is judged
+
+Every role on the shelf is a template the backend ships
+(`pod_bundle/templates/<name>/`), listed with its card by
+`GET /pods/bundle/templates` (`src/data/roles.ts`); the app keeps no list of
+its own, so a new role is a new template. The card's prose is the template's
+`role` block; its skills, tables and "judged on" are read off what the
+template carries, so a candidate cannot promise what the hire will not get.
+The only listing the app owns is somebody new. Hiring a role imports the template while the
+making steps run — "Bringing what Support desk comes with" is a real step —
+and a template that fails to arrive does not undo the hire: the reveal says
+what did not arrive. Templates carry skills, tables and a seeded `scorecard`
+table; never connected accounts, so a hire asks nothing.
+
+- The reveal's first wins are the role's openers. A win that needs a place
+  says "Needs Intercom. Connect it", which opens Settings › Connectors
+  searched to it. Nothing claims a place is connected that is not.
+- Standing work a role offers is turned on with one tap each, never created
+  by the hire.
+- "Choose how {name} is judged" opens the setup step (`/t/{pod}/setup`),
+  whose copy calls each measure a goal and opens on one sentence of model:
+  the goals it is held to, counted every Friday, with fixes to approve. It
+  shows what the goals count — the work tables, with how many rows the last
+  four weeks hold — then each goal as its sentence, "Target each week: …" and
+  where it is counted from, with four weeks of bars as the server counted
+  them and the last seven days in words; that number opens to the rows behind
+  it. A measure is a share, a count, a median or a total (a value added up:
+  reach, views, revenue), and every target is per week. There is no target
+  picker: a person changes a target by saying so, and the teammate redrafts
+  and recounts. A sentence in the person's words goes to the teammate as an
+  ask; it drafts a measure, checks it with `try_measure`, and the draft
+  returns as a proposal with Add goal and Drop. A goal whose week could not be
+  counted says so and offers "Ask {name} to fix it", which hands the
+  counter's reason to the teammate. Checks every teammate gets (standing work
+  on time, nothing left waiting) are one line, never rows. "Turn on the
+  Friday review" starts a shared TIME schedule on the teammate, run as whoever
+  pressed it, which makes them the reviewer.
+- While a role's scorecard waits on its review, the sidebar shows "Setting up
+  {name}" and Home one line. Nothing else announces setup.
+- About › Judged on reads back what the review wrote: the newest week against
+  its targets, a link to that week's page (`/pages/Week to <date>.md`), and
+  the review's suggestions with Add and Not now. The page counts nothing
+  itself, and a week is said as results against targets, never as the
+  teammate getting better. Add is done by the app as the person, after the
+  row is checked; the review never makes the change.
 
 ## Groups
 

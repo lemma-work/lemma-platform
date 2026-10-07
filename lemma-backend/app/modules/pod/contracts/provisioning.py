@@ -44,8 +44,14 @@ async def append_recipe(
     recipe: PodRecipe,
     requester_user_id: UUID,
     ctx: Context,
+    description_if_empty: str | None = None,
 ) -> None:
     """Record that this pod was built from a bundle, keeping the rest of config.
+
+    ``description_if_empty`` is the bundle's own description, written only when
+    the pod has none. The update merges with ``exclude_unset``, so the field is
+    left out entirely rather than sent as None, which would clear a description
+    somebody wrote.
 
     Raises whatever the pod's own read and update raise -- the caller has just
     finished importing into this pod, so a pod that has gone missing or a
@@ -57,9 +63,18 @@ async def append_recipe(
     if pod is None:
         raise LookupError(f"pod {pod_id} no longer exists")
     config = pod.config.model_copy(update={"recipes": [*pod.config.recipes, recipe]})
+    describe = (
+        bool(description_if_empty and description_if_empty.strip())
+        and not (pod.description or "").strip()
+    )
+    update = (
+        PodUpdateEntity(config=config, description=description_if_empty)
+        if describe
+        else PodUpdateEntity(config=config)
+    )
     await pod_service.update_pod(
         pod_id,
-        PodUpdateEntity(config=config),
+        update,
         requester_user_id=requester_user_id,
         ctx=ctx,
     )

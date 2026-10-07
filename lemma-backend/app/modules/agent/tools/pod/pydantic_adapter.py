@@ -36,6 +36,8 @@ from app.modules.agent.tools.pod.pod_file_tools import (
     pod_view_document_pages,
     pod_write_file,
 )
+from app.modules.agent.tools.pod.scorecard import score_week_tool
+from app.modules.agent.tools.pod.try_measure import try_measure_tool
 from app.modules.datastore.contracts import (
     TableContext,
 )
@@ -261,5 +263,8 @@ pod_toolset = FunctionToolset[BaseAgentContext](
         pod_view_document_pages,
         pod_get_file_url,
         pod_search_files,
+        # Deferred, unlike the rest: see `scorecard` and `try_measure`.
+        score_week_tool,
+        try_measure_tool,
     ]
 )

@@ -1,0 +1,16 @@
+{
+  "name": "bank_lines",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "One row per bank line: the account, the amount, when it was booked, and when it was reconciled."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "account", "type": "TEXT", "required": false},
+    {"name": "description", "type": "TEXT", "required": true},
+    {"name": "amount", "type": "FLOAT", "required": false},
+    {"name": "booked", "type": "DATE", "required": false},
+    {"name": "reconciled_at", "type": "DATETIME", "required": false},
+    {"name": "matched_to", "type": "TEXT", "required": false},
+    {"name": "link", "type": "TEXT", "required": false}
+  ]
+}

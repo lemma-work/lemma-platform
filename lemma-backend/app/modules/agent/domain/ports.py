@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import AsyncIterator, Protocol, Sequence
 from uuid import UUID
 
@@ -22,6 +22,13 @@ from app.modules.agent.domain.run_projections import (
     StrandedConversationRef,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.scorecard import (
+    Counted,
+    CounterName,
+    ScorecardPage,
+    ScoringWindow,
+)
+from app.modules.agent.domain.scorecard_work import UnitTable
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRunApprovalDecision,
@@ -402,3 +409,33 @@ class ConversationRepository(Protocol):
     ) -> list[Message]: ...
 
     def collect_events(self, events: Sequence[AgentDomainEvent]) -> None: ...
+
+
+class ScorecardSource(Protocol):
+    """What counting a scorecard reads, bound to one caller in one pod.
+
+    Every method answers as that caller: the scorecard and the tables a
+    measure counts through the datastore's own authorization and row security,
+    the platform's counts through the visibility rules its listings use. A
+    refusal is the datastore's ``DomainError``, raised; the counting decides
+    whether one refusal fails a measure or the whole request.
+    """
+
+    async def scorecard_rows(self, limit: int) -> ScorecardPage | None:
+        """The ``scorecard`` table's rows, up to ``limit``; ``None`` when the pod
+        has no scorecard."""
+        ...
+
+    async def unit_table(self, name: str) -> UnitTable | None:
+        """The table a work measure names, or ``None`` when there is none."""
+        ...
+
+    async def query(self, sql: str) -> Sequence[Mapping[str, object]]:
+        """Rows of one read-only statement, through the datastore's query path."""
+        ...
+
+    async def count_platform(
+        self, counter: CounterName, window: ScoringWindow
+    ) -> Counted:
+        """One of ``PLATFORM_COUNTERS``, counted over ``window``."""
+        ...

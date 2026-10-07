@@ -89,6 +89,69 @@ foreign keys, RLS, and visibility. Column descriptions are available through
 table inspection rather than repeated in every prompt. Omission counts mark
 truncated inventories and schemas.
 
+## Scorecard counting
+
+A scorecard counts rows of the teammate's work. The pod's `scorecard` table
+holds one row per measure; `work` measures name a table with one row per unit
+of work (`unit_table`), the DATE or DATETIME column that places a row in a week
+(`time_column`), a SQL boolean over one row (`test`) and a `shape`:
+
+| Shape | Number | Shown |
+| --- | --- | --- |
+| `share` | rows passing `test`, out of every row in the week | `31 of 40` |
+| `count` | rows passing `test` (every row with no `test`) | `none`, `2`, `2 views` |
+| `median` | middle `value` over rows passing `test`; a null value is in neither | `1.6 days`, `31 minutes` |
+
+`aim` decides whether the number met `target`. A share of fewer than
+`MIN_UNITS_TO_JUDGE` rows is `too_few` — counted, shown as `too few to judge
+(3)`, no verdict — unless its target is every one. Rows written before shapes
+read as a share when they aim higher and a count when they aim lower.
+
+The other counters are the platform's own:
+
+| Counter | Counted out of total |
+| --- | --- |
+| `approvals` | `request_approval` decisions approved, of those decided in the week; a DENY the platform recorded because the person moved on is not a verdict and is left out |
+| `open_questions` | `ask_user`, `request_approval` and `browser_sign_in` calls still unanswered a day after they were asked, as of the week's end, of those asked in the week |
+| `standing_work` | the schedule module's `count_standing_work` |
+| `sql` | the row's own `query`, with only `{start}` and `{end}` replaced by ISO dates, one statement |
+
+Any other counter scores `not_counted`. A `work` measure is checked before
+anything runs (`domain/scorecard_work.py`): every name it gives must be a
+lower-case identifier and a real column of its table, and `test`/`value` must be
+one expression — no `;`, comments, braces, `$`, backslash, unbalanced
+parentheses or quotes, and none of the words that start a subquery or a write.
+A measure that fails says why and is never run. What does run goes through the
+datastore's read-only query path as the caller, which is the boundary that
+matters: it authorizes every table and applies row security.
+
+Three readers share one counting path (`services/scorecard_counting.py`), so a
+week previewed and the week later recorded come from the same statement:
+
+- **`score_week`**, a deferred pod tool, counts the seven whole UTC days before
+  `end` (default today; a later day is refused) for every measure that is on —
+  a proposal is off until somebody keeps it — and writes `scorecard_weeks`
+  (created on first use, shared rather than per person), replacing that week's
+  rows. Nothing else is written.
+- **`POST /pods/{pod_id}/scorecard/preview`** counts the last `weeks` (1–8,
+  default 4) of those windows without writing: every measure that is on or
+  proposed, the saved measures named in `keys`, or one unsaved `measure` (a
+  draft, refused with 422 and the reason if it cannot run). One statement per
+  measure per window, at most `MAX_PREVIEW_MEASURES` measures.
+- **`GET /pods/{pod_id}/scorecard/measures/{key}/rows`** lists the units behind
+  a `work` measure's number for one week — `id`, `label`, `link`, `at`,
+  `passed` — misses first for a share. Other counters have no rows (422).
+
+**`try_measure`**, a deferred pod tool beside `score_week`, is the preview of
+one draft for the teammate: it is told to try every measure before proposing
+it, and to propose one by writing it into `scorecard` with `is_on` false and
+`proposed_from` set to the person's words.
+
+Every count runs as the caller. The conversation counts read only the caller's
+own conversations (`readable_by`, the history list's rule), because counting
+across the pod would report other people's private conversations; a per-person
+unit table is counted as each person sees it.
+
 ## Key dependencies
 
 - Pod/identity: tenant, membership, authorization, delegation.

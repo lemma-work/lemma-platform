@@ -449,6 +449,63 @@ are shown with a retry action rather than an indefinite loading message.
 - The system shall not open a guide on its own.
 - If the person goes to another place, then the system shall close the guide.
 
+## Capability: Hire a teammate for a role, and agree how it is judged
+
+### PS-ONB-080 — Hiring a role brings what the role card lists
+**Status:** planned
+
+- When a person hires a role that comes with a template, the system shall
+  give the new teammate the template's skills, tables and scorecard before
+  the teammate is shown to them, without asking anything further.
+- If part of the template does not arrive, the system shall still hire the
+  teammate and say what did not arrive, rather than returning the person to
+  the hire button.
+- The system shall not connect an account, start a schedule or send anything
+  as part of hiring; standing work a role offers is started only when a
+  person turns it on.
+- A first task that needs a connector shall say which one and offer to
+  connect it, and shall never imply it is already connected.
+- The roles on offer shall be the templates the server ships, each with a
+  card read from the template itself, so a card never lists a skill or a
+  measure the hire will not get, and a new role needs no change to the app.
+
+### PS-ONB-081 — A person chooses how a teammate is judged
+**Status:** planned
+
+- The system shall judge a teammate on the work it makes: each measure is a
+  test over the teammate's own rows of work, so two teammates with different
+  jobs are not shown the same measures.
+- The system shall show each measure with where it is counted from and its
+  last four weeks as counted, before anyone keeps it, and let a person turn it
+  on or off and pick its target.
+- A number on a scorecard shall open to the rows it was counted from.
+- When a person says what good looks like in their own words, the system
+  shall offer a measure only after it has been counted over past weeks, and
+  shall add it only when that person keeps it.
+- Checks every teammate shares shall be stated once, not listed as measures.
+- A measure the system cannot count yet shall be shown off, with the reason,
+  and cannot be turned on.
+- When a person keeps the measures, the system shall start a weekly review
+  of the teammate that runs as that person, and shall show it with the
+  teammate's other schedules.
+- Until the review is on for a teammate that came with a scorecard, the
+  system shall say once, in that teammate's space, that setting up is not
+  finished.
+
+### PS-ONB-082 — The weekly review counts in code and changes nothing on its own
+**Status:** planned
+
+- Every number in a review shall come from what the system recorded — the
+  approvals people gave, the schedules that ran, the questions left
+  unanswered, the teammate's tables — and never from the teammate's own
+  judgement of its work.
+- A review shall not ask anyone a question or wait for an answer.
+- A review shall suggest changes — a note to remember, a fix to a skill, a
+  schedule — and shall make none of them; a person adds or dismisses each.
+- When a person adds a suggestion, the system shall check it before making
+  the change, and shall refuse one that would write outside the place it
+  names or produce a skill that would not load.
+
 ## Capability: Explore the public website
 
 ### PS-ONB-060 — A visitor can learn about Lemma without signing in

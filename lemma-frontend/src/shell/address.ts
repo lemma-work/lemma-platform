@@ -104,6 +104,7 @@ export function readAddress(pathname: string): Address {
         case "groups":
         case "settings":
         case "about":
+        case "setup":
             return rest.length > 1 ? here(null) : here("space:" + rest[0]);
         case "library":
         case "history":

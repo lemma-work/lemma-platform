@@ -1,0 +1,6 @@
+id,key,measure,kind,counter,query,aim,target,target_label,counted_from,is_on,note,position,shape,unit_table,time_column,test,value,value_unit,label_column,link_column,proposed_from
+77de68d9-53e0-5713-b685-73a5ae6c6b2d,first_round,Merged without a second round of changes,outcome,work,,higher,0.7,7 in 10,Pull requests,true,,1,share,pull_requests,opened_at,"merged_at IS NOT NULL AND coalesce(review_rounds, 0) <= 1",,,title,link,
+3c66b6f4-89e6-580e-b1fd-a694219d9a5f,open_to_merged,Median time from opened to merged,outcome,work,,lower,48,2 days,Pull requests,true,,2,median,pull_requests,merged_at,,extract(epoch from merged_at - opened_at) / 3600,hours,title,link,
+100b7cd4-15da-56a1-911a-7cac17d1576d,stayed_merged,Merged changes that stayed merged,outcome,work,,higher,1,every one,Pull requests,true,,3,share,pull_requests,merged_at,"NOT coalesce(reverted, false)",,,title,link,
+e5a4051a-525d-54bf-af8e-6fdb15174638,standing_work,Standing work runs on time,reliability,standing_work,,higher,1,every run,Run history,true,,4,share,,,,,,,,
+5ffc9794-3a5b-5f64-8d6e-90f5d6da57d0,open_questions,Nothing waits on a question for a day,reliability,open_questions,,lower,0,none,Conversations,true,,5,count,,,,,,,,

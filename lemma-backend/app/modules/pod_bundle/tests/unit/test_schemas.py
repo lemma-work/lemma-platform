@@ -7,8 +7,12 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.modules.pod_bundle.api.schemas import ExportStartRequest, PublishStartRequest
-from app.modules.pod_bundle.domain.state import PublishMode
+from app.modules.pod_bundle.api.schemas import (
+    ExportStartRequest,
+    ImportStartRequest,
+    PublishStartRequest,
+)
+from app.modules.pod_bundle.domain.state import BundleSourceKind, PublishMode
 
 
 def test_export_defaults_to_resources_only():
@@ -84,6 +88,77 @@ def test_publish_requires_account_and_defaults_to_create():
 def test_publish_rejects_invalid_repository_names(repo_name: str):
     with pytest.raises(ValidationError):
         PublishStartRequest(repo_name=repo_name, account_id=uuid4())
+
+
+# --- import start: templates -------------------------------------------------
+
+
+def test_import_start_accepts_a_template_by_name():
+    request = ImportStartRequest(kind="TEMPLATE", template="support-desk")
+    assert request.kind is BundleSourceKind.TEMPLATE
+    assert request.template == "support-desk"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "../etc",
+        "..",
+        ".",
+        "support-desk/../follow-ups",
+        "support-desk/",
+        "/support-desk",
+        "support_desk",
+        "Support-Desk",
+        "-support",
+        "support-desk\n",
+        "",
+        "a" * 64,
+    ],
+)
+def test_import_start_refuses_a_template_name_that_is_not_a_plain_slug(template):
+    """The name becomes a directory under ``templates/``, so anything that is
+    not a lowercase slug -- a dot, a separator -- is refused before it gets
+    near the filesystem."""
+    with pytest.raises(ValidationError):
+        ImportStartRequest(kind="TEMPLATE", template=template)
+
+
+def test_import_start_template_kind_requires_a_name():
+    with pytest.raises(ValidationError):
+        ImportStartRequest(kind="TEMPLATE")
+
+
+@pytest.mark.parametrize(
+    "locating",
+    [
+        {"url": "https://github.com/acme/crm"},
+        {"owner": "acme"},
+        {"repo": "crm"},
+        {"ref": "main"},
+        {"account_id": str(uuid4())},
+    ],
+)
+def test_import_start_template_refuses_fields_that_locate_a_bundle(locating):
+    """Beside a template they would be ignored; refusing them says so."""
+    with pytest.raises(ValidationError):
+        ImportStartRequest(kind="TEMPLATE", template="support-desk", **locating)
+
+
+@pytest.mark.parametrize("kind", ["URL", "GITHUB"])
+def test_import_start_refuses_a_template_name_with_another_kind(kind):
+    with pytest.raises(ValidationError):
+        ImportStartRequest(
+            kind=kind, url="https://github.com/acme/crm", template="support-desk"
+        )
+
+
+def test_plan_response_carries_the_bundle_description():
+    from app.modules.pod_bundle.api.schemas import ImportPlanResponse
+    from app.modules.pod_bundle.domain.state import ImportPlan
+
+    plan = ImportPlan(format_version=3, description="Answers customers.")
+    assert ImportPlanResponse.from_domain(plan).description == "Answers customers."
 
 
 # --- partial apply -----------------------------------------------------------

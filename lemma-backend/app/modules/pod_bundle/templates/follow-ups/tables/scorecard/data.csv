@@ -1,0 +1,6 @@
+id,key,measure,kind,counter,query,aim,target,target_label,counted_from,is_on,note,position,shape,unit_table,time_column,test,value,value_unit,label_column,link_column,proposed_from
+b9d6749c-2f6f-536f-ad61-04be99d719a5,followed_up,Follow-ups go out before they go cold,outcome,work,,higher,0.9,9 in 10,Commitments,true,,1,share,commitments,due,followed_up_at IS NOT NULL AND followed_up_at::date <= due,,,what,source,
+676b9c0d-4435-563b-a1e0-a86a0a4da49f,nothing_overdue,Promises still open after their date,outcome,work,,lower,0,none,Commitments,true,,2,count,commitments,due,"coalesce(status, 'open') = 'open' AND due < current_date",,,what,source,
+1ab1f724-8e34-5843-bd11-d03ca1d6f2d1,closed_on_time,Promises closed within two days of their date,outcome,work,,higher,0.9,9 in 10,Commitments,true,,3,share,commitments,due,status = 'done' AND done_at::date <= due + 2,,,what,source,
+473da898-8284-56d9-9cb5-eb4418c6e7dd,standing_work,Standing work runs on time,reliability,standing_work,,higher,1,every run,Run history,true,,4,share,,,,,,,,
+17df40e6-4444-524b-9271-b1545d9a98db,open_questions,Nothing waits on a question for a day,reliability,open_questions,,lower,0,none,Conversations,true,,5,count,,,,,,,,

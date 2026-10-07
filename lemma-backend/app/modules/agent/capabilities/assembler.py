@@ -346,7 +346,7 @@ async def _build_lemma_harness_tooling(
         # `deferred_hint` sorts its tool names specifically to keep it
         # byte-identical between runs. Behind volatile text it would be re-read
         # every time somebody answered a question.
-        hint = build_deferred_tools_hint(extra)
+        hint = build_deferred_tools_hint(extra, visible_toolsets=core)
         if hint:
             capabilities.append(DeferredToolsHintCapability(hint))
 

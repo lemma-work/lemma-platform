@@ -312,7 +312,7 @@ export function SettingsModal({
                         {section === "usage" && <UsagePanel orgId={activeOrgId} />}
                         {section === "plan" && <PlanSection />}
                         {org && section === "people" && <PeopleSection orgId={org.id} />}
-                        {org && section === "connectors" && <ConnectorsSection orgId={org.id} />}
+                        {org && section === "connectors" && <ConnectorsSection orgId={org.id} find={section === opening ? openingFocus : null} />}
                         {org && section === "models" && <ModelsSection orgId={org.id} />}
                         {org && section === "org-usage" && <OrgUsageSection orgId={org.id} />}
                         {org && section === "team-billing" && <TeamBillingSection orgId={org.id} />}

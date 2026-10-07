@@ -1915,6 +1915,14 @@
         "title": "AgentToolset",
         "type": "string"
       },
+      "Aim": {
+        "enum": [
+          "higher",
+          "lower"
+        ],
+        "title": "Aim",
+        "type": "string"
+      },
       "AnswerSignInRequest": {
         "properties": {
           "signed_in": {
@@ -3095,10 +3103,11 @@
         "type": "object"
       },
       "BundleSourceKind": {
-        "description": "Where an imported bundle comes from — a CAPS wire enum.\n\n``URL`` covers any lemma-origin signed download URL (an export or an\nuploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public\nrepo fetched via the connector path.",
+        "description": "Where an imported bundle comes from — a CAPS wire enum.\n\n``URL`` covers any lemma-origin signed download URL (an export or an\nuploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public\nrepo fetched via the connector path; ``TEMPLATE`` is a bundle that ships\nwith the backend under ``pod_bundle/templates/``, named rather than located.",
         "enum": [
           "URL",
-          "GITHUB"
+          "GITHUB",
+          "TEMPLATE"
         ],
         "title": "BundleSourceKind",
         "type": "string"
@@ -9026,6 +9035,18 @@
             ],
             "title": "Bundle Name"
           },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the bundle says it is for (its pod.json).",
+            "title": "Description"
+          },
           "format_version": {
             "title": "Format Version",
             "type": "integer"
@@ -9064,7 +9085,7 @@
         "type": "object"
       },
       "ImportStartRequest": {
-        "description": "Body for starting a URL-based import.",
+        "description": "Body for starting an import.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -9081,7 +9102,7 @@
           },
           "kind": {
             "$ref": "#/components/schemas/BundleSourceKind",
-            "description": "URL (a lemma signed download URL) or GITHUB (a public repo)."
+            "description": "URL (a lemma signed download URL), GITHUB (a public repo), or TEMPLATE (a template that ships with Lemma, by name)."
           },
           "owner": {
             "anyOf": [
@@ -9118,6 +9139,19 @@
             ],
             "description": "GITHUB repo name.",
             "title": "Repo"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For TEMPLATE: the template's name, e.g. 'support-desk'. Required with TEMPLATE and refused with any other kind.",
+            "title": "Template"
           },
           "url": {
             "anyOf": [
@@ -9636,6 +9670,17 @@
         ],
         "title": "McpEndpointResponse",
         "type": "object"
+      },
+      "MeasureStatus": {
+        "enum": [
+          "counted",
+          "nothing_to_count",
+          "too_few",
+          "not_counted",
+          "failed"
+        ],
+        "title": "MeasureStatus",
+        "type": "string"
       },
       "MessageKind": {
         "description": "Discriminates the flat message body.\n\nA message carries exactly one kind. Textual kinds use ``text``; tool kinds\nuse ``tool_name``/``tool_call_id`` plus ``tool_args`` (call) or\n``tool_result`` (return). There is no nested ``content`` object.",
@@ -13875,6 +13920,468 @@
         "title": "Scope",
         "type": "string"
       },
+      "ScorecardMeasureHistory": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "measure": {
+            "title": "Measure",
+            "type": "string"
+          },
+          "weeks": {
+            "description": "One per window, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/ScorecardWeekScore"
+            },
+            "title": "Weeks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "measure",
+          "weeks"
+        ],
+        "title": "ScorecardMeasureHistory",
+        "type": "object"
+      },
+      "ScorecardMeasureSpec": {
+        "description": "A measure as a `scorecard` row holds it, not yet saved.\n\nOther columns of a row (`kind`, `is_on`, `note`, ...) are accepted and play\nno part in counting it.",
+        "properties": {
+          "aim": {
+            "$ref": "#/components/schemas/Aim"
+          },
+          "counter": {
+            "default": "work",
+            "description": "`work`, `sql`, `approvals`, `standing_work` or `open_questions`.",
+            "title": "Counter",
+            "type": "string"
+          },
+          "key": {
+            "default": "draft",
+            "description": "The row's key.",
+            "title": "Key",
+            "type": "string"
+          },
+          "label_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The column naming a row when it is listed.",
+            "title": "Label Column"
+          },
+          "link_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The column holding a row's link.",
+            "title": "Link Column"
+          },
+          "measure": {
+            "default": "",
+            "description": "The measure in one sentence.",
+            "title": "Measure",
+            "type": "string"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`sql` counter only: a SELECT returning `counted` and `total`.",
+            "title": "Query"
+          },
+          "shape": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Shape"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`share`, `count`, `median` or `total`. Omitted: a share when `aim` is higher, a count when it is lower."
+          },
+          "target": {
+            "title": "Target",
+            "type": "number"
+          },
+          "target_label": {
+            "default": "",
+            "title": "Target Label",
+            "type": "string"
+          },
+          "test": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One SQL boolean expression over a row.",
+            "title": "Test"
+          },
+          "time_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The DATE or DATETIME column that places a row in a week.",
+            "title": "Time Column"
+          },
+          "unit_table": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The table with one row per unit of work.",
+            "title": "Unit Table"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Median or total: one SQL number over a row.",
+            "title": "Value"
+          },
+          "value_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a count, median or total is in: `minutes`.",
+            "title": "Value Unit"
+          }
+        },
+        "required": [
+          "aim",
+          "target"
+        ],
+        "title": "ScorecardMeasureSpec",
+        "type": "object"
+      },
+      "ScorecardPreviewRequest": {
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The day the last week ends, not included. Defaults to today; cannot be after it.",
+            "title": "End"
+          },
+          "keys": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 30,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Saved measures to preview, by key, whether on or off.",
+            "title": "Keys"
+          },
+          "measure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScorecardMeasureSpec"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One unsaved measure to preview instead. Nothing is saved."
+          },
+          "weeks": {
+            "default": 4,
+            "description": "How many weeks to count, oldest first.",
+            "maximum": 8,
+            "minimum": 1,
+            "title": "Weeks",
+            "type": "integer"
+          }
+        },
+        "title": "ScorecardPreviewRequest",
+        "type": "object"
+      },
+      "ScorecardPreviewResponse": {
+        "properties": {
+          "measures": {
+            "items": {
+              "$ref": "#/components/schemas/ScorecardMeasureHistory"
+            },
+            "title": "Measures",
+            "type": "array"
+          },
+          "measures_skipped": {
+            "default": 0,
+            "description": "Measures chosen but not counted by this preview.",
+            "title": "Measures Skipped",
+            "type": "integer"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/ScorecardWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "windows",
+          "measures"
+        ],
+        "title": "ScorecardPreviewResponse",
+        "type": "object"
+      },
+      "ScorecardRowsResponse": {
+        "properties": {
+          "end": {
+            "format": "date",
+            "title": "End",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ScorecardUnitRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "start": {
+            "format": "date",
+            "title": "Start",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "description": "More rows fell in the week than are listed.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "rows"
+        ],
+        "title": "ScorecardRowsResponse",
+        "type": "object"
+      },
+      "ScorecardUnitRow": {
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The time column's value, ISO 8601.",
+            "title": "At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the number counted this row.",
+            "title": "Passed"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ScorecardUnitRow",
+        "type": "object"
+      },
+      "ScorecardWeekScore": {
+        "description": "One measure's result for one week, as `score_week` records it.",
+        "properties": {
+          "counted": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counted"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "measure": {
+            "title": "Measure",
+            "type": "string"
+          },
+          "met": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Met"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "shown": {
+            "description": "The one string to show: \"31 of 40\", \"none\", \"1.6 days\".",
+            "title": "Shown",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MeasureStatus"
+          },
+          "target_label": {
+            "title": "Target Label",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key",
+          "measure",
+          "status",
+          "shown",
+          "target_label"
+        ],
+        "title": "ScorecardWeekScore",
+        "type": "object"
+      },
+      "ScorecardWindow": {
+        "description": "``[start, end)`` in whole UTC days.",
+        "properties": {
+          "end": {
+            "format": "date",
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "format": "date",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "ScorecardWindow",
+        "type": "object"
+      },
       "SearchFreshness": {
         "enum": [
           "day",
@@ -14068,6 +14575,17 @@
         ],
         "title": "SetOrganizationDefaultRuntimeRequest",
         "type": "object"
+      },
+      "Shape": {
+        "description": "What a measure's number is.",
+        "enum": [
+          "share",
+          "count",
+          "median",
+          "total"
+        ],
+        "title": "Shape",
+        "type": "string"
       },
       "SignInOutcomeResponse": {
         "properties": {
@@ -15631,6 +16149,214 @@
           "expires_at"
         ],
         "title": "TelegramManagedBotSetupResponse",
+        "type": "object"
+      },
+      "TemplateCardResponse": {
+        "description": "A role on the hiring shelf, read from the template that makes it.",
+        "properties": {
+          "about": {
+            "description": "The template's description; written onto the pod.",
+            "title": "About",
+            "type": "string"
+          },
+          "brings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Brings",
+            "type": "array"
+          },
+          "judged_on": {
+            "description": "The measures its scorecard turns on, beyond the ones every teammate has.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Judged On",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "offers": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateOfferResponse"
+            },
+            "title": "Offers",
+            "type": "array"
+          },
+          "role": {
+            "description": "The job, in one line.",
+            "title": "Role",
+            "type": "string"
+          },
+          "seed": {
+            "description": "The archetype face's seed.",
+            "title": "Seed",
+            "type": "string"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateSkillResponse"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateTableResponse"
+            },
+            "title": "Tables",
+            "type": "array"
+          },
+          "template": {
+            "description": "Pass as `template` to a kind=TEMPLATE import.",
+            "title": "Template",
+            "type": "string"
+          },
+          "wins": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateWinResponse"
+            },
+            "title": "Wins",
+            "type": "array"
+          }
+        },
+        "required": [
+          "template",
+          "name",
+          "role",
+          "about",
+          "seed",
+          "brings",
+          "wins",
+          "offers",
+          "judged_on",
+          "skills",
+          "tables"
+        ],
+        "title": "TemplateCardResponse",
+        "type": "object"
+      },
+      "TemplateListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateCardResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "TemplateListResponse",
+        "type": "object"
+      },
+      "TemplateNeedResponse": {
+        "properties": {
+          "connector": {
+            "title": "Connector",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connector",
+          "label"
+        ],
+        "title": "TemplateNeedResponse",
+        "type": "object"
+      },
+      "TemplateOfferResponse": {
+        "properties": {
+          "cron": {
+            "title": "Cron",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "instruction": {
+            "title": "Instruction",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "detail",
+          "cron",
+          "instruction"
+        ],
+        "title": "TemplateOfferResponse",
+        "type": "object"
+      },
+      "TemplateSkillResponse": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "TemplateSkillResponse",
+        "type": "object"
+      },
+      "TemplateTableResponse": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "TemplateTableResponse",
+        "type": "object"
+      },
+      "TemplateWinResponse": {
+        "properties": {
+          "needs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TemplateNeedResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "say": {
+            "title": "Say",
+            "type": "string"
+          }
+        },
+        "required": [
+          "say"
+        ],
+        "title": "TemplateWinResponse",
         "type": "object"
       },
       "UpdateAgentHostRuntimeProfileRequest": {
@@ -23722,6 +24448,35 @@
         }
       }
     },
+    "/pods/bundle/templates": {
+      "get": {
+        "description": "The templates that ship with Lemma and carry a role card, in shelf order: the job in one line, what arrives, first things to say, standing work on offer, and what the role is judged on, read from the template itself. Hire one by importing it with kind=TEMPLATE into a new pod.",
+        "operationId": "pod.bundle.templates.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Role Templates",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle.templates",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/pods/{pod_id}": {
       "delete": {
         "description": "Delete a pod",
@@ -25406,7 +26161,7 @@
     },
     "/pods/{pod_id}/bundle/imports": {
       "post": {
-        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
+        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for private repos); kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
         "operationId": "pod.bundle.import.start",
         "parameters": [
           {
@@ -33658,6 +34413,183 @@
           "resource": "schedule.run",
           "result": "entity",
           "verb": "retry"
+        }
+      }
+    },
+    "/pods/{pod_id}/scorecard/measures/{key}/rows": {
+      "get": {
+        "description": "The units of work a measure counted for the week ending `end` (default today), with whether each passed its test. Only a `work` measure has rows; any other is answered 422.",
+        "operationId": "agent.scorecard.measure_rows",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The day the week ends, not included. Defaults to today.",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The day the week ends, not included. Defaults to today.",
+              "title": "End"
+            }
+          },
+          {
+            "description": "How many rows to list at most.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "How many rows to list at most.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardRowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The pod has no scorecard, or no measure has this key"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The measure has no rows to show, or cannot run"
+          }
+        },
+        "summary": "List Rows Behind A Scorecard Measure",
+        "tags": [
+          "agents"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "agent.scorecard",
+          "result": "entity",
+          "verb": "measure_rows"
+        }
+      }
+    },
+    "/pods/{pod_id}/scorecard/preview": {
+      "post": {
+        "description": "Count scorecard measures over recent weeks without recording anything: the same seven-day windows and the same counting the weekly review uses, oldest week first. With `measure`, one unsaved measure (a dry run); with `keys`, those saved measures; with neither, every measure that is on and every proposal not yet kept. Counted as the caller.",
+        "operationId": "agent.scorecard.preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScorecardPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The pod has no scorecard, or no measure has a key"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A draft measure or a window that cannot be counted"
+          }
+        },
+        "summary": "Preview Scorecard Weeks",
+        "tags": [
+          "agents"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.scorecard"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.scorecard",
+          "result": "entity",
+          "verb": "preview"
         }
       }
     },

@@ -22,6 +22,7 @@ class ImportPlanResponse:
     Attributes:
         format_version (int):
         bundle_name (None | str | Unset):
+        description (None | str | Unset): What the bundle says it is for (its pod.json).
         has_destructive_steps (bool | Unset):  Default: False.
         steps (list[PlanStepResponse] | Unset):
         variables (list[VariableSpecResponse] | Unset):
@@ -30,6 +31,7 @@ class ImportPlanResponse:
 
     format_version: int
     bundle_name: None | str | Unset = UNSET
+    description: None | str | Unset = UNSET
     has_destructive_steps: bool | Unset = False
     steps: list[PlanStepResponse] | Unset = UNSET
     variables: list[VariableSpecResponse] | Unset = UNSET
@@ -44,6 +46,12 @@ class ImportPlanResponse:
             bundle_name = UNSET
         else:
             bundle_name = self.bundle_name
+
+        description: None | str | Unset
+        if isinstance(self.description, Unset):
+            description = UNSET
+        else:
+            description = self.description
 
         has_destructive_steps = self.has_destructive_steps
 
@@ -74,6 +82,8 @@ class ImportPlanResponse:
         )
         if bundle_name is not UNSET:
             field_dict["bundle_name"] = bundle_name
+        if description is not UNSET:
+            field_dict["description"] = description
         if has_destructive_steps is not UNSET:
             field_dict["has_destructive_steps"] = has_destructive_steps
         if steps is not UNSET:
@@ -102,6 +112,15 @@ class ImportPlanResponse:
 
         bundle_name = _parse_bundle_name(d.pop("bundle_name", UNSET))
 
+        def _parse_description(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        description = _parse_description(d.pop("description", UNSET))
+
         has_destructive_steps = d.pop("has_destructive_steps", UNSET)
 
         _steps = d.pop("steps", UNSET)
@@ -127,6 +146,7 @@ class ImportPlanResponse:
         import_plan_response = cls(
             format_version=format_version,
             bundle_name=bundle_name,
+            description=description,
             has_destructive_steps=has_destructive_steps,
             steps=steps,
             variables=variables,

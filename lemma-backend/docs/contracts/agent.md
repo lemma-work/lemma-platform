@@ -42,6 +42,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.runtime.profiles.restore` | POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore` | Restore Agent Runtime Profile |
 | `agent.runtime.profiles.test` | POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/test` | Test a Saved Model Provider |
 | `agent.runtime.profiles.update` | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | Update Agent Runtime Profile |
+| `agent.scorecard.measure_rows` | GET | `/pods/{pod_id}/scorecard/measures/{key}/rows` | List Rows Behind A Scorecard Measure |
+| `agent.scorecard.preview` | POST | `/pods/{pod_id}/scorecard/preview` | Preview Scorecard Weeks |
 | `agent.tool.report_feedback` | POST | `/tools/report-feedback` | Agent Report Feedback |
 | `agent.tool.web_search` | POST | `/tools/web-search` | Agent Web Search |
 | `agent.update` | PATCH | `/pods/{pod_id}/agents/{agent_name}` | Update Agent |

@@ -1,0 +1,18 @@
+{
+  "name": "invoices",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {"description": "One row per invoice the team sent: who owes it, how much, when it was due, when it was paid, and when a reminder went out."},
+  "columns": [
+    {"name": "id", "type": "UUID", "required": true, "auto": true},
+    {"name": "customer", "type": "TEXT", "required": true},
+    {"name": "number", "type": "TEXT", "required": false},
+    {"name": "amount", "type": "FLOAT", "required": false},
+    {"name": "currency", "type": "TEXT", "required": false},
+    {"name": "issued", "type": "DATE", "required": false},
+    {"name": "due", "type": "DATE", "required": false},
+    {"name": "paid_at", "type": "DATETIME", "required": false},
+    {"name": "reminded_at", "type": "DATETIME", "required": false},
+    {"name": "link", "type": "TEXT", "required": false}
+  ]
+}

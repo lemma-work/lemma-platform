@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Select, func, literal, select, tuple_
+from sqlalchemy import Select, and_, func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import ColumnElement
 
 from app.core.infrastructure.db.sql_text import escape_like
 from app.modules.agent.domain.entities import Conversation as ConversationEntity
@@ -26,6 +27,19 @@ from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.infrastructure.repository_status import (
     conversation_status_values_for_db,
 )
+
+
+def readable_by(*, user_id: UUID, pod_id: UUID) -> ColumnElement[bool]:
+    """The conversations one person may read in one pod: their own.
+
+    The rule ``validate_conversation_access`` applies to a single conversation,
+    as a predicate, so that anything reading many -- this list, the scorecard's
+    counts -- reads the same set and cannot drift into someone else's.
+    """
+    return and_(
+        ConversationModel.user_id == user_id,
+        ConversationModel.pod_id == pod_id,
+    )
 
 
 def list_statement(
@@ -44,8 +58,7 @@ def list_statement(
     # a tail on the end of the history. Equality rather than "not archived"
     # so the same query serves both without a second code path.
     stmt = select(ConversationModel).where(
-        ConversationModel.user_id == user_id,
-        ConversationModel.pod_id == pod_id,
+        readable_by(user_id=user_id, pod_id=pod_id),
         ConversationModel.is_archived.is_(archived),
     )
     # Default: root conversations only. With parent_id: that conversation's
