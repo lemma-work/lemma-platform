@@ -49,7 +49,7 @@ def test_the_display_name_is_not_the_product_name():
 
 
 def test_the_frontend_agrees():
-    """`lemma-harness/lib/utils/agents.ts` maps the same value to the same name.
+    """`lemma-frontend/src/data/agent-names.ts` maps the same value to the same name.
 
     Someone reading a name in Slack and someone reading it in the app are
     reading about the same actor. The two constants are compared here rather
@@ -59,8 +59,8 @@ def test_the_frontend_agrees():
     from pathlib import Path
 
     source = Path(__file__).resolve().parents[5].parent / (
-        "lemma-harness/lib/utils/agents.ts"
+        "lemma-frontend/src/data/agent-names.ts"
     )
     if not source.is_file():
         pytest.skip("frontend checkout is not present")
-    assert f"DEFAULT_RESPONDER_NAME = '{DEFAULT_RESPONDER_NAME}'" in source.read_text()
+    assert f'DEFAULT_RESPONDER_NAME = "{DEFAULT_RESPONDER_NAME}"' in source.read_text()

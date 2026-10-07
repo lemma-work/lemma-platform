@@ -226,59 +226,6 @@ impl Daemon {
             .begin(id)
     }
 
-    /// Change only the AI profile.
-    ///
-    /// Onboarding runs in the workspace, on a remote origin, and is trusted
-    /// with this one section and nothing else — not sharing, not tunnels, not
-    /// the runtime. Keeping that narrow is the reason this is its own command
-    /// rather than a `config.apply` with the rest of the configuration echoed
-    /// back by the caller.
-    /// Change only the AI profile.
-    ///
-    /// Onboarding runs in the workspace, on a remote origin, and is trusted
-    /// with this one section and nothing else — not sharing, not tunnels, not
-    /// the runtime. Keeping that narrow is the reason this is its own command
-    /// rather than a `config.apply` with the rest of the configuration echoed
-    /// back by the caller.
-    pub(super) fn set_ai_profile(
-        self: &Arc<Self>,
-        request: Value,
-        client: &mpsc::SyncSender<String>,
-    ) {
-        let id = request.get("id").cloned();
-        if self.lifecycle.begin().is_err() {
-            self.send_direct(
-                client,
-                error_event("busy", "another local operation is running", id.as_ref()),
-            );
-            return;
-        }
-        let payload = request.get("payload").cloned().unwrap_or(Value::Null);
-        if let Err(error) = self.begin_config_operation(id.as_ref()) {
-            self.lifecycle.finish();
-            self.send_direct(
-                client,
-                error_event(
-                    "config-operation-unavailable",
-                    error.to_string(),
-                    id.as_ref(),
-                ),
-            );
-            return;
-        }
-        self.send_direct(
-            client,
-            json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.set-ai", "id": id.as_ref()}),
-        );
-        let daemon = Arc::clone(self);
-        thread::spawn(move || {
-            // Taken first, so a write that panics still releases admission.
-            let finish = daemon.lifecycle.finish_on_drop();
-            let result = daemon.write_operator_config(|store| store.set_ai(payload));
-            daemon.finish_config_write(finish, result, id.as_ref());
-        });
-    }
-
     /// Ask a provider what it can run, without committing to anything.
     ///
     /// `config.apply` already probes, but it probes as one step of a write that

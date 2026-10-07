@@ -156,8 +156,8 @@ def test_manifest_is_private_and_atomic(paths, tmp_path):
     assert not list(destination.parent.glob("*.tmp-*"))
 
 
-def test_source_mode_runs_the_workspace_frontend_not_the_harness(paths, tmp_path):
-    for name in ("lemma-backend", "lemma-harness", "lemma-frontend", "desktop/runtime"):
+def test_source_mode_runs_lemma_frontend(paths, tmp_path):
+    for name in ("lemma-backend", "lemma-frontend", "desktop/runtime"):
         (tmp_path / name).mkdir(parents=True)
     (tmp_path / "desktop/runtime/frontend-launcher.mjs").write_text("")
     manifest = build_manifest(

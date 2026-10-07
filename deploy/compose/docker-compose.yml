@@ -200,9 +200,9 @@ services:
   # Deliberately NOT env_file: .env — that file holds the database password and
   # the secret-encryption key, and the Next server has no use for either. It
   # gets the browser-facing values only, read from the same settings the backend
-  # uses so the two cannot disagree about their own URLs. Every NEXT_PUBLIC_*
-  # here is injected at runtime by docker-entrypoint.sh, so one published image
-  # serves any domain.
+  # uses so the two cannot disagree about their own URLs. The server reads every
+  # NEXT_PUBLIC_* here when it starts and serves them at /site-config.js, so one
+  # published image serves any domain.
   frontend:
     image: ${LEMMA_FRONTEND_IMAGE:?run ./bootstrap.sh first}
     restart: unless-stopped
@@ -213,10 +213,6 @@ services:
       NEXT_PUBLIC_API_URL: ${API_URL:?}
       NEXT_PUBLIC_SITE_URL: ${FRONTEND_URL:?}
       NEXT_PUBLIC_AUTH_URL: ${AUTH_FRONTEND_URL:?}
-      NEXT_PUBLIC_AUTH_WEBSITE_BASE_PATH: ${AUTH_WEBSITE_BASE_PATH:-/auth}
-      NEXT_PUBLIC_SUPERTOKENS_API_BASE_PATH: ${SUPERTOKENS_API_BASE_PATH:-/auth}
-      NEXT_PUBLIC_SUPERTOKENS_API_GATEWAY_PATH: ${SUPERTOKENS_API_GATEWAY_PATH:-/st}
-      NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI: ${FRONTEND_URL:?}/
       # Blank: the session cookie is host-only. See SESSION_COOKIE_DOMAIN.
       NEXT_PUBLIC_SESSION_TOKEN_DOMAIN: ""
       NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED: ${AUTH_EMAIL_VERIFICATION_REQUIRED:-true}
