@@ -13,6 +13,7 @@ import json
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -26,10 +27,45 @@ from app.modules.agent.tools.dispatcher import ToolInfo
 
 pytestmark = pytest.mark.unit
 
+
+class _Page(HTMLParser):
+    """The view's inline scripts, and anything it would load from elsewhere.
+
+    A parser rather than a pattern: tag names arrive lowercased whatever the
+    file spells them, and attributes arrive parsed.
+    """
+
+    def __init__(self, html: str) -> None:
+        super().__init__()
+        self.scripts: list[str] = []
+        self.loads: list[str] = []
+        self._in_script = False
+        self.feed(html)
+        self.close()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        named = dict(attrs)
+        source = named.get("href") if tag == "link" else named.get("src")
+        if source:
+            self.loads.append(source)
+        if tag == "script":
+            self._in_script = True
+            self.scripts.append("")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script":
+            self._in_script = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_script:
+            self.scripts[-1] += data
+
+
 _HTML = (
     Path(__file__).resolve().parents[2] / "services" / "pod_mcp_table_view.html"
 ).read_text(encoding="utf-8")
-_SCRIPTS = re.findall(r"<script>(.*?)</script>", _HTML, re.DOTALL)
+_PAGE = _Page(_HTML)
+_SCRIPTS = _PAGE.scripts
 _MODEL_SCRIPT, _BRIDGE_SCRIPT = _SCRIPTS
 
 
@@ -98,9 +134,9 @@ async def test_the_table_view_is_served_as_an_mcp_app_that_reaches_nothing():
 def test_the_view_loads_nothing_from_anywhere():
     """The declared CSP is empty; a CDN script or a fetch would be blocked by
     every host, so the view must not depend on one."""
-    assert not re.search(
-        r"<script[^>]+src=|<link[^>]+href=|fetch\(|XMLHttpRequest", _HTML
-    )
+    assert _PAGE.loads == []
+    assert "fetch(" not in _HTML
+    assert "XMLHttpRequest" not in _HTML
 
 
 def test_the_view_writes_pod_data_as_text_only():
@@ -527,3 +563,48 @@ def test_the_bridge_shakes_hands_draws_pages_and_tells_the_model():
             "error": {"code": -32601, "message": "Method not found: tools/list"},
         },
     ]
+
+
+def test_a_page_that_answers_after_a_newer_result_is_dropped():
+    """The person pages, and before the page arrives the model calls the tool
+    again. The late page belongs to the old result; drawn, it would replace
+    the new one and tell the model about rows no longer on screen."""
+    first = _records_result([{"id": str(i)} for i in range(20)], 57)
+    newer = _records_result([{"name": "Ada"}, {"name": "Grace"}], 2)
+    late = _records_result([{"id": str(i)} for i in range(20, 40)], 57)
+    harness = f"""
+      (async () => {{
+        fromHost({{ id: posted[0].id, result: {{
+          protocolVersion: "2026-01-26", hostCapabilities: {{ serverTools: {{}} }},
+          hostContext: {{ toolInfo: {{ tool: {{ name: "lemma_pod_get_records" }} }} }},
+        }} }});
+        await settle();
+        fromHost({{ method: "ui/notifications/tool-input", params: {{ arguments: {{ table_name: "orders" }} }} }});
+        fromHost({{ method: "ui/notifications/tool-result", params: {first} }});
+        elements.next.listeners.click();
+        await settle();
+        const call = posted.find((m) => m.method === "tools/call");
+        fromHost({{ method: "ui/notifications/tool-input", params: {{ arguments: {{ table_name: "people" }} }} }});
+        fromHost({{ method: "ui/notifications/tool-result", params: {newer} }});
+        fromHost({{ id: call.id, result: {late} }});
+        await settle();
+        console.log(JSON.stringify({{
+          title: elements.title.textContent, count: elements.count.textContent,
+          told: posted.filter((m) => m.method === "ui/update-model-context").length,
+        }}));
+        process.exit(0);
+      }})();
+    """
+    result = subprocess.run(
+        [_node(), "-e", f"{_FAKE_PAGE}\n{_MODEL_SCRIPT}\n{_BRIDGE_SCRIPT}\n{harness}"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "title": "people",
+        "count": "2 records",
+        "told": 0,
+    }

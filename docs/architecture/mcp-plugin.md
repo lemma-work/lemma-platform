@@ -134,17 +134,21 @@ signed in with a token the connection mints, not rebuilt as a view.
   the `externalUrl` content type is deferred in the spec. A deployed app can
   only be a nested iframe from an origin the view lists in
   `_meta.ui.csp.frameDomains`.
-- **ChatGPT allows that for the MCP server's own registrable domain**, with a
-  justification at review
-  ([ChatGPT UI guide](https://developers.openai.com/plugins/build/chatgpt-ui)).
+- **ChatGPT allows it for the MCP server's own registrable domain, and for a
+  third-party domain where the embedded experience is essential.** Either way a
+  listed plugin justifies each iframe at submission — what it shows, why, and
+  who controls its domain — and iframe use can mean extra review or escalation;
+  sharing the server's domain does not guarantee approval
+  ([plugin guidelines](https://developers.openai.com/plugins/plugin-guidelines)).
   **Claude restricts `frameDomains`** "pending security review"
   ([Claude MCP Apps design guidelines](https://claude.com/docs/connectors/building/mcp-apps/design-guidelines)),
   so ChatGPT comes first and Claude follows when it opens.
 - **Not with cookies.** The SDK's session cookie and the #860
   `__Host-lemmaAppAccess` cookie are both `SameSite=Lax`, which no browser sends
   from a frame inside another site's page. The SDK already has a token mode —
-  every call, the WebSocket included, sent as `Authorization: Bearer` — so the
-  framed app signs in with a token instead.
+  HTTP calls carry it as `Authorization: Bearer`, and the datastore-changes
+  WebSocket, which a browser cannot give headers, as an `access_token` query
+  parameter — so the framed app signs in with a token instead.
 
 **The token is a delegated one.** Lemma already mints pod-scoped delegated
 tokens for agents and functions (`app/core/authorization/delegation.py`,

@@ -458,14 +458,21 @@ const LemmaTable = (() => {
     else onNotification(message.method, message.params || {});
   });
 
+  // Moves on whenever the host hands the view a call of its own. A page or a
+  // sort the person asked for that answers after that belongs to a result no
+  // longer on screen, and is dropped rather than drawn over the newer one.
+  let generation = 0;
+
   function onNotification(method, params) {
     switch (method) {
       case "ui/notifications/tool-input":
+        generation++;
         state.args = params.arguments || {};
         if (state.result) render(state.result);
         else drawHeading({ kind: "pending" }, true);
         break;
       case "ui/notifications/tool-result":
+        generation++;
         render(params);
         break;
       case "ui/notifications/tool-cancelled":
@@ -719,10 +726,12 @@ const LemmaTable = (() => {
   async function fetchAndShow(args) {
     if (state.busy) return;
     state.busy = true;
+    const started = generation;
     root.setAttribute("aria-busy", "true");
     drawPager(state.view);
     try {
       const result = await request("tools/call", { name: toolName(), arguments: args });
+      if (started !== generation) return;
       state.args = args;
       render(result);
       if (state.view.kind === "records") {
@@ -730,6 +739,7 @@ const LemmaTable = (() => {
         request("ui/update-model-context", LemmaTable.contextFor(state.view)).catch(() => {});
       }
     } catch (_) {
+      if (started !== generation) return;
       const notice = byId("notice");
       notice.textContent = "That page did not load. Try again.";
       notice.hidden = false;

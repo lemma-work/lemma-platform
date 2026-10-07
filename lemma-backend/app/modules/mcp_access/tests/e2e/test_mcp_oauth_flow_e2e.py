@@ -11,8 +11,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import secrets
+import shutil
+import subprocess
 from contextlib import asynccontextmanager
+from html.parser import HTMLParser
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
@@ -619,6 +623,60 @@ async def test_a_host_finds_the_table_view_and_the_rows_it_draws(
     rows = query.json()["result"]["structuredContent"]
     assert [row["customer"] for row in rows["rows"]] == ["Linus", "Ada", "Grace"]
     assert rows["truncated"] is False
+
+    # The served view's own model, given the results this server returned: what
+    # a host forwards to the view is what it draws, so a payload the view no
+    # longer understands fails here rather than as an empty card.
+    page_result = json.dumps(page.json()["result"])
+    query_result = json.dumps(query.json()["result"])
+    drawn = _run_view_model(
+        view["text"],
+        f"""(() => {{
+          const page = LemmaTable.model({page_result}, {{ table_name: "orders", offset: 2, limit: 2 }});
+          const query = LemmaTable.model({query_result}, {{ sql: "select customer from orders" }});
+          return [page.kind, LemmaTable.summary(page), page.columns.slice(0, 2),
+                  query.kind, LemmaTable.summary(query)];
+        }})()""",
+    )
+    assert drawn == ["records", "3 of 3", ["customer", "amount"], "query", "3 rows"]
+
+
+class _ViewScripts(HTMLParser):
+    def __init__(self, html: str) -> None:
+        super().__init__()
+        self.scripts: list[str] = []
+        self._in_script = False
+        self.feed(html)
+        self.close()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "script":
+            self._in_script = True
+            self.scripts.append("")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script":
+            self._in_script = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_script:
+            self.scripts[-1] += data
+
+
+def _run_view_model(html: str, expression: str) -> object:
+    """Evaluate ``expression`` with the view's model script loaded, under node."""
+    node = shutil.which("node")
+    assert node, "this test runs the served view's script under node; install Node"
+    model_script = _ViewScripts(html).scripts[0]
+    result = subprocess.run(
+        [node, "-e", f"{model_script}\n;console.log(JSON.stringify({expression}));"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 
 async def test_a_denied_consent_redirects_with_access_denied(

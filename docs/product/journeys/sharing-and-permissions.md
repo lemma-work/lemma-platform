@@ -236,16 +236,24 @@ rights than the person who asked.
 ### PS-ACCESS-042 — A connected tool shows a pod's records as a table the person can work in
 **Status:** manual
 
-- Where the tool can show interactive views, when it reads records or runs a
-  query, the system shall show the result as a table.
+- Where the tool can show interactive views, when it reads records, the system
+  shall show the result as a table.
+- Where the tool can show interactive views, when it runs a query, the system
+  shall show the result as a table.
 - When the table is one page of more, the system shall say which rows are shown
   out of how many.
-- When the person moves to another page or sorts the table, the system shall
-  read the rows with the same access the tool was given.
+- When the person moves to another page, the system shall read the rows with
+  the same access the tool was given.
+- When the person sorts the table, the system shall read the rows with the same
+  access the tool was given.
 - When the person sorts a table that has more rows than are shown, the system
   shall sort the whole table, not only the page shown.
-- When the person moves to another page or sorts the table, the system shall
-  tell the tool which rows the person is now looking at.
+- When the person moves to another page, the system shall tell the tool which
+  rows the person is now looking at.
+- When the person sorts the table, the system shall tell the tool which rows
+  the person is now looking at.
+- If the tool's result changes while a page the person asked for is still on
+  its way, then the system shall keep the newer result.
 - If a query's result was cut short, then the system shall say so.
 - If reading the records fails, then the system shall show the failure.
 - Where the tool cannot show interactive views, the system shall give it the
