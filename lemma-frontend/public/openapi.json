@@ -5277,6 +5277,94 @@
         "title": "DatastoreQueryResponse",
         "type": "object"
       },
+      "DecisionAnswerResponse": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The provider's probability for this value, when it measures one. Null from providers that do not, such as a language model.",
+            "title": "Confidence"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The answer, or null when the evidence did not support one. Null is an answer, not a failure: a failure is an error response.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "value",
+          "confidence"
+        ],
+        "title": "DecisionAnswerResponse",
+        "type": "object"
+      },
+      "DecisionExampleBody": {
+        "additionalProperties": false,
+        "properties": {
+          "answers": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "How that case was answered, by question key. Questions may be left out; null means the right answer there was 'can't tell'.",
+            "title": "Answers",
+            "type": "object"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "A past case, as evidence was sent."
+          }
+        },
+        "required": [
+          "evidence",
+          "answers"
+        ],
+        "title": "DecisionExampleBody",
+        "type": "object"
+      },
       "DecisionNode": {
         "description": "Decision node. Routes to the first rule whose condition is truthy;\nfalls through to the default outgoing edge when no rule matches.",
         "properties": {
@@ -5388,6 +5476,46 @@
         "title": "DecisionNodeResponse",
         "type": "object"
       },
+      "DecisionResponse": {
+        "properties": {
+          "answers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DecisionAnswerResponse"
+            },
+            "description": "One answer per question, by key.",
+            "title": "Answers",
+            "type": "object"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The model that ran.",
+            "title": "Model"
+          },
+          "provider": {
+            "description": "The provider that answered.",
+            "title": "Provider",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/DecisionUsageResponse"
+          }
+        },
+        "required": [
+          "answers",
+          "provider",
+          "model",
+          "usage"
+        ],
+        "title": "DecisionResponse",
+        "type": "object"
+      },
       "DecisionRule": {
         "properties": {
           "condition": {
@@ -5405,6 +5533,34 @@
           "next_node_id"
         ],
         "title": "DecisionRule",
+        "type": "object"
+      },
+      "DecisionUsageResponse": {
+        "properties": {
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          }
+        },
+        "title": "DecisionUsageResponse",
         "type": "object"
       },
       "DirectoryTreeNode": {
@@ -9585,6 +9741,56 @@
           "config"
         ],
         "title": "LoopNodeResponse",
+        "type": "object"
+      },
+      "MakeDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "What to judge: an email, an event, a row, as text or JSON. Never followed as instructions. At most 64 KiB; send the part that matters."
+          },
+          "examples": {
+            "description": "Past cases and their answers, to steer the provider.",
+            "items": {
+              "$ref": "#/components/schemas/DecisionExampleBody"
+            },
+            "maxItems": 20,
+            "title": "Examples",
+            "type": "array"
+          },
+          "instruction": {
+            "description": "What to judge and how, in your words. Trusted: it is the only part of the request the provider follows.",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "priority": {
+            "default": "background",
+            "description": "`interactive` when someone is waiting on the answer: a shorter deadline and no second attempt. `background` otherwise.",
+            "enum": [
+              "interactive",
+              "background"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "The questions, as a flat JSON Schema object: one property per question, its `description` the question. Each property is a choice (`{\"type\": \"string\", \"enum\": [...]}`, or `oneOf` of `{const, description}`), a multi-choice (`{\"type\": \"array\", \"items\": <choice>, \"uniqueItems\": true}`), yes or no (`{\"type\": \"boolean\"}`), or a scale (`{\"type\": \"integer\", \"minimum\": 1, \"maximum\": 5}`, or `oneOf` of described integer levels). Free text and open-ended numbers are not supported.",
+            "title": "Schema",
+            "type": "object"
+          }
+        },
+        "required": [
+          "instruction",
+          "evidence",
+          "schema"
+        ],
+        "title": "MakeDecisionRequest",
         "type": "object"
       },
       "ManualWorkflowStartInput": {
@@ -29725,6 +29931,98 @@
           "resource": "record",
           "result": "entity",
           "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/decisions": {
+      "post": {
+        "description": "Answer closed questions -- a choice, several choices, yes or no, a point on a scale -- about one piece of evidence. Nothing is stored: record the answer wherever it matters to you. An answer of null means the evidence did not support one. 422 means the request cannot be asked as sent; 429 and 503 mean ask again later.",
+        "operationId": "decision.make",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MakeDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request body is too large."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The questions, evidence or examples are not valid."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate or spend limit reached; see Retry-After."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The decision provider did not answer; retry."
+          }
+        },
+        "summary": "Make a decision",
+        "tags": [
+          "Decisions"
+        ],
+        "x-lemma": {
+          "invalidates": [],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "decision",
+          "result": "entity",
+          "verb": "make"
         }
       }
     },
