@@ -237,6 +237,29 @@ always reaches a conclusion a person can see.
 
 ---
 
+## Capability: Judge something with a closed question
+
+A function or a person can ask the pod to judge one piece of evidence -- an
+email, an event, a row -- against closed questions: which of these, which of
+these apply, yes or no, where on a short scale. Nothing is kept; whoever asks
+records the answer where it matters.
+
+### PS-FUNC-020 — A closed question about some evidence gets one allowed answer per question
+**Status:** covered
+
+- When a pod member asks closed questions about a piece of evidence, the system
+  shall answer every question with one of the values that question allows, or
+  with no value when the evidence does not support one.
+- If a question asks for free text or an open-ended number, then the system
+  shall refuse the request without judging anything and shall name each
+  question at fault.
+- If someone who is not a member of the pod asks, then the system shall refuse
+  them.
+
+**Contracts:** `decision.make`
+
+---
+
 ## Not covered here
 
 | Concern | Where it lives |
