@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, personalNameFor, teamNameFor } from "../src/org/arrival.ts";
+import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, personalNameFor, teamNameFor } from "../src/org/arrival.ts";
 
 test("a domain is read off the address, lowercased", () => {
     assert.equal(domainOf("Alice@Acme.COM"), "acme.com");
@@ -69,4 +69,13 @@ test("a local install preselects just me, whatever the domain", () => {
     assert.equal(defaultOrgKind("alice@acme.com", true), "personal");
     assert.equal(defaultOrgKind("alice@acme.com", false), "team");
     assert.equal(defaultOrgKind("alice@gmail.com", false), "personal");
+});
+
+test("a second organization is not offered the name of the first", () => {
+    // The guess comes from the email domain, so somebody at Acme making a
+    // second organization was offered "Acme" again.
+    assert.equal(freshTeamNameFor("alice@acme.com", ["Acme"]), "");
+    assert.equal(freshTeamNameFor("alice@acme.com", [" acme "]), "");
+    assert.equal(freshTeamNameFor("alice@acme.com", ["Alice's Personal"]), "Acme");
+    assert.equal(freshTeamNameFor("alice@acme.com", []), "Acme");
 });

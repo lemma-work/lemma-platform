@@ -18,6 +18,8 @@ from app.modules.workflow.api.dependencies import (
     WorkflowViewerDep,
 )
 from app.core.api.pagination import parse_uuid_page_token
+from app.modules.workflow.api.run_summaries import run_summaries
+from app.modules.workflow.api.start_schemas import workflow_start_input_to_domain
 from app.modules.workflow.api.schemas import (
     WorkflowDetailResponse,
     WorkflowSummaryResponse,
@@ -29,7 +31,6 @@ from app.modules.workflow.api.schemas import (
     WorkflowUpdateRequest,
     workflow_response_from_domain,
     run_response_from_domain,
-    workflow_start_input_to_domain,
 )
 from app.modules.workflow.domain.workflow import WorkflowEntity, WorkflowUpdateEntity
 
@@ -92,6 +93,7 @@ async def create_workflow(
         edges=data.edges,
         requester_user_id=user.id,
         ctx=ctx,
+        run_title=data.run_title,
     )
     workflow = await service.get_workflow_by_name(
         pod_id,
@@ -315,7 +317,7 @@ async def create_workflow_run(
     engine = build_workflow_engine(uow)
     run = await engine.start_run(workflow.id, user.id, ctx=ctx)
     active_wait = await engine.get_active_wait(run.id)
-    return run_response_from_domain(run, active_wait)
+    return run_response_from_domain(run, active_wait, workflow.run_title)
 
 
 @router.get(
@@ -356,7 +358,7 @@ async def list_workflow_runs(
         ctx=ctx,
     )
     return WorkflowRunListResponse(
-        items=runs,
+        items=await run_summaries(uow, runs),
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )

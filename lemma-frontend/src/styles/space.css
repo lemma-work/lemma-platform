@@ -1888,12 +1888,6 @@ samp,
 .split .composer__box {
     box-shadow: 0 0 0 1px var(--line-2), 0 4px 16px rgb(0 0 0 / 0.04);
 }
-.working {
-    padding-left: var(--turn-indent, 0px);
-    font-size: 14px;
-    color: var(--ink-3);
-}
-
 /* ── Sign-in, beside the thread ──────────────────────────────────────────
    The browser, with one thin bar: where you are, why (on request), and the
    two answers. */
@@ -4299,6 +4293,155 @@ samp,
 }
 .wfdock__list .runrow:last-child {
     border-bottom: 0;
+}
+/* The runs still going, one lane per step. Full width above the page's two
+   columns: five steps side by side do not fit in the dock. The lanes scroll
+   sideways inside the board, never the page. */
+.wfboard {
+    margin: 0 0 32px;
+    padding: 14px 16px 16px;
+    border-radius: var(--r-lg, 14px);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.wfboard__head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.wfboard__head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+}
+.wfboard__head span {
+    font-size: 13px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+.wfboard__head em {
+    margin-left: auto;
+    font-style: normal;
+    font-size: 13px;
+    color: var(--warn);
+}
+.wfboard__trouble {
+    margin: 0 0 24px;
+}
+.wfboard__lanes {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    margin: 0 -16px;
+    padding: 0 16px 4px;
+    scroll-snap-type: x proximity;
+}
+.wfboard__lane {
+    flex: 1 0 220px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 10px 8px 8px;
+    border-radius: var(--r-md);
+    background: var(--wash-b);
+    scroll-snap-align: start;
+}
+/* An empty step stays in line, so the pipeline still reads in order, but
+   gives its width to the steps that have something in them. */
+.wfboard__lane[data-empty] {
+    flex: 0 0 150px;
+}
+.wfboard__lane > header {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 0 4px 8px;
+}
+.wfboard__lane > header b {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wfboard__lane > header span {
+    font-size: 12px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+.wfboard__lane ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 360px;
+    overflow-y: auto;
+}
+.wfboard__none {
+    margin: 0;
+    padding: 0 4px 4px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.wfcard {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+}
+.wfcard:hover {
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.wfcard:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+.wfcard[data-mine] {
+    box-shadow: inset 2px 0 0 var(--tone-waiting), inset 0 0 0 1px var(--line-2);
+}
+.wfcard__top {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+.wfcard__top b {
+    flex: 1;
+    min-width: 0;
+    font-size: 13.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wfcard__top time {
+    flex: none;
+    font-size: 12px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+.wfcard small {
+    font-size: 12.5px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wfcard[data-mine] small {
+    color: var(--warn);
 }
 .wfstart {
     display: flex;
@@ -7020,6 +7163,39 @@ samp,
     background: var(--wash-a);
     color: var(--ink-2);
     font-size: 12px;
+}
+/* An action's mark sits where an organization's initial does, so the labels
+   line up down the menu; the trailing-tick rule above must not move it. */
+.orgmenu__glyph {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    flex: none;
+    color: var(--ink-3);
+}
+.orgmenu__item .orgmenu__glyph svg {
+    margin-left: 0;
+}
+.orgmenu__rule {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--line);
+}
+.new-org {
+    padding: 2px 0 4px;
+}
+.new-org code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--chrome);
+    border-radius: var(--r-sm);
+    padding: 2px 6px;
+}
+.new-org__quiet {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: var(--t-ui);
 }
 
 /* ── About: the teammate as a page ─────────────────────────────────── */

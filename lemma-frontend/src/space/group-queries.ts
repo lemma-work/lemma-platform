@@ -19,7 +19,6 @@ export function useGroups(podId: string, poll: number | false = false, enabled =
         enabled,
         queryFn: () => source.listGroups(podId),
         staleTime: 30_000,
-        refetchOnWindowFocus: true,
         refetchInterval: poll,
     });
 }

@@ -18,11 +18,11 @@ from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
 from app.modules.pod.contracts.members import pod_member_id
 from app.modules.workflow.api.dependencies import build_workflow_engine
+from app.modules.workflow.api.run_summaries import run_summaries
 from app.modules.workflow.api.schemas import (
     WorkflowRunFormSubmitRequest,
     WorkflowRunListResponse,
     WorkflowRunResponse,
-    WorkflowRunSummaryResponse,
     WorkflowRunWaitAssignment,
     WorkflowRunWaitAssignmentListResponse,
     WorkflowRunWaitResponse,
@@ -37,6 +37,7 @@ from app.modules.workflow.domain.run import (
     WorkflowRunStatus,
 )
 from app.modules.workflow.infrastructure.repositories import (
+    SqlAlchemyWorkflowRepository,
     SqlAlchemyWorkflowRunRepository,
     SqlAlchemyWorkflowRunWaitRepository,
 )
@@ -106,7 +107,11 @@ async def submit_workflow_run_form(
             ctx=ctx,
         )
         active_wait = await engine.get_active_wait(run.id)
-        return run_response_from_domain(run, active_wait)
+        return run_response_from_domain(
+            run,
+            active_wait,
+            await SqlAlchemyWorkflowRepository(uow).run_title_of(run.flow_id),
+        )
 
 
 @router.post(
@@ -133,7 +138,9 @@ async def cancel_workflow_run(
 
     async with uow:
         run = await engine.cancel_run(run_id, requester_user_id=user.id, ctx=ctx)
-        return run_response_from_domain(run, None)
+        return run_response_from_domain(
+            run, None, await SqlAlchemyWorkflowRepository(uow).run_title_of(run.flow_id)
+        )
 
 
 @router.get(
@@ -180,13 +187,16 @@ async def list_waiting_runs_assigned_to_me(
     runs = await SqlAlchemyWorkflowRunRepository(uow).list_summaries_by_ids(
         [wait.run_id for wait in waits]
     )
+    summaries = {
+        summary.id: summary for summary in await run_summaries(uow, list(runs.values()))
+    }
     items = [
         WorkflowRunWaitAssignment(
             wait=WorkflowRunWaitResponse.model_validate(wait),
-            run=WorkflowRunSummaryResponse.model_validate(runs[wait.run_id]),
+            run=summaries[wait.run_id],
         )
         for wait in waits
-        if wait.run_id in runs
+        if wait.run_id in summaries
     ]
 
     return WorkflowRunWaitAssignmentListResponse(
@@ -204,7 +214,9 @@ async def list_waiting_runs_assigned_to_me(
     description=(
         "Recent runs across every workflow in the pod, newest first. Exists so "
         "an index that wants 'what has been happening here' makes one request "
-        "instead of one per workflow. Filter with `status` (repeatable)."
+        "instead of one per workflow. Filter with `status` (repeatable) and "
+        "`workflow_id`. Each run carries its `title` and, while it has one, "
+        "the active wait as `waiting_on`."
     ),
 )
 async def list_pod_workflow_runs(
@@ -217,6 +229,9 @@ async def list_pod_workflow_runs(
     # nothing, and returned an empty page that reads exactly like "no runs".
     # FastAPI now rejects it with 422 and names the valid values.
     status: list[WorkflowRunStatus] | None = Query(default=None),
+    # By id rather than name: a run summary names its workflow by id, so
+    # that is what a client holding runs already has.
+    workflow_id: UUID | None = None,
     page_token: str | None = None,
 ) -> WorkflowRunListResponse:
     await ctx.require(
@@ -236,9 +251,10 @@ async def list_pod_workflow_runs(
         limit=effective_limit,
         cursor=cursor,
         statuses=[value.value for value in status] if status else None,
+        flow_id=workflow_id,
     )
     return WorkflowRunListResponse(
-        items=[WorkflowRunSummaryResponse.model_validate(run) for run in runs],
+        items=await run_summaries(uow, runs),
         limit=effective_limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
@@ -266,7 +282,11 @@ async def get_run(
     _verify_pod(run, pod_id)
     assert run is not None
     active_wait = await engine.get_active_wait(run.id)
-    return run_response_from_domain(run, active_wait)
+    return run_response_from_domain(
+        run,
+        active_wait,
+        await SqlAlchemyWorkflowRepository(uow).run_title_of(run.flow_id),
+    )
 
 
 # How long a quiet stream waits before emitting an SSE comment frame. Nothing is
@@ -325,7 +345,11 @@ async def stream_workflow_run(
         _verify_pod(run, pod_id)
         assert run is not None
         active_wait = await engine.get_active_wait(run.id)
-        opening = run_response_from_domain(run, active_wait)
+        opening = run_response_from_domain(
+            run,
+            active_wait,
+            await SqlAlchemyWorkflowRepository(uow).run_title_of(run.flow_id),
+        )
         is_terminal = run.status in TERMINAL_STATUSES
     except BaseException as exc:
         await _close_subscription(subscription, run_id, exc)

@@ -4,6 +4,7 @@ import type { SharedLink } from "@/data";
 import { CheckIcon, CopyIcon, ExternalIcon } from "@/ui/icons";
 import { Modal } from "@/shell/modal";
 import { copyText } from "@/desktop/clipboard";
+import { useFileAppUrl } from "@/library/file-app-url";
 
 /** Sharing a document.
  *
@@ -82,6 +83,7 @@ export function ShareDialog({
     startWith?: "pod" | "anyone";
     onClose: () => void;
 }) {
+    const internalLink = useFileAppUrl(podId, path, appUrl);
     const [audience, setAudience] = useState<"pod" | "anyone">(startWith);
     const [life, setLife] = useState(10800);
     const [opens, setOpens] = useState(50);
@@ -124,8 +126,8 @@ export function ShareDialog({
                 </div>
 
                 {audience === "pod" ? (
-                    appUrl ? (
-                        <Copyable url={appUrl} label="Internal link" />
+                    internalLink ? (
+                        <Copyable url={internalLink} label="Internal link" />
                     ) : (
                         <p className="empty-row">This document has no workspace link yet.</p>
                     )

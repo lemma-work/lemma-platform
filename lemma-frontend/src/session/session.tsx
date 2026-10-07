@@ -16,6 +16,7 @@ import { source } from "@/data";
 import { sessionStatus, doorFor, unreachableRetryDelay, type SessionStatus } from "./auth-state";
 import { LemmaLogo } from "@/ui/icons";
 import { signedOutOfThisComputer } from "@/desktop/auto-connect";
+import { openedTranscripts } from "@/thread/opened-transcripts";
 
 /** Who is asking.
  *
@@ -67,6 +68,12 @@ function useAuthState(client: LemmaClient | null, enabled: boolean): AuthState {
        `loading` and is never published, because `sessionStatus` answers
        `unconfigured` before it is ever consulted. */
     const cache = useQueryClient();
+    /* The query cache and the transcripts the conversation pane keeps beside
+       it (`opened-transcripts.ts`): both are what the last person could see. */
+    const forgetEverything = () => {
+        cache.clear();
+        openedTranscripts.clear();
+    };
     const [state, setState] = useState<AuthState>({ status: "loading", user: null });
     useEffect(() => {
         if (!enabled || !client) return;
@@ -74,11 +81,16 @@ function useAuthState(client: LemmaClient | null, enabled: boolean): AuthState {
         return observeAuth(client.auth, askTheApi, next => {
             if (next.status !== "loading") {
                 const user = next.user?.id;
-                if (previousUser && previousUser !== user) cache.clear();
+                if (previousUser && previousUser !== user) forgetEverything();
                 try {
-                    if (retainWorkspaceOwner(localStorage, user ?? null)) cache.clear();
+                    if (retainWorkspaceOwner(localStorage, user ?? null)) forgetEverything();
                 } catch { /* Storage may be unavailable; the in-memory boundary still applies. */ }
                 previousUser = user;
+                /* The session check is `GET /users/me`, the same answer
+                   `["current-user"]` asks for. Handed over here, the shell,
+                   the profile and the arrival screen read it rather than
+                   asking again the moment the gate opens. */
+                if (next.status === "authenticated" && next.user) cache.setQueryData(["current-user"], next.user);
             }
             setState(next);
         });

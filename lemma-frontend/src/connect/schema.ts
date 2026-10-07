@@ -156,20 +156,29 @@ export function problems(list: Field[], values: Values): Record<string, string> 
 
 /** The payload to send: trimmed, typed, and with untouched secrets left out.
  *
- *  Leaving a masked secret out rather than sending it is what makes an edit
- *  form safe against a redacted read — the server keeps what it already holds
- *  for a key it is not given.
+ *  Leaving a masked secret out rather than sending it is what makes a
+ *  credential form safe against a redacted read — the server keeps what it
+ *  already holds for a key it is not given.
+ *
+ *  An install's edit is the exception, set by `editing`, and wants the masks
+ *  sent back instead. The server validates what it is sent against the
+ *  install schema before merging it into what it holds, so a required secret
+ *  left out is refused as invalid; and it replaces a header map whole, so a
+ *  pair left out is a header deleted. A mask is a valid string, and once
+ *  validated the server swaps each one for the value it holds under that name.
+ *  An emptied header map is sent empty for the same reason: left out, the
+ *  headers it used to hold would stay.
  */
-export function payload(list: Field[], values: Values): Values {
+export function payload(list: Field[], values: Values, { editing = false }: { editing?: boolean } = {}): Values {
     const out: Values = {};
     for (const field of list) {
         const value = values[field.name];
-        if (field.kind === "secret" && unchangedSecret(value)) continue;
+        if (field.kind === "secret" && unchangedSecret(value) && !editing) continue;
         if (field.kind === "boolean") { out[field.name] = Boolean(value); continue; }
         if (field.kind === "headers") {
             const pairs = Object.entries((value ?? {}) as Record<string, unknown>)
-                .filter(([key, held]) => key.trim() && !unchangedSecret(held));
-            if (pairs.length > 0) out[field.name] = Object.fromEntries(pairs.map(([k, v]) => [k.trim(), String(v)]));
+                .filter(([key, held]) => key.trim() && (editing || !unchangedSecret(held)));
+            if (pairs.length > 0 || editing) out[field.name] = Object.fromEntries(pairs.map(([k, v]) => [k.trim(), String(v)]));
             continue;
         }
         if (typeof value === "string") {

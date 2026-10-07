@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueries, useQuery } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
-import { source, type ConversationRef, type Pod } from "@/data";
+import { source, type ConversationRef, type LibraryItem, type Pod } from "@/data";
+import type { AgentRow } from "@/data/agents";
+import type { StandingJob } from "@/schedule/schedules";
 import { rank, type Candidate, type Hit } from "./matching";
 import {
     agentCandidates,
@@ -15,7 +17,6 @@ import {
     recordSearchSql,
     recordSourcesFrom,
     scheduleCandidates,
-    tableCandidates,
     workflowCandidates,
 } from "./sources";
 
@@ -43,6 +44,21 @@ const DEBOUNCE_MS = 180;
 /** Below this, a server search is all noise — and an expensive way to get it. */
 const MIN_SERVER_QUERY = 2;
 
+/* Readers for lists other screens already hold, put back into the shape the
+   raw-response readers expect. Module-level so `select` keeps one reference
+   and does not re-derive the candidates on every render. */
+function agentHits(rows: AgentRow[]): Candidate[] {
+    return agentCandidates(rows.map((row) => ({ id: row.id, name: row.name, description: row.blurb })));
+}
+
+function scheduleHits(jobs: StandingJob[]): Candidate[] {
+    return scheduleCandidates(jobs.map((job) => ({ id: job.id, name: job.name, cron: job.triggerLiteral, agent_name: job.target.name })));
+}
+
+function tableHits(data: { pages: { items: LibraryItem[] }[] }): Candidate[] {
+    return data.pages.flatMap((page) => page.items).map((item): Candidate => ({ kind: "table", id: item.id, title: item.name, subtitle: item.detail, payload: item }));
+}
+
 export interface SearchOutcome {
     hits: Hit[];
     /** The server-backed halves are still in flight. Local hits already show. */
@@ -59,14 +75,11 @@ export function useSearch(podId: string | null, pods: Pod[], query: string): Sea
     const enabled = Boolean(podId && client);
 
     /* ── the cheap half: one list each, cached, matched locally ────── */
-    const catalogue = useQueries({
+    const own = useQueries({
         queries: [
-            { key: "agents", run: () => client!.agents.list({ limit: 100 }), read: agentCandidates },
             { key: "functions", run: () => client!.functions.list({ limit: 100 }), read: functionCandidates },
             { key: "workflows", run: () => client!.workflows.list({ limit: 100 }), read: workflowCandidates },
             { key: "apps", run: () => client!.apps.list({ limit: 100 }), read: appCandidates },
-            { key: "schedules", run: () => client!.schedules.list({ limit: 100 }), read: scheduleCandidates },
-            { key: "tables", run: () => client!.tables.list({ limit: 100 }), read: tableCandidates },
             { key: "people", run: () => client!.podMembers.list(podId!, { limit: 100 }), read: personCandidates },
         ].map(({ key, run, read }) => ({
             queryKey: ["search", podId, key],
@@ -76,7 +89,37 @@ export function useSearch(podId: string | null, pods: Pod[], query: string): Sea
             gcTime: 30 * 60_000,
         })),
     });
-    const catalogueNames = ["agents", "functions", "workflows", "apps", "schedules", "tables", "people"];
+
+    /* Agents, schedules and tables are lists the pod's own screens already
+       read, so they come from those caches — the same key and the same
+       request — rather than a second copy of each under `["search", …]`. */
+    const agents = useQuery({
+        queryKey: ["agents", podId],
+        queryFn: () => source.listAgents(podId as string),
+        enabled,
+        staleTime: 60_000,
+        select: agentHits,
+    });
+    const schedules = useQuery({
+        queryKey: ["schedules", podId],
+        queryFn: () => source.listSchedules(podId as string),
+        enabled,
+        staleTime: 30_000,
+        select: scheduleHits,
+    });
+    /* The library's first page of tables: fifty, the same fifty the Tables
+       filter shows first. A pod with more than that is rare. */
+    const tables = useInfiniteQuery({
+        queryKey: ["library", podId, "tables"],
+        initialPageParam: undefined as string | undefined,
+        queryFn: ({ pageParam }) => source.listLibrary(podId as string, "tables", "/", pageParam),
+        getNextPageParam: (page) => page.next || undefined,
+        enabled,
+        staleTime: 60_000,
+        select: tableHits,
+    });
+    const catalogue = [agents, ...own, schedules, tables];
+    const catalogueNames = ["agents", "functions", "workflows", "apps", "people", "schedules", "tables"];
 
     /* Conversations and teammates are already on screen elsewhere, so they are
        read from the caches that drew them rather than fetched again. */
@@ -150,32 +193,18 @@ export function useSearch(podId: string | null, pods: Pod[], query: string): Sea
         staleTime: 30_000,
     });
 
-    /* Which tables can hold text, resolved once. `tables.list` deliberately
-       omits columns, so this is a request per table — done on the catalogue's
-       schedule rather than on the query's. */
-    const tableNames = useMemo(
-        () => (catalogue[5].data ?? []).map((candidate) => candidate.title),
-        [catalogue[5].data],
-    );
+    /* Which tables can hold text. `tables.list` deliberately omits columns,
+       so this is a request per table — which is why it waits until something
+       worth searching records for has been typed, rather than firing as the
+       palette opens. Every table's shape is what the record page reads too,
+       under the same key; an unreadable table comes back without columns
+       there, which RLS can do, and is simply not searched. */
     const columns = useQuery({
-        queryKey: ["search", podId, "columns", tableNames.join(",")],
-        queryFn: async () => {
-            const loaded = await Promise.all(
-                tableNames.map(async (name) => {
-                    try {
-                        const detail = await client!.tables.get(name);
-                        return { name, columns: (detail as { columns?: { name: string; type?: string }[] }).columns ?? [] };
-                    } catch {
-                        /* One unreadable table is not a reason to have no record
-                           search — RLS can hide a table from the person asking. */
-                        return { name, columns: [] };
-                    }
-                }),
-            );
-            return recordSourcesFrom(loaded);
-        },
-        enabled: enabled && tableNames.length > 0,
+        queryKey: ["table-shapes", podId],
+        queryFn: () => source.tableShapes(podId as string) as Promise<{ name: string; columns?: { name: string; type?: string }[] }[]>,
+        enabled: enabled && Boolean(serverQuery),
         staleTime: CATALOGUE_STALE,
+        select: recordSourcesFrom,
     });
 
     const recordSources = columns.data?.sources ?? [];
@@ -224,11 +253,13 @@ export function useSearch(podId: string | null, pods: Pod[], query: string): Sea
     const failed = catalogueNames.filter((_, index) => catalogue[index].isError);
     if (olderConversations.isError) failed.push("conversations");
     if (docs.isError) failed.push("documents");
-    if (records.isError) failed.push("records");
+    /* Without the tables' shapes there is no record search at all, which is
+       a failure to admit rather than an empty answer. */
+    if (records.isError || columns.isError) failed.push("records");
 
     return {
         hits,
-        isSearching: Boolean(serverQuery) && (olderConversations.isFetching || docs.isFetching || records.isFetching || settled !== query.trim()),
+        isSearching: Boolean(serverQuery) && (olderConversations.isFetching || docs.isFetching || columns.isFetching || records.isFetching || settled !== query.trim()),
         failed,
         skippedTables: columns.data?.skipped ?? 0,
     };

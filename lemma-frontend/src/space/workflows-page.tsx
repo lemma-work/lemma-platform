@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Pod } from "@/data";
 import { isForbidden } from "@/session/auth-state";
 import { gather } from "@/workflow/waiting-inbox";
@@ -38,11 +38,16 @@ export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun, onAsk, onL
     const runs = useSpaceRuns(pod.id);
     const schedules = useSchedules(pod.id);
     const agents = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
+    /* The shell's query, under its key: the same request, given the cache so
+       the workflow names come from the list already read, and held as long as
+       the shell holds it — a shorter hold here refetched the whole fan-out
+       every time this page was opened. */
+    const cache = useQueryClient();
     const waiting = useQuery({
         queryKey: ["workflow-waiting", pods.map((each) => each.id).join(",")],
-        queryFn: () => gather(pods, source.label === "sample"),
+        queryFn: () => gather(pods, source.label === "sample", cache),
         enabled: pods.length > 0,
-        staleTime: 30_000,
+        staleTime: 60_000,
     });
 
     const nameOf = useMemo(() => new Map((flows.data ?? []).map((flow) => [flow.id, flow.name])), [flows.data]);

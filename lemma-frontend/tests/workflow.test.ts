@@ -571,3 +571,127 @@ test("every node kind says what it does, and none of them throws on an empty con
     assert.match(bare[4].detail[1], /points at nothing/);
     assert.match(bare[5].detail[0], /did not carry/);
 });
+
+/* ── the board ─────────────────────────────────────────────────────── */
+
+import { boardOf, sayHeldBy } from "../src/workflow/board.ts";
+
+const boardShape = readShape({
+    name: "hire",
+    start: { type: "MANUAL" },
+    nodes: [
+        { id: "screen", type: "FORM", label: "Screen the CV", config: {} },
+        { id: "route", type: "DECISION", config: { rules: [{ condition: "x", next_node_id: "legal" }] } },
+        { id: "legal", type: "FORM", label: "Legal review", config: {} },
+        { id: "draft", type: "AGENT", config: { agent_name: "writer" } },
+        { id: "done", type: "END", config: {} },
+    ],
+    edges: [
+        { source: "screen", target: "route" },
+        { source: "route", target: "draft" },
+        { source: "legal", target: "draft" },
+        { source: "draft", target: "done" },
+    ],
+});
+
+function boardRun(id: string, extra: Record<string, unknown>) {
+    return readRun({ id, workflow_id: "wf-hire", status: "WAITING", ...extra })!;
+}
+
+test("the board has a lane per step a run can sit at, in run order", () => {
+    const board = boardOf(boardShape, [], "wf-hire");
+    assert.deepEqual(board.columns.map((column) => column.id), ["screen", "legal", "draft"]);
+    assert.equal(board.count, 0);
+});
+
+test("runs land at their step; finished runs and other workflows stay off", () => {
+    const board = boardOf(boardShape, [
+        boardRun("a", { current_node_id: "legal", started_at: "2026-09-20T00:00:00Z" }),
+        boardRun("b", { current_node_id: "legal", started_at: "2026-09-10T00:00:00Z" }),
+        boardRun("c", { current_node_id: "screen" }),
+        boardRun("done", { status: "COMPLETED", current_node_id: "legal" }),
+        boardRun("other", { workflow_id: "wf-else", current_node_id: "legal" }),
+    ], "wf-hire");
+    const legal = board.columns.find((column) => column.id === "legal")!;
+    assert.deepEqual(legal.cards.map((card) => card.run.id), ["b", "a"], "longest stuck first");
+    assert.equal(board.count, 3);
+});
+
+test("a run at no known step is kept in a trailing lane rather than dropped", () => {
+    const board = boardOf(boardShape, [
+        boardRun("pending", { status: "PENDING" }),
+        boardRun("gone", { current_node_id: "renamed-away" }),
+    ], "wf-hire");
+    const last = board.columns.at(-1)!;
+    assert.equal(last.id, "");
+    assert.equal(last.step, null);
+    assert.equal(last.cards.length, 2);
+});
+
+test("a wait of yours puts the run first in its lane, at the wait's step", () => {
+    const mine = readWait({ ...wait, run_id: "late", node_id: "legal", created_at: "2026-09-25T00:00:00Z" })!;
+    const board = boardOf(boardShape, [
+        boardRun("early", { current_node_id: "legal", started_at: "2026-09-01T00:00:00Z" }),
+        boardRun("late", { current_node_id: "screen", started_at: "2026-09-24T00:00:00Z" }),
+    ], "wf-hire", new Map([["late", mine]]));
+    const legal = board.columns.find((column) => column.id === "legal")!;
+    assert.deepEqual(legal.cards.map((card) => card.run.id), ["late", "early"]);
+    assert.equal(legal.cards[0].since, "2026-09-25T00:00:00Z");
+    assert.equal(board.mine, 1);
+});
+
+test("a card says what it is held by from the kind of step", () => {
+    const [screen, , draft] = boardOf(boardShape, [], "wf-hire").columns;
+    assert.equal(sayHeldBy(screen.step, boardRun("x", {})), "Waiting on a person");
+    assert.equal(sayHeldBy(draft.step, boardRun("x", { status: "RUNNING" })), "With an agent");
+    assert.equal(sayHeldBy(null, boardRun("x", { status: "PENDING" })), "Starting");
+});
+
+test("a run summary reads its title and the wait it is parked on", () => {
+    const read = readRun({
+        id: "r", workflow_id: "f", status: "WAITING", title: "Priya Shah · Designer",
+        waiting_on: { node_id: "legal", wait_type: "HUMAN", assigned_pod_member_id: "m-9", since: "2026-10-01T00:00:00Z" },
+    })!;
+    assert.equal(read.title, "Priya Shah · Designer");
+    assert.deepEqual(read.waitingOn, { nodeId: "legal", type: "HUMAN", assigneeId: "m-9", since: "2026-10-01T00:00:00Z" });
+    const bare = readRun({ id: "r", status: "RUNNING", title: "", waiting_on: { wait_type: "AGENT" } })!;
+    assert.equal(bare.title, null, "an empty title is no title");
+    assert.equal(bare.waitingOn, null, "a wait with no step cannot place the run");
+});
+
+test("a run's own wait places it and dates it, for everybody's runs", () => {
+    const board = boardOf(boardShape, [
+        boardRun("w", {
+            current_node_id: "screen", started_at: "2026-09-01T00:00:00Z",
+            waiting_on: { node_id: "legal", wait_type: "HUMAN", since: "2026-09-30T00:00:00Z" },
+        }),
+        boardRun("bare", { current_node_id: "screen", started_at: "2026-09-02T00:00:00Z" }),
+    ], "wf-hire");
+    const legal = board.columns.find((column) => column.id === "legal")!;
+    assert.equal(legal.cards[0].run.id, "w");
+    assert.equal(legal.cards[0].since, "2026-09-30T00:00:00Z");
+    assert.equal(legal.cards[0].here, true);
+    const screen = board.columns.find((column) => column.id === "screen")!;
+    assert.equal(screen.cards[0].here, false, "a start time is not time at the step");
+});
+
+test("the wait's kind beats the step's kind when saying what a run is held by", () => {
+    const [screen] = boardOf(boardShape, [], "wf-hire").columns;
+    const run = boardRun("x", { status: "RUNNING", waiting_on: { node_id: "screen", wait_type: "AGENT" } });
+    assert.equal(sayHeldBy(screen.step, run), "With an agent");
+});
+
+test("a run assigned to the viewer is theirs even when their wait list missed it", () => {
+    const board = boardOf(boardShape, [
+        boardRun("old", { current_node_id: "legal", started_at: "2026-09-01T00:00:00Z" }),
+        boardRun("mine", {
+            current_node_id: "legal", started_at: "2026-09-20T00:00:00Z",
+            waiting_on: { node_id: "legal", wait_type: "HUMAN", assigned_pod_member_id: "m-me" },
+        }),
+    ], "wf-hire", new Map(), "m-me");
+    const legal = board.columns.find((column) => column.id === "legal")!;
+    assert.deepEqual(legal.cards.map((card) => card.run.id), ["mine", "old"]);
+    assert.equal(legal.cards[0].yours, true);
+    assert.equal(legal.cards[0].mine, null, "no wait detail without the list");
+    assert.equal(board.mine, 1);
+});

@@ -1,13 +1,14 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { createContext, memo, useContext, type ComponentProps, type ReactNode } from "react";
 import { CopyButton } from "./copy-button";
-import Markdown from "react-markdown";
+import Markdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Element, Root } from "hast";
 import { visit } from "unist-util-visit";
+import { splitSettled } from "./stream-blocks";
 
 /** Agents emit HTML on purpose — a pod can be told to answer with status
  *  strips and `<details>` blocks, and several are. React-markdown drops HTML
@@ -122,30 +123,94 @@ function CopySection({ children, text }: { children: ReactNode; text: string }) 
     return <div className="copy-section"><CopyButton text={text} label="Copy section" />{children}</div>;
 }
 
-export function Prose({ text, imageSource }: {
-    text: string;
-    /** Where a picture written as `src` is fetched from, or null to drop it.
-     *  Without one, pictures are not drawn at all. */
-    imageSource?: (src: string) => string | null;
-}) {
+/** The markdown being rendered, for the components that copy a slice of it.
+ *
+ *  Read from context rather than closed over, so the components below can be
+ *  defined once. Built inside `Prose` they were new component types on every
+ *  render, and React unmounts and remounts everything under a component whose
+ *  type changed — every code block and table in a reply, rebuilt for each
+ *  update. */
+const Source = createContext("");
+
+type Positioned = { node?: Element; children?: ReactNode };
+
+function sliceOf(text: string, node?: Element): string {
+    return node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : "";
+}
+
+function CodeBlock({ children, node, ...props }: Positioned & ComponentProps<"pre">) {
+    return <CopySection text={node ? codeText(node) : ""}><pre {...props}>{children}</pre></CopySection>;
+}
+
+function Quote({ children, node, ...props }: Positioned & ComponentProps<"blockquote">) {
+    return <CopySection text={sliceOf(useContext(Source), node)}><blockquote {...props}>{children}</blockquote></CopySection>;
+}
+
+function Disclosure({ children, node, ...props }: Positioned & ComponentProps<"details">) {
+    return <CopySection text={sliceOf(useContext(Source), node)}><details {...props}>{children}</details></CopySection>;
+}
+
+function Table({ children, node, ...props }: Positioned & ComponentProps<"table">) {
+    return <CopySection text={sliceOf(useContext(Source), node)}><table {...props}>{children}</table></CopySection>;
+}
+
+/** Where a picture written as `src` is fetched from, or null to drop it. */
+type ImageSource = (src: string) => string | null;
+
+/** Read from context for the same reason as `Source`. Only reached at all
+ *  when the caller gave one: without it the sanitiser has already removed
+ *  every `<img>`. */
+const Pictures = createContext<ImageSource | null>(null);
+
+function Picture({ node: _node, src, alt, ...props }: Positioned & ComponentProps<"img">) {
+    const imageSource = useContext(Pictures);
+    const resolved = imageSource && typeof src === "string" ? imageSource(src) : null;
+    return resolved ? <img {...props} src={resolved} alt={alt ?? ""} loading="lazy" /> : null;
+}
+
+const COMPONENTS: Components = { pre: CodeBlock, blockquote: Quote, details: Disclosure, table: Table, img: Picture };
+const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [rehypeRaw, [rehypeSanitize, schema], narrowStyles];
+const REHYPE_PLUGINS_WITH_IMAGES: NonNullable<Options["rehypePlugins"]> = [rehypeRaw, [rehypeSanitize, schemaWithImages], narrowStyles];
+
+/** The rendered markdown alone, without the `.md` box: a streaming reply puts
+ *  several of these in one box, and the box's first- and last-child rules have
+ *  to see one run of blocks. */
+const Rendered = memo(function Rendered({ text, imageSource }: { text: string; imageSource?: ImageSource }) {
+    return (
+        <Source.Provider value={text}>
+            <Pictures.Provider value={imageSource ?? null}>
+                <Markdown
+                    components={COMPONENTS}
+                    remarkPlugins={REMARK_PLUGINS}
+                    rehypePlugins={imageSource ? REHYPE_PLUGINS_WITH_IMAGES : REHYPE_PLUGINS}
+                >
+                    {text}
+                </Markdown>
+            </Pictures.Provider>
+        </Source.Provider>
+    );
+});
+
+/** Markdown, rendered once per text. Memoised: a transcript re-renders for
+ *  every few tokens of the reply being written, and every message above it
+ *  used to be parsed again each time.
+ *
+ *  Pictures are drawn only when `imageSource` says where their bytes come
+ *  from; chat passes none. */
+export const Prose = memo(function Prose({ text, imageSource }: { text: string; imageSource?: ImageSource }) {
+    return <div className="md"><Rendered text={text} imageSource={imageSource} /></div>;
+});
+
+/** A reply still being written. The blocks it has finished are rendered once
+ *  each and left alone; only the one in progress is parsed again as tokens
+ *  arrive. See `stream-blocks.ts` for where it is safe to cut. */
+export function StreamingProse({ text }: { text: string }) {
+    const { settled, tail } = splitSettled(text);
     return (
         <div className="md">
-            <Markdown
-                components={{
-                    img: ({ node: _node, src, alt, ...props }) => {
-                        const resolved = imageSource && typeof src === "string" ? imageSource(src) : null;
-                        return resolved ? <img {...props} src={resolved} alt={alt ?? ""} loading="lazy" /> : null;
-                    },
-                    pre: ({ children, node, ...props }) => <CopySection text={node ? codeText(node) : ""}><pre {...props}>{children}</pre></CopySection>,
-                    blockquote: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><blockquote {...props}>{children}</blockquote></CopySection>,
-                    details: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><details {...props}>{children}</details></CopySection>,
-                    table: ({ children, node, ...props }) => <CopySection text={node?.position ? text.slice(node.position.start.offset, node.position.end.offset) : ""}><table {...props}>{children}</table></CopySection>,
-                }}
-                remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw, [rehypeSanitize, imageSource ? schemaWithImages : schema], narrowStyles]}
-            >
-                {text}
-            </Markdown>
+            {settled.map((block, index) => <Rendered key={index} text={block} />)}
+            {tail && <Rendered text={tail} />}
         </div>
     );
 }

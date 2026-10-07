@@ -1,5 +1,6 @@
 """Workflow run wait repository."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -74,6 +75,28 @@ class SqlAlchemyWorkflowRunWaitRepository(WorkflowRunWaitRepository):
         result = await self.session.execute(stmt)
         model = result.scalars().first()
         return self._to_entity(model) if model else None
+
+    async def active_for_runs(
+        self, run_ids: Sequence[UUID]
+    ) -> dict[UUID, WorkflowRunWaitEntity]:
+        """The active wait of each run in a page, keyed by run id -- one
+        statement for the page, on `ix_workflow_run_waits_run_status`.
+
+        A run holds at most one active wait; should two ever coexist, the
+        newest wins, as it does in `get_active_for_run`.
+        """
+        if not run_ids:
+            return {}
+        stmt = (
+            select(WorkflowRunWaitModel)
+            .where(
+                WorkflowRunWaitModel.run_id.in_(list(run_ids)),
+                WorkflowRunWaitModel.status == WorkflowRunWaitStatus.ACTIVE.value,
+            )
+            .order_by(WorkflowRunWaitModel.created_at.asc())
+        )
+        result = await self.session.execute(stmt)
+        return {model.run_id: self._to_entity(model) for model in result.scalars()}
 
     async def find_active_by_external_ref(
         self,

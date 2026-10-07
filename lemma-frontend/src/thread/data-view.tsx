@@ -33,12 +33,13 @@ export function DataView({ podId, name, sql, onOpenTable }: {
     sql?: string;
     onOpenTable?: (name: string) => void;
 }) {
+    /* A table's first page is asked for under the key the record page reads
+       it by, with the same request, so the two share one answer. A page of
+       rows is never `truncated` — it is just the first fifty. */
     const query = useQuery({
-        queryKey: sql ? ["query", podId, sql] : ["table-preview", podId, name],
-        queryFn: () =>
-            sql
-                ? source.runQuery(podId, sql)
-                : source.tableRows(podId, name as string).then((page) => ({ items: page.items, truncated: false })),
+        queryKey: sql ? ["query", podId, sql] : ["table", podId, name, "sample"],
+        queryFn: (): Promise<{ items: Record<string, unknown>[]; truncated?: boolean }> =>
+            sql ? source.runQuery(podId, sql) : source.tableRows(podId, name as string),
         enabled: Boolean(sql || name),
         staleTime: 60_000,
         retry: false,

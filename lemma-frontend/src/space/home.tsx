@@ -50,10 +50,11 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
     const [fill, setFill] = useState<{ text: string; id: number } | null>(null);
     const asks = useRef(0);
 
+    const cache = useQueryClient();
     /* The same queue the bell's neighbour reads, narrowed to this space. */
     const waiting = useQuery({
         queryKey: ["workflow-waiting", pods.map(each => each.id).join(",")],
-        queryFn: () => gather(pods, source.label === "sample"),
+        queryFn: () => gather(pods, source.label === "sample", cache),
         enabled: pods.length > 0,
         staleTime: 60_000,
     });
@@ -69,7 +70,6 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
     const { fresh: asked, quiet } = byAge((asking.data ?? []).filter(row => row.podId === pod.id));
     const [showQuiet, setShowQuiet] = useState(false);
     const [putAway, setPutAway] = useState<ReadonlySet<string>>(new Set());
-    const cache = useQueryClient();
     /* Dismissing archives the conversation: the same "put away" the chat
        list offers, so it leaves this list on every device and is still
        there under Archived. The run behind it is left exactly as it was. */

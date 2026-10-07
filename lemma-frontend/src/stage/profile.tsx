@@ -32,6 +32,10 @@ import { AddPeopleButton } from "@/shell/add-people";
  *  answers on. No invented endorsements, no numbers with nothing behind them.
  *  A section with nothing in it says so rather than showing a placeholder. */
 
+/** How many conversations the first page of the list holds — the page size
+ *  `listConversations` asks for. A page this full may have more behind it. */
+const CONVERSATION_PAGE = 25;
+
 function monthOf(iso: string): string {
     if (!iso) return "";
     const date = new Date(iso);
@@ -1085,13 +1089,14 @@ export function ProfilePane({
     });
 
     /* Surfaces are already on screen elsewhere in this pod, so they come from
-       the same cache. Conversations are a page of their own: the count needs
-       to know whether there is a next page, which the sidebar's list drops.
-       Under `["conversations", pod.id]`, so a refresh of the lists reaches it. */
+       the same cache. So do conversations: the sidebar's first page, under its
+       key, rather than the same request again under one of its own. That list
+       drops the cursor, so "is there more" is read from the page being full —
+       wrong only for a space with exactly one page's worth, which says "25+". */
     const surfaces = useSurfaces(pod.id);
     const conversations = useQuery({
-        queryKey: ["conversations", pod.id, "first"],
-        queryFn: () => source.listConversationsPage(pod.id),
+        queryKey: ["conversations", pod.id],
+        queryFn: () => source.listConversations(pod.id),
         staleTime: 60_000,
     });
 
@@ -1128,7 +1133,7 @@ export function ProfilePane({
                 reach,
                 members: pod.members,
                 stats: conversations.isSuccess
-                    ? { talks: conversations.data.items.length, talksMore: conversations.data.next !== null, people: pod.members.length }
+                    ? { talks: conversations.data.length, talksMore: conversations.data.length >= CONVERSATION_PAGE, people: pod.members.length }
                     : undefined,
                 onOpenProject: onOpenTab,
                 onDiscussAgent,

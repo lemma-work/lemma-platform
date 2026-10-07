@@ -453,7 +453,9 @@ export const liveSource: PodSource = {
     },
 
     async getPod(podId: string): Promise<Pod> {
-        return podSummary(await lemma().pods.get(podId));
+        /* Through the held row: the surfaces, the agents and the schedules
+           each read the same pod for its name while the space opens. */
+        return podSummary(await podRow(podId) as Parameters<typeof podSummary>[0]);
     },
 
     async getPodDetail(podId: string, podName: string, podIcon?: string | null): Promise<PodDetail> {
@@ -1060,9 +1062,12 @@ export const liveSource: PodSource = {
     async readFile(podId: string, path: string): Promise<FileContent> {
         const client = lemma(podId);
 
-        /* The deep link is fetched alongside the metadata rather than only on
-           the fallback path: every file gets an "open" affordance, drawn
-           inline or not. */
+        /* The signed link is fetched alongside the metadata for anything
+           drawn from it — media, PDFs, files offered as a download. Text read
+           inline never uses it, and every card, skill and sub-page link reads
+           text: there it was a third request apiece for a link only Copy link
+           and Share ask for, and they ask `fileAppUrl` themselves. */
+        const inline = ["markdown", "text", "html"].includes(fileKind("", path));
         const [detail, urls] = await Promise.all([
             client.files.get(path) as Promise<{
                 name?: string;
@@ -1070,7 +1075,7 @@ export const liveSource: PodSource = {
                 mime_type?: string | null;
                 size_bytes?: number;
             }>,
-(client.files.getUrl(path) as Promise<{ app_url?: string; url?: string }>).catch(
+            inline ? ({} as { app_url?: string; url?: string }) : (client.files.getUrl(path) as Promise<{ app_url?: string; url?: string }>).catch(
                 () => ({}) as { app_url?: string; url?: string },
             ),
         ]);
@@ -1121,6 +1126,11 @@ export const liveSource: PodSource = {
         }
 
         return { ...base, kind: "binary" };
+    },
+
+    async fileAppUrl(podId: string, path: string): Promise<string | null> {
+        const urls = (await lemma(podId).files.getUrl(path)) as { app_url?: string };
+        return urls.app_url ?? null;
     },
 
     async writeFile(podId: string, path: string, text: string): Promise<void> {
@@ -1225,23 +1235,7 @@ export const liveSource: PodSource = {
             ? await lemma(podId).conversations.list(page)
             : await lemma(podId).conversations.listDefault(page);
         return {
-            items: (listed.items ?? []).map((c) => {
-                const row = c as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; metadata?: Record<string, unknown> | null; agent_id?: string | null };
-                const bound = row.metadata?.[RESOURCE_KEY];
-                /* The list is ordered by last activity, so the time beside a row
-                   is that — not `updated_at`, which a rename also moves and
-                   which would put "Today" on a row sitting below yesterday's. */
-                const at = row.last_activity_at ?? row.updated_at;
-                return {
-                    id: row.id,
-                    title: (row.title ?? "").trim() || "Untitled",
-                    at: listStamp(at),
-                    kind: row.type ?? "CHAT",
-                    boundTo: typeof bound === "string" ? bound : null,
-                    origin: originOf(row.metadata, row.type),
-                    agentId: row.agent_id ?? null,
-                };
-            }),
+            items: (listed.items ?? []).map(conversationRefOf),
             next: listed.next_page_token ?? null,
         };
     },
@@ -1473,11 +1467,15 @@ export const liveSource: PodSource = {
            rather than taken from the reply, which would blank the grants the
            detail is already showing. */
         await lemma(podId).agents.update(name, patch);
+        agentPages.delete(podId);
         return liveSource.getAgent(podId, name);
     },
 
     async deleteAgent(podId: string, name: string): Promise<void> {
         await lemma(podId).agents.delete(name);
+        /* Or the refetch that follows gets the held page back, with the
+           agent still in it, for the rest of the window. */
+        agentPages.delete(podId);
     },
 
     /* ── standing work ──────────────────────────────────────────────
@@ -1600,3 +1598,24 @@ export const liveSource: PodSource = {
         return liveSource.getConversation(podId, teammate, conversationId);
     },
 };
+
+/** One conversation as the lists draw it, from the server's record of it.
+ *  Shared by the list reads and by a conversation created here, which goes
+ *  into the history the moment it exists rather than after a refetch. */
+export function conversationRefOf(conversation: unknown): ConversationRef {
+    const row = conversation as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; created_at?: string; metadata?: Record<string, unknown> | null; agent_id?: string | null };
+    const bound = row.metadata?.[RESOURCE_KEY];
+    /* The list is ordered by last activity, so the time beside a row
+       is that — not `updated_at`, which a rename also moves and
+       which would put "Today" on a row sitting below yesterday's. */
+    const at = row.last_activity_at ?? row.updated_at ?? row.created_at;
+    return {
+        id: row.id,
+        title: (row.title ?? "").trim() || "Untitled",
+        at: listStamp(at),
+        kind: row.type ?? "CHAT",
+        boundTo: typeof bound === "string" ? bound : null,
+        origin: originOf(row.metadata, row.type),
+        agentId: row.agent_id ?? null,
+    };
+}

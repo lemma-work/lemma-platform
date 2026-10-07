@@ -1586,8 +1586,12 @@ button svg, a svg { flex-shrink:0; }
 .connector__body { grid-column:2;grid-row:1; }
 .connector__acts { grid-column:3;grid-row:1;justify-self:end; }
 /* From the name across to the far edge: an account's actions line up with the
-   button they sit beneath, because now they end in the same place. */
-.connector .accts { grid-column:2 / -1;grid-row:2; }
+   button they sit beneath, because now they end in the same place.
+   No row named: a connector installed more than once has one list per install,
+   and pinning them all to row 2 drew every install on top of the others — the
+   names overprinted into one garbled line under a single set of actions. Left
+   to auto-placement, each list takes the next row down. */
+.connector .accts { grid-column:2 / -1; }
 .connector:last-child { border-bottom:0; }
 .connector:hover { background:var(--chrome); }
 /* The accent outline said "connected" on a row that is only ever shown under

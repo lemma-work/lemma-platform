@@ -552,6 +552,7 @@ _NAME_TO_MODULE = {
     'WorkflowRunWaitResponsePayload': 'workflow_run_wait_response_payload',
     'WorkflowRunWaitStatus': 'workflow_run_wait_status',
     'WorkflowRunWaitType': 'workflow_run_wait_type',
+    'WorkflowRunWaitingOn': 'workflow_run_waiting_on',
     'WorkflowSummaryResponse': 'workflow_summary_response',
     'WorkflowUpdateRequest': 'workflow_update_request',
     'WorkspaceAppAccessRequest': 'workspace_app_access_request',
@@ -1107,6 +1108,7 @@ if TYPE_CHECKING:
     from .workflow_run_wait_response_payload import WorkflowRunWaitResponsePayload
     from .workflow_run_wait_status import WorkflowRunWaitStatus
     from .workflow_run_wait_type import WorkflowRunWaitType
+    from .workflow_run_waiting_on import WorkflowRunWaitingOn
     from .workflow_summary_response import WorkflowSummaryResponse
     from .workflow_update_request import WorkflowUpdateRequest
     from .workspace_app_access_request import WorkspaceAppAccessRequest
@@ -1675,6 +1677,7 @@ __all__ = [
     'WorkflowRunWaitResponsePayload',
     'WorkflowRunWaitStatus',
     'WorkflowRunWaitType',
+    'WorkflowRunWaitingOn',
     'WorkflowSummaryResponse',
     'WorkflowUpdateRequest',
     'WorkspaceAppAccessRequest',

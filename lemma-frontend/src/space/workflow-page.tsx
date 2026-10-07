@@ -10,12 +10,14 @@ import { byNewest, readRun, readRuns, type RunRow } from "@/workflow/runs";
 import { readShape, type WorkflowShape } from "@/workflow/shape";
 import { Shape } from "@/workflow/workflows-view";
 import { RunRowButton } from "@/workflow/run-row";
-import { useWorkflowGraph, workflowGraphQuery, useWorkflowList } from "@/workflow/use-run";
+import { RunBoard } from "./run-board";
+import { runsPollEvery, useWorkflowGraph, workflowGraphQuery, useWorkflowList } from "@/workflow/use-run";
 import { automationOf, runsForOf, schedulesFor, turnOnOf, turnOnRequest, type Automation, type TurnOn } from "@/workflow/turn-on";
 import { useSchedules } from "@/schedule/queries";
 import { CADENCES, SCOPE_LABEL, agoOf, healthOf, humanizeName, type StandingJob } from "@/schedule/schedules";
 import { ChevronLeftIcon, ClockIcon, PlayIcon, RefreshIcon, WorkflowIcon } from "@/ui/icons";
 import { samples } from "@/data/samples";
+import { usePaneVisible } from "@/shell/pane-visible";
 
 /** One workflow, as a page: what it is and who it runs for, whether it is on
  *  — for you, or for the space — and every run it has made, each one a click
@@ -84,6 +86,8 @@ export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, o
                     </div>
                 </header>
                 {problem && <p className="runpage__problem" role="alert">{problem}</p>}
+
+                <RunBoard pod={pod} workflowId={flow?.id ?? null} shape={shape.data ?? null} name={name} onOpenRun={onOpenRun} />
 
                 <div className="agentpage__grid wfpage__grid">
                     <div className="agentpage__main">
@@ -239,6 +243,7 @@ function stepNames(shape: WorkflowShape | null | undefined): Map<string, string>
 }
 
 function Runs({ pod, name, names, onOpenRun }: { pod: Pod; name: string; names: ReadonlyMap<string, string>; onOpenRun: (runId: string, label: string) => void }) {
+    const visible = usePaneVisible();
     const runs = useInfiniteQuery({
         queryKey: ["workflow-runs", pod.id, name, "pages"],
         initialPageParam: undefined as string | undefined,
@@ -252,7 +257,11 @@ function Runs({ pod, name, names, onOpenRun }: { pod: Pod; name: string; names: 
         },
         getNextPageParam: (last) => last.next ?? undefined,
         staleTime: 15_000,
-        refetchInterval: 20_000,
+        /* Only while a loaded run is still moving and this page is in front.
+           A list where everything has finished does not change by itself: a
+           run started here refetches it as it starts, and one started
+           elsewhere waits for Refresh or the next visit. */
+        refetchInterval: (query) => (visible ? runsPollEvery(query.state.data?.pages.flatMap((page) => page.items), 20_000) : false),
     });
     const all = runs.data?.pages.flatMap((page) => page.items) ?? [];
     return (

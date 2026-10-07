@@ -124,12 +124,26 @@ function Arrived({ pod, group, onOpen }: { pod: Pod; group: Group; onOpen: () =>
     );
 }
 
+/** How long a sheet waits for a group to turn up before it stops asking.
+ *  Adding a bot to a Slack channel or a Telegram group is a minute's work;
+ *  a sheet still open after ten has been left, and coming back to the
+ *  window reads the list again on focus anyway. */
+const ARRIVAL_FOR_MS = 10 * 60_000;
+
 /** A group that turns up on this channel after the sheet opened. The list
- *  is read every few seconds while `watching`; what was there on first
- *  sight is the baseline, so a group that was already in it never counts. */
+ *  is read every few seconds while `watching`, for as long as
+ *  `ARRIVAL_FOR_MS`; what was there on first sight is the baseline, so a
+ *  group that was already in it never counts. */
 function useArrival(podId: string, surfaceName: string, watching: boolean): Group | null {
     const [found, setFound] = useState<Group | null>(null);
-    const groups = useGroups(podId, watching && !found ? 3_000 : false);
+    const [gaveUp, setGaveUp] = useState(false);
+    useEffect(() => {
+        if (!watching || found) return;
+        const timer = window.setTimeout(() => setGaveUp(true), ARRIVAL_FOR_MS);
+        /* Watching again — a new link — is a new wait with its own clock. */
+        return () => { window.clearTimeout(timer); setGaveUp(false); };
+    }, [watching, found]);
+    const groups = useGroups(podId, watching && !found && !gaveUp ? 3_000 : false);
     const before = useRef<Set<string> | null>(null);
     if (before.current === null && groups.data) before.current = new Set(groups.data.map((group) => group.id));
     const arrived = before.current && groups.data ? arrivedSince(before.current, groups.data, surfaceName) : null;

@@ -6,11 +6,12 @@ import { NEW_CONVERSATION, saidAboutSending, source } from "@/data";
 import { initialsOf } from "@/data/agent-names";
 import type { ApprovalDecision } from "./approval";
 import type { Pod } from "@/data";
-import { buildTurns, openInteraction, openSignIn } from "./turns";
+import { buildTurns, openInteraction, openSignIn, type RawMessage, type Turn } from "./turns";
+import { messageIds, runTouched } from "./run-touched";
 import { InteractionDock } from "./interaction-dock";
 import type { AnswerWith } from "./interaction-card";
 import { isAlreadyUploaded, markAttachment, toAttachments, withReferences, type Attachment } from "./attachments";
-import { applyTitle, patchConversationLists, refreshConversationLists } from "./conversation-list";
+import { allConversationsKey, applyTitle, insertConversation, patchConversationLists, refreshConversationLists } from "./conversation-list";
 import { Transcript } from "./transcript";
 import type { Streaming } from "./turns";
 import { Composer } from "./composer";
@@ -23,6 +24,11 @@ import { needsAiModel, pointsAtModels, runFailure } from "./model-setup";
 import { RECONNECTED_EVENT, isTransportFailure } from "@/shell/connection";
 import { STUCK_AFTER_MS, TRANSPORT_RELOAD_MS, runLooksStuck } from "./stuck-run";
 import { runFailure as describeRunFailure } from "./transcript-state";
+import { CLIENT_MESSAGE_KEY, isSending, pendingQueued, pendingSend, stillPending, withPending, type PendingSend } from "./pending-sends";
+import { openedTranscripts } from "./opened-transcripts";
+import { keepUnchanged } from "./turn-identity";
+import { useStableCallback } from "./stable-callback";
+import { conversationRefOf } from "@/data/live";
 
 /** The conversation, on the SDK's own session.
  *
@@ -197,12 +203,15 @@ export function LiveConversation({
         setOlderToken(null);
         (async () => {
             try {
-                const record = await refreshConversation(openId);
+                /* Side by side: neither needs the other, and one after the
+                   other put a whole round trip between opening a conversation
+                   and seeing it. */
+                const [record, page] = await Promise.all([
+                    refreshConversation(openId),
+                    loadMessages({ conversationId: openId, limit: 100 }),
+                ]);
                 if (cancelled) return;
                 if (!record || historyRequestFailed.current) throw new Error("History unavailable");
-                const page = await loadMessages({ conversationId: openId, limit: 100 });
-                if (cancelled) return;
-                if (historyRequestFailed.current) throw new Error("History unavailable");
                 historyReady = true;
                 setOlderToken(page.next_page_token ?? null);
                 setHistoryLoading(false);
@@ -250,8 +259,27 @@ export function LiveConversation({
 
     useEffect(() => { streamingIn.current = session.conversationId; }, [session.conversationId]);
 
-    const state = stateOf(session.status);
-    const agentId = (session.conversation as { agent_id?: string | null } | null)?.agent_id ?? null;
+    /* What this conversation looked like the last time it was open here, or
+       when someone last rested on it in the history: drawn while the server is
+       re-read, so going back to a conversation is not a skeleton and a wait.
+       Read once per conversation opened; the session's own copy replaces it
+       the moment the load lands. */
+    const cached = useMemo(() => openedTranscripts.get(pod.id, openId), [pod.id, openId]);
+    const fromCache = historyLoading && cached ? cached : null;
+    const conversationRecord = session.conversation ?? fromCache?.conversation ?? null;
+
+    const [pending, setPending] = useState<readonly PendingSend[]>([]);
+    /* Steers whose request is still in the air. */
+    const steering = useRef<Set<string>>(new Set());
+    /* A send whose server copy has arrived is the server's to draw. */
+    useEffect(() => { setPending(was => stillPending(was, session.messages)); }, [session.messages]);
+    /* Drawn as going before the server has said so: the run is what the
+       message asks for, and "is working…" belongs on screen with it. */
+    const optimistic = isSending(pending);
+
+    const state = stateOf(session.status ?? fromCache?.status);
+    const shownState = optimistic && state !== "running" ? "running" : state;
+    const agentId = (conversationRecord as { agent_id?: string | null } | null)?.agent_id ?? null;
     const agentName = typeof createWith?.agent_name === "string" ? createWith.agent_name : null;
     const bot = (bots.data ?? []).find((row) => !row.front && ((agentId && row.id === agentId) || (!agentId && agentName && row.name === agentName))) ?? null;
     const teammate = useMemo(
@@ -262,7 +290,7 @@ export function LiveConversation({
     /* A conversation that also lives on a chat platform: a note to the bot,
        or a reply the group reads. Read off the conversation as the server
        holds it, so it appears once that has loaded and never on a new one. */
-    const reply = useChannelReply(session.conversation?.metadata, teammate.name, session.conversationId);
+    const reply = useChannelReply(conversationRecord?.metadata, teammate.name, session.conversationId);
 
     /* After a server restart: the conversation's status, its messages, and --
        if the run is still going -- its stream, read again. Forced, because the
@@ -312,23 +340,57 @@ export function LiveConversation({
        runs out. A list that stays empty while the chat beside it says "done"
        reads as the work having failed. Once per run, as it stops. */
     const ranBefore = useRef(false);
+    const runMessages = useRef(session.messages as readonly RawMessage[]);
+    runMessages.current = session.messages as readonly RawMessage[];
+    const startedBeside = useRef<ReadonlySet<string>>(new Set());
+    /* The server's word only: a cached "running" flipping to the truth on
+       load is not a run ending here. */
+    const runningLive = stateOf(session.status) === "running";
     useEffect(() => {
-        if (running) { ranBefore.current = true; return; }
+        if (runningLive) {
+            if (!ranBefore.current) startedBeside.current = messageIds(runMessages.current);
+            ranBefore.current = true;
+            return;
+        }
         if (!ranBefore.current) return;
         ranBefore.current = false;
-        for (const touched of [["library", pod.id], ["tabs", pod.id], ["workflows", pod.id], ["schedules", pod.id], ["table", pod.id]]) {
-            void queryClient.invalidateQueries({ queryKey: touched });
-        }
-    }, [running, pod.id, queryClient]);
+        /* Only what the run could have changed. An answer, or a run that only
+           read, leaves every list as it was — and a refresh of an open table
+           is every page of rows it has loaded. */
+        const touched = runTouched(runMessages.current, startedBeside.current);
+        if (touched === "nothing") return;
+        const keys = touched === "files" ? [["library", pod.id]]
+            : [["library", pod.id], ["tabs", pod.id], ["workflows", pod.id], ["schedules", pod.id], ["table", pod.id]];
+        for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });
+    }, [runningLive, pod.id, queryClient]);
+    /* A steer the server took while the run was going and whose copy never
+       came back on its stream: once the run is over, the transcript the server
+       holds is the record, and the tray has nothing left to promise. */
+    useEffect(() => {
+        if (runningLive) return;
+        setPending(was => {
+            const left = was.filter(one => one.kind !== "steer" || steering.current.has(one.clientId));
+            return left.length === was.length ? was : left;
+        });
+    }, [runningLive]);
     /* Taken back here, and hidden until the server's list agrees. The session
        has no way to drop a message it holds, and a reload reads the list the
        server has already changed. */
     const [withdrawn, setWithdrawn] = useState<ReadonlySet<string>>(() => new Set());
-    const { transcript, queued } = useMemo(
-        () => splitQueued(session.messages, running, withdrawn),
-        [session.messages, running, withdrawn],
-    );
-    const turns = useMemo(() => buildTurns(transcript), [transcript]);
+    const held = fromCache ? fromCache.messages : session.messages;
+    const { transcript, queued } = useMemo(() => {
+        const split = splitQueued(withPending(held, pending), running, withdrawn);
+        const going = pendingQueued(pending, held);
+        return going.length === 0 ? split : { ...split, queued: [...split.queued, ...going] };
+    }, [held, pending, running, withdrawn]);
+    /* Every turn that did not change keeps the object already on screen, so
+       its row can skip drawing again when a message lands elsewhere. */
+    const shownTurns = useRef<Turn[]>([]);
+    const turns = useMemo(() => {
+        const next = keepUnchanged(shownTurns.current, buildTurns(transcript));
+        shownTurns.current = next;
+        return next;
+    }, [transcript]);
 
     /* What the run is blocked on, read straight out of the transcript.
        An approval IS a tool call: `request_approval` streams in like any
@@ -437,23 +499,36 @@ export function LiveConversation({
     const steer = useCallback(
         async (text: string, id: string) => {
             setSendError(null);
-            await steerConversation(text, id, {
-                putFiles: (conversation, said) => putFiles(conversation, said),
-                /* A note stays a note mid-run too: the mark rides on the
-                   message, and the answer to it stays here. */
-                append: (conversation, content) =>
-                    client.conversations.appendMessage(
-                        conversation,
-                        reply.sendWith ? { content, metadata: reply.sendWith } : { content },
-                        { pod_id: pod.id },
-                    ),
-                clearAttachments: sent => setAttachments(was => withoutSent(was, sent)),
-                restoreAttachments: settled => setAttachments(was => [
-                    ...settled,
-                    ...was.filter(one => !settled.some(back => back.key === one.key)),
-                ]),
-                report: message => { if (mounted.current) setSendError(message); },
-            });
+            /* In the tray at once, as "sending…", until the server's copy
+               takes its place there or in the transcript. */
+            const going = pendingSend(text, "steer", session.messages);
+            steering.current.add(going.clientId);
+            setPending(was => [...was, going]);
+            try {
+                await steerConversation(text, id, {
+                    putFiles: (conversation, said) => putFiles(conversation, said),
+                    /* A note stays a note mid-run too: the mark rides on the
+                       message, and the answer to it stays here. */
+                    append: (conversation, content) =>
+                        client.conversations.appendMessage(
+                            conversation,
+                            { content, metadata: { ...reply.sendWith, [CLIENT_MESSAGE_KEY]: going.clientId } },
+                            { pod_id: pod.id },
+                        ),
+                    clearAttachments: sent => setAttachments(was => withoutSent(was, sent)),
+                    restoreAttachments: settled => setAttachments(was => [
+                        ...settled,
+                        ...was.filter(one => !settled.some(back => back.key === one.key)),
+                    ]),
+                    report: message => { if (mounted.current) setSendError(message); },
+                });
+            } catch (problem) {
+                /* The composer puts the words back; the tray lets them go. */
+                setPending(was => was.filter(one => one.clientId !== going.clientId));
+                throw problem;
+            } finally {
+                steering.current.delete(going.clientId);
+            }
             /* The message arrives on the stream already open for the run. When
                that stream has died, reattaching is what shows it -- forced,
                because a steer never changes the status the dedup key reads. */
@@ -501,6 +576,11 @@ export function LiveConversation({
             setSending(true);
             setSendError(null);
             setSendProblem(null);
+            /* On screen now, before the conversation exists or the server has
+               heard a word of it. Its id rides along in the metadata, which is
+               how the server's copy is known to be this one. */
+            const going = pendingSend(text, "send", session.messages);
+            setPending(was => [...was, going]);
             try {
                 await sendToConversation(text, {
                     conversationId: createdHere.current ?? session.conversationId,
@@ -543,7 +623,13 @@ export function LiveConversation({
                     onCreated: made => {
                         createdHere.current = made.id;
                         onCreated?.(made.id);
-                        void refreshConversationLists(queryClient, pod.id);
+                        /* Into the history now, named for what was asked until
+                           the server names it — not after a refetch, which
+                           would bring it back "Untitled" and only then
+                           renamed. The full list is asked for again when the
+                           run ends, by which time the server has a title. */
+                        insertConversation(queryClient, pod.id, conversationRefOf(made), text);
+                        void queryClient.invalidateQueries({ queryKey: allConversationsKey(pod.id) });
                     },
                     send: async (content, id, knownConversation) => {
                         const { content: said, settled } = await putFiles(id, content, knownConversation as { pod_cwd?: string } | undefined);
@@ -557,7 +643,11 @@ export function LiveConversation({
                            the message that is going. */
                         setAttachments(was => withoutSent(was, settled));
                         try {
-                            return await session.sendMessage(said, { conversationId: id, knownConversation, metadata: reply.sendWith });
+                            return await session.sendMessage(said, {
+                                conversationId: id,
+                                knownConversation,
+                                metadata: { ...reply.sendWith, [CLIENT_MESSAGE_KEY]: going.clientId },
+                            });
                         } catch (problem) {
                             /* Back, but marked as already uploaded: the files
                                are in the pod whatever happened to the message,
@@ -574,13 +664,21 @@ export function LiveConversation({
                         }
                     },
                 });
+                /* The stream has drained, so the server's copy has long since
+                   arrived and replaced this one — or never will, and a copy
+                   left here would be a message the server does not have. */
+                setPending(was => was.filter(one => one.clientId !== going.clientId));
                 void refreshConversationLists(queryClient, pod.id);
             } catch (problem) {
                 if (mounted.current) {
                     setSendError(saidAboutSending(problem, "That did not send."));
                     setSendProblem(problem);
+                    /* Kept where it was written, marked as not sent, with Retry
+                       and Edit under it. Not thrown back to the composer: the
+                       message is on screen, and the same words in the box as
+                       well would be two of it. */
+                    setPending(was => was.map(one => one.clientId === going.clientId ? { ...one, state: "failed" } : one));
                 }
-                throw problem;
             } finally {
                 sendingRef.current = false;
                 if (mounted.current) setSending(false);
@@ -588,6 +686,23 @@ export function LiveConversation({
         },
         [conversationId, session, client, pod.id, onCreated, queryClient, putFiles, folder.pendingId, running, steer, createWith, reply.sendWith],
     );
+
+    /* A refused message, sent again as a new one, or taken back into the box
+       to be changed first. */
+    const [refill, setRefill] = useState<{ text: string; id: number } | null>(null);
+    const takeBack = useCallback((clientId: string): PendingSend | undefined => {
+        const failed = pending.find(one => one.clientId === clientId && one.state === "failed");
+        if (failed) setPending(was => was.filter(one => one.clientId !== clientId));
+        return failed;
+    }, [pending]);
+    const retrySend = useStableCallback((clientId: string) => {
+        const failed = takeBack(clientId);
+        if (failed) void send(failed.text);
+    });
+    const editSend = useStableCallback((clientId: string) => {
+        const failed = takeBack(clientId);
+        if (failed) setRefill({ text: failed.text, id: Date.now() });
+    });
 
     /* A handed-over message goes once, the first time this pane sees it. The
        hand-over is cleared first, so a remount cannot send it twice. */
@@ -661,16 +776,70 @@ export function LiveConversation({
           }
         : null;
 
-    const failure = runFailure(state, session.error, session.conversation);
+    /* Read against the state on screen: a message just sent is a new run,
+       and the last one's failure is not what it is doing. */
+    const failure = runFailure(shownState, optimistic ? null : session.error, conversationRecord);
     const stuckMessage = stuck ? "This run stopped updating. The server may have restarted." : null;
     /* A coding agent's own failure stays readable after a reload too: the
        transcript words it through `transcript-state`, never raw. */
-    const recorded = state === "failed" && !session.error ? session.conversation?.last_run_error ?? null : null;
+    const recorded = shownState === "failed" && !session.error ? conversationRecord?.last_run_error ?? null : null;
     const agentFailure = recorded && describeRunFailure(recorded).codingAgents ? recorded : null;
     const error = sendError ?? loadError ?? failure.message ?? agentFailure ?? stuckMessage;
     /* Whichever failure is on screen, read by its code rather than its
        words: the words differ by deployment. */
     const modelMissing = sendError ? needsAiModel(sendProblem) : !loadError && failure.noModel;
+
+    /* Handed down stable, so the turns and the composer — memoised — are
+       not drawn again for every token of the reply. */
+    const retryLoad = useStableCallback(() => setLoadAttempt(attempt => attempt + 1));
+    const retryRun = useStableCallback(() => void session.retryFailedRun());
+    const resolveStable = useStableCallback(resolve);
+    const withdrawStable = useStableCallback((id: string) => void withdraw(id));
+    const sendStable = useStableCallback(send);
+    const dismissCallError = useStableCallback(() => setDismissedCallError(shownCallError));
+    const filled = useStableCallback(() => {
+        if (refill) setRefill(null);
+        else onFilled?.();
+    });
+
+    /* Stop is answered at once: the button goes and the box says so, while
+       the request goes out. A run takes a moment to wind down whatever it is
+       in the middle of, and a Stop that looked ignored for that moment was
+       pressed again. Given back if the request fails. */
+    const [stopping, setStopping] = useState(false);
+    useEffect(() => { if (!runningLive) setStopping(false); }, [runningLive]);
+    const stop = useStableCallback(() => {
+        if (stopping) return;
+        setStopping(true);
+        session.stop().catch(() => {
+            if (!mounted.current) return;
+            setStopping(false);
+            setSendError("Could not stop " + teammate.name + ". Try again.");
+        });
+    });
+    const winding = stopping || session.status === "STOP_REQUESTED";
+
+    /* What this pane last held, for the next time this conversation opens.
+       Not while the copy on screen is the cache itself, and not a load that
+       failed. */
+    useEffect(() => {
+        const id = session.conversationId;
+        if (!id || historyLoading || loadError || session.messages.length === 0) return;
+        openedTranscripts.save(pod.id, id, {
+            conversation: session.conversation,
+            status: session.status,
+            messages: session.messages,
+            olderToken,
+        });
+    }, [pod.id, session.conversationId, session.conversation, session.status, session.messages, olderToken, historyLoading, loadError]);
+
+    /* Unsent words, kept per conversation. A new conversation keeps one only
+       in the main pane: the panes beside a doc or a table each start one of
+       their own, and one shared "new" draft would follow somebody between
+       them. */
+    const draftKey = session.conversationId
+        ? pod.id + ":" + session.conversationId
+        : createWith ? null : pod.id + ":new";
 
     return (
         <>
@@ -679,10 +848,10 @@ export function LiveConversation({
                 teammate={teammate}
                 speakerSeed={speakerSeed}
                 streaming={streaming}
-                state={state}
+                state={shownState}
                 error={error}
                 loading={historyLoading}
-                onReload={loadError ? () => setLoadAttempt(attempt => attempt + 1) : stuck && error === stuckMessage ? reloadStuck : undefined}
+                onReload={loadError ? retryLoad : stuck && error === stuckMessage ? reloadStuck : undefined}
                 reloadLabel={loadError ? "Retry" : "Reload conversation"}
                 emptyTitle={emptyHint?.title ?? (
                     conversationId === NEW_CONVERSATION || !session.conversationId
@@ -696,23 +865,25 @@ export function LiveConversation({
                 }
                 podId={pod.id}
                 conversationId={session.conversationId}
-                hasMore={Boolean(olderToken)}
+                hasMore={Boolean(olderToken ?? fromCache?.olderToken)}
                 loadingEarlier={loadingOlder}
                 onEarlier={loadOlder}
                 onOpenApp={onOpenApp}
                 onOpenFile={onOpenFile}
                 onOpenTable={onOpenTable}
-                onResolve={resolve}
-                onRetry={failure.retryable && !modelMissing ? () => void session.retryFailedRun() : undefined}
+                onResolve={resolveStable}
+                onRetry={failure.retryable && !modelMissing ? retryRun : undefined}
                 noModel={modelMissing}
                 modelsAction={pointsAtModels(error)}
                 dockedId={waitingOn?.id ?? signingIn?.id}
                 outsiders={reply.thread?.outsiders ? pod.name : undefined}
+                onRetrySend={retrySend}
+                onEditSend={editSend}
             />
             <InteractionDock
                 interaction={waitingOn}
                 teammate={teammate.name}
-                onResolve={resolve}
+                onResolve={resolveStable}
                 /* Not while the status is still unknown, which reads as idle
                    for a moment after load and would flash "Expired". */
                 runEnded={session.status !== undefined && state !== "running"}
@@ -739,7 +910,9 @@ export function LiveConversation({
                        on the thing it is sitting under. Except for what typing
                        does to an approval: the box is not blocked, and a
                        message sent past a request is heard as declining it. */
-                    waitingOn?.kind === "approval"
+                    winding && running
+                        ? "stopping…"
+                        : waitingOn?.kind === "approval"
                         ? "sending a message skips this request"
                         : waitingOn || signingIn
                           ? undefined
@@ -752,31 +925,32 @@ export function LiveConversation({
                               shownCallError ?? (pod.waiting || undefined)
                 }
                 onDismissNote={
-                    shownCallError && !waitingOn && !signingIn && state !== "waiting"
-                        ? () => setDismissedCallError(shownCallError)
+                    shownCallError && !waitingOn && !signingIn && state !== "waiting" && !(winding && running)
+                        ? dismissCallError
                         : undefined
                 }
                 /* `sending` lasts as long as the stream this pane opened, which
                    is the whole run -- so it only holds the box before the run
                    is visibly going. After that, sending again is steering. */
                 busy={(sending && !running) || historyLoading || Boolean(loadError)}
-                canStop={running}
+                canStop={running && !winding}
                 queued={queued}
                 queuedNote={
                     queued.length === 0
                         ? undefined
                         : teammate.name + " hears " + (queued.length === 1 ? "this" : "these") + " as soon as the work in progress allows"
                 }
-                onWithdraw={id => void withdraw(id)}
-                fill={fill}
-                onFilled={onFilled}
+                onWithdraw={withdrawStable}
+                fill={refill ?? fill}
+                onFilled={filled}
                 attachments={attachments}
                 onAttach={attach}
                 onRemoveAttachment={unattach}
-                onSend={send}
+                onSend={sendStable}
                 onTall={setCrowded}
-                onStop={() => void session.stop()}
+                onStop={stop}
                 onVoice={onVoice}
+                draftKey={draftKey}
             />
         </>
     );

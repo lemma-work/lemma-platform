@@ -1,5 +1,6 @@
 """Workflow (workflow definition) repository."""
 
+from collections.abc import Sequence
 from uuid import UUID
 from typing import List, Optional
 
@@ -24,6 +25,7 @@ from app.modules.workflow.domain.graph import WorkflowEdge
 from app.modules.workflow.domain.nodes import WORKFLOW_NODE_ADAPTER
 from app.modules.workflow.domain.ports import WorkflowRepository
 from app.modules.workflow.infrastructure.models import WorkflowModel
+from app.modules.workflow.infrastructure.start_column import join_start, split_start
 
 
 class SqlAlchemyWorkflowRepository(WorkflowRepository):
@@ -38,6 +40,7 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
     ) -> WorkflowEntity:
         nodes = [WORKFLOW_NODE_ADAPTER.validate_python(n) for n in model.nodes]
         edges = [WorkflowEdge(**e) for e in model.edges]
+        start, run_title = split_start(model.start)
         entity = WorkflowEntity(
             id=model.id,
             pod_id=model.pod_id,
@@ -48,7 +51,8 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             nodes=nodes,
             edges=edges,
             entry_node_id=model.entry_node_id,
-            start=model.start,
+            start=start,
+            run_title=run_title,
             mode=WorkflowMode(model.mode),
             is_active=model.is_active,
             visibility=model.visibility,
@@ -70,7 +74,10 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             "nodes": [n.model_dump(mode="json") for n in entity.nodes],
             "edges": [e.model_dump(mode="json") for e in entity.edges],
             "entry_node_id": entity.entry_node_id,
-            "start": entity.start.model_dump(mode="json") if entity.start else None,
+            "start": join_start(
+                entity.start.model_dump(mode="json") if entity.start else None,
+                entity.run_title,
+            ),
             "mode": entity.mode.value,
             "is_active": entity.is_active,
             "visibility": entity.visibility,
@@ -205,6 +212,28 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             models = models[:limit]
 
         return [self._to_entity(m) for m in models], next_cursor
+
+    async def run_titles_by_ids(
+        self, flow_ids: Sequence[UUID]
+    ) -> dict[UUID, list[str]]:
+        """Each workflow's `run_title`, for the ones that set one. Reads the
+        one column it lives in rather than validating whole graphs."""
+        if not flow_ids:
+            return {}
+        stmt = select(WorkflowModel.id, WorkflowModel.start).where(
+            WorkflowModel.id.in_(list(flow_ids))
+        )
+        result = await self.session.execute(stmt)
+        titles: dict[UUID, list[str]] = {}
+        for flow_id, raw in result.all():
+            _, run_title = split_start(raw)
+            if run_title:
+                titles[flow_id] = run_title
+        return titles
+
+    async def run_title_of(self, flow_id: UUID) -> list[str]:
+        """One workflow's `run_title`, for a response about a single run."""
+        return (await self.run_titles_by_ids([flow_id])).get(flow_id, [])
 
     def _to_summary(
         self,
