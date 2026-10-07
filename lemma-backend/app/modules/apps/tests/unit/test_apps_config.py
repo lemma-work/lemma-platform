@@ -24,8 +24,9 @@ def test_apps_settings_own_archive_limits(monkeypatch):
         "app_release_retention_cron": "20 4 * * *",
         "app_release_retention_batch": 200,
         "app_release_retention_budget_seconds": 60.0,
-        # Moved from `app/core/config.py`: only this module reads it.
-        "app_branding_enabled": True,
+        # Moved from `app/core/config.py`: only this module reads it. Off
+        # until the "Remix on Lemma" pill is rethought.
+        "app_branding_enabled": False,
     }
     assert set(AppsSettings.model_fields) == set(expected)
     for field, default in expected.items():
