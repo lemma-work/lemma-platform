@@ -83,7 +83,7 @@ it is switched off; (c) it should exist, stay silent, and gain UI so somebody ca
 see why nothing is happening. Decide before writing code.
 **How it was found:** tracing `AgentSurfaceStatus.INACTIVE` from
 `domain/entities.py:248` to its readers during the surfaces schema rework, then
-grepping `lemma-harness/src` for any reference to it and finding none.
+grepping the web app's source for any reference to it and finding none.
 
 ### DEV-SURF-002 — A reassigned phone number signs in as the person who had it
 **Violates:** nothing. Decided: a number belongs to one person until somebody

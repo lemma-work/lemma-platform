@@ -337,14 +337,14 @@ repository.
 
 Two details that are easy to get wrong:
 
-- **The web key is read through `window.__ENV`, not `process.env`.** Next
+- **The web key is read at server start, not inlined at build time.** Next
   inlines `process.env` at build time, so a key handed to a prebuilt image at
   run time would never arrive and analytics would silently never start. It goes
-  through `lib/config.ts` like every other public setting, which the Docker
-  entrypoint populates at container start.
+  through `lemma-frontend/src/site/runtime.ts` like every other public setting,
+  which the server reads when it starts and serves at `/site-config.js`.
 - **`NEXT_PUBLIC_ANALYTICS_INGEST_HOST` is the exception**: `next.config.ts`
   reads it from `process.env` when the server boots, so it is not part of
-  `window.__ENV` and does not need to be.
+  `/site-config.js` and does not need to be.
 
 The backend key belongs only to Lemma Cloud. The CLI and Desktop share
 `LEMMA_TELEMETRY_KEY` deliberately — both send the anonymous, install-scoped
@@ -371,8 +371,7 @@ Mirror what the observability plane already does:
 Two things must close before the first production event, both outside the code:
 
 1. **A DPA with PostHog**, and PostHog on the subprocessor list.
-2. **The privacy page was a 12-line stub** in the retired `lemma-harness`;
-   `lemma-frontend/src/app/privacy/page.tsx` now renders the full policy.
+2. **The privacy page** (`lemma-frontend/src/app/privacy/page.tsx`).
    It has to name what is collected, by whom, and how to opt out — and be
    consistent with the README's "run it on your laptop" promise, which under
    the posture above it is.

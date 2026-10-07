@@ -1,5 +1,5 @@
-// AnomalousOrb, ported from the retired lemma-harness web app.
-// Same shaders, geometry, and gold (0x7a5ce0); three.js vendored locally so
+// AnomalousOrb, the splash screen's animated orb.
+// Shaders, geometry, and gold (0x7a5ce0); three.js vendored locally so
 // the splash never depends on the network.
 //
 // Imported where it is used rather than at the top of the module. It is

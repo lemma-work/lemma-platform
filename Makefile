@@ -115,7 +115,7 @@ PUBLIC_TUNNEL_READY_TIMEOUT  ?= 30
 # ── Canonical dev ports + URLs ───────────────────────────────────────────────
 # These are the SINGLE source of truth for the dev stack. Infra (docker
 # compose), backend settings (API_URL / FRONTEND_URL / DATABASE_URL / …) and
-# the frontend (NEXT_PUBLIC_* + runtime-config.js) all derive from these.
+# the frontend (NEXT_PUBLIC_*) all derive from these.
 # Change one number here and the whole stack stays consistent. Picked to
 # differ from the installed lemma-stack defaults (3700/8700/4173/5432/…)
 # so a fresh platform checkout can sit alongside an installed copy.
