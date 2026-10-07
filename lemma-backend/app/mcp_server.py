@@ -23,6 +23,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
 from app.modules.agent.infrastructure.mcp import LEMMA_MCP_SERVER_NAME
 from app.modules.agent.services.pod_mcp_service import pod_mcp_service
+from app.modules.agent.services.pod_mcp_apps import app_view_template
 from app.modules.agent.services.pod_mcp_views import POD_MCP_VIEWS
 from app.modules.mcp_access.contracts import (
     MCP_MOUNT_PATH,
@@ -166,6 +167,7 @@ def build_pod_mcp_server() -> PodFastMCP:
     # the way the tools are: a host reading one learns nothing about the pod.
     for view in POD_MCP_VIEWS:
         mcp_server.add_resource(view.resource())
+    mcp_server.add_template(app_view_template())
     return mcp_server
 
 

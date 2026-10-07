@@ -8,6 +8,8 @@ vi.mock("../auth.js", async importOriginal => {
   return { ...actual, AuthManager: class {
     getRequestInit(init: RequestInit) { return { ...init, credentials: "include" }; }
     markUnauthenticated() {}
+    async ready() {}
+    async renewEmbeddedToken() { return false; }
   } };
 });
 vi.mock("supertokens-web-js/recipe/session/index.js", () => ({ default: { attemptRefreshingSession: vi.fn().mockResolvedValue(false) } }));
