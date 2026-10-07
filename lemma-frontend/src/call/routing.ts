@@ -37,14 +37,8 @@ export interface RouteDecision {
     action: RouteAction;
     conversationId: string | null;
     delivery: "speak" | "context" | "ignore";
-    confidence: number;
+    /** The probability of the route, when the decision provider measures one. */
+    confidence: number | null;
 }
-
-export async function classifyCall(state: RouterState, signal?: AbortSignal): Promise<RouteDecision> {
-    const response = await fetch("/api/call/route", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(state), signal,
-    });
-    if (!response.ok) throw new Error("Call routing is unavailable. No request was dispatched.");
-    return response.json();
-}
+/** Routes one utterance or update. Rejects when there is no route. */
+export type Classify = (state: RouterState, signal: AbortSignal) => Promise<RouteDecision>;

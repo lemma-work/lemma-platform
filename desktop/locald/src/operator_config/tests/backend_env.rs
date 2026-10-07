@@ -94,8 +94,8 @@ fn applies_profile_with_vault_secret_and_renders_backend_environment() {
 /// protocol above rather than copied through verbatim.
 #[test]
 fn every_settable_secret_reaches_the_backend_environment() {
-    // The voice-call keys go to the frontend's server instead, which is the
-    // one that reads them.
+    // A live call's voice key goes to the frontend's server instead, which is
+    // the one that reads it.
     let mapped: std::collections::HashSet<&str> = secret_environment()
         .into_iter()
         .chain(frontend_secret_environment())
@@ -109,6 +109,23 @@ fn every_settable_secret_reaches_the_backend_environment() {
             mapped.contains(name),
             "{name} can be stored but is never passed to the backend; \
              add it to secret_environment()"
+        );
+    }
+}
+
+/// Call routing is a backend decision now, so its key is the backend's alone:
+/// one secret in both lists would reach a process that never reads it.
+#[test]
+fn the_typesafe_key_is_the_backends_and_no_secret_goes_to_both() {
+    let backend: std::collections::HashMap<&str, &str> = secret_environment().into_iter().collect();
+    assert_eq!(
+        backend.get("integrations.typesafe_api_key"),
+        Some(&"TYPESAFE_API_KEY")
+    );
+    for (name, _) in frontend_secret_environment() {
+        assert!(
+            !backend.contains_key(name),
+            "{name} goes to the frontend and the backend"
         );
     }
 }
