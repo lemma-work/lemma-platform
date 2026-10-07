@@ -432,13 +432,6 @@ pub(crate) fn build(
         ("NEXT_PUBLIC_API_URL", backend_origin),
         ("NEXT_PUBLIC_AUTH_URL", format!("{frontend_origin}/auth")),
         ("NEXT_PUBLIC_SITE_URL", frontend_origin.clone()),
-        ("NEXT_PUBLIC_AUTH_WEBSITE_BASE_PATH", "/auth".to_owned()),
-        ("NEXT_PUBLIC_SUPERTOKENS_API_BASE_PATH", "/auth".to_owned()),
-        ("NEXT_PUBLIC_SUPERTOKENS_API_GATEWAY_PATH", "/st".to_owned()),
-        (
-            "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI",
-            format!("{frontend_origin}/"),
-        ),
         // Deliberately NOT widened to match SESSION_COOKIE_DOMAIN.
         //
         // This is the domain the *browser* SDK writes its own cookies to, and

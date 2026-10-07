@@ -122,10 +122,6 @@ impl Daemon {
                 self.discover_provider_models(request, client);
                 return true;
             }
-            "config.set-ai" => {
-                self.set_ai_profile(request, client);
-                return true;
-            }
             "config.test" => {
                 self.test_setup(request, client);
                 return true;

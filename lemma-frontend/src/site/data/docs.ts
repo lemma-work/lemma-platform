@@ -117,7 +117,7 @@ lemma auth login`,
             {
                 type: "code",
                 title: "Developer checkout",
-                body: "Use this path only when you are changing the platform source. The dev stack uses 3710/8710 so it can coexist with the installed local stack.",
+                body: "Use this path only when you are changing the platform source. The dev stack uses 3000/8710 so it can coexist with the installed local stack.",
                 language: "bash",
                 code: `git clone https://github.com/lemma-work/lemma-platform.git
 cd lemma-platform
@@ -125,7 +125,7 @@ make init
 make dev
 
 uv tool install --force --editable lemma-cli
-lemma servers add local-dev --base-url http://localhost:8710 --auth-url http://localhost:3710/auth
+lemma servers add local-dev --base-url http://localhost:8710 --auth-url http://localhost:3000/auth
 lemma servers select local-dev
 lemma auth login`,
             },

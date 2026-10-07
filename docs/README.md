@@ -94,7 +94,7 @@ issue.
 Each component keeps its own README next to the code:
 
 [lemma-backend](../lemma-backend/README.md) ·
-[lemma-harness](../lemma-harness/README.md) ·
+[lemma-frontend](../lemma-frontend/README.md) ·
 [lemma-cli](../lemma-cli/README.md) ·
 [lemma-python](../lemma-python/README.md) ·
 [lemma-typescript](../lemma-typescript/README.md) ·
