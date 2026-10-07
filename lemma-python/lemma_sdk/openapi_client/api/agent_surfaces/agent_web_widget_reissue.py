@@ -64,7 +64,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[ErrorResponse | WebWidgetSecretResponse]:
-    """Rotate Secret
+    """Reissue Widget
 
      Mint a new signing secret. Tokens signed with the old one stop working.
 
@@ -98,7 +98,7 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
 ) -> ErrorResponse | WebWidgetSecretResponse | None:
-    """Rotate Secret
+    """Reissue Widget
 
      Mint a new signing secret. Tokens signed with the old one stop working.
 
@@ -127,7 +127,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[ErrorResponse | WebWidgetSecretResponse]:
-    """Rotate Secret
+    """Reissue Widget
 
      Mint a new signing secret. Tokens signed with the old one stop working.
 
@@ -159,7 +159,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
 ) -> ErrorResponse | WebWidgetSecretResponse | None:
-    """Rotate Secret
+    """Reissue Widget
 
      Mint a new signing secret. Tokens signed with the old one stop working.
 

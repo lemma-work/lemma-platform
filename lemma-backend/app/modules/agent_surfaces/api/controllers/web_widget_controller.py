@@ -208,11 +208,11 @@ async def update_widget(
 
 @router.post(
     "/{widget_id}/secret",
-    operation_id="agent.web_widget.rotate_secret",
+    operation_id="agent.web_widget.reissue",
     response_model=WebWidgetSecretResponse,
     dependencies=[require_action(Permissions.POD_UPDATE)],
 )
-async def rotate_secret(
+async def reissue_widget(
     pod_id: UUID, widget_id: UUID, uow: UoWDep
 ) -> WebWidgetSecretResponse:
     """Mint a new signing secret. Tokens signed with the old one stop working."""

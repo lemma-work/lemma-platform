@@ -638,7 +638,8 @@ export interface PodSource {
     createWidget(podId: string, draft: WidgetDraft): Promise<NewWebWidget>;
     updateWidget(podId: string, widgetId: string, change: { answer?: WidgetAnswer; origins?: string[] }): Promise<WebWidget>;
     /** A new signing secret, shown this once. */
-    rotateWidgetSecret(podId: string, widgetId: string): Promise<string>;
+    /** A new signing secret for a widget; tokens signed with the old one stop working. */
+    reissueWidget(podId: string, widgetId: string): Promise<string>;
     deleteWidget(podId: string, widgetId: string): Promise<void>;
     /** Who outside the space may add rows to a table, and which columns could be open. */
     tableOpening(podId: string, table: string): Promise<TableOpening>;

@@ -36368,7 +36368,7 @@
     "/pods/{pod_id}/web-widgets/{widget_id}/secret": {
       "post": {
         "description": "Mint a new signing secret. Tokens signed with the old one stop working.",
-        "operationId": "agent.web_widget.rotate_secret",
+        "operationId": "agent.web_widget.reissue",
         "parameters": [
           {
             "in": "path",
@@ -36413,7 +36413,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Rotate Secret",
+        "summary": "Reissue Widget",
         "tags": [
           "Agent Surfaces"
         ],
@@ -36425,7 +36425,7 @@
           "paginates": false,
           "resource": "agent.web_widget",
           "result": "entity",
-          "verb": "rotate_secret"
+          "verb": "reissue"
         }
       }
     },

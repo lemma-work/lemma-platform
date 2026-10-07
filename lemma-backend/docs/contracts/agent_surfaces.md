@@ -35,7 +35,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.web_widget.create` | POST | `/pods/{pod_id}/web-widgets` | Create Widget |
 | `agent.web_widget.delete` | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | Delete Widget |
 | `agent.web_widget.list` | GET | `/pods/{pod_id}/web-widgets` | List Widgets |
-| `agent.web_widget.rotate_secret` | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | Rotate Secret |
+| `agent.web_widget.reissue` | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | Reissue Widget |
 | `agent.web_widget.update` | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | Update Widget |
 | `notification.acknowledge` | POST | `/pods/{pod_id}/notifications/{notification_id}/acknowledge` | Acknowledge A Notification |
 | `notification.list` | GET | `/pods/{pod_id}/notifications` | List My Notifications |

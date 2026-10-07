@@ -209,7 +209,7 @@ function Widgets({ pod }: { pod: Pod }) {
     const rotate = async (widget: WebWidget) => {
         setProblem(null);
         try {
-            setRevealed({ widget, secret: await source.rotateWidgetSecret(pod.id, widget.id) });
+            setRevealed({ widget, secret: await source.reissueWidget(pod.id, widget.id) });
         } catch {
             setProblem("Couldn’t make a new secret. Try again.");
         }

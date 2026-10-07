@@ -744,7 +744,7 @@ Public, the way a group's people from outside it are.
   member's private note.
 
 **Contracts:** `agent.web_widget.create`, `agent.web_widget.update`,
-`agent.web_widget.rotate_secret`, `public.web.session.start`,
+`agent.web_widget.reissue`, `public.web.session.start`,
 `public.web.message.send`, `public.web.stream.read`, `public.web.code.verify`
 
 ### PS-SURF-050 — A member writes first to a contact only where the contact wants it

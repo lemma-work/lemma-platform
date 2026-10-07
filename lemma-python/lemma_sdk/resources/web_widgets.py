@@ -6,7 +6,7 @@ from ..openapi_client.api.agent_surfaces import (
     agent_web_widget_create,
     agent_web_widget_delete,
     agent_web_widget_list,
-    agent_web_widget_rotate_secret,
+    agent_web_widget_reissue,
     agent_web_widget_update,
 )
 from ..openapi_client.models.web_widget_create_request import WebWidgetCreateRequest
@@ -26,7 +26,7 @@ class PodWebWidgets(BoundResource):
     A widget's public key goes in the page and names the widget, nothing more:
     anonymous visitors chat as outsiders. Its signing secret stays on the
     customer's server, which signs short-lived tokens naming its own signed-in
-    users, who are then answered as contacts. ``create`` and ``rotate_secret``
+    users, who are then answered as contacts. ``create`` and ``reissue``
     return the secret once.
     """
 
@@ -54,10 +54,10 @@ class PodWebWidgets(BoundResource):
             body_model=WebWidgetUpdateRequest,
         )
 
-    def rotate_secret(self, widget_id: str | UUID) -> WebWidgetSecretResponse:
+    def reissue(self, widget_id: str | UUID) -> WebWidgetSecretResponse:
         """A new signing secret. Tokens signed with the old one stop working."""
         return self._call(
-            agent_web_widget_rotate_secret, self._pod_uuid(), as_uuid(widget_id)
+            agent_web_widget_reissue, self._pod_uuid(), as_uuid(widget_id)
         )
 
     def delete(self, widget_id: str | UUID) -> None:

@@ -77,7 +77,7 @@ export class ContactsNamespace {
   /**
    * Web widgets: the pod's chat on other people's pages, and the key a form page adds rows with. The public key
    * goes in the page and names the widget only; the signing secret, returned by
-   * `create` and `rotateWidgetSecret` once, stays on the customer's server.
+   * `create` and `reissue` once, stays on the customer's server.
    */
   readonly widgets = {
     list: (podId: string) =>
@@ -88,9 +88,9 @@ export class ContactsNamespace {
       this.client.request(() =>
         AgentSurfacesService.agentWebWidgetUpdate(podId, widgetId, payload),
       ),
-    rotateSecret: (podId: string, widgetId: string) =>
+    reissue: (podId: string, widgetId: string) =>
       this.client.request(() =>
-        AgentSurfacesService.agentWebWidgetRotateSecret(podId, widgetId),
+        AgentSurfacesService.agentWebWidgetReissue(podId, widgetId),
       ),
     remove: (podId: string, widgetId: string) =>
       this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId)),

@@ -622,14 +622,14 @@ export class AgentSurfacesService {
         });
     }
     /**
-     * Rotate Secret
+     * Reissue Widget
      * Mint a new signing secret. Tokens signed with the old one stop working.
      * @param podId
      * @param widgetId
      * @returns WebWidgetSecretResponse Successful Response
      * @throws ApiError
      */
-    public static agentWebWidgetRotateSecret(
+    public static agentWebWidgetReissue(
         podId: string,
         widgetId: string,
     ): CancelablePromise<WebWidgetSecretResponse> {

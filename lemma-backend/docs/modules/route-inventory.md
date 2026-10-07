@@ -83,7 +83,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
 | POST | `/pods/{pod_id}/web-widgets` | `agent.web_widget.create` | Create Widget |
-| POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | `agent.web_widget.rotate_secret` | Rotate Secret |
+| POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | `agent.web_widget.reissue` | Reissue Widget |
 | POST | `/public/web/{public_key}/code` | `public.web.code.send` | Web Send Code |
 | POST | `/public/web/{public_key}/code/verify` | `public.web.code.verify` | Web Verify Code |
 | POST | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |

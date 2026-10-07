@@ -3003,7 +3003,7 @@ export const fixtureSource: PodSource = {
         if (change.origins) widget.allowedOrigins = change.origins;
         return widget;
     },
-    async rotateWidgetSecret() {
+    async reissueWidget() {
         await wait(300);
         return sampleSecret();
     },

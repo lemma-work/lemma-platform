@@ -678,8 +678,8 @@ export const liveSource: PodSource = {
             ...(change.origins ? { allowed_origins: change.origins } : {}),
         }));
     },
-    async rotateWidgetSecret(podId, widgetId) {
-        return (await lemma(podId).contacts.widgets.rotateSecret(podId, widgetId)).signing_secret;
+    async reissueWidget(podId, widgetId) {
+        return (await lemma(podId).contacts.widgets.reissue(podId, widgetId)).signing_secret;
     },
     async deleteWidget(podId, widgetId) {
         await lemma(podId).contacts.widgets.remove(podId, widgetId);

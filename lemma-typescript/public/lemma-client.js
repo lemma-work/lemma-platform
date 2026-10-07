@@ -15949,14 +15949,14 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Rotate Secret
+     * Reissue Widget
      * Mint a new signing secret. Tokens signed with the old one stop working.
      * @param podId
      * @param widgetId
      * @returns WebWidgetSecretResponse Successful Response
      * @throws ApiError
      */
-    static agentWebWidgetRotateSecret(podId, widgetId) {
+    static agentWebWidgetReissue(podId, widgetId) {
       return request(OpenAPI, {
         method: "POST",
         url: "/pods/{pod_id}/web-widgets/{widget_id}/secret",
@@ -16677,7 +16677,7 @@ var LemmaClient = (() => {
       /**
        * Web widgets: the pod's chat on other people's pages, and the key a form page adds rows with. The public key
        * goes in the page and names the widget only; the signing secret, returned by
-       * `create` and `rotateWidgetSecret` once, stays on the customer's server.
+       * `create` and `reissue` once, stays on the customer's server.
        */
       __publicField(this, "widgets", {
         list: (podId) => this.client.request(() => AgentSurfacesService.agentWebWidgetList(podId)),
@@ -16685,8 +16685,8 @@ var LemmaClient = (() => {
         update: (podId, widgetId, payload) => this.client.request(
           () => AgentSurfacesService.agentWebWidgetUpdate(podId, widgetId, payload)
         ),
-        rotateSecret: (podId, widgetId) => this.client.request(
-          () => AgentSurfacesService.agentWebWidgetRotateSecret(podId, widgetId)
+        reissue: (podId, widgetId) => this.client.request(
+          () => AgentSurfacesService.agentWebWidgetReissue(podId, widgetId)
         ),
         remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId))
       });
