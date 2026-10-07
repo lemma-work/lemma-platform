@@ -4,6 +4,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import uuid7
 
+import pytest
+
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -84,7 +86,8 @@ async def test_cache_expiry_and_revision_hash_mint_new_sessions() -> None:
     assert calls == 3
 
 
-async def test_cache_mints_fresh_token_for_required_validity_window() -> None:
+@pytest.mark.parametrize("deadline_seconds", [9, 10, 60])
+async def test_cache_respects_required_validity_window(deadline_seconds: int) -> None:
     wall_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     cache = FunctionSessionTokenCache(wall_clock=lambda: wall_now)
     calls = 0
@@ -100,10 +103,86 @@ async def test_cache_mints_fresh_token_for_required_validity_window() -> None:
         )
 
     assert (await cache.get(key, minter=mint)).value == "token-1"
+    served = await cache.get(
+        key,
+        minter=mint,
+        min_validity_until=wall_now + timedelta(seconds=deadline_seconds),
+    )
+    assert served.value == ("token-1" if deadline_seconds < 10 else "token-2")
+
+
+@pytest.mark.parametrize("elapsed_seconds", [9, 10, 11])
+@pytest.mark.parametrize("deadline_seconds", [None, 5])
+async def test_cache_respects_wall_clock_expiry(
+    elapsed_seconds: int, deadline_seconds: int | None
+) -> None:
+    wall_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cache = FunctionSessionTokenCache(
+        clock=lambda: 100.0,
+        wall_clock=lambda: wall_now,
+    )
+    key = _key()
+    calls = 0
+
+    async def mint(**_kwargs) -> FunctionSessionToken:
+        nonlocal calls
+        calls += 1
+        return FunctionSessionToken(
+            value=f"token-{calls}",
+            expires_at=wall_now + timedelta(seconds=10),
+        )
+
+    deadline = (
+        wall_now + timedelta(seconds=deadline_seconds)
+        if deadline_seconds is not None
+        else None
+    )
     assert (
         await cache.get(
             key,
             minter=mint,
-            min_validity_until=wall_now + timedelta(seconds=60),
+            min_validity_until=deadline,
         )
+    ).value == "token-1"
+
+    wall_now += timedelta(seconds=elapsed_seconds)
+    served = await cache.get(key, minter=mint, min_validity_until=deadline)
+    assert served.value == ("token-1" if elapsed_seconds < 10 else "token-2")
+
+
+async def test_cache_serves_fresh_token_shorter_than_window_and_remints_next() -> None:
+    # A job's deadline plus its callback grace can outlast the issuer's whole
+    # access-token lifetime. No token covers that window, so the run gets the
+    # longest-lived one there is rather than failing before it starts -- and a
+    # later run is never handed that same token back.
+    wall_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cache = FunctionSessionTokenCache(wall_clock=lambda: wall_now)
+    calls = 0
+    key = _key()
+
+    async def mint(**_kwargs) -> FunctionSessionToken:
+        nonlocal calls
+        calls += 1
+        return FunctionSessionToken(
+            value=f"token-{calls}",
+            expires_at=wall_now + timedelta(seconds=300),
+        )
+
+    job_window = wall_now + timedelta(seconds=660)
+    assert (
+        await cache.get(key, minter=mint, min_validity_until=job_window)
+    ).value == "token-1"
+    assert (
+        await cache.get(key, minter=mint, min_validity_until=job_window)
     ).value == "token-2"
+
+
+async def test_cache_refuses_a_fresh_token_that_is_already_expired() -> None:
+    wall_now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    cache = FunctionSessionTokenCache(wall_clock=lambda: wall_now)
+
+    async def mint(**_kwargs) -> FunctionSessionToken:
+        return FunctionSessionToken(value="dead-on-arrival", expires_at=wall_now)
+
+    with pytest.raises(ValueError, match="already expired"):
+        await cache.get(_key(), minter=mint)
