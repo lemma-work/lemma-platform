@@ -41,6 +41,10 @@ THINKING_TAGS: tuple[str, str] = ("<think>", "</think>")
 
 Segment = tuple[Literal["thinking", "text"], str]
 
+# A tag's attributes are ``[^<>]*``, never ``[^>]*``: a tag never contains another
+# ``<``, and without that stop every ``<think`` in a run of them scans to the end of
+# the string, which is quadratic in what a model was made to repeat.
+#
 # Ordered alternation, and the order is load-bearing:
 #   - self-closing first, so ``<think/>`` is not read as an unclosed open tag
 #   - then a closed block, non-greedy, so two blocks stay two
@@ -48,15 +52,15 @@ Segment = tuple[Literal["thinking", "text"], str]
 #     ``<think>`` and never closes it has reasoned for the rest of the message,
 #     and treating the remainder as an answer is the worst of the options.
 _THINK_RE = re.compile(
-    r"<think(?:ing)?[^>]*/>"
-    r"|<think(?:ing)?[^>]*>.*?</think(?:ing)?>"
-    r"|<think(?:ing)?[^>]*>.*",
+    r"<think(?:ing)?[^<>]*/>"
+    r"|<think(?:ing)?[^<>]*>.*?</think(?:ing)?>"
+    r"|<think(?:ing)?[^<>]*>.*",
     re.DOTALL | re.IGNORECASE,
 )
 
-_OPEN_RE = re.compile(r"<think(?:ing)?[^>]*>", re.IGNORECASE)
+_OPEN_RE = re.compile(r"<think(?:ing)?[^<>]*>", re.IGNORECASE)
 _CLOSE_RE = re.compile(r"</think(?:ing)?>", re.IGNORECASE)
-_SELF_CLOSING_RE = re.compile(r"<think(?:ing)?[^>]*/>", re.IGNORECASE)
+_SELF_CLOSING_RE = re.compile(r"<think(?:ing)?[^<>]*/>", re.IGNORECASE)
 
 # Longest tag we must never emit half of: ``</thinking>``.
 _MAX_TAG = len("</thinking>")
