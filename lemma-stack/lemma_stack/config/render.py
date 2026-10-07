@@ -305,10 +305,6 @@ def frontend_env(doc: TOMLDocument) -> dict[str, str]:
         "NEXT_PUBLIC_API_URL": backend_origin(doc),
         "NEXT_PUBLIC_AUTH_URL": f"{frontend_origin(doc)}/auth",
         "NEXT_PUBLIC_SITE_URL": frontend_origin(doc),
-        "NEXT_PUBLIC_AUTH_WEBSITE_BASE_PATH": "/auth",
-        "NEXT_PUBLIC_SUPERTOKENS_API_BASE_PATH": "/auth",
-        "NEXT_PUBLIC_SUPERTOKENS_API_GATEWAY_PATH": "/st",
-        "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI": f"{frontend_origin(doc)}/",
         "NEXT_PUBLIC_SESSION_TOKEN_DOMAIN": "",
         "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
         # What makes lemma-frontend behave as an installation rather than as

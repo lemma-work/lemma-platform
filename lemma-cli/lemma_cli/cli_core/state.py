@@ -149,7 +149,11 @@ def _extract_field_errors(details: Any) -> list[str]:
         for item in items:
             if isinstance(item, dict):
                 loc = [str(p) for p in (item.get("loc") or []) if p != "body"]
-                name = ".".join(loc) if loc else str(item.get("field") or "")
+                name = (
+                    ".".join(loc)
+                    if loc
+                    else str(item.get("field") or item.get("path") or "")
+                )
                 msg = str(item.get("msg") or item.get("message") or "").strip()
                 out.append(f"{name}: {msg}".strip(": ").strip() if name else msg)
             elif isinstance(item, str):

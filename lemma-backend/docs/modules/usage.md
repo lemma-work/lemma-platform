@@ -63,6 +63,15 @@ pricing policy; deployments that need monetary admission install a
 Direct model-call token/request guardrails are independent of monetary
 admission.
 
+A paid request that is not a model call -- a classifier reached over HTTP, say
+-- is metered through `contracts.metering.metered_request(profile, source=...)`
+inside the same `metering_execution`. It is admitted against the limits before
+anything is sent, then recorded from what the caller reports: `settle` with the
+provider's token counts (priced by the rate card registered for the profile's
+`model_name`), `reject` for a refusal that cost nothing, or neither, which
+records the request as unconfirmed. `decisions` meters Typesafe System One this
+way.
+
 ## Tests and operations
 
 Tests cover optional pricing, unlimited defaults, injected reservations,
