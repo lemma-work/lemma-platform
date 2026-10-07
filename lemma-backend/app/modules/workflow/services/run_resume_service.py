@@ -15,6 +15,9 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitType,
 )
 from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.services.decision_resume_service import (
+    DecisionResumeService,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -134,6 +137,10 @@ class RunResumeService:
         there is no external source to poll (a timer just needs to fire), so a
         past-due TIME wait whose scheduler wake was lost is fired here.
 
+        A DECISION wait this old means its job was lost -- every attempt of it
+        fits well inside the grace period -- so the same job is queued again, a
+        bounded number of times (`DecisionResumeService.recover_lost`).
+
         HUMAN waits are swept for the ceiling alone. Nothing can be polled: a
         form is resolved by somebody answering it. But a form assigned to
         someone who has left, or whose pod membership was removed
@@ -154,6 +161,7 @@ class RunResumeService:
                 WorkflowRunWaitType.FUNCTION,
                 WorkflowRunWaitType.TIME,
                 WorkflowRunWaitType.HUMAN,
+                WorkflowRunWaitType.DECISION,
             ],
             created_before=cutoff,
             limit=RECONCILE_BATCH,
@@ -194,6 +202,10 @@ class RunResumeService:
                     )
                 elif wait.wait_type == WorkflowRunWaitType.TIME:
                     handled = await self._fire_time_wait_if_due(wait)
+                elif wait.wait_type == WorkflowRunWaitType.DECISION:
+                    handled = await DecisionResumeService(self._engine).recover_lost(
+                        wait
+                    )
                 else:
                     status = await self._engine.function_adapter.get_run_status(
                         UUID(wait.external_ref)

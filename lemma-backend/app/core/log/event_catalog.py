@@ -934,6 +934,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'worker.lanes.starting': EventSpec('info', frozenset({'lanes'})),
     'worker.startup.failed': EventSpec('error', frozenset()),
     'workflow.cancel.underlying_work_stop_failed': EventSpec('warning', frozenset({'run_id', 'wait_type'})),
+    'workflow.decision_queue.enqueue_deferred.degraded': EventSpec('warning', frozenset({'external_ref'})),
+    'workflow.decision_resume.lost_decision_requeued.degraded': EventSpec('warning', frozenset({'requeues', 'run_id', 'wait_id'})),
     'workflow.fail.stale_event': EventSpec('debug', frozenset({'wait_type'})),
     'workflow.form.invalid_schema': EventSpec('warning', frozenset({'node_id'})),
     'workflow.handlers.ignoring_agentruncompleted_non_workflow_conversation.observed': EventSpec('debug', frozenset({'conversation_id'})),

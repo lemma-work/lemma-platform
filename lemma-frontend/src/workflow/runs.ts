@@ -18,8 +18,10 @@ export const RUN_STATUSES = [
 ] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
-/** `domain/wait.py:12`. */
-export const WAIT_TYPES = ["HUMAN", "AGENT", "FUNCTION", "TIME"] as const;
+/** `domain/wait.py:12`. DECISION is a decision node asking its question: a
+ *  machine wait like a function's, answered by the decision provider, never
+ *  by a person. */
+export const WAIT_TYPES = ["HUMAN", "AGENT", "FUNCTION", "TIME", "DECISION"] as const;
 export type WaitType = (typeof WAIT_TYPES)[number];
 
 /** What a row is for, at a glance. Four tones rather than six statuses,
@@ -66,6 +68,7 @@ export function sayWaitingOn(type: WaitType): string {
         case "AGENT": return "Waiting on an agent";
         case "FUNCTION": return "Waiting on a function";
         case "TIME": return "Waiting on a timer";
+        case "DECISION": return "Weighing a question";
     }
 }
 
@@ -73,6 +76,16 @@ export function sayWaitingOn(type: WaitType): string {
  *  (`domain/run.py:57`) — cancelling a finished run is a 409, not a no-op. */
 export function stillGoing(status: string | null | undefined): boolean {
     return status === "PENDING" || status === "RUNNING" || status === "WAITING";
+}
+
+/** One answer a decision node routes on, said the way a person would: a
+ *  `routes` key is the answer written as a string (`domain/nodes/decision.py`),
+ *  so `"true"` and `true` are both "yes". */
+export function sayAnswer(value: unknown): string {
+    if (value === true || value === "true") return "yes";
+    if (value === false || value === "false") return "no";
+    if (typeof value === "number" || typeof value === "string") return String(value);
+    return "something this app cannot show";
 }
 
 /* ── guarded readers ───────────────────────────────────────────────── */
@@ -235,6 +248,9 @@ export interface WaitRow {
     externalRef: string | null;
     /** For an AGENT wait, which agent. */
     agentName: string | null;
+    /** For a DECISION wait, the question being weighed: the `description` of
+     *  the one property the node asks (`executors/decision.py`). */
+    question: string | null;
 }
 
 export function waitTypeOf(raw: unknown): WaitType | null {
@@ -265,7 +281,16 @@ export function readWait(raw: unknown): WaitRow | null {
         createdAt: str(raw.created_at),
         externalRef: str(raw.external_ref),
         agentName: str(payload.agent_name),
+        question: questionOf(payload.schema),
     };
+}
+
+/** The one question a decision wait asks, out of the schema it was asked with:
+ *  `{"type": "object", "properties": {"answer": {..., "description": "…"}}}`. */
+function questionOf(schema: unknown): string | null {
+    const properties = isRecord(schema) && isRecord(schema.properties) ? schema.properties : null;
+    const answer = properties && isRecord(properties.answer) ? properties.answer : null;
+    return str(answer?.description);
 }
 
 /** One entry in the approval queue: a wait and the run that owns it.

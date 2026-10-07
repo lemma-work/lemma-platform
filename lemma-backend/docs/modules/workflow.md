@@ -13,8 +13,8 @@ work, and resumes from function, agent, schedule, or user-form events.
 | --- | --- |
 | API routers | Workflow CRUD/graph/visualization, run create/list/detail/cancel/form/visualization |
 | Redis consumers | Function completion, agent completion, and schedule-fired events |
-| streaq tasks | Resume function/agent waits and start scheduled workflows |
-| cron | Reconcile stale waits every five minutes |
+| streaq tasks | Resume function/agent waits, ask a decision node's question (`decide_workflow_step`), and start scheduled workflows |
+| cron | Reconcile stale waits every five minutes, re-queueing a lost decision |
 
 ## Main data model
 
@@ -30,11 +30,61 @@ work, and resumes from function, agent, schedule, or user-form events.
 | --- | --- |
 | Function | Starts a function run and waits for its terminal event |
 | Agent | Starts/continues an agent conversation and waits for completion |
-| Decision | Evaluates ordered expressions and chooses an edge |
+| Decision | Evaluates ordered rule expressions and chooses a branch, or asks one closed question about some evidence and routes on the answer (see below) |
 | Loop | Iterates items while maintaining a scoped loop frame |
 | Form | Persists a human wait with schema/assignment and resumes on submission |
 | Wait until | Pauses until a time/schedule signal |
 | End | Resolves output bindings and completes the run |
+
+## Waits
+
+A step that cannot finish inside the run's transaction writes one ACTIVE row in
+`workflow_run_waits` and suspends. Only a form wait moves the run to WAITING;
+the others keep it RUNNING while the row says what it is on.
+
+| Wait type | Written by | Resumed by |
+| --- | --- | --- |
+| `HUMAN` | Form node | The assignee submitting the form |
+| `AGENT` | Agent node | The agent run's completion event |
+| `FUNCTION` | Function node | The function run's completion event |
+| `TIME` | Wait-until node | The scheduler's wake |
+| `DECISION` | Decision node with a `question` | The `decide_workflow_step` job, with the answer's route |
+
+## Decision questions
+
+A decision node has `rules` or a `question`, never both. A question asks one
+closed question through `decisions.contracts.decide`: `instruction` (trusted),
+`evidence` (an input binding resolved against the run context), `answer` (one
+property of the decisions schema subset: a choice, yes or no, or a scale; a
+multi-choice cannot be routed), and optional `examples`. It routes on the
+answer:
+
+| Answer | Next node |
+| --- | --- |
+| A value with a route (`routes` keys are the value as a string: `true`, `3`, `billing`) | That route |
+| No value, or a confidence below `min_confidence` (ignored when the provider reports none) | `unsure_next_node_id` |
+| Anything else | The default edge, the node's first outgoing edge |
+
+Saving checks the question against the decisions contract, that every route key
+is an answer and every target exists, and that every answer and unsure has
+somewhere to go -- a route or the default edge.
+
+The executor resolves the evidence, writes the whole request onto a `DECISION`
+wait and suspends; after the commit, `AfterCommitDecisionQueue` enqueues
+`decide_workflow_step` (job id `workflow-decision:{external_ref}`). The job
+reads the wait in one short transaction, asks with no session open, and in a
+second transaction picks the route from the flow as it is then and resumes the
+run there. The node's output is `{answer, confidence, provider, model, route}`.
+
+No failure takes a branch. A provider that did not answer, or a rate limit, is
+retried with backoff (at least the limit's `retry_after_seconds`) up to six
+attempts, then the run fails naming the cause. An invalid question, a spent
+usage limit, too much evidence for one decision (`token_limit`) or no configured
+provider (`not_configured`) fail the run at once, as does an answer with no
+route and no default edge. A cancelled run's job finds no active wait and does
+nothing. A `DECISION` wait older than the reconciliation grace period means its
+job was lost: the sweep queues it again, up to three times (counted in the
+wait's `requeues`), then fails the run.
 
 ## API groups
 
@@ -49,7 +99,7 @@ visualization.
 stateDiagram-v2
     [*] --> RUNNING: manual/event/schedule start
     RUNNING --> RUNNING: synchronous decision/loop/end step
-    RUNNING --> WAITING: agent/function/form/time step
+    RUNNING --> WAITING: agent/function/form/time/decision-question step
     WAITING --> RUNNING: terminal event or human submission
     RUNNING --> COMPLETED: end output
     RUNNING --> FAILED: validation/executor error

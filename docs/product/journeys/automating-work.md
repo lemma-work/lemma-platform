@@ -219,6 +219,25 @@ always reaches a conclusion a person can see.
 
 **Contracts:** `workflow.run.create`, `workflow.run.get`
 
+### PS-FLOW-015 — A workflow can branch on a judgement
+**Status:** covered
+
+- Where a branch depends on reading something rather than on a fact the run
+  already holds, the system shall let a person give that step one closed
+  question about the evidence, and a branch for each answer.
+- When a run reaches such a step, the system shall ask the question and
+  continue down the branch the answer names.
+- When the evidence does not support an answer, the system shall take the branch
+  the person set for an unsure answer.
+- The system shall record on the step what was answered and which branch it
+  took.
+- If a person saves a question with an answer that leads nowhere, then the
+  system shall refuse it and shall say which answer.
+- If the judgement cannot be made, then the system shall not take any branch,
+  and shall fail the run saying why.
+
+**Contracts:** `workflow.graph.update`, `workflow.run.create`, `workflow.run.get`
+
 ---
 
 ## Capability: Watch a run happen

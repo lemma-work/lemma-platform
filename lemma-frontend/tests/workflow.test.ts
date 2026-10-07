@@ -85,6 +85,7 @@ test("RUNNING says what it is actually stuck on", () => {
     assert.equal(sayStatus("RUNNING", "AGENT"), "Waiting on an agent");
     assert.equal(sayStatus("RUNNING", "FUNCTION"), "Waiting on a function");
     assert.equal(sayStatus("RUNNING", "TIME"), "Waiting on a timer");
+    assert.equal(sayStatus("RUNNING", "DECISION"), "Weighing a question");
     // A HUMAN wait on a RUNNING run is not a thing the engine produces, and
     // the status is the one to trust if it ever is.
     assert.equal(sayStatus("RUNNING", "HUMAN"), "Running");
@@ -128,6 +129,28 @@ test("a non-form wait has no schema rather than a broken one", () => {
     assert.equal(timer?.uiSchema, null);
     // A payload that is not an object at all is the same answer.
     assert.equal(readWait({ ...wait, payload: "nonsense" })?.schema, null);
+});
+
+test("a decision wait reads as one, with the question it is weighing", () => {
+    // executors/decision.py puts the whole request on the wait; the question
+    // is the description of the one property it asks.
+    const deciding = readWait({
+        ...wait,
+        wait_type: "DECISION",
+        assigned_pod_member_id: null,
+        external_ref: "ref-1",
+        payload: {
+            node_id: "collect",
+            instruction: "Triage.",
+            evidence: { subject: "Charged twice" },
+            schema: { type: "object", properties: { answer: { type: "boolean", description: "Is it a refund?" } } },
+            examples: [],
+        },
+    });
+    assert.equal(deciding?.type, "DECISION");
+    assert.equal(deciding?.question, "Is it a refund?");
+    assert.equal(deciding?.schema, null, "a decision wait is not a form");
+    assert.equal(readWait(wait)?.question, null);
 });
 
 test("an assignment needs both halves, and keeps the ones that have them", () => {
@@ -572,6 +595,29 @@ test("every node kind says what it does, and none of them throws on an empty con
     assert.match(bare[5].detail[0], /did not carry/);
 });
 
+test("a decision that asks a question says the question and where each answer goes", () => {
+    const step = readFlowStep({
+        id: "triage",
+        type: "DECISION",
+        config: {
+            question: {
+                instruction: "Triage incoming email.",
+                evidence: { type: "expression", value: "start.payload.email" },
+                answer: { type: "string", enum: ["billing", "bug", "other"], description: "What is it about?" },
+                routes: { billing: "refund", bug: "file_bug" },
+                unsure_next_node_id: "ask",
+            },
+        },
+    }, 0);
+    assert.equal(step.says, "Asks: What is it about?");
+    assert.deepEqual(step.branches, ["refund", "file_bug", "ask"]);
+    assert.deepEqual(step.detail.slice(0, 3), ["If billing → refund", "If bug → file_bug", "If it cannot tell → ask"]);
+    assert.match(step.detail[3], /default path; if it cannot be answered at all, the run stops/);
+    const yesNo = readFlowStep({ id: "d", type: "DECISION", config: { question: { routes: { true: "a" } } } }, 0);
+    assert.equal(yesNo.says, "Branches on a judgement", "a question with no description still says what it is");
+    assert.equal(yesNo.detail[0], "If yes → a");
+});
+
 /* ── the board ─────────────────────────────────────────────────────── */
 
 import { boardOf, sayHeldBy } from "../src/workflow/board.ts";
@@ -645,6 +691,8 @@ test("a card says what it is held by from the kind of step", () => {
     assert.equal(sayHeldBy(screen.step, boardRun("x", {})), "Waiting on a person");
     assert.equal(sayHeldBy(draft.step, boardRun("x", { status: "RUNNING" })), "With an agent");
     assert.equal(sayHeldBy(null, boardRun("x", { status: "PENDING" })), "Starting");
+    const deciding = boardRun("x", { status: "RUNNING", waiting_on: { node_id: "route", wait_type: "DECISION" } });
+    assert.equal(sayHeldBy(null, deciding), "Weighing a question");
 });
 
 test("a run summary reads its title and the wait it is parked on", () => {
