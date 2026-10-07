@@ -7,6 +7,7 @@ import typer
 from lemma_sdk.openapi_client.models.create_schedule_request import (
     CreateScheduleRequest,
 )
+from lemma_sdk.openapi_client.models.schedule_run_status import ScheduleRunStatus
 from lemma_sdk.openapi_client.models.update_schedule_request import (
     UpdateScheduleRequest,
 )
@@ -22,17 +23,9 @@ app = typer.Typer(help="Schedule commands.")
 runs_app = typer.Typer(help="Schedule run commands: what each event or tick became.")
 app.add_typer(runs_app, name="runs")
 
-_RUN_STATUSES = (
-    "RECEIVED",
-    "PROCESSING",
-    "DISPATCHED",
-    "COMPLETED",
-    "TARGET_FAILED",
-    "CANCELLED",
-    "FILTERED",
-    "FAILED",
-    "DEAD_LETTERED",
-)
+# From the SDK's generated enum, so a status the API adds is accepted here
+# without a second list to keep in step.
+_RUN_STATUSES = tuple(status.value for status in ScheduleRunStatus)
 
 
 @app.command("init")

@@ -87,6 +87,13 @@ function describe(c: ConversationSnapshot, focused: boolean): string {
     return `${focused ? "The call's current focus: " : ""}"${clip(c.title || "Untitled conversation", OPTION_TITLE_BYTES, "start", "ascii")}" (${state}).`;
 }
 
+/** The call's own state could not be made into a routing request. A fault in
+ *  this code, not the provider's, so it is told apart from an outage where it
+ *  is caught. */
+export class RoutingRequestError extends Error {
+    override name = "RoutingRequestError";
+}
+
 /** The call's state as evidence, at most `budget` bytes of JSON. The latest
  *  utterance, the update being judged, the pod's context and every target's
  *  identity are kept first (each capped); what is left goes to the end of the
@@ -112,7 +119,7 @@ export function evidenceFor(state: RouterState, budget = EVIDENCE_BYTES): Record
         conversations,
     };
     const skeleton = bytes(evidence);
-    if (skeleton > budget) throw new Error("The call's state does not fit a routing decision.");
+    if (skeleton > budget) throw new RoutingRequestError("The call's state does not fit a routing decision.");
 
     // A streamed answer still being written is the newest thing a conversation said.
     const histories = targets.map(c => [...c.messages, ...(c.partialText ? [{ role: "assistant", text: c.partialText, at: "still writing" }] : [])]);
@@ -130,7 +137,7 @@ export function evidenceFor(state: RouterState, budget = EVIDENCE_BYTES): Record
     if (state.transcript) evidence.transcript = transcript;
     const shares = fairShares(needs, left - jsonBytes(transcript));
     histories.forEach((messages, i) => { conversations[i].messages = newest(messages, shares[i]); });
-    if (bytes(evidence) > budget) throw new Error("Routing evidence exceeded its budget.");
+    if (bytes(evidence) > budget) throw new RoutingRequestError("Routing evidence exceeded its budget.");
     return evidence;
 }
 

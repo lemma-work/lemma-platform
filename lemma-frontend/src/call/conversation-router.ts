@@ -3,7 +3,7 @@ import { buildTurns } from "@/thread/turns";
 import { resourceLabel } from "@/thread/display-resource";
 import { NEW_CONVERSATION } from "@/data/types";
 import type { Classify, ConversationSnapshot, RouteDecision, RouterState, VoiceEvent } from "./routing";
-import { classifyCall } from "./decision-router";
+import { classifyCall, RoutingRequestError } from "./decision-router";
 import { newId } from "./ids";
 
 export const running = (status: string) => ["RUNNING", "IN_PROGRESS", "PROCESSING", "STOP_REQUESTED"].includes(status.toUpperCase());
@@ -137,13 +137,18 @@ export class ConversationRouter {
             this.transcript = transcript;
             let decision: RouteDecision;
             try { decision = await this.classify(this.state(text), this.controller.signal); }
-            catch {
+            catch (error) {
                 // No route (provider down, rate limited, offline, too slow):
                 // the voice carries on, quietly told nothing was sent, so it
                 // neither claims work started nor interrupts every utterance.
+                // A request this code could not build is a fault here, not an
+                // outage, and is said as one.
                 if (epoch !== this.epoch || !this.active) return;
+                const fault = error instanceof RoutingRequestError;
+                if (fault) console.error("Could not build the call's routing request.", error);
+                const why = fault ? "Routing failed for this" : "Routing is unavailable right now";
                 this.emit({ id, kind: "failed", conversationId: null, speak: false,
-                    text: `Routing is unavailable right now: nothing was sent for this, and no result will come back from it. Do not claim it was sent. User said: ${text}` });
+                    text: `${why}: nothing was sent for this, and no result will come back from it. Do not claim it was sent. User said: ${text}` });
                 return;
             }
             if (epoch !== this.epoch || !this.active) return;

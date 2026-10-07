@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyCall, clip, decisionFrom, evidenceFor, EVIDENCE_BYTES, MAX_TARGETS, questionsFor, ROUTING_TIMEOUT_MS, SPEAK_CONFIDENCE } from "../src/call/decision-router.ts";
+import { classifyCall, clip, decisionFrom, evidenceFor, EVIDENCE_BYTES, MAX_TARGETS, questionsFor, ROUTING_TIMEOUT_MS, RoutingRequestError, SPEAK_CONFIDENCE } from "../src/call/decision-router.ts";
 import { ConversationRouter } from "../src/call/conversation-router.ts";
 import { UtteranceBuffer } from "../src/call/utterance-buffer.ts";
 import type { ConversationSnapshot, RouterState, VoiceEvent } from "../src/call/routing.ts";
@@ -217,6 +217,20 @@ test("with no route the call carries on: nothing is sent and the voice is told q
         await f.router.route("u2", "research this", "User: research this");
         assert.equal(f.sends.length, 1); assert.equal(f.sends[0].id, "one");
     } finally { f.router.close(); }
+});
+
+test("a request that could not be built is told apart from an outage", async () => {
+    const f = fixture({ action: "voice", conversationId: null }, undefined, "backend", async () => ({ answers: {} }));
+    (f.router as any).classify = async () => { throw new RoutingRequestError("Routing evidence exceeded its budget."); };
+    const logged = console.error;
+    console.error = () => {};
+    try {
+        await f.router.open("one");
+        await f.router.route("u1", "research this", "User: research this");
+        assert.equal(f.sends.length, 0);
+        assert.equal(f.events[0].kind, "failed"); assert.equal(f.events[0].speak, false);
+        assert.match(f.events[0].text, /^Routing failed for this: nothing was sent/);
+    } finally { console.error = logged; f.router.close(); }
 });
 
 test("an update whose delivery cannot be decided is still delivered when it answers the caller", async () => {
