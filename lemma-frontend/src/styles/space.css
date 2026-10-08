@@ -4336,8 +4336,11 @@ samp,
     padding: 0 16px 4px;
     scroll-snap-type: x proximity;
 }
+/* A lane is a column's width whatever the count. Growing to fill, the one
+   lane of a one-step workflow became a bar across the page, and a board with
+   a single bar on it does not read as a board. */
 .wfboard__lane {
-    flex: 1 0 220px;
+    flex: 0 0 248px;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -4347,7 +4350,7 @@ samp,
     scroll-snap-align: start;
 }
 /* An empty step stays in line, so the pipeline still reads in order, but
-   gives its width to the steps that have something in them. */
+   narrower, so more of the steps with something in them fit on screen. */
 .wfboard__lane[data-empty] {
     flex: 0 0 150px;
 }
