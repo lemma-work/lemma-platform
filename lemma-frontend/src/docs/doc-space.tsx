@@ -9,7 +9,7 @@ import { threadsOf } from "@/docpages/comments/model";
 import { useComments, useCommentsStatus } from "@/docpages/comments/store";
 import { CommentsPanel, type CommentBot } from "@/docpages/comments/panel";
 import { setComments, useCommentsEntry } from "@/docpages/comments/toggle";
-import { nearestInBox, type Point } from "@/docpages/editor/sheet-click";
+import { caretTarget, type Point } from "@/docpages/editor/sheet-click";
 
 /** Markdown is a doc; everything else keeps the plain file view. */
 export function isDoc(path: string): boolean {
@@ -22,7 +22,7 @@ type Anchor = { quote: string; quotePrefix: string; quoteSuffix: string };
  *  document surface does — so it names only the handles it uses on it. */
 type SheetEditor = {
     isEditable: boolean;
-    commands: { focus: (at: number | "end") => boolean };
+    commands: { focus: (at?: number | "start" | "end") => boolean };
     view: { posAtCoords: (at: Point) => { pos: number } | null };
 };
 
@@ -90,8 +90,8 @@ export function DocSpace({ pod, path, renamePage, openFile, openTable, openConve
     }), [pod.id, path, botName, openFile, renamePage, openTable, statusSlot, sendToBot, anchors, active, personal, setPanel]);
 
     /** A click on the sheet, outside the text, puts the caret where it was
-     *  aimed rather than at the end — see `nearestInBox` for why the point has
-     *  to be brought into the editor's box first. */
+     *  aimed rather than at the end — see `caretTarget` for what each margin
+     *  means and why the point has to be brought into the editor's box. */
     const placeCaret = (event: React.MouseEvent<HTMLDivElement>) => {
         const target = event.target as Element;
         if (target.closest(".ProseMirror, button, a, input, textarea, select, [contenteditable], [role=dialog]")) return;
@@ -100,11 +100,13 @@ export function DocSpace({ pod, path, renamePage, openFile, openTable, openConve
         const root = event.currentTarget.querySelector<HTMLElement & { editor?: SheetEditor }>(".ProseMirror");
         const editor = root?.editor;
         if (!root || !editor?.isEditable) return;
-        const at = nearestInBox({ left: event.clientX, top: event.clientY }, root.getBoundingClientRect());
-        if (!at) return;
+        const meant = caretTarget({ left: event.clientX, top: event.clientY }, root.getBoundingClientRect());
+        if (!meant) return;
         event.preventDefault();
-        const placed = editor.view.posAtCoords(at);
-        editor.commands.focus(placed ? placed.pos : "end");
+        if (typeof meant === "string") { editor.commands.focus(meant); return; }
+        const placed = editor.view.posAtCoords(meant);
+        if (placed) editor.commands.focus(placed.pos);
+        else editor.commands.focus();
     };
 
     return (
@@ -116,8 +118,8 @@ export function DocSpace({ pod, path, renamePage, openFile, openTable, openConve
 
                     </div>
                     {/* The whole sheet is the page, so a click anywhere on it lands
-                        in the text: below the last line at the end, and in the
-                        margin around the measure on the nearest line. */}
+                        in the text: past the last line at the end, above the first
+                        at the start, and beside the measure on the nearest line. */}
                     <div className="docspace__page" onMouseDown={placeCaret}>
                         <FileView podId={pod.id} path={path} full />
                     </div>
