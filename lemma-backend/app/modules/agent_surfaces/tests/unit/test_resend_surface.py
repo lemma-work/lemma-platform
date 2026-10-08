@@ -1200,14 +1200,12 @@ def test_a_non_http_failure_still_reports_something_usable():
 
 
 @pytest.mark.asyncio
-async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
-    """The attribution has to survive an inbox list nobody has opened.
+async def test_the_from_header_names_the_sender_and_nothing_else():
+    """The sender column is narrow, and what it showed was three parts.
 
-    ``attribute()`` puts "On behalf of Deepak" in the body, which is the right
-    place for it and invisible until the message is opened. It does not name the
-    agent — the bot's own identity carries that on chat — so the sender column
-    is the only place "Priya" is ever shown, and it used to say "Lemma" for
-    every agent in every pod.
+    ``Lem (Ada Member) via Lemma``: the product, which the sending domain
+    already says; the person, who is in the body's "On behalf of" line, where a
+    full name fits; and the agent, buried between them. One name is left.
     """
     service = ResendPlatformService(
         {
@@ -1240,19 +1238,62 @@ async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
             thread_seed_id="<seed@ops.lemma.work>",
             metadata={
                 "agent_display_name": "Priya",
-                "actor_display_name": "Deepak Jha",
+                "actor_display_name": "Ada Member",
             },
         )
 
-    # Quoted, and the quotes are load-bearing rather than cosmetic: parentheses
-    # are RFC 5322 *comment* syntax, so the same header unquoted parses as the
-    # display name "Priya via Lemma" with "(Deepak Jha)" split off as a comment
-    # that most clients never render. Which is the second reason this send path
-    # had to move off an f-string, independent of the injection one below.
-    assert (
-        captured["json"]["from"]
-        == '"Priya (Deepak Jha) via Lemma" <priya.acme@ops.lemma.work>'
+    # The actor is in the metadata and deliberately not in the header: the body
+    # carries them under "On behalf of".
+    assert captured["json"]["from"] == "Priya <priya.acme@ops.lemma.work>"
+    assert "Deepak" not in captured["json"]["from"]
+
+
+@pytest.mark.asyncio
+async def test_the_pods_mailbox_goes_out_as_the_pod_rather_than_as_lem():
+    """The reported header, end to end: "Lem (Ada Member) via Lemma".
+
+    The pod's own assistant has a display name of its own — ``Lem``, which is
+    the platform's word for whatever answers in a pod — and an email from it is
+    the pod writing. ``email_sender_name`` is the key that says so, set where
+    the sending agent is known to be the pod's (see ``group_names``); the chat
+    display name beside it stays ``Lem``, because that is the bot's username.
+    """
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "sales@ops.lemma.work",
+            "from_name": "Lemma",
+        }
     )
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["json"] = json
+
+        class _Resp:
+            content = b"{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "email-1"}
+
+        return _Resp()
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="What did you ship?",
+            thread_seed_id="<seed@ops.lemma.work>",
+            metadata={
+                "agent_display_name": "Lem",
+                "email_sender_name": "Sales",
+            },
+        )
+
+    assert captured["json"]["from"] == "Sales <sales@ops.lemma.work>"
 
 
 @pytest.mark.asyncio

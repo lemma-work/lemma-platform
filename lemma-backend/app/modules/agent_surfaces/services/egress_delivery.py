@@ -58,6 +58,7 @@ from app.modules.agent_surfaces.services.group_log import (
     GroupLog,
     answered_in_group,
 )
+from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 
 logger = get_logger(__name__)
@@ -275,6 +276,21 @@ class SurfaceDelivery:
         )
         if agent is not None and agent.icon_url:
             resolved.setdefault("agent_icon_url", str(agent.icon_url))
+        # The email ``From`` display name, which is not the chat bot's name and
+        # not the bot's row name either. An inbox shows it beside a domain that
+        # already says the product, so it is one name: the pod's own, when the
+        # pod's assistant is writing, because that is what a member calls it.
+        # Mail only, so no chat send pays for the pod lookup.
+        if target.surface.surface_type.is_email:
+            resolved.setdefault(
+                "email_sender_name",
+                await sender_name_for(
+                    self.uow,
+                    is_pod_default=agent is None or agent.is_pod_default,
+                    agent_name=agent.name if agent is not None else None,
+                    pod_id=target.surface.pod_id,
+                ),
+            )
         return resolved
 
     async def deliver_envelope(

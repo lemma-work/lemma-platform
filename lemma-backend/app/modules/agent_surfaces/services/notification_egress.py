@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+from app.core.authorization.delegation import is_pod_default_agent
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
@@ -32,6 +33,7 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceNotificationEgressPort,
 )
 from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
+from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.services.notification_delivery import DeliveryChannel
 
 logger = get_logger(__name__)
@@ -67,7 +69,6 @@ class NotificationEgress:
         notification: NotificationEntity,
         message: str,
         agent_name: str | None = None,
-        actor_display_name: str | None = None,
     ) -> bool:
         """Hand the message to the platform.
 
@@ -78,11 +79,11 @@ class NotificationEgress:
         reaches the second branch — it would have had no candidate without a
         link in the first place.
 
-        Both names travel in the metadata because email puts them in the ``From``
-        display name, where an inbox list will actually show them — the body
-        header from ``attribute()`` is not visible until the message is opened,
-        and it carries only the actor. A chat platform takes the agent name as
-        its bot's username and avatar, and ignores the actor.
+        The agent's name travels in the metadata because email puts it in the
+        ``From`` display name, where an inbox list will actually show it, and a
+        chat platform takes it as the bot's username and avatar. The person the
+        run acts for does not: ``attribute()`` puts them in the body, which is
+        the only place a full name can be read whole.
         """
         metadata: dict[str, Any] = {"notification_id": str(notification.id)}
         # Set only when known. ``SurfaceDelivery.egress_metadata`` fills
@@ -91,8 +92,6 @@ class NotificationEgress:
         # bot would lose the name and icon it replies under.
         if agent_name:
             metadata["agent_display_name"] = agent_name
-        if actor_display_name:
-            metadata["actor_display_name"] = actor_display_name
         if channel.link is not None:
             return await self.egress.send_agent_message_for_conversation(
                 conversation_id=conversation_id,
@@ -101,6 +100,18 @@ class NotificationEgress:
             )
         if not channel.email_address:
             return False
+        # The name this mail wears in the ``From`` header. Cold-open mail is the
+        # one send that never passes through ``egress_metadata``, which fills
+        # the same key on the reply path — and it is not the agent's display
+        # name, because the pod's own assistant goes out under the pod's name.
+        metadata["email_sender_name"] = await sender_name_for(
+            self.uow,
+            is_pod_default=is_pod_default_agent(
+                channel.surface.agent_id, pod_id=channel.surface.pod_id
+            ),
+            agent_name=agent_name,
+            pod_id=channel.surface.pod_id,
+        )
         return await self._send_cold_email(
             channel,
             conversation_id=conversation_id,
