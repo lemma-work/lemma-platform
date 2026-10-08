@@ -211,15 +211,26 @@ def files_under(root: str) -> dict[str, str]:
 
     A request's path is only ever a key into this, never part of a path that is
     opened, so ``..``, an absolute path or an encoded one names nothing outside
-    the folder. Read afresh on each request, so a sample file added while the
-    server runs is answered on the next reload.
+    the folder. A symlink whose target is outside it is left out too. Read
+    afresh on each request, so a sample file added while the server runs is
+    answered on the next reload.
     """
+    base = os.path.realpath(root)
     found: dict[str, str] = {}
-    for folder, _subfolders, names in os.walk(root):
+    for folder, _subfolders, names in os.walk(base):
         for name in names:
             full = os.path.join(folder, name)
-            found[os.path.relpath(full, root).replace(os.sep, "/")] = full
+            if not _inside(base, os.path.realpath(full)):
+                continue
+            found[os.path.relpath(full, base).replace(os.sep, "/")] = full
     return found
+
+
+def _inside(base: str, target: str) -> bool:
+    try:
+        return os.path.commonpath([base, target]) == base
+    except ValueError:  # different drives, on Windows
+        return False
 
 
 def inject(page: bytes, script: bytes) -> bytes:
