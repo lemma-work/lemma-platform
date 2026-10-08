@@ -6,9 +6,9 @@
   edge.
 
   Open at a 1200x630 viewport with
-    ?name=Standup&description=...&address=standup.lemma.work&slug=standup&screen=screen.png
-  `screen` is a 390x844 screenshot of the app rendered with sample rows
-  (see references/cover.md), next to this file. Wait until
+    ?name=Standup&description=...&address=standup.lemma.work&slug=standup
+  with `screen.png` next to this file: a 390x844 screenshot of the app
+  rendered with sample rows (see references/cover.md). Wait until
   document.body.dataset.ready is set: "yes" means draw it, anything else means
   the screenshot did not load.
 -->
@@ -68,8 +68,9 @@
     }
   }
 
+  // A fixed file beside this one, never a URL from the query string.
   const screen = document.getElementById("screen");
-  screen.src = q.get("screen") || "screen.png";
+  screen.src = "screen.png";
   Promise.all([document.fonts.ready, screen.decode()])
     .then(() => { fit(); document.body.dataset.ready = "yes"; })
     .catch(() => { document.body.dataset.ready = "no-screen"; });

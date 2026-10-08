@@ -110,10 +110,11 @@ where there should be work means a file to write. Add it, reload, shoot again.
 ### 4. Compose the cover
 
 ```bash
-cp /skills/lemma-app-design/assets/cover/cover-window.html /tmp/cover/
+TEMPLATE=cover-window.html                      # the phone template: cover-phone.html
+cp "/skills/lemma-app-design/assets/cover/$TEMPLATE" /tmp/cover/
 (cd /tmp/cover && python3 -m http.server 4611 --bind 127.0.0.1) &
-URL=$(python3 -c 'import sys, urllib.parse as u; print("http://localhost:4611/cover-window.html?" + u.urlencode(dict(name=sys.argv[1], description=sys.argv[2], address=sys.argv[3], slug=sys.argv[4], screen="screen.png")))' \
-  "Deals" "Every open deal, who owns it, and what happens next." "deals.lemma.work" "deals")
+URL=$(python3 -c 'import sys, urllib.parse as u; print("http://localhost:4611/" + sys.argv[1] + "?" + u.urlencode(dict(name=sys.argv[2], description=sys.argv[3], address=sys.argv[4], slug=sys.argv[5])))' \
+  "$TEMPLATE" "Deals" "Every open deal, who owns it, and what happens next." "deals.lemma.work" "deals")
 $B set viewport 1200 630 1
 $B open "$URL"
 $B wait --fn "document.body.dataset.ready"
@@ -121,6 +122,8 @@ $B eval "document.body.dataset.ready"           # must be "yes"
 $B screenshot "$PWD/public/.lemma/cover.png"    # an HTML app: "$PWD/.lemma/cover.png"
 ```
 
+- The template reads the screenshot from `screen.png` beside it, which is
+  where step 3 saved it.
 - `name` and `description` are the app's own (`lemma apps get <name>`), so the
   picture says what the link preview's text says.
 - `address` is where the app is served, without `https://`.

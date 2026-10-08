@@ -18,8 +18,10 @@ export function appCoverUrl(appUrl: string): string | null {
  *  origin answers only someone who has opened it, so a cover that will not
  *  load is expected rather than an error. */
 export function AppCover({ url, fallback }: { url: string; fallback: ReactNode }) {
-    const [failed, setFailed] = useState(false);
+    /* Which address failed, not whether one did: an app that moves to a new
+       address gets a fresh attempt at the cover there. */
+    const [failedSrc, setFailedSrc] = useState<string | null>(null);
     const src = appCoverUrl(url);
-    if (!src || failed) return <>{fallback}</>;
-    return <img className="app-cover" src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+    if (!src || src === failedSrc) return <>{fallback}</>;
+    return <img className="app-cover" src={src} alt="" loading="lazy" decoding="async" onError={() => setFailedSrc(src)} />;
 }

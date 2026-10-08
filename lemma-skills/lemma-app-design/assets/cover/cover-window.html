@@ -5,9 +5,9 @@
   edges.
 
   Open at a 1200x630 viewport with
-    ?name=Deals&description=...&address=deals.lemma.work&slug=deals&screen=screen.png
-  `screen` is a 1280x800 screenshot of the app rendered with sample rows
-  (see references/cover.md), next to this file. Wait until
+    ?name=Deals&description=...&address=deals.lemma.work&slug=deals
+  with `screen.png` next to this file: a 1280x800 screenshot of the app
+  rendered with sample rows (see references/cover.md). Wait until
   document.body.dataset.ready is set: "yes" means draw it, anything else means
   the screenshot did not load.
 -->
@@ -73,8 +73,9 @@
     }
   }
 
+  // A fixed file beside this one, never a URL from the query string.
   const screen = document.getElementById("screen");
-  screen.src = q.get("screen") || "screen.png";
+  screen.src = "screen.png";
   Promise.all([document.fonts.ready, screen.decode()])
     .then(() => { fit(); document.body.dataset.ready = "yes"; })
     .catch(() => { document.body.dataset.ready = "no-screen"; });

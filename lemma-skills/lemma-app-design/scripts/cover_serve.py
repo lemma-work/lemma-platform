@@ -34,7 +34,7 @@ import os
 import sys
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 POD_ID = "pod"
@@ -95,8 +95,9 @@ def config_script(name: str) -> bytes:
 
 
 class Handler(SimpleHTTPRequestHandler):
-    app_dir: Path
-    fixtures: Path
+    # Real paths, so ``contained`` can compare a request's against them.
+    app_dir: str
+    fixtures: str
     api_base: str
     app_name: str
 
@@ -147,13 +148,11 @@ class Handler(SimpleHTTPRequestHandler):
         self._send(200, json.dumps(answer).encode("utf-8"), "application/json")
 
     def _fixture(self, path: str, body: bytes) -> object | None:
-        relative = PurePosixPath(path)
-        if relative.is_absolute() or ".." in relative.parts:
+        file = contained(self.fixtures, f"{path}.json")
+        if file is None or not os.path.isfile(file):
             return None
-        file = self.fixtures / f"{relative}.json"
-        if not file.is_file():
-            return None
-        data = json.loads(file.read_text(encoding="utf-8"))
+        with open(file, encoding="utf-8") as handle:
+            data = json.load(handle)
         if (
             isinstance(data, list)
             and data
@@ -181,23 +180,25 @@ class Handler(SimpleHTTPRequestHandler):
         self._send(200, content, media)
 
     def _app(self, path: str) -> None:
-        relative = PurePosixPath(path.lstrip("/") or "index.html")
-        if ".." in relative.parts:
-            self._send(404, b"", "text/plain")
-            return
-        file = self.app_dir / relative
-        if file.is_dir():
-            file = file / "index.html"
-        if not file.is_file():
-            if "." in relative.name:
+        name = path.lstrip("/")
+        file = contained(self.app_dir, name or "index.html")
+        if file is not None and os.path.isdir(file):
+            file = contained(self.app_dir, os.path.join(name, "index.html"))
+        if file is None or not os.path.isfile(file):
+            # A missing file is a missing asset; a path with no extension is
+            # the app's own client-side route, which its index.html answers.
+            if "." in PurePosixPath(name).name:
                 self._send(404, b"", "text/plain")
                 return
-            file = self.app_dir / "index.html"
-        content = file.read_bytes()
-        if file.name == "index.html":
+            file = contained(self.app_dir, "index.html")
+        if file is None:
+            self._send(404, b"", "text/plain")
+            return
+        with open(file, "rb") as handle:
+            content = handle.read()
+        if os.path.basename(file) == "index.html":
             content = inject(content, config_script(self.app_name))
-        media = self.guess_type(str(file))
-        self._send(200, content, media)
+        self._send(200, content, self.guess_type(file))
 
     def _send(self, status: int, content: bytes, media: str) -> None:
         self.send_response(status)
@@ -207,6 +208,18 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(content)
+
+
+def contained(root: str, relative: str) -> str | None:
+    """``relative`` resolved under ``root``, or None if it would leave it.
+
+    Every path a request names goes through here before it touches the disk,
+    so ``..``, an absolute path or a symlink out of the folder answers nothing.
+    """
+    candidate = os.path.realpath(os.path.join(root, relative))
+    if candidate != root and not candidate.startswith(root + os.sep):
+        return None
+    return candidate
 
 
 def inject(page: bytes, script: bytes) -> bytes:
@@ -239,12 +252,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    app_dir = Path(args.app).resolve()
-    if not (app_dir / "index.html").is_file():
+    app_dir = os.path.realpath(args.app)
+    if not os.path.isfile(os.path.join(app_dir, "index.html")):
         say(f"{app_dir} has no index.html: build the app first")
         return 2
     Handler.app_dir = app_dir
-    Handler.fixtures = Path(args.fixtures).resolve()
+    Handler.fixtures = os.path.realpath(args.fixtures)
     Handler.api_base = args.api.rstrip("/")
     Handler.app_name = args.name
 
