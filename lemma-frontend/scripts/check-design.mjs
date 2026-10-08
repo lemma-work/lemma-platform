@@ -28,7 +28,12 @@ const ALLOWED = [
     {
         file: "shell.css",
         line: /font-weight: 700;/,
-        reason: "the badge wordmark, stamped rather than set — the one documented exception, scoped to .idcard__name",
+        reason: "the badge wordmark, stamped rather than set — one of the two documented weight exceptions, scoped to .idcard__name",
+    },
+    {
+        file: "space.css",
+        line: /font-weight: 700;/,
+        reason: "bold in a page's prose — a document reads at 16px, where a bold at the 500 cap is one step above its own body and disappears into it",
     },
     {
         file: "shell.css",

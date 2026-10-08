@@ -4220,7 +4220,8 @@ button.filecard__open {
 .idcard__name {
     margin-top: 58cqw;
     font-size: var(--name-size, 12cqw);
-    /* The one place weight goes past 500. Everywhere else in this app
+    /* Weight goes past 500 in two places and this is one of them; the other
+       is bold in a page's prose (space.css). Everywhere else in this app
        hierarchy comes from size and space; a badge's wordmark is stamped,
        and at 500 it reads as a label sitting on the colour rather than as
        part of the object. Scoped to this element on purpose. */
