@@ -97,7 +97,7 @@ The offer never interrupts a first visit. The workspace marks its
 moment they asked for a tab; everyone else is asked on a second visit. Inside
 the workspace's app frame the pill still appears, but installing is a top-level
 operation, so it asks the workspace to open the app itself
-(`lemma-harness/lib/app/app-install.ts`).
+(`lemma-app-install-request`).
 
 ## Cover
 

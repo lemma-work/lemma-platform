@@ -43,7 +43,7 @@ const tables = await client.tables.list();
 const records = await client.records.list("tickets");
 ```
 
-Pod-scoped namespaces include `tables`, `records`, `agents`, `conversations`, `workflows`, `schedules`, `functions`, `files`, `apps`, `connectors`, `resourceAccess`, and `datastore`. New runtime code should use agents plus conversations.
+Pod-scoped namespaces include `tables`, `records`, `agents`, `conversations`, `workflows`, `schedules`, `decisions`, `functions`, `files`, `apps`, `connectors`, `resourceAccess`, and `datastore`. New runtime code should use agents plus conversations.
 
 ### Live datastore changes (WebSocket)
 

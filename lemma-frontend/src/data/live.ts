@@ -1235,23 +1235,7 @@ export const liveSource: PodSource = {
             ? await lemma(podId).conversations.list(page)
             : await lemma(podId).conversations.listDefault(page);
         return {
-            items: (listed.items ?? []).map((c) => {
-                const row = c as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; metadata?: Record<string, unknown> | null; agent_id?: string | null };
-                const bound = row.metadata?.[RESOURCE_KEY];
-                /* The list is ordered by last activity, so the time beside a row
-                   is that — not `updated_at`, which a rename also moves and
-                   which would put "Today" on a row sitting below yesterday's. */
-                const at = row.last_activity_at ?? row.updated_at;
-                return {
-                    id: row.id,
-                    title: (row.title ?? "").trim() || "Untitled",
-                    at: listStamp(at),
-                    kind: row.type ?? "CHAT",
-                    boundTo: typeof bound === "string" ? bound : null,
-                    origin: originOf(row.metadata, row.type),
-                    agentId: row.agent_id ?? null,
-                };
-            }),
+            items: (listed.items ?? []).map(conversationRefOf),
             next: listed.next_page_token ?? null,
         };
     },
@@ -1614,3 +1598,24 @@ export const liveSource: PodSource = {
         return liveSource.getConversation(podId, teammate, conversationId);
     },
 };
+
+/** One conversation as the lists draw it, from the server's record of it.
+ *  Shared by the list reads and by a conversation created here, which goes
+ *  into the history the moment it exists rather than after a refetch. */
+export function conversationRefOf(conversation: unknown): ConversationRef {
+    const row = conversation as { id: string; title?: string | null; type?: string; updated_at?: string; last_activity_at?: string | null; created_at?: string; metadata?: Record<string, unknown> | null; agent_id?: string | null };
+    const bound = row.metadata?.[RESOURCE_KEY];
+    /* The list is ordered by last activity, so the time beside a row
+       is that — not `updated_at`, which a rename also moves and
+       which would put "Today" on a row sitting below yesterday's. */
+    const at = row.last_activity_at ?? row.updated_at ?? row.created_at;
+    return {
+        id: row.id,
+        title: (row.title ?? "").trim() || "Untitled",
+        at: listStamp(at),
+        kind: row.type ?? "CHAT",
+        boundTo: typeof bound === "string" ? bound : null,
+        origin: originOf(row.metadata, row.type),
+        agentId: row.agent_id ?? null,
+    };
+}

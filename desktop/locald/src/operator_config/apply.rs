@@ -137,43 +137,6 @@ impl OperatorConfigStore {
         Ok(api_key)
     }
 
-    /// Replace only the AI profile, leaving everything else exactly as it is.
-    ///
-    /// `apply` takes a whole configuration, which means any caller wanting to
-    /// change the model has to hold — and faithfully return — the sharing,
-    /// integration, and surface settings too. That is a fine contract for the
-    /// bundled settings page and a bad one to expose anywhere else: a caller
-    /// that got it wrong would silently reset unrelated configuration. This
-    /// takes the one section it is allowed to touch and merges it here.
-    pub fn set_ai(&self, request: Value) -> io::Result<Value> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct SetAiRequest {
-            ai: AiProfile,
-            /// Absent leaves the stored key alone; empty clears it.
-            #[serde(default)]
-            api_key: Option<String>,
-        }
-
-        let request: SetAiRequest = serde_json::from_value(request)
-            .map_err(|error| invalid(format!("invalid AI profile request: {error}")))?;
-        let mut config = self
-            .config
-            .lock()
-            .expect("operator config poisoned")
-            .clone();
-        config.ai = request.ai;
-
-        let mut secrets = BTreeMap::new();
-        if let Some(api_key) = request.api_key {
-            secrets.insert(
-                "ai.api_key".to_string(),
-                Some(api_key).filter(|value| !value.is_empty()),
-            );
-        }
-        self.apply(ApplyOperatorConfig { config, secrets })
-    }
-
     pub fn apply(&self, mut request: ApplyOperatorConfig) -> io::Result<Value> {
         let _write = self.writes.lock().expect("operator writes poisoned");
         self.apply_locked(&mut request)

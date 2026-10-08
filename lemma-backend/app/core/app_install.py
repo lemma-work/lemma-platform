@@ -43,7 +43,7 @@ COVER_PATH = f"/{RESERVED_ASSET_PREFIX}cover.png"
 PLATE_COLOR = "#141413"
 
 # The workspace's app frame announces itself with this message
-# (``lemma-harness/lib/app/app-theme.ts``). It is how a framed app knows it is
+# (``lemma-frontend/src/thread/widget-theme.ts``). It is how a framed app knows it is
 # inside Lemma rather than embedded on an unrelated page, and it carries the
 # origin to reply to.
 WORKSPACE_HELLO_MESSAGE = "lemma-app-theme"

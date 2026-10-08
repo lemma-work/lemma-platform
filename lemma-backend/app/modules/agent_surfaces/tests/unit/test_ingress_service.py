@@ -195,7 +195,7 @@ async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member(
     assert context.reply_kind == "pod_access"
     assert "Request access" in (context.reply_message or "")
     assert context.reply_message.endswith(
-        f"https://app.example.test/pod/{surface.pod_id}"
+        f"https://app.example.test/t/{surface.pod_id}"
     )
     assert "auth.example.test" not in context.reply_message
     agent_conversations.open_surface_conversation.assert_not_called()
