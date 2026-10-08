@@ -530,6 +530,36 @@ test("arms that never meet again keep the biggest on the main line, and the rest
     assert.equal(shape.ordered.length, 15);
 });
 
+test("a body step that goes to what follows the loop runs inside every pass, so it is drawn there", () => {
+    // Legal to save, and easy to misread. A body step pointing anywhere but
+    // its loop keeps the loop's frame (execution/stepper.py move_past), so
+    // `after` runs once per item and again when the items run out. Drawing it
+    // only after the loop would say the decision breaks out, which it never
+    // does; after the loop it is pointed at instead.
+    const shape = readShape({
+        name: "body-runs-the-tail",
+        nodes: [
+            node("each", "LOOP", { items_path: "start.rows", child_node_id: "check" }),
+            node("check", "DECISION", { rules: [{ condition: "loop.item.ok", next_node_id: "after" }] }),
+            node("after", "FUNCTION", { function_name: "record" }),
+        ],
+        edges: [edge("each", "after"), edge("check", "after")],
+        start: { type: "MANUAL", config: null },
+    });
+
+    assert.ok(shape);
+    assert.deepEqual(outlineOf(shape.flow), [
+        { loop: "each", body: [
+            { fork: "check", then: "after", on: null, arms: [
+                { when: "loop.item.ok", items: [] },
+                { when: null, items: [] },
+            ] },
+            "after",
+        ] },
+        "→ after",
+    ]);
+});
+
 test("two arms the same size stay an either/or, each drawn in full", () => {
     const shape = readShape({
         name: "either",
