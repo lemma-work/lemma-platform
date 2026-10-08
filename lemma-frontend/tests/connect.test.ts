@@ -336,6 +336,52 @@ test("the provider's tab comes back to the completion page, carrying where it st
     assert.equal(failed.text, "access_denied");
 });
 
+test("an outcome reaches the tab that started the flow, however it can be reached", async () => {
+    const { deliverOutcome } = await import("../src/connect/round-trip.ts");
+    const outcome = { connect: "connected", connector: "gmail", account: "a1", reason: null };
+    const posted: { message: unknown; origin: string }[] = [];
+    const broadcast: unknown[] = [];
+    const opener = { closed: false, postMessage: (message: unknown, origin: string) => { posted.push({ message, origin }); } };
+
+    // An opener is direct, and is preferred over the channel even when both
+    // are available — one outcome, delivered once.
+    assert.equal(
+        deliverOutcome(outcome, { opener, origin: "https://app.test", waiting: true, broadcast: (o) => broadcast.push(o) }),
+        "opener",
+    );
+    assert.deepEqual(posted, [{ message: { source: "lemma-connect", ...outcome }, origin: "https://app.test" }]);
+    assert.deepEqual(broadcast, []);
+
+    // A popup whose opener the consent chain cut: the channel is the only way
+    // left, and it is used while a tab is still waiting.
+    assert.equal(
+        deliverOutcome(outcome, { opener: null, origin: "https://app.test", waiting: true, broadcast: (o) => broadcast.push(o) }),
+        "channel",
+    );
+    assert.deepEqual(broadcast, [outcome]);
+
+    // A closed opener is no opener, and a tab nobody is waiting in is not one
+    // to close on: the caller takes the person back itself instead.
+    assert.equal(
+        deliverOutcome(outcome, { opener: { ...opener, closed: true }, origin: "https://app.test", waiting: false, broadcast: (o) => broadcast.push(o) }),
+        "nowhere",
+    );
+    assert.equal(broadcast.length, 1);
+});
+
+test("a round trip is only still out for as long as one could be", async () => {
+    const { isWaiting } = await import("../src/connect/round-trip.ts");
+    const now = 1_700_000_000_000;
+    assert.equal(isWaiting(String(now - 60_000), now), true);
+    assert.equal(isWaiting(String(now), now), true);
+    // The window is minutes, not hours: past it a person who wandered off has
+    // the panel's own "Done?", and a focus is just a focus.
+    assert.equal(isWaiting(String(now - 16 * 60_000), now), false);
+    assert.equal(isWaiting(null, now), false);
+    assert.equal(isWaiting("not a time", now), false);
+    assert.equal(isWaiting("0", now), false);
+});
+
 test("the role refusal is said as the role it is", () => {
     // Making an install needs an owner or editor; the backend tells anyone
     // else "no connectors in organization <uuid>", which nobody can act on.
