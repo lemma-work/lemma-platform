@@ -95,7 +95,7 @@ def config_script(name: str) -> bytes:
 
 
 class Handler(SimpleHTTPRequestHandler):
-    # Real paths, so ``contained`` can compare a request's against them.
+    # The folders ``files_under`` lists; a request never names a path in them.
     app_dir: str
     fixtures: str
     api_base: str
@@ -148,8 +148,8 @@ class Handler(SimpleHTTPRequestHandler):
         self._send(200, json.dumps(answer).encode("utf-8"), "application/json")
 
     def _fixture(self, path: str, body: bytes) -> object | None:
-        file = contained(self.fixtures, f"{path}.json")
-        if file is None or not os.path.isfile(file):
+        file = files_under(self.fixtures).get(f"{path}.json")
+        if file is None:
             return None
         with open(file, encoding="utf-8") as handle:
             data = json.load(handle)
@@ -180,17 +180,13 @@ class Handler(SimpleHTTPRequestHandler):
         self._send(200, content, media)
 
     def _app(self, path: str) -> None:
-        name = path.lstrip("/")
-        file = contained(self.app_dir, name or "index.html")
-        if file is not None and os.path.isdir(file):
-            file = contained(self.app_dir, os.path.join(name, "index.html"))
-        if file is None or not os.path.isfile(file):
+        name = path.strip("/")
+        files = files_under(self.app_dir)
+        file = files.get(name or "index.html") or files.get(f"{name}/index.html")
+        if file is None:
             # A missing file is a missing asset; a path with no extension is
             # the app's own client-side route, which its index.html answers.
-            if "." in PurePosixPath(name).name:
-                self._send(404, b"", "text/plain")
-                return
-            file = contained(self.app_dir, "index.html")
+            file = None if "." in PurePosixPath(name).name else files.get("index.html")
         if file is None:
             self._send(404, b"", "text/plain")
             return
@@ -210,16 +206,20 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(content)
 
 
-def contained(root: str, relative: str) -> str | None:
-    """``relative`` resolved under ``root``, or None if it would leave it.
+def files_under(root: str) -> dict[str, str]:
+    """Every file under ``root``, keyed by its ``/``-separated relative path.
 
-    Every path a request names goes through here before it touches the disk,
-    so ``..``, an absolute path or a symlink out of the folder answers nothing.
+    A request's path is only ever a key into this, never part of a path that is
+    opened, so ``..``, an absolute path or an encoded one names nothing outside
+    the folder. Read afresh on each request, so a sample file added while the
+    server runs is answered on the next reload.
     """
-    candidate = os.path.realpath(os.path.join(root, relative))
-    if candidate != root and not candidate.startswith(root + os.sep):
-        return None
-    return candidate
+    found: dict[str, str] = {}
+    for folder, _subfolders, names in os.walk(root):
+        for name in names:
+            full = os.path.join(folder, name)
+            found[os.path.relpath(full, root).replace(os.sep, "/")] = full
+    return found
 
 
 def inject(page: bytes, script: bytes) -> bytes:
