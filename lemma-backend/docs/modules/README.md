@@ -23,7 +23,7 @@ flowchart LR
     J --> P["PostgreSQL, Redis, object storage, the sandbox runtime, providers"]
 ```
 
-The canonical registration order is identity, pod, pod bundle, datastore,
+The canonical registration order is vault, identity, pod, pod bundle, datastore,
 schedule, connectors, agent, function, apps, workflow, agent surfaces, icon,
 usage, workspace, web login, MCP access, decisions, and analytics. Order affects router and lifespan registration, but
 modules should communicate through explicit ports or domain events rather than
@@ -33,6 +33,7 @@ depending on import order.
 
 | Module | Primary responsibility | Durable tables owned |
 | --- | --- | --- |
+| [vault](vault.md) | Every stored secret: sealed values, key-encryption keys, audit | `vault_keys`, `vault_secrets`, `vault_secret_events`; the root key is outside the database |
 | [identity](identity.md) | Users, organizations, invitations, authentication | `users`, `organizations`, `organization_members`, `organization_invitations` |
 | [pod](pod.md) | Workspace tenancy, membership, roles, resource grants | `pods`, `pod_members`, `pod_join_requests`; shared authorization grant tables live in core |
 | [pod_bundle](pod_bundle.md) | Export, plan, import, and GitHub publish of portable pods | `pod_bundle_jobs`, `pod_bundle_job_steps`; Redis holds only the realtime mirror, and staged archives live in object storage |

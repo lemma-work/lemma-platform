@@ -85,8 +85,9 @@ dependencies = [
 local = [
     "xberg>=1.0.14",
 ]
-# Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the
-# imports are lazy (only loaded when secret_key_provider selects them).
+# Cloud root keys for the vault (app/core/crypto/roots). Optional so a pip or
+# desktop install stays lean -- the imports are lazy, loaded only when
+# SECRET_KEY_PROVIDER selects them -- and always installed in the backend image.
 gcp-kms = [
     "google-cloud-kms>=3.0.0",
     "google-cloud-secret-manager>=2.20.0",
