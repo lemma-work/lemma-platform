@@ -1,5 +1,5 @@
 import type { AuthManager } from "./auth.js";
-import { NetworkError, apiErrorFromStatus } from "./http.js";
+import { NetworkError, apiErrorFromStatus, isSessionRejection } from "./http.js";
 import { ApiError as GeneratedApiError } from "./openapi_client/core/ApiError.js";
 import { CancelablePromise } from "./openapi_client/core/CancelablePromise.js";
 import { OpenAPI } from "./openapi_client/core/OpenAPI.js";
@@ -71,7 +71,7 @@ export class GeneratedClientAdapter {
         return await this.runWithTimeout(operation);
       } catch (error) {
         if (error instanceof GeneratedApiError) {
-          if (error.status === 401) {
+          if (isSessionRejection(error.status, extractCode(error.body))) {
             this.auth.markUnauthenticated();
           }
 

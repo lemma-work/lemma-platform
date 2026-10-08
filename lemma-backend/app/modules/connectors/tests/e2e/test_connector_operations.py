@@ -659,7 +659,9 @@ async def test_connector_operation_returns_upstream_execution_error_details(
             },
         )
 
-    assert response.status_code == 401, response.text
+    # 424, not the provider's 401: every client reads a 401 from this API as
+    # the caller's own session ending, and resends or signs them out.
+    assert response.status_code == 424, response.text
     payload = response.json()
     assert payload["message"] == "Connector account authorization failed."
     assert payload["code"] == "OPERATION_EXECUTION_UNAUTHORIZED"

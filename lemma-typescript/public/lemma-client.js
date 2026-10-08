@@ -10194,6 +10194,10 @@ var LemmaClient = (() => {
         return status >= 500 ? new ServerError(status, message, code, details, rawResponse) : new ApiError(status, message, code, details, rawResponse);
     }
   }
+  var CONNECTOR_PROVIDER_CODE_PREFIX = "OPERATION_EXECUTION_";
+  function isSessionRejection(status, code) {
+    return status === 401 && !(code == null ? void 0 : code.startsWith(CONNECTOR_PROVIDER_CODE_PREFIX));
+  }
   var HttpClient = class {
     constructor(apiUrl, auth, options = {}) {
       __publicField(this, "apiUrl", apiUrl);
@@ -10293,6 +10297,16 @@ var LemmaClient = (() => {
       error.requestId = (_b = response.headers.get("x-request-id")) != null ? _b : void 0;
       return error;
     }
+    /** The error a refused response becomes, once the session has been told
+     *  whether it was the one refused. The body has to be read first: the code
+     *  in it is what tells a dead session from a connector's rejected key. */
+    async failure(response) {
+      const error = await this.parseError(response);
+      if (isSessionRejection(error.statusCode, error.code)) {
+        this.auth.markUnauthenticated();
+      }
+      return error;
+    }
     getRequestBody(options) {
       if (options.body === void 0) {
         return void 0;
@@ -10321,9 +10335,6 @@ var LemmaClient = (() => {
       const init = this.buildRequestInit(method, options);
       for (let attempt = 0; ; attempt++) {
         const response = await this.fetchWithTimeout(url, init, options.signal);
-        if (response.status === 401) {
-          this.auth.markUnauthenticated();
-        }
         const retryDelay = retryDelayForStatus(
           response.status,
           method,
@@ -10336,7 +10347,7 @@ var LemmaClient = (() => {
           continue;
         }
         if (!response.ok) {
-          throw await this.parseError(response);
+          throw await this.failure(response);
         }
         if (response.status === 204) {
           return void 0;
@@ -10385,11 +10396,8 @@ var LemmaClient = (() => {
           error
         );
       }
-      if (response.status === 401) {
-        this.auth.markUnauthenticated();
-      }
       if (!response.ok) {
-        throw await this.parseError(response);
+        throw await this.failure(response);
       }
       return response;
     }
@@ -10417,11 +10425,8 @@ var LemmaClient = (() => {
         init.headers = { ...init.headers, ...options.headers };
       }
       const response = await this.fetchWithTimeout(url, init);
-      if (response.status === 401) {
-        this.auth.markUnauthenticated();
-      }
       if (!response.ok) {
-        throw await this.parseError(response);
+        throw await this.failure(response);
       }
       return {
         blob: await response.blob(),
@@ -10617,7 +10622,7 @@ var LemmaClient = (() => {
           return await this.runWithTimeout(operation);
         } catch (error) {
           if (error instanceof ApiError2) {
-            if (error.status === 401) {
+            if (isSessionRejection(error.status, extractCode(error.body))) {
               this.auth.markUnauthenticated();
             }
             const retryDelay = retryDelayForStatus(

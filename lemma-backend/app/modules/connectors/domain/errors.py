@@ -360,11 +360,23 @@ class OperationExecutionRateLimitedError(OperationExecutionError):
 
 
 class OperationExecutionUnauthorizedError(OperationExecutionError):
+    """The provider refused the connected account's credential.
+
+    424, not the provider's 401. Every client of this API reads a 401 as the
+    caller's own Lemma session ending: the browser's session interceptor
+    refreshes and resends the request, the SDKs and the CLI refresh and run it
+    again, and a pod app signs its user out. So a wrong third-party API key
+    executed the operation several more times and then sent somebody who was
+    signed in to the sign-in page. The request did fail because something it
+    depended on failed, which is what 424 says; the provider's own status stays
+    in ``details["upstream_status"]``.
+    """
+
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
             message="Connector account authorization failed.",
             code="OPERATION_EXECUTION_UNAUTHORIZED",
-            status_code=401,
+            status_code=424,
             details=_safe_connector_details(details),
         )
 
