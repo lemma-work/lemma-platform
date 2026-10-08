@@ -107,6 +107,28 @@ export function humanize(name: string): string {
     return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** The app a bundle installs, if it installs one.
+ *
+ *  An APP step is named by the app's own directory, which is the segment a
+ *  workspace URL names it by, so the step carries everything the landing
+ *  address needs. The first one is the one the bundle is built around; a
+ *  bundle with several is rare and either is better than the teammate. */
+export function installedApp(steps: PlanStep[]): string | null {
+    return steps.find((step) => step.kind === "APP")?.name ?? null;
+}
+
+/** Where somebody lands once an install has finished.
+ *
+ *  A teammate that ships an app is meant to be used from the app: the app is
+ *  the work, and the conversation behind it is where it was built. Landing on
+ *  the teammate instead puts the thing that was just installed behind a second
+ *  click, which reads as an install that produced nothing. */
+export function landingPath(podId: string, steps: PlanStep[]): string {
+    const base = "/t/" + encodeURIComponent(podId);
+    const app = installedApp(steps);
+    return app ? base + "/app/" + encodeURIComponent(app) : base;
+}
+
 /** A repository slug as a teammate's name: `smart-inbox` → "Smart Inbox". */
 export function teammateName(repo: string): string {
     return repo
