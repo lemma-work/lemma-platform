@@ -111,6 +111,27 @@ export function tooLarge(file: File): boolean {
     return file.size > MAX_BYTES;
 }
 
+/** What a drop, a paste or the file picker handed over, split into what can go
+ *  up and a sentence about what cannot.
+ *
+ *  Shared by the composer and the ask box, because the two are the same act on
+ *  two surfaces: a second copy of this rule is a second ceiling, and the one
+ *  that drifts is the one somebody hits.
+ */
+export function offered(files: readonly File[]): { take: File[]; refused: string | null } {
+    const big = files.filter(tooLarge);
+    const take = files.filter((file) => !tooLarge(file));
+    return {
+        take,
+        refused:
+            big.length === 0
+                ? null
+                : big.length === 1
+                  ? big[0].name + " is too large to attach (" + describeSize(big[0].size) + ")."
+                  : big.length + " files are too large to attach.",
+    };
+}
+
 export function describeSize(bytes: number): string {
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + " KB";

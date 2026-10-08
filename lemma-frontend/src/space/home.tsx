@@ -43,8 +43,8 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
     onOpenConversation: (id: string) => void;
     /** The teammate's own page. */
     onAbout: () => void;
-    /** Start a conversation with these words, in the Chat tab. */
-    onAsk: (text: string) => void;
+    /** Start a conversation with these words and files, in the Chat tab. */
+    onAsk: (text: string, files: File[]) => void;
 }) {
     const mate = pod.teammate?.name || pod.name;
     const [fill, setFill] = useState<{ text: string; id: number } | null>(null);

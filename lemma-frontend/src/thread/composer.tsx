@@ -3,7 +3,7 @@ import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type DragEve
 import {
     canSend,
     describeSize,
-    tooLarge,
+    offered,
     type Attachment,
 } from "./attachments";
 import { composerActions, type Queued } from "./queued";
@@ -210,16 +210,9 @@ export const Composer = memo(function Composer({
      *  only ever a refusal that says exactly what it did. */
     function offer(files: File[]) {
         if (files.length === 0) return;
-        const big = files.filter(tooLarge);
-        const rest = files.filter((file) => !tooLarge(file));
-        setRefused(
-            big.length === 0
-                ? null
-                : big.length === 1
-                  ? big[0].name + " is too large to attach (" + describeSize(big[0].size) + ")."
-                  : big.length + " files are too large to attach.",
-        );
-        if (rest.length > 0) onAttach?.(rest);
+        const { take, refused: why } = offered(files);
+        setRefused(why);
+        if (take.length > 0) onAttach?.(take);
     }
 
     async function send() {
