@@ -245,5 +245,11 @@ class ScheduleFilterTaskQueue(ABC):
         payload: Dict[str, Any],
         metadata: Dict[str, Any],
         source_event_id: str,
+        user_id: UUID | None = None,
     ) -> None:
-        """Enqueue background LLM filter work for a schedule."""
+        """Enqueue background LLM filter work for a schedule.
+
+        ``user_id`` is who the fire runs as when it is not the schedule owner:
+        the row owner of an RLS datastore event. ``None`` means the schedule
+        owner, which is every webhook fire.
+        """

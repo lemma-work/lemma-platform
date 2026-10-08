@@ -23,12 +23,18 @@ class StreaqScheduleFilterTaskQueue(ScheduleFilterTaskQueue):
         payload: Dict[str, Any],
         metadata: Dict[str, Any],
         source_event_id: str,
+        user_id: UUID | None = None,
     ) -> None:
+        # `user_id` only when there is one, so a webhook job is the same bytes
+        # it always was and a worker that predates the argument can still run
+        # it during a rolling deploy.
+        owner = {"user_id": str(user_id)} if user_id is not None else {}
         await self._job_queue.enqueue(
             "handle_llm_filter_task",
             schedule_id=str(schedule_id),
             payload=payload,
             metadata=metadata,
             source_event_id=source_event_id,
+            **owner,
             _job_id=f"schedule-filter:{schedule_id}:{source_event_id}",
         )

@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
+from app.core.origin import OriginKind
 from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
@@ -15,6 +16,12 @@ from app.modules.schedule.domain.schedule import (
     ScheduleType,
 )
 from app.modules.schedule.services.datastore_event_handler import DatastoreEventHandler
+from app.modules.schedule.services.schedule_processor import ScheduleProcessor
+from app.modules.schedule.tests.fakes import (
+    RecordingFilterTaskQueue,
+    RecordingScheduleEventPublisher,
+    ScriptedScheduleFilter,
+)
 
 
 @pytest.mark.asyncio
@@ -274,11 +281,11 @@ def _repository_on(journal: _Journal) -> AsyncMock:
 async def test_the_connection_is_handed_back_before_each_schedule_is_processed():
     """Per iteration, not once before the loop.
 
-    A schedule carrying a `filter_instruction` runs an LLM inference inline, so
-    holding the transaction across it keeps a pooled connection idle for the
-    length of every call in the loop. One release before the loop would not do:
-    the FILTERED/TRIGGERED fire row written for schedule N re-dirties the
-    session before schedule N+1's inference.
+    Each schedule is handed on through I/O this session does not own -- the
+    outbox write on a session of its own, or a Redis enqueue -- and a pooled
+    connection must not sit idle across it. One release before the loop would
+    not do: the FILTERED/TRIGGERED fire row written for schedule N re-dirties
+    the session before schedule N+1 is handed on.
 
     The property is an ordering, so the assertion is on the sequence. A commit
     *count* would pass just as well with the commit in the wrong place.
@@ -323,3 +330,149 @@ async def test_the_connection_is_handed_back_before_each_schedule_is_processed()
         "process_event",
         "record_fire",
     ]
+
+
+def _filtered_schedule(pod_id, *, table: str = "users"):
+    return ScheduleEntity(
+        id=uuid4(),
+        user_id=uuid4(),
+        pod_id=pod_id,
+        schedule_type=ScheduleType.DATASTORE,
+        config={"table_name": table, "operations": ["INSERT"]},
+        filter_instruction="Only rows that need a human.",
+    )
+
+
+def _insert(pod_id, *, owner_user_id=None, table: str = "users"):
+    return DatastoreRecordEvent.create(
+        pod_id=pod_id,
+        table_name=table,
+        record_id="rec_1",
+        operation=DatastoreRecordOperation.INSERT,
+        payload={"id": "rec_1"},
+        actor_id=uuid4(),
+        owner_user_id=owner_user_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_filtered_schedule_is_queued_instead_of_evaluated_inline():
+    """The shared consumer must not wait on a model.
+
+    Every pod's record events go through one consumer, one at a time, so a
+    filter evaluated here holds back every other pod's triggers for as long as
+    the model takes. The decision is the filter task's; this only queues it.
+    """
+    journal = _Journal()
+    repo = _repository_on(journal)
+    model = ScriptedScheduleFilter(proceed=True)
+    publisher = RecordingScheduleEventPublisher()
+    queue = RecordingFilterTaskQueue(journal.entries)
+    pod_id = uuid4()
+    schedule = _filtered_schedule(pod_id)
+    repo.find_by_pod_table_event.return_value = [schedule]
+    row_owner = uuid4()
+    event = _insert(pod_id, owner_user_id=row_owner)
+
+    handler = DatastoreEventHandler(
+        repo, ScheduleProcessor(model, publisher), filter_task_queue=queue
+    )
+    fired = await handler.handle_datastore_event(event)
+
+    assert model.evaluated == [], "the model was called on the shared consumer"
+    assert publisher.fired == [], "a filtered schedule fired before its filter ran"
+    assert fired == []
+    [queued] = queue.queued
+    assert queued.schedule_id == schedule.id
+    # The job's identity is the event's, which is what lets a redelivery
+    # collapse into the run the first delivery already started.
+    assert queued.source_event_id == str(event.event_id)
+    assert queued.user_id == row_owner
+    assert queued.metadata["record_id"] == "rec_1"
+    # Released before the enqueue, and no fire stamped: the task decides.
+    assert journal.entries == ["commit", "enqueue"]
+
+
+@pytest.mark.asyncio
+async def test_an_unfiltered_schedule_still_fires_directly():
+    repo = AsyncMock()
+    model = ScriptedScheduleFilter(proceed=True)
+    publisher = RecordingScheduleEventPublisher()
+    queue = RecordingFilterTaskQueue()
+    pod_id = uuid4()
+    filtered = _filtered_schedule(pod_id)
+    direct = ScheduleEntity(
+        id=uuid4(),
+        user_id=uuid4(),
+        pod_id=pod_id,
+        schedule_type=ScheduleType.DATASTORE,
+        config={"table_name": "users", "operations": ["INSERT"]},
+    )
+    repo.find_by_pod_table_event.return_value = [filtered, direct]
+    event = _insert(pod_id)
+
+    handler = DatastoreEventHandler(
+        repo, ScheduleProcessor(model, publisher), filter_task_queue=queue
+    )
+    fired = await handler.handle_datastore_event(event)
+
+    assert fired == [direct.id]
+    assert [fire.schedule_id for fire in publisher.fired] == [direct.id]
+    assert publisher.fired[0].source_event_id == str(event.event_id)
+    assert [job.schedule_id for job in queue.queued] == [filtered.id]
+    assert model.evaluated == []
+
+
+@pytest.mark.asyncio
+async def test_a_shared_row_queues_its_filter_to_run_as_the_schedule_owner():
+    """No row owner travels, and the task reads that as the schedule owner."""
+    repo = AsyncMock()
+    queue = RecordingFilterTaskQueue()
+    pod_id = uuid4()
+    repo.find_by_pod_table_event.return_value = [_filtered_schedule(pod_id)]
+
+    handler = DatastoreEventHandler(repo, AsyncMock(), filter_task_queue=queue)
+    await handler.handle_datastore_event(_insert(pod_id, owner_user_id=None))
+
+    assert [job.user_id for job in queue.queued] == [None]
+
+
+@pytest.mark.asyncio
+async def test_the_filter_task_is_queued_as_a_data_trigger():
+    """Origin travels with a queued job, so the filter's work is DATA_TRIGGER."""
+    repo = AsyncMock()
+    queue = RecordingFilterTaskQueue()
+    pod_id = uuid4()
+    repo.find_by_pod_table_event.return_value = [_filtered_schedule(pod_id)]
+
+    handler = DatastoreEventHandler(repo, AsyncMock(), filter_task_queue=queue)
+    await handler.handle_datastore_event(_insert(pod_id))
+
+    assert [job.origin for job in queue.queued] == [OriginKind.DATA_TRIGGER]
+
+
+@pytest.mark.asyncio
+async def test_a_direct_fire_reports_its_latency_at_info(caplog):
+    """Fire latency is the number a datastore trigger is judged by in production."""
+    repo = AsyncMock()
+    publisher = RecordingScheduleEventPublisher()
+    pod_id = uuid4()
+    repo.find_by_pod_table_event.return_value = [
+        ScheduleEntity(
+            id=uuid4(),
+            user_id=uuid4(),
+            pod_id=pod_id,
+            schedule_type=ScheduleType.DATASTORE,
+            config={"table_name": "users", "operations": ["INSERT"]},
+        )
+    ]
+    handler = DatastoreEventHandler(
+        repo,
+        ScheduleProcessor(ScriptedScheduleFilter(), publisher),
+        filter_task_queue=RecordingFilterTaskQueue(),
+    )
+
+    with caplog.at_level("INFO"):
+        await handler.handle_datastore_event(_insert(pod_id))
+
+    assert "schedule.fire.latency_ms" in caplog.text

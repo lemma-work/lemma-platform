@@ -7,11 +7,19 @@ from typing import List
 from uuid import UUID
 
 from app.modules.datastore.domain.events import DatastoreRecordEvent
+from app.modules.schedule.domain.interfaces import ScheduleFilterTaskQueue
 from app.modules.schedule.domain.match_conditions import evaluate_match_conditions
-from app.modules.schedule.domain.schedule import ScheduleFireStatus, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    ScheduleEntity,
+    ScheduleFireStatus,
+    ScheduleType,
+)
 from app.modules.schedule.domain.value_objects import (
     DatastoreOperation,
     parse_datastore_operation,
+)
+from app.modules.schedule.infrastructure.adapters.filter_task_queue import (
+    StreaqScheduleFilterTaskQueue,
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
@@ -22,16 +30,45 @@ from app.core.origin import Origin, OriginKind, origin_scope
 logger = get_logger(__name__)
 
 
+def log_fire_latency(
+    schedule_id: UUID, occurred_at: datetime, *, llm_filter: bool
+) -> None:
+    """How long after the write its schedule fired.
+
+    At info, because this is the number a datastore trigger is judged by and
+    the one that is otherwise invisible: a schedule that fires late looks
+    exactly like one that fires on time, just later. `llm_filter` separates the
+    fires that waited on a model from the ones that did not.
+    """
+    latency_ms = int((datetime.now(timezone.utc) - occurred_at).total_seconds() * 1000)
+    logger.info(
+        "schedule.fire.latency_ms",
+        schedule_id=str(schedule_id),
+        latency_ms=latency_ms,
+        llm_filter=llm_filter,
+    )
+
+
 class DatastoreEventHandler:
-    """Handler that matches datastore events to DATASTORE schedules and fires them."""
+    """Match a datastore event to DATASTORE schedules and fire them.
+
+    Database work only, by design. This runs on the one consumer group every
+    pod's record events share, one message at a time, so anything slow here
+    is slow for every pod on the platform. A schedule with a
+    `filter_instruction` is therefore handed to the filter task -- the same
+    one webhook schedules use -- rather than evaluated here: a model call
+    here would hold back every other pod's triggers for as long as it took.
+    """
 
     def __init__(
         self,
         schedule_repository: ScheduleRepository,
         schedule_processor: ScheduleProcessor,
+        filter_task_queue: ScheduleFilterTaskQueue | None = None,
     ):
         self.schedule_repository = schedule_repository
         self.schedule_processor = schedule_processor
+        self.filter_task_queue = filter_task_queue or StreaqScheduleFilterTaskQueue()
 
     async def handle_datastore_event(
         self,
@@ -77,12 +114,10 @@ class DatastoreEventHandler:
                 await self._record_fire(schedule.id, status=ScheduleFireStatus.FILTERED)
                 continue
 
-            # Let the connection go before processing. A schedule carrying a
-            # filter_instruction runs an LLM inference inline here, once per
-            # matching schedule, and holding the transaction across that keeps
-            # a pooled connection idle for the length of every call in the
-            # loop. The webhook sibling (schedule_consumer) already does this
-            # and says why in its docstring.
+            # Let the connection go before the schedule is handed on. Either
+            # way out leaves this session -- a Redis enqueue for a filtered
+            # schedule, an outbox write on a session of its own otherwise -- and
+            # a pooled connection must not sit idle across either.
             #
             # A commit rather than `connection_released`: a previous iteration
             # may have written a FILTERED fire row, and `safe_to_release`
@@ -96,8 +131,13 @@ class DatastoreEventHandler:
                 # may well have been written from the web, but that is how the
                 # write arrived -- this schedule's work arrived because a table
                 # changed, and DATA_TRIGGER is the honest answer for everything
-                # raised from here down.
+                # raised from here down. The filter task inherits it: origin
+                # travels with an enqueued job.
                 with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
+                    if schedule.filter_instruction:
+                        await self._queue_filter(schedule, event, metadata)
+                        # The filter task decides, and records what it decided.
+                        continue
                     fired = await self.schedule_processor.process_event(
                         schedule=schedule,
                         payload=event.payload or {},
@@ -116,14 +156,7 @@ class DatastoreEventHandler:
                 )
                 raise
 
-            latency_ms = int(
-                (datetime.now(timezone.utc) - event.occurred_at).total_seconds() * 1000
-            )
-            logger.debug(
-                "schedule.fire.latency_ms",
-                schedule_id=str(schedule.id),
-                latency_ms=latency_ms,
-            )
+            log_fire_latency(schedule.id, event.occurred_at, llm_filter=False)
             await self._record_fire(
                 schedule.id,
                 status=(
@@ -136,6 +169,29 @@ class DatastoreEventHandler:
                 fired_schedule_ids.append(schedule.id)
 
         return fired_schedule_ids
+
+    async def _queue_filter(
+        self,
+        schedule: ScheduleEntity,
+        event: DatastoreRecordEvent,
+        metadata: dict[str, object],
+    ) -> None:
+        """Hand the schedule's filter to the filter task, keyed by this event.
+
+        The event id is the whole of the idempotency: the job is keyed on
+        schedule plus event, and the run it may start is claimed once per
+        schedule plus event, so a redelivery that queues the job a second time
+        still starts one run.
+        """
+        await self.filter_task_queue.enqueue(
+            schedule_id=schedule.id,
+            payload=event.payload or {},
+            metadata=metadata,
+            source_event_id=str(event.event_id),
+            # `None` for a shared row, which has no owner of its own; the task
+            # then runs it as the schedule owner, as a direct fire does.
+            user_id=event.owner_user_id,
+        )
 
     def _matches_conditions(
         self,

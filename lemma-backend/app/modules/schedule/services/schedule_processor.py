@@ -51,7 +51,7 @@ class ScheduleProcessor:
                 raise RuntimeError("Schedule filter adapter is not configured")
             # Every filter failure propagates, quota included. Which of them is
             # worth retrying is a policy question, and it is answered at the
-            # task boundary in `handle_llm_filter_task` — this layer does not
+            # task boundary in `run_deferred_filter` — this layer does not
             # know whether its caller can retry.
             should_proceed, llm_output = await self.filter_service.filter_event(
                 instruction=schedule.filter_instruction,

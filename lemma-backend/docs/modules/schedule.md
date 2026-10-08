@@ -12,7 +12,7 @@ or surfaces; target modules decide how to execute the fire.
 | --- | --- |
 | API routers | Pod schedule CRUD and public webhook ingress/verification |
 | Redis consumers | Schedule commands, datastore events, pod deletion, scheduler notifications |
-| streaq task | Evaluate LLM filters off-request |
+| streaq task | Evaluate LLM filters off the path that received the event, for webhook and datastore schedules alike |
 | Worker poller | Claims due TIME schedules with `FOR UPDATE SKIP LOCKED` and advances their cursor |
 | Published stream | `schedule_events` |
 
@@ -127,6 +127,16 @@ flowchart LR
     E --> W["workflow target"]
     E --> S["surface target"]
 ```
+
+Every pod's datastore events share one consumer group, read one message at a
+time, so that consumer does database work only: it matches conditions and
+either stages the fire or queues the schedule's filter. A model call there
+would hold back every pod's triggers for as long as it took. The filter task
+retries a failure a later attempt can get past — a provider outage, an answer
+that did not fit the schema, a database blip — because streaq retries only a
+task that asks to be. `schedule.fire.latency_ms` (info) reports how long after
+the write each datastore schedule fired, with `llm_filter` separating the two
+paths.
 
 The service mirrors provider-backed webhook schedules into the connector through
 an adapter. Each `schedule.fired` trigger claims one durable schedule run;

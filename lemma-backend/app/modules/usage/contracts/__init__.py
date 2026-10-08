@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.modules.usage.domain.entities import UsageReservation
 from app.modules.usage.domain.errors import (
+    ProviderAttemptsExhaustedError,
     UsageContextMissingError,
     UsageLimitExceededError,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "AgentRunUsage",
     "MeteredRequest",
     "ModelPricing",
+    "ProviderAttemptsExhaustedError",
     "UsageContextMissingError",
     "UsageLimitExceededError",
     "UsageReservation",
