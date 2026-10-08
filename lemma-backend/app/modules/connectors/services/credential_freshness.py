@@ -82,8 +82,14 @@ async def resolve_execution_credentials(
     if not credential_refresh_due(stored):
         return stored
 
+    # Refreshed as the account's owner, never as the caller. Resolution has
+    # already decided the caller may use this account -- for a pinned shared
+    # account through ``connector_account.use`` -- and ``get_account_credentials``
+    # only finds an account for its owner. Passing the caller made every call by
+    # anyone else fail with ``ACCOUNT_NOT_FOUND`` whenever the token happened to be
+    # due, until the owner's own next call refreshed it.
     refreshed = await connector_service.get_account_credentials(
-        account.id, user_id, account.organization_id
+        account.id, account.user_id, account.organization_id
     )
     refreshed_credentials = serialize(refreshed)
     if "user_data" not in refreshed_credentials and stored.get("user_data"):
