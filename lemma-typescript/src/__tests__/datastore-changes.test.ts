@@ -53,6 +53,7 @@ beforeEach(() => {
 afterEach(() => {
   (globalThis as { WebSocket?: unknown }).WebSocket = originalWebSocket;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("watchDatastoreChanges", () => {
@@ -103,6 +104,52 @@ describe("watchDatastoreChanges", () => {
       "ws://localhost:8711/pods/POD/datastore/changes?access_token=TOKEN",
     );
     handle.close();
+  });
+
+  // `lemma apps init --proxy` sets the API URL to "/api" in dev. The page origin
+  // is stubbed in both rows: an absolute URL must not be rebased onto it.
+  it.each([
+    [
+      "https://api.x.test",
+      "wss://api.x.test/pods/POD/datastore/changes?table=notes&since=1-0&access_token=TOKEN",
+    ],
+    [
+      "/api",
+      "ws://localhost:5173/api/pods/POD/datastore/changes?table=notes&since=1-0&access_token=TOKEN",
+    ],
+  ])("builds the ws url for apiUrl %s against the page origin", async (apiUrl, expected) => {
+    vi.stubGlobal("location", { origin: "http://localhost:5173" });
+    const handle = watchDatastoreChanges(apiUrl, makeAuth(), "POD", {
+      table: "notes",
+      since: "1-0",
+      onChange: vi.fn(),
+    });
+    await flush();
+
+    expect(FakeWebSocket.instances[0].url).toBe(expected);
+    handle.close();
+  });
+
+  it.each([
+    ["no location", undefined],
+    ["an opaque origin", { origin: "null" }],
+  ])("stops for good on a relative apiUrl with %s", async (_label, location) => {
+    vi.stubGlobal("location", location);
+    const onError = vi.fn();
+    const onStatus = vi.fn();
+    const handle = watchDatastoreChanges("/api", makeAuth(), "POD", {
+      onChange: vi.fn(),
+      onError,
+      onStatus,
+    });
+    await flush();
+    await flush();
+
+    expect(FakeWebSocket.instances.length).toBe(0);
+    expect(handle.closed).toBe(true);
+    expect(onStatus).toHaveBeenLastCalledWith("closed");
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0].message).toMatch(/"\/api" is relative/);
   });
 
   // refreshAccessToken (microtask) -> scheduleReconnect -> setTimeout(0) -> connect

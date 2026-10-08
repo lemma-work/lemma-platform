@@ -18144,8 +18144,19 @@ var LemmaClient = (() => {
     );
     return Math.random() * ceiling;
   }
+  function absoluteApiUrl(apiUrl) {
+    var _a;
+    if (/^[a-z][a-z\d+.-]*:/i.test(apiUrl)) return apiUrl;
+    const origin = (_a = globalThis.location) == null ? void 0 : _a.origin;
+    if (!origin || origin === "null") {
+      throw new Error(
+        `Datastore change stream: apiUrl "${apiUrl}" is relative and there is no page origin to resolve it against; pass an absolute URL`
+      );
+    }
+    return new URL(apiUrl, origin).toString();
+  }
   function changesWsUrl(apiUrl, podId, table, since, token) {
-    const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
+    const root = absoluteApiUrl(apiUrl).replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
     const url = new URL(`${root}/pods/${podId}/datastore/changes`);
     if (table) url.searchParams.set("table", table);
     if (since) url.searchParams.set("since", since);
@@ -18201,9 +18212,16 @@ var LemmaClient = (() => {
         }
       }
       if (stopped) return;
+      let url;
+      try {
+        url = changesWsUrl(apiUrl, podId, options.table, cursor, token);
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
       let ws;
       try {
-        ws = new WebSocket(changesWsUrl(apiUrl, podId, options.table, cursor, token));
+        ws = new WebSocket(url);
       } catch (error) {
         (_a = options.onError) == null ? void 0 : _a.call(options, error instanceof Error ? error : new Error(String(error)));
         scheduleReconnect();
