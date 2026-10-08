@@ -29,6 +29,7 @@ import { openedTranscripts } from "./opened-transcripts";
 import { keepUnchanged } from "./turn-identity";
 import { useStableCallback } from "./stable-callback";
 import { conversationRefOf } from "@/data/live";
+import { draftKeyFor } from "./drafts";
 
 /** The conversation, on the SDK's own session.
  *
@@ -56,6 +57,7 @@ export function LiveConversation({
     callError,
     callRefresh,
     createWith,
+    draftScope,
     emptyHint,
     placeholder,
     autoSend,
@@ -68,6 +70,10 @@ export function LiveConversation({
      *  resource metadata it is found by, and it still only comes into being
      *  when somebody says something. */
     createWith?: Record<string, unknown>;
+    /** What this pane is about, when it has no conversation yet — the draft a
+     *  not-yet-sent message is kept under, so two panes beside two docs do not
+     *  share one. Absent in the main pane, which keeps the one "new" draft. */
+    draftScope?: string | null;
     /** What an empty conversation says, when the place it is shown in knows
      *  better than the generic "what should it work on". */
     emptyHint?: { title: string; body: string };
@@ -833,13 +839,11 @@ export function LiveConversation({
         });
     }, [pod.id, session.conversationId, session.conversation, session.status, session.messages, olderToken, historyLoading, loadError]);
 
-    /* Unsent words, kept per conversation. A new conversation keeps one only
-       in the main pane: the panes beside a doc or a table each start one of
-       their own, and one shared "new" draft would follow somebody between
-       them. */
-    const draftKey = session.conversationId
-        ? pod.id + ":" + session.conversationId
-        : createWith ? null : pod.id + ":new";
+    /* Unsent words, kept per conversation — and, before there is one to keep
+       them against, per pane: the chat beside a doc names its draft after what
+       it is about (`draftScope`), so the box keeps the words without carrying
+       them to the next doc. */
+    const draftKey = draftKeyFor(pod.id, session.conversationId, draftScope);
 
     return (
         <>
