@@ -22,10 +22,13 @@
   "default_events": [
     "push",
     "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
     "issues",
     "issue_comment",
     "workflow_run",
     "check_suite",
+    "check_run",
     "release"
   ]
 }

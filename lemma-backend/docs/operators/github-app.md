@@ -16,6 +16,11 @@ the source of truth for what the App needs. It is checked in so the permission
 set is reviewable, and so a new environment is a copy rather than a memory
 exercise.
 
+The manifest is read once, when the App is created. An App that already exists
+does not pick up an event added to it later: subscribe to the event by hand
+under the App's **Permissions & events**, in every environment, or its trigger
+can be scheduled and never fires.
+
 ```bash
 uv run python scripts/create_github_app.py --name lemma-dev --base-url https://api.dev.example.com
 uv run python scripts/create_github_app.py --name Lemma --base-url https://api.lemma.work --org lemma-work
@@ -49,10 +54,10 @@ For local work `make dev-public` prints the public API URL to use for both.
 |---|---|
 | `metadata: read` | Mandatory for every App |
 | `contents: write` | Cloning, pushing, branches, and the sandbox's `git` |
-| `pull_requests: write` | Opening, reviewing and merging pull requests |
+| `pull_requests: write` | Opening, reviewing and merging pull requests; reacting to reviews and review comments |
 | `issues: write` | Issues, comments, labels, assignees |
 | `actions: write` | Runs, re-runs, cancels, `workflow_dispatch` |
-| `checks: read` | Reacting to `check_suite` |
+| `checks: read` | Reacting to `check_suite` and `check_run` (`created` and `completed` only — GitHub sends `rerequested` and `requested_action` to Apps with write access) |
 | `deployments: write` | Approving pending deployments |
 | `secrets: read`, `actions_variables: read` | Listing only — Lemma never writes either |
 
@@ -195,7 +200,9 @@ from the event's own content instead.
 
 A pull request that fires an agent binds the conversation to the repository and
 its head branch, and the clone runs as the schedule's connected account — the
-person, not the App — so what the agent pushes is attributed to them.
+person, not the App — so what the agent pushes is attributed to them. A review
+or a comment on a line of the diff binds the same head branch, and a check run
+binds the branch of the commit it checked.
 
 ## What a triggered agent needs beyond the connection
 
@@ -222,7 +229,7 @@ manifest that lists `installation` or `installation_repositories` --
 "Default events unsupported" -- and delivers them to every App regardless.
 Observed live before the rejection was known:
 `installation.new_permissions_accepted` arrived twice while the App's `events`
-contained neither. The seven trigger events do have to be subscribed; these two
+contained neither. The trigger events do have to be subscribed; these two
 must be left out.
 
 An `installation` delivery with `deleted` or `suspend` retires what the
