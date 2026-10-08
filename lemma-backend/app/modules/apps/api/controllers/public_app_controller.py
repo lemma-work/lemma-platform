@@ -50,22 +50,37 @@ router = APIRouter(
 _SLUG_HEADER = "X-App-Public-Slug"
 
 
+def _loads_a_page(request: Request) -> bool:
+    """Whether fetch metadata says this request is a page load.
+
+    The mode is the half that survives a service worker. Every hosted app runs
+    the install worker, which forwards each navigation with
+    ``fetch(event.request)``, and that resets the destination to ``empty``
+    (w3c/ServiceWorker#1803) but keeps ``Sec-Fetch-Mode: navigate`` -- a mode
+    page script cannot ask for. Reading the destination alone sent a lapsed
+    cookie the bare 401 a script gets instead of the sign-in page that renews
+    it, and nothing short of clearing the site's data got the person back in.
+    """
+    return request.headers.get("sec-fetch-mode") == "navigate" or (
+        request.headers.get("sec-fetch-dest") in {"document", "iframe", "frame"}
+    )
+
+
 def _is_navigation(request: Request) -> bool:
     """Whether a person is looking at this response, or code is reading it.
 
     Fetch metadata distinguishes documents from scripts even when a caller
     sends an HTML Accept header. Older clients fall back to Accept.
     """
-    destination = request.headers.get("sec-fetch-dest")
     return "text/html" in request.headers.get("accept", "") and (
-        destination is None or destination in {"document", "iframe", "frame"}
+        request.headers.get("sec-fetch-dest") is None or _loads_a_page(request)
     )
 
 
 def _can_show_access_page(request: Request, asset_path: str | None) -> bool:
     if not _is_navigation(request):
         return False
-    if request.headers.get("sec-fetch-dest") in {"document", "iframe", "frame"}:
+    if _loads_a_page(request):
         return True
     return PurePosixPath(asset_path or "").suffix.lower() in {"", ".html", ".htm"}
 
