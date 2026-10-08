@@ -396,9 +396,20 @@ export function runMillis(run: { startedAt: string | null; createdAt: string | n
     return span >= 0 ? span : null;
 }
 
-function at(iso: string | null): number | null {
+const at = millisOf;
+
+/** A time off the wire, in epoch milliseconds.
+ *
+ *  A run's `started_at` and `completed_at` are a plain timestamp column
+ *  (`infrastructure/models.py:149`), so they arrive as UTC with no zone on
+ *  them, and `Date.parse` reads a zoneless date-time as local time. In India
+ *  that put a run started a minute ago five and a half hours in the past. A
+ *  date-time with no zone is UTC here; one that names its zone keeps it.
+ */
+export function millisOf(iso: string | null): number | null {
     if (!iso) return null;
-    const stamp = Date.parse(iso);
+    const zoned = !iso.includes("T") || /(?:[zZ]|[+-]\d\d(?::?\d\d)?)$/.test(iso);
+    const stamp = Date.parse(zoned ? iso : iso + "Z");
     return Number.isNaN(stamp) ? null : stamp;
 }
 

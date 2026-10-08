@@ -269,6 +269,40 @@ const RESUME_RACE_DELAYS_MS = [400, 900, 2000];
  */
 const QUEUED_RESUME_DELAYS_MS = [400, 900, 2000, 4000, 8000, 15_000, 30_000, 30_000, 30_000];
 
+/**
+ * The conversation as it stood before the run a caller is waiting for: enough
+ * to tell, from a later read, that the run has already been and gone.
+ *
+ * `finishedAt` is absent until a read of the conversation supplies it.
+ */
+interface BeforeTheRun {
+  status: string | undefined;
+  finishedAt?: string | null;
+}
+
+/**
+ * Did the awaited run start and finish between two reads?
+ *
+ * Waiting for a read that says RUNNING assumes the run lasts longer than the
+ * gap between reads, and a short one does not: an approved call whose tool
+ * and follow-on run were both quick read WAITING on one rung and COMPLETED on
+ * the next. The ladder took COMPLETED for "not started yet"
+ * and kept asking for two minutes, while the card sat on "Approval sent." over
+ * an answer that was already written.
+ *
+ * Two signs, either enough. A conversation that was waiting on someone and
+ * now is neither waiting nor running has moved on, and only a run (or
+ * stopping one) moves it. And a run that ended in the same state it began,
+ * paused on a second request, still leaves a new finish time behind.
+ */
+function runFinishedSince(before: BeforeTheRun, latest: Conversation): boolean {
+  const status = normalizeConversationStatus(latest.status);
+  if (isConversationRunningStatus(status)) return false;
+  if (before.status === "WAITING" && status !== "WAITING") return true;
+  if (before.finishedAt === undefined) return false;
+  return status !== before.status || (latest.last_run_finished_at ?? null) !== before.finishedAt;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1281,7 +1315,14 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
         ? QUEUED_RESUME_DELAYS_MS
         : RESUME_RACE_DELAYS_MS;
       const attempts = options?.expectRun ? delays.length + 1 : 1;
+      // The status is the caller's own view of the moment it acted. The finish
+      // time waits for the first read rather than coming from the record the
+      // session holds: that record is only rewritten when it is re-read, not
+      // as a stream ends, so its finish time can be a run or two old — and a
+      // stale one would say the run had happened before it had even started.
+      let before: BeforeTheRun = { status: normalizeConversationStatus(statusRef.current) };
       let started = false;
+      let finishedUnseen = false;
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         if (attempt > 0) await delay(delays[attempt - 1]);
         // Someone else got there first (a send, or a stream that attached while
@@ -1298,16 +1339,30 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           started = true;
           break;
         }
+        if (latestConversation && options?.expectRun) {
+          if (runFinishedSince(before, latestConversation)) {
+            finishedUnseen = true;
+            break;
+          }
+          if (before.finishedAt === undefined) {
+            before = {
+              status: normalizeConversationStatus(latestConversation.status),
+              finishedAt: latestConversation.last_run_finished_at ?? null,
+            };
+          }
+        }
       }
       if (!started) {
-        if (options?.expectRun === "queued" && conversationIdRef.current === id) {
-          // Every rung read WAITING, and there are two ways to arrive there:
-          // the job still has not started the run, or it started and finished
-          // one entirely between two rungs. The second leaves a transcript
-          // holding both the tool return and the whole answer, with nothing
-          // that will ever mention them again. One read, once, so that case
-          // costs a stale card until the ladder ends rather than until the
-          // page is reloaded.
+        // The run came and went between two rungs, so its tool return and its
+        // answer are in the transcript with nothing left to stream them: read
+        // it now. A queued ladder that ran out without seeing anything reads it
+        // too, once — the run may have ended in a way no rung could tell apart
+        // from the pause (a second pause, landing before the first read), and
+        // a stale card until the ladder ends beats one until a reload.
+        if (
+          conversationIdRef.current === id
+          && (finishedUnseen || options?.expectRun === "queued")
+        ) {
           await loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
         }
         return false;
