@@ -388,12 +388,26 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
   return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
 }
 
-/** Set once an own-origin session recovery has been tried in this page. */
-let ownOriginRecoveryTried = false;
+/** SuperTokens' host-only session markers; the update marker never expires. */
+const UPDATE_MARKER_COOKIE = "st-last-access-token-update";
+const FRONT_TOKEN_COOKIE = "sFrontToken";
+
+function hasCookie(name: string): boolean {
+  return document.cookie.split(";").some((part) => part.trim().startsWith(`${name}=`));
+}
+
+/** The update marker with no front token: SuperTokens' "no session", decided without asking. */
+function isHalfCleared(): boolean {
+  if (typeof document === "undefined") return false;
+  return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
+}
+
+/** Set once a half-cleared session recovery has been tried in this page. */
+let markerRecoveryTried = false;
 
 /** For tests: forget that recovery was tried. */
-export function resetOwnOriginRecoveryForTests(): void {
-  ownOriginRecoveryTried = false;
+export function resetMarkerRecoveryForTests(): void {
+  markerRecoveryTried = false;
 }
 
 export class AuthManager {
@@ -673,29 +687,28 @@ export class AuthManager {
   }
 
   /**
-   * One refresh for an app that calls the API through its own origin.
+   * One refresh for a pod app whose host remembers a session that ended.
    *
    * The session is shared between hosts by the HttpOnly cookies, but the
    * markers the browser SDK reads (`sFrontToken`, `st-last-access-token-update`)
    * are host-only on purpose, so a pod app keeps its own copy. If that copy is
    * half-cleared -- the update marker left behind with no front token, as a
    * failed refresh leaves it -- `doesSessionExist()` answers "no" without ever
-   * asking, and the app sends a signed-in person to sign in forever. Drop the
-   * stale marker on this host and ask once: the refresh carries the shared
-   * cookie and returns this origin's own front token. Once per page, so a
-   * genuinely signed-out app cannot storm the endpoint.
+   * asking. Signing in again renews the shared cookies but cannot reach this
+   * host's marker, so the auth portal, which sees the session, sends the person
+   * straight back to an app that does not: a redirect loop with no way out.
+   * Drop the stale marker on this host and ask once: the refresh carries the
+   * shared cookie and returns this host's own front token.
+   *
+   * Whether the API is on this origin or another one does not matter: the
+   * marker is always this host's, and the refresh cookie travels to the API
+   * either way. Once per page, so a genuinely signed-out app costs one refused
+   * refresh per load rather than a storm.
    */
-  private async recoverOwnOriginSession(): Promise<boolean> {
-    if (ownOriginRecoveryTried || typeof document === "undefined") return false;
-    ownOriginRecoveryTried = true;
-    try {
-      if (new URL(this.apiUrl, window.location.href).origin !== window.location.origin) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-    document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+  private async recoverHalfClearedSession(): Promise<boolean> {
+    if (markerRecoveryTried || typeof document === "undefined") return false;
+    markerRecoveryTried = true;
+    document.cookie = `${UPDATE_MARKER_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
     return Session.doesSessionExist();
   }
 
@@ -716,26 +729,36 @@ export class AuthManager {
    * with no `front-token`, which the SDK throws on without saving anything.
    * One direct refresh tells them apart. It also is the retry the duplicate
    * answer needs: the server cleared the stray copy on that response, so this
-   * refresh carries one cookie and succeeds. Where the SDK already knows there
-   * is no session (the update marker without a front token) it answers
-   * without touching the network.
+   * refresh carries one cookie and succeeds.
+   *
+   * A half-cleared host takes the recovery instead of that refresh. There,
+   * `attemptRefreshingSession()` never reaches the network: it answers from
+   * the marker and fires `UNAUTHORISED` on the way out, which marks this
+   * manager signed out and so discards the result of the very check that is
+   * about to repair the session.
    */
   private async localSession(): Promise<"exists" | "absent" | "unreachable"> {
+    // Read first: `doesSessionExist()` may itself refresh, fail, and leave the
+    // marker behind, and then the server has already given its answer.
+    const halfCleared = isHalfCleared();
     try {
       if (await Session.doesSessionExist()) return "exists";
     } catch (error) {
       return refreshFailureKind(error);
+    }
+    if (halfCleared) {
+      try {
+        return (await this.recoverHalfClearedSession()) ? "exists" : "absent";
+      } catch (error) {
+        return refreshFailureKind(error);
+      }
     }
     try {
       if (await Session.attemptRefreshingSession()) return "exists";
     } catch (error) {
       if (refreshFailureKind(error) === "unreachable") return "unreachable";
     }
-    try {
-      return (await this.recoverOwnOriginSession()) ? "exists" : "absent";
-    } catch (error) {
-      return refreshFailureKind(error);
-    }
+    return "absent";
   }
 
   private async performAuthCheck(revision: number): Promise<AuthState> {

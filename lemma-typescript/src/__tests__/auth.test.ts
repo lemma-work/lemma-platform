@@ -5,7 +5,7 @@ import { ensureCookieSessionSupport } from "../supertokens.js";
 import {
   AuthManager,
   clearTestingToken,
-  resetOwnOriginRecoveryForTests,
+  resetMarkerRecoveryForTests,
   resolveSafeRedirectUri,
   setTestingToken,
 } from "../auth.js";
@@ -33,7 +33,7 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     vi.restoreAllMocks();
     doesSessionExist.mockReset();
     vi.mocked(Session.attemptRefreshingSession).mockReset();
-    resetOwnOriginRecoveryForTests();
+    resetMarkerRecoveryForTests();
     document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   });
 
@@ -49,9 +49,14 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("an app on its own origin drops a stale update marker and asks once before giving up", async () => {
+  it.each([
+    ["through its own origin", "/_lemma"],
+    ["on a separate API host", "https://api.x.test"],
+  ])("an app calling the API %s drops a stale update marker and asks once before giving up", async (_label, apiUrl) => {
     // A failed refresh leaves `st-last-access-token-update` behind with no
-    // front token, and the SDK then answers "no session" without asking.
+    // front token, and the SDK then answers "no session" without asking --
+    // even after the person signs in again, because that renews the shared
+    // cookies and never reaches this host's marker.
     document.cookie = "st-last-access-token-update=1700000000000; path=/";
     const seen: string[] = [];
     doesSessionExist
@@ -64,7 +69,7 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
       new Response(JSON.stringify({ id: "u1", email: "a@x.test" }), { status: 200 }),
     );
 
-    const auth = new AuthManager("/_lemma", "https://auth.x.test");
+    const auth = new AuthManager(apiUrl, "https://auth.x.test");
     const state = await auth.checkAuth();
 
     expect(state.status).toBe("authenticated");
@@ -74,9 +79,12 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
 
   it("the recovery is tried once per page, so a signed-out app cannot storm refresh", async () => {
     doesSessionExist.mockResolvedValue(false);
-    const auth = new AuthManager("/_lemma", "https://auth.x.test");
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
 
+    document.cookie = "st-last-access-token-update=1700000000000; path=/";
     expect((await auth.checkAuth()).status).toBe("unauthenticated");
+    // The refused refresh writes the marker back, as SuperTokens does.
+    document.cookie = "st-last-access-token-update=1700000000001; path=/";
     auth.markUnauthenticated();
     expect((await auth.checkAuth()).status).toBe("unauthenticated");
     expect(doesSessionExist).toHaveBeenCalledTimes(3);
