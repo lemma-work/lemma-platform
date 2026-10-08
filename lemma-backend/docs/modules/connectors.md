@@ -68,6 +68,13 @@ decrypted credential values into a session-free DTO. The provider call happens
 outside a UoW; a final short UoW marks accounts for reauthentication when an
 unauthorized response is classified.
 
+A provider refusing the connected account's credential, still refused after one
+refresh, reaches the caller as a 424 `OPERATION_EXECUTION_UNAUTHORIZED`, with
+the provider's own status in `details.upstream_status`. It is never a 401: every
+client of this API reads a 401 as the caller's own Lemma session ending, so the
+browser's session interceptor and the SDKs would resend the operation and a pod
+app would sign its user out over somebody else's API key.
+
 A credential refresh fails one of two ways, and they answer differently. When
 the provider says the grant itself is gone (`invalid_grant`, `invalid_client`,
 `unauthorized_client`, a Composio connection in a terminal state), or an expired

@@ -178,6 +178,72 @@ describe("HttpClient.request retry loop", () => {
   });
 });
 
+/* A connector whose third-party API key is wrong. A server from before the
+   change relays the provider's refusal as 401; a current one answers 424. */
+const connectorKeyRefused = {
+  message: "Connector account authorization failed.",
+  code: "OPERATION_EXECUTION_UNAUTHORIZED",
+  details: { upstream_status: 401 },
+};
+
+async function signedInAuth(): Promise<RealAuthManager> {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ id: "user-1" })));
+  const auth = new RealAuthManager("https://api.test", "https://auth.test", "TESTTOKEN");
+  await auth.checkAuth();
+  expect(auth.getState().status).toBe("authenticated");
+  return auth;
+}
+
+describe("HttpClient and a connector's provider refusing its key", () => {
+  it("keeps the caller signed in when a 401 relays the provider's refusal", async () => {
+    const auth = await signedInAuth();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(connectorKeyRefused, 401)));
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 0 });
+
+    await expect(client.request("POST", "/connectors/x/operations/y/execute")).rejects.toMatchObject({
+      statusCode: 401,
+      code: "OPERATION_EXECUTION_UNAUTHORIZED",
+    });
+    expect(auth.getState().status).toBe("authenticated");
+  });
+
+  it("keeps the caller signed in when a stream's 401 relays the provider's refusal", async () => {
+    const auth = await signedInAuth();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(connectorKeyRefused, 401)));
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 0 });
+
+    await expect(client.streamResponse("/x", { method: "POST" })).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(auth.getState().status).toBe("authenticated");
+  });
+
+  it("keeps the caller signed in on the 424 a current server sends", async () => {
+    const auth = await signedInAuth();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(connectorKeyRefused, 424)));
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 0 });
+
+    await expect(client.request("POST", "/x")).rejects.toMatchObject({ statusCode: 424 });
+    expect(auth.getState().status).toBe("authenticated");
+  });
+
+  it("still signs the caller out when a 401 carries no connector code", async () => {
+    const auth = await signedInAuth();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ message: "Unauthorized" }, 401)));
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 0 });
+
+    await expect(client.request("GET", "/x")).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(auth.getState().status).toBe("unauthenticated");
+  });
+
+  it("still signs the caller out when a 401 body is not JSON", async () => {
+    const auth = await signedInAuth();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("unauthorised", { status: 401 })));
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 0 });
+
+    await expect(client.requestBytes("GET", "/x")).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(auth.getState().status).toBe("unauthenticated");
+  });
+});
+
 describe("HttpClient timeout + transport errors", () => {
   it("aborts and surfaces a NetworkError when the request exceeds timeoutMs", async () => {
     vi.useFakeTimers();
