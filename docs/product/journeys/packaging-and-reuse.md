@@ -51,6 +51,8 @@ their credentials do not travel with it.
 
 - When a person starts an import, the system shall compare the bundle to their
   pod and shall present a plan of what it would create, change, and remove.
+- The system shall say what the plan brings in plain language, and shall keep
+  the component-by-component detail on the same screen for whoever wants it.
 - The system shall change nothing until the person approves the plan.
 - The system shall require explicit confirmation for anything destructive, named
   individually rather than as a single blanket approval.

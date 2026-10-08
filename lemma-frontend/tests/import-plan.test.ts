@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import {
     actionLabel,
     askedVariables,
+    contentsLine,
     groupSteps,
     humanize,
+    needsAnswer,
+    suggestedValue,
     teammateName,
 } from "../src/site/import/plan.ts";
 import type { PlanStep, VariableSpec } from "../src/site/import-types.ts";
@@ -70,4 +73,72 @@ test("names read as words", () => {
     assert.equal(humanize("slack_account"), "Slack account");
     assert.equal(humanize("triageChannel"), "Triage channel");
     assert.equal(teammateName("smart-inbox"), "Smart Inbox");
+});
+
+test("a name is filled in for the person rather than asked about", () => {
+    const slug: VariableSpec = {
+        name: "slug",
+        kind: "free",
+        description: null,
+        required: true,
+        default: null,
+    };
+    assert.equal(suggestedValue(slug, "Smart Inbox"), "smart-inbox");
+    assert.equal(needsAnswer(slug, "Smart Inbox"), false);
+});
+
+test("a bundle's own default still wins over the teammate's name", () => {
+    const variable: VariableSpec = {
+        name: "slug",
+        kind: "free",
+        description: null,
+        required: false,
+        default: "queue",
+    };
+    assert.equal(suggestedValue(variable, "Smart Inbox"), "queue");
+});
+
+test("an account belongs to whoever is installing, so it is always asked", () => {
+    const account: VariableSpec = {
+        name: "slack_account",
+        kind: "account",
+        description: null,
+        required: true,
+        default: null,
+        connector: "slack",
+    };
+    assert.equal(suggestedValue(account, "Smart Inbox"), "");
+    assert.equal(needsAnswer(account, "Smart Inbox"), true);
+});
+
+test("a required name nothing can be derived from is still put in front of the person", () => {
+    const variable: VariableSpec = {
+        name: "slug",
+        kind: "free",
+        description: null,
+        required: true,
+        default: null,
+    };
+    assert.equal(suggestedValue(variable, "☕"), "");
+    assert.equal(needsAnswer(variable, "☕"), true);
+});
+
+test("what a bundle brings reads as one line, not a checklist", () => {
+    assert.equal(
+        contentsLine(
+            groupSteps([
+                step("AGENT", "triager"),
+                step("AGENT", "fixer"),
+                step("TABLE", "tickets"),
+                step("WORKFLOW", "route"),
+            ]),
+        ),
+        "2 agents, 1 workflow and 1 table",
+    );
+    assert.equal(contentsLine(groupSteps([step("TABLE", "tickets")])), "1 table");
+    assert.equal(
+        contentsLine(groupSteps([step("TABLE", "a"), step("AGENT", "b")])),
+        "1 agent and 1 table",
+    );
+    assert.equal(contentsLine([]), "");
 });

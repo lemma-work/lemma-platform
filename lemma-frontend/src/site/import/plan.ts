@@ -114,3 +114,44 @@ export function teammateName(repo: string): string {
         .replace(/\b\w/g, (c) => c.toUpperCase())
         .trim();
 }
+
+/** A name as a machine reads it: `Smart Inbox` → `smart-inbox`. */
+export function slugify(name: string): string {
+    return name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+}
+
+/** What a variable is worth when nobody has chosen a value.
+ *
+ *  An account cannot be invented — it belongs to whoever is installing — but a
+ *  free variable is only ever a name (an app's slug, say), and the teammate's
+ *  name is the one thing the person has already chosen. Deriving it is what
+ *  lets the plain path install without asking a non-technical person what a
+ *  slug is; the developer path shows the same value in an editable field. */
+export function suggestedValue(variable: VariableSpec, who: string): string {
+    if (variable.default) return variable.default;
+    if (variable.kind !== "free") return "";
+    return slugify(who);
+}
+
+/** Whether the plain path has to put this variable in front of the person:
+ *  because nothing can fill it in for them, or because the name we would have
+ *  derived came out empty. */
+export function needsAnswer(variable: VariableSpec, who: string): boolean {
+    return variable.kind === "account" || !suggestedValue(variable, who);
+}
+
+/** What a bundle brings, as one line: "2 agents, 1 workflow and 1 table".
+ *
+ *  The plain path says what is coming in a sentence rather than making a
+ *  non-technical person read a component-by-component list; the list is still
+ *  there, one press away. */
+export function contentsLine(groups: StepGroup[]): string {
+    const parts = groups.map(
+        (group) => `${group.steps.length} ${group.label.toLowerCase()}`,
+    );
+    if (parts.length < 2) return parts.join("");
+    return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+}
