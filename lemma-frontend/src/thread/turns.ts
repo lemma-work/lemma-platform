@@ -109,9 +109,32 @@ export interface HumanMessage {
     at: string;
     note?: boolean;
     from?: string;
+    /** Another teammate's answer to a request this conversation put to it. It
+     *  arrives as input, like a person's message, but it is theirs, not yours. */
+    answeredBy?: AnsweredBy;
+    /** The other side of that: a request another teammate put to this one. The
+     *  conversation is the reader's, but they did not write it. */
+    askedBy?: AskedBy;
     /** Drawn before the server has it: still going, or refused. See
      *  `pending-sends.ts`. */
     pending?: PendingState;
+}
+
+/** Who answered, and where their side of the request lives. */
+export interface AnsweredBy {
+    name: string;
+    podId: string;
+    conversationId: string;
+}
+
+/** Who asked. `forYou` when it asked as the reader, from a conversation of
+ *  theirs; otherwise it asked on its own, over its connection, and where it
+ *  asked from is not necessarily the reader's to open. */
+export interface AskedBy {
+    name: string;
+    podId: string;
+    conversationId: string;
+    forYou: boolean;
 }
 
 export interface Turn {
@@ -230,9 +253,30 @@ function textOf(message: RawMessage): string {
 /** What a person's message says about itself: a note to the bot alone, and —
  *  for one that came in from a chat platform — who wrote it. Keys are added
  *  only when they apply, so a plain message stays `{ id, text, at }`. */
-export function humanMarks(metadata: Record<string, unknown> | null | undefined): Pick<HumanMessage, "note" | "from"> {
+export function humanMarks(
+    metadata: Record<string, unknown> | null | undefined,
+): Pick<HumanMessage, "note" | "from" | "answeredBy" | "askedBy"> {
     const meta = metadata ?? {};
-    const marks: Pick<HumanMessage, "note" | "from"> = {};
+    const marks: Pick<HumanMessage, "note" | "from" | "answeredBy" | "askedBy"> = {};
+    if (meta.source === "pod_ask") {
+        const name = typeof meta.ask_from_pod_name === "string" ? meta.ask_from_pod_name.trim() : "";
+        marks.askedBy = {
+            name: name || "Another teammate",
+            podId: typeof meta.ask_from_pod_id === "string" ? meta.ask_from_pod_id : "",
+            conversationId: typeof meta.ask_from_conversation_id === "string" ? meta.ask_from_conversation_id : "",
+            forYou: meta.ask_mode !== "LINK",
+        };
+        return marks;
+    }
+    if (meta.source === "pod_ask_answer") {
+        const name = typeof meta.asked_pod_name === "string" ? meta.asked_pod_name.trim() : "";
+        marks.answeredBy = {
+            name: name || "Another teammate",
+            podId: typeof meta.asked_pod_id === "string" ? meta.asked_pod_id : "",
+            conversationId: typeof meta.ask_conversation_id === "string" ? meta.ask_conversation_id : "",
+        };
+        return marks;
+    }
     if (meta.private_note === true) marks.note = true;
     const named = [meta.sender_display_name, meta.sender_phone]
         .find((value): value is string => typeof value === "string" && value.trim() !== "");
@@ -307,6 +351,16 @@ function step(message: RawMessage, metadata: Record<string, unknown> | null, ear
            a page not yet loaded would indent a step under nothing. */
         nested: Boolean(parent) && earlier.some((note) => note.toolCallId === parent),
     };
+}
+
+/** The answer itself, without the line telling the model whose it is.
+ *
+ *  The backend writes "{name} answered your request:" above the answer, because
+ *  the model reads this message as input and needs to be told. A person reading
+ *  it sees the name already, on the message itself. */
+function withoutAnswerPreamble(text: string, name: string): string {
+    const preamble = name + " answered your request:";
+    return text.startsWith(preamble) ? text.slice(preamble.length).trim() || text : text;
 }
 
 export function buildTurns(messages: RawMessage[]): Turn[] {
@@ -517,11 +571,12 @@ export function buildTurns(messages: RawMessage[]): Turn[] {
         if (message.role === "user") {
             current = open(message);
             const pending = pendingStateOf(message);
+            const marks = humanMarks(message.metadata);
             current.human = {
                 id: message.id ?? "u" + turns.length,
-                text,
+                text: marks.answeredBy ? withoutAnswerPreamble(text, marks.answeredBy.name) : text,
                 at: clockOf(message.created_at),
-                ...humanMarks(message.metadata),
+                ...marks,
                 ...(pending ? { pending } : {}),
             };
             continue;

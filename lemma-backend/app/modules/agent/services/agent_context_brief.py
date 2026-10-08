@@ -62,6 +62,7 @@ from app.modules.datastore.contracts.agent_tools import (
 )
 from app.modules.function.contracts import agent_tools as function_tools
 from app.modules.pod.contracts.directory import list_pod_members
+from app.modules.agent.services.askable_pods_brief import askable_pod_lines
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.agent.services.brief_seams import (
     AuthorizationFactory,
@@ -311,6 +312,11 @@ class AgentContextBriefBuilder:
         lines.extend(await self._table_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._agent_lines(pod_id=pod_id))
         lines.extend(await self._people_lines(pod_id=pod_id, user_id=user_id))
+        lines.extend(
+            await askable_pod_lines(
+                self.uow_factory, self._repo_factory(), pod_id=pod_id, user_id=user_id
+            )
+        )
         lines.extend(await self._workflow_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._function_lines(pod_id=pod_id))
         lines.extend(await self._file_lines(pod_id=pod_id, user_id=user_id))

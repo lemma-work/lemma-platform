@@ -5,7 +5,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-qu
 import { AgentMark } from "./agent-mark";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { ChannelIcon } from "@/shell/channels";
-import { ChatIcon, ClockIcon, FileIcon, PlusIcon, SearchIcon, WorkflowIcon, BellIcon } from "@/ui/icons";
+import { AgentIcon, ChatIcon, ClockIcon, FileIcon, PlusIcon, SearchIcon, WorkflowIcon, BellIcon } from "@/ui/icons";
 import { originLabel, type ConversationOrigin, type OriginKind } from "@/thread/conversation-origin";
 import { emptyFor } from "./empty-copy";
 import { SpaceEmpty } from "./empty-state";
@@ -13,7 +13,7 @@ import { SpaceEmpty } from "./empty-state";
 type Filter = "all" | "chats" | "channels" | "automations" | "docs";
 const FILTERS: { id: Filter; label: string; kinds: OriginKind[] | null }[] = [
     { id: "all", label: "All", kinds: null },
-    { id: "chats", label: "Conversations", kinds: ["chat"] },
+    { id: "chats", label: "Conversations", kinds: ["chat", "ask"] },
     { id: "channels", label: "Channels", kinds: ["channel", "notification"] },
     { id: "automations", label: "Automations", kinds: ["schedule", "workflow", "task"] },
     { id: "docs", label: "On docs", kinds: ["resource"] },
@@ -27,6 +27,7 @@ function OriginIcon({ origin }: { origin: ConversationOrigin }) {
     if (origin.kind === "workflow" || origin.kind === "task") return <WorkflowIcon size={16} />;
     if (origin.kind === "notification") return <BellIcon size={16} />;
     if (origin.kind === "resource") return <FileIcon size={16} />;
+    if (origin.kind === "ask") return <AgentIcon size={16} />;
     return <ChatIcon size={16} />;
 }
 

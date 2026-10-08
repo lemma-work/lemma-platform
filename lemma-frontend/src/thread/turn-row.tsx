@@ -5,6 +5,7 @@ import { Prose, StreamingProse } from "./markdown";
 import { ClampedProse } from "./clamped-prose";
 import { CopyButton } from "./copy-button";
 import { Mark } from "@/shell/mark";
+import { writeAddress } from "@/shell/address";
 import { ResourceCard } from "./resource-card";
 import { PlanCard } from "./plan-card";
 import { ToolCardView } from "./tool-card-view";
@@ -126,6 +127,26 @@ export function Reply({ teammate, seed, at, children }: { seed: string; teammate
     );
 }
 
+/** A message another teammate put here: its answer to a request of yours, or a
+ *  request of its own. Either way it is input, not yours, so it is drawn under
+ *  that teammate's name with a chip saying which, and -- where the other side
+ *  is the reader's own conversation -- a way into it. A request it made on its
+ *  own, over its connection, links nowhere: where it asked from belongs to
+ *  whoever started that run, not necessarily the person reading. */
+function relayed(message: HumanMessage): { name: string; chip: string; href: string | null } | null {
+    const at = (podId: string, conversationId: string) =>
+        podId && conversationId ? writeAddress({ podId, tabId: "conversation", conversationId, agentName: null }) : null;
+    const answered = message.answeredBy;
+    if (answered) {
+        return { name: answered.name, chip: "Answered your request", href: at(answered.podId, answered.conversationId) };
+    }
+    const asked = message.askedBy;
+    if (!asked) return null;
+    return asked.forYou
+        ? { name: asked.name, chip: "Asked for you", href: at(asked.podId, asked.conversationId) }
+        : { name: asked.name, chip: "Asked on its own", href: null };
+}
+
 /** A person's message. Yours sits on the far side, marked when it was a note
  *  to the bot alone. In a conversation where people outside the space ask,
  *  what came in from the group is theirs, not yours: it takes the near side,
@@ -148,13 +169,17 @@ function Human({
     onRetry?: (id: string) => void;
     onEdit?: (id: string) => void;
 }) {
-    const guest = Boolean(outsiders && message.from);
+    const teammate = relayed(message);
+    const guest = Boolean(outsiders && message.from) || Boolean(teammate);
     const at = message.pending === "sending" ? "Sending…" : message.pending === "failed" ? "Not sent" : message.at;
     return (
         <div className={"msg msg--you" + (guest ? " msg--guest" : "")} data-pending={message.pending}>
             <div className="msg__head">
-                <span className="msg__who">{guest ? message.from : "You"}</span>
-                {guest && <span className="msg__chip">Not in {outsiders}</span>}
+                <span className="msg__who">{teammate ? teammate.name : guest ? message.from : "You"}</span>
+                {teammate && (teammate.href
+                    ? <a className="msg__chip" href={teammate.href}>{teammate.chip}</a>
+                    : <span className="msg__chip">{teammate.chip}</span>)}
+                {guest && !teammate && <span className="msg__chip">Not in {outsiders}</span>}
                 <span className="msg__at">{at}</span>
             </div>
             {message.note && (

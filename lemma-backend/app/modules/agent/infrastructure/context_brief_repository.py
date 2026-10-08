@@ -22,6 +22,8 @@ from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.resource_names import resolve_resource_names_by_ids
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.infrastructure.pod_ask_queries import Teammate, askable_pods
+from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.modules.agent_surfaces.contracts.pod_summaries import (
     PodSurfaceSummary,
     list_surface_summaries,
@@ -93,6 +95,15 @@ class AgentContextBriefRepository:
     ) -> list[PodSurfaceSummary]:
         return await list_surface_summaries(
             session=self._session, pod_id=pod_id, limit=limit
+        )
+
+    async def list_askable_pods(self, *, pod_id: UUID, user_id: UUID) -> list[Teammate]:
+        """The other pods this one's assistant can ask, as this person."""
+        return await askable_pods(
+            self._uow,
+            user_id=user_id,
+            organization_id=await pod_organization_id(self._uow, pod_id),
+            pod_id=pod_id,
         )
 
     async def get_user_profile(self, user_id: UUID) -> UserProfile:

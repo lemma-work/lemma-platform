@@ -52,6 +52,9 @@ import {
 } from "./runtimes";
 import type {
     AccountConnect,
+    AskablePod,
+    LinkShare,
+    PodLink,
     Conversation,
     ConversationPage,
     ConversationRef,
@@ -450,6 +453,59 @@ export const liveSource: PodSource = {
                 Boolean(pod.id && pod.name),
             )
             .map((pod) => podSummary({ ...pod, organization_id: pod.organization_id ?? orgId }));
+    },
+
+    async askablePods(podId: string): Promise<AskablePod[]> {
+        const listed = (await lemma(podId).request("GET", `/pods/${podId}/askable-pods`)) as Listish;
+        return itemsOf(listed)
+            .map((raw) => raw as { pod_id?: string; name?: string; icon_url?: string | null; description?: string | null; through_you?: boolean; connected?: boolean })
+            .filter((pod): pod is { pod_id: string; name: string; icon_url?: string | null; description?: string | null; through_you?: boolean; connected?: boolean } => Boolean(pod.pod_id && pod.name))
+            .map((pod) => ({
+                id: pod.pod_id,
+                name: pod.name,
+                iconUrl: pod.icon_url ?? null,
+                ...(pod.description ? { description: pod.description } : {}),
+                throughYou: pod.through_you === true,
+                connected: pod.connected === true,
+            }));
+    },
+
+    async podLinks(podId: string): Promise<PodLink[]> {
+        const listed = (await lemma(podId).request("GET", `/pods/${podId}/pod-links`)) as Listish;
+        return itemsOf(listed)
+            .map((raw) => raw as {
+                pod_id?: string; name?: string; icon_url?: string | null; description?: string | null;
+                steward_name?: string | null;
+                shared?: { resource_type?: string; resource_name?: string }[];
+            })
+            .filter((link): link is typeof link & { pod_id: string; name: string } => Boolean(link.pod_id && link.name))
+            .map((link) => ({
+                podId: link.pod_id,
+                name: link.name,
+                iconUrl: link.icon_url ?? null,
+                ...(link.description ? { description: link.description } : {}),
+                ...(link.steward_name ? { stewardName: link.steward_name } : {}),
+                shared: (link.shared ?? [])
+                    .filter((one) => typeof one.resource_name === "string")
+                    .map((one) => ({
+                        kind: one.resource_type === "datastore_table" ? "table" as const : "folder" as const,
+                        name: one.resource_name as string,
+                    })),
+            }));
+    },
+
+    async connectPod(podId: string, askingPodId: string, shares: LinkShare[]): Promise<void> {
+        await lemma(podId).request("PUT", `/pods/${podId}/pod-links/${askingPodId}`, {
+            body: {
+                shares: shares.map((share) => share.kind === "table"
+                    ? { resource_type: "datastore_table", resource_name: share.name, permission_ids: ["datastore.table.read", "datastore.record.read"] }
+                    : { resource_type: "folder", resource_name: share.name, permission_ids: ["folder.read"] }),
+            },
+        });
+    },
+
+    async disconnectPod(podId: string, askingPodId: string): Promise<void> {
+        await lemma(podId).request("DELETE", `/pods/${podId}/pod-links/${askingPodId}`);
     },
 
     async getPod(podId: string): Promise<Pod> {

@@ -18,7 +18,7 @@ from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.outsiders import without_audience
+from app.modules.agent.domain.server_metadata import client_metadata
 from app.modules.agent.api.controllers.conversation_streaming import (
     load_authorized_agent_run,
     start_and_stream_run,
@@ -133,9 +133,9 @@ async def create_conversation(
         agent_runtime=data.agent_runtime,
         parent_id=data.parent_id,
         type=data.type,
-        # Only routing opens a conversation for people outside the pod; a
-        # client cannot make one look like it.
-        metadata=without_audience(data.metadata),
+        # Only the server opens a conversation for people outside the pod, or
+        # one answering another pod; a client cannot make one look like either.
+        metadata=client_metadata(data.metadata),
     )
     return ConversationResponse.model_validate(conversation)
 

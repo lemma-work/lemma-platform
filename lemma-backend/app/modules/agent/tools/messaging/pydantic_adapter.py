@@ -42,6 +42,7 @@ from app.modules.agent_surfaces.contracts.notifications import (
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.pod.contracts import directory as pod_directory
+from app.modules.agent.tools.messaging.teammates import ask_teammate, list_teammates
 from app.modules.agent.tools.messaging.models import (
     MAX_OUTSIDER_MESSAGE_CHARS,
     MAX_TITLE_LENGTH,
@@ -447,5 +448,11 @@ async def _reachable_on(
 
 
 messaging_toolset = FunctionToolset[BaseAgentContext](
-    tools=[message_user, check_messages, list_pod_members]
+    tools=[
+        message_user,
+        check_messages,
+        list_pod_members,
+        list_teammates,
+        ask_teammate,
+    ]
 )

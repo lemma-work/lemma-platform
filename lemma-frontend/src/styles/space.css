@@ -3032,6 +3032,46 @@ samp,
     flex: none;
     border-radius: calc(var(--r-md) - 2px);
 }
+
+/* ── who can ask this teammate, and connecting one ────────────────────── */
+.asked-by {
+    margin-top: 20px;
+}
+.asked-by__row {
+    cursor: default;
+}
+.asked-by__who {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 14px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+}
+.asked-by__who:hover .agentlist__title b {
+    text-decoration: underline;
+    text-decoration-color: var(--line-2);
+    text-underline-offset: 3px;
+}
+.connect__label {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.connect__choices {
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+}
+.connect__choices .check {
+    align-items: center;
+    margin-bottom: 8px;
+}
 .agentlist__row:hover .agentlist__title b {
     text-decoration: underline;
     text-decoration-color: var(--line-2);

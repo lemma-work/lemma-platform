@@ -27,7 +27,7 @@ const STARTERS: { key: string; title: string; note: string; icon: React.ReactNod
 /** Where a conversation began that nobody started from this app: a channel,
  *  a schedule, a workflow's step, a run on its own. What the teammate did
  *  while you were elsewhere. */
-const ON_ITS_OWN = new Set(["channel", "notification", "schedule", "workflow", "task"]);
+const ON_ITS_OWN = new Set(["channel", "notification", "schedule", "workflow", "task", "ask"]);
 const RECENT_ROWS = 4;
 
 /** Where a space opens: the teammate whose space it is, what is waiting on

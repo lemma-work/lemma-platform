@@ -19,10 +19,14 @@ from app.modules.datastore.services.files.path_resolver import PathResolver
 
 logger = get_logger(__name__)
 
+#: Actors with no ambient access: every file needs a grant, judged on its own
+#: (the grant cascade from any ancestor folder included). Another pod asking
+#: this one over a link is one -- it holds nothing here but what it was granted.
 _WORKLOAD_ACTORS = (
     ActorType.AGENT,
     ActorType.FUNCTION,
     ActorType.DELEGATED_USER_WORKLOAD,
+    ActorType.POD,
 )
 
 
@@ -156,13 +160,7 @@ class FileAuthorizer:
         requester_user_id: UUID,
         ctx: Context | None = None,
     ) -> None:
-        actor_type = getattr(ctx, "actor_type", None)
-        is_workload = actor_type in (
-            ActorType.AGENT,
-            ActorType.FUNCTION,
-            ActorType.DELEGATED_USER_WORKLOAD,
-        )
-        if is_workload:
+        if _is_workload(ctx):
             # A workload holds zero ambient access — every resource needs an
             # explicit grant. Authorize the file ALONE: require_document_read
             # carries the path, so the grant cascade matches a grant on the file
@@ -357,12 +355,7 @@ class FileAuthorizer:
             file_ids=[item.id for item in context_items],
         )
 
-        actor_type = getattr(ctx, "actor_type", None)
-        is_workload = actor_type in (
-            ActorType.AGENT,
-            ActorType.FUNCTION,
-            ActorType.DELEGATED_USER_WORKLOAD,
-        )
+        is_workload = _is_workload(ctx)
 
         visible_ids: set[UUID] = set()
         for item in items:
@@ -410,11 +403,6 @@ class FileAuthorizer:
             # the high-risk case, so they warn; humans seeing fewer files is
             # expected and logged at info.
             actor_type = getattr(ctx, "actor_type", None)
-            is_workload = actor_type in (
-                ActorType.AGENT,
-                ActorType.FUNCTION,
-                ActorType.DELEGATED_USER_WORKLOAD,
-            )
             if is_workload:
                 logger.warning(
                     "datastore.access.files_withheld",

@@ -1871,6 +1871,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             request={aboutSection.id}
                                             onAsk={() => { setConversationId(NEW_CONVERSATION); pickTab("conversation"); }}
                                             onOpenAgent={openAgent}
+                                            onOpenTeammate={(id) => goToPod(id)}
                                             onAskFor={(text) => { pickTab("conversation"); asks.current += 1; setFill({ text, id: asks.current, podId: pod.id }); }}
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}

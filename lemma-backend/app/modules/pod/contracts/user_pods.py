@@ -160,6 +160,9 @@ class AttachablePod:
 
     id: UUID
     name: str
+    #: The pod's job line, for a caller offering pods to an agent to choose from.
+    description: str | None = None
+    icon_url: str | None = None
 
 
 async def list_attachable_pods(
@@ -191,7 +194,7 @@ async def list_attachable_pods(
         (Pod.organization_id == organization_id,) if organization_id is not None else ()
     )
     rows = await session.execute(
-        select(Pod.id, Pod.name)
+        select(Pod.id, Pod.name, Pod.description, Pod.icon_url)
         .join(PodMember, PodMember.pod_id == Pod.id)
         .where(
             PodMember.organization_member_id.in_(organization_member_ids),
@@ -201,4 +204,24 @@ async def list_attachable_pods(
         .order_by(Pod.created_at.desc(), Pod.id)
         .limit(limit)
     )
-    return [AttachablePod(id=pod_id, name=name) for pod_id, name in rows]
+    return [
+        AttachablePod(id=pod_id, name=name, description=description, icon_url=icon)
+        for pod_id, name, description, icon in rows
+    ]
+
+
+async def pods_by_ids(
+    *, session: AsyncSession, pod_ids: list[UUID]
+) -> list[AttachablePod]:
+    """These pods, as a listing shows them, skipping any that were deleted."""
+    if not pod_ids:
+        return []
+    rows = await session.execute(
+        select(Pod.id, Pod.name, Pod.description, Pod.icon_url)
+        .where(Pod.id.in_(pod_ids), Pod.is_deleted.is_(False))
+        .order_by(Pod.name, Pod.id)
+    )
+    return [
+        AttachablePod(id=pod_id, name=name, description=description, icon_url=icon)
+        for pod_id, name, description, icon in rows
+    ]

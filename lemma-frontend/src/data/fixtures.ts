@@ -1,7 +1,7 @@
 import { key } from "@/session/storage";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
-import type { Conversation, FileContent, Invitation, LibraryItem, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
+import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
@@ -2504,6 +2504,9 @@ async function sampleFile(path: string): Promise<FileContent> {
     };
 }
 
+/** Connections between sample pods: answering pod -> asking pod -> shared. */
+const LINKS = new Map<string, Map<string, LinkShare[]>>();
+
 export const fixtureSource: PodSource = {
     label: "sample",
     async listOrgs() {
@@ -2548,6 +2551,38 @@ export const fixtureSource: PodSource = {
         return made;
     },
     async getPod(podId: string) { return PODS.find(pod => pod.id === podId) ?? null; },
+    async askablePods(podId: string) {
+        await wait(60);
+        /* Every sample pod has the same person in it, so each can ask all the
+           others as them -- the live answer for someone who is in all of them. */
+        return PODS.filter(pod => pod.id !== podId).map(pod => ({
+            id: pod.id,
+            name: pod.name,
+            iconUrl: pod.iconUrl,
+            ...(pod.description ? { description: pod.description } : {}),
+            throughYou: true,
+            connected: (LINKS.get(pod.id) ?? new Map()).has(podId),
+        }));
+    },
+    async podLinks(podId: string) {
+        await wait(60);
+        return [...(LINKS.get(podId) ?? new Map()).entries()].flatMap(([askingId, shared]) => {
+            const asking = PODS.find(pod => pod.id === askingId);
+            return asking
+                ? [{ podId: asking.id, name: asking.name, iconUrl: asking.iconUrl, stewardName: "You", shared }]
+                : [];
+        });
+    },
+    async connectPod(podId: string, askingPodId: string, shares: LinkShare[]) {
+        await wait(60);
+        const links = LINKS.get(podId) ?? new Map<string, LinkShare[]>();
+        links.set(askingPodId, [...shares]);
+        LINKS.set(podId, links);
+    },
+    async disconnectPod(podId: string, askingPodId: string) {
+        await wait(60);
+        LINKS.get(podId)?.delete(askingPodId);
+    },
     async listPods(orgId: string) {
         await wait(60);
         /* A copy, not the array itself. Handing out the internal one meant

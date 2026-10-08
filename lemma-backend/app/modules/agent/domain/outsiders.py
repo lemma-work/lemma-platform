@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.pod_asks import linked_asker
 from app.modules.agent.domain.value_objects import AgentToolset
 
 #: The metadata key, and the one value of it that means "outsiders".
@@ -61,11 +62,20 @@ OUTSIDE_ANSWER_TOOL = "respond_to_notification"
 
 
 def answers_outsiders(conversation: Conversation | None) -> bool:
-    """Whether this conversation's turns come from people outside the pod."""
+    """Whether this conversation's turns come from outside the pod.
+
+    People in a group the pod's bot sits in, or another pod asking over a link
+    (``pod_asks.linked_asker``). Both get every rule here -- no workspace, no
+    connector accounts, no memory, nothing run as the member who owns the
+    conversation -- and differ only in whose authority the tools check: nobody's
+    for a stranger, the asking pod's grants for a link.
+    """
     if conversation is None:
         return False
     metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    return metadata.get(AUDIENCE_KEY) == OUTSIDERS
+    if metadata.get(AUDIENCE_KEY) == OUTSIDERS:
+        return True
+    return linked_asker(conversation) is not None
 
 
 def with_audience_kept(

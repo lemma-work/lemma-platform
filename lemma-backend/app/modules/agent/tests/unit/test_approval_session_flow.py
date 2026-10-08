@@ -76,6 +76,7 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=uuid4(),
         tool_args={
             "tool_name": "pod_delete_table",
             "permission_ids": ["datastore.table.delete", "folder.delete", "", 7],
@@ -99,7 +100,18 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
+@pytest.mark.parametrize("named", ["nobody", "the assistant's row"])
+async def test_approve_for_session_for_the_assistant_sticks_however_it_is_named(
+    monkeypatch, named
+):
+    """The assistant is checked as its row, and a conversation may name nobody.
+
+    Its run asks under ``agent:{pod id}`` -- the row's id is the pod's -- while
+    a conversation started without naming an agent stores no agent at all, and
+    a run with no workload falls back to the sentinel. Recorded under the
+    sentinel alone, "approve for this conversation" never matched the
+    assistant's own next check.
+    """
     recorded: list[dict] = []
 
     async def fake_record(**kwargs):
@@ -109,16 +121,24 @@ async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    conversation = SimpleNamespace(id=uuid4(), agent_id=None)
+    pod_id = uuid4()
+    conversation = SimpleNamespace(
+        id=uuid4(), agent_id=None if named == "nobody" else pod_id
+    )
 
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=pod_id,
         tool_args={"permission_ids": ["datastore.table.delete"]},
         user_id=uuid4(),
     )
 
-    assert recorded[0]["workload_actor_id"] == f"agent:{DEFAULT_POD_AGENT_ID}"
+    assert {r["workload_actor_id"] for r in recorded} == {
+        f"agent:{pod_id}",
+        f"agent:{DEFAULT_POD_AGENT_ID}",
+    }
+    assert {r["permission_id"] for r in recorded} == {"datastore.table.delete"}
 
 
 @pytest.mark.asyncio
@@ -141,14 +161,14 @@ async def test_approve_for_session_without_permission_ids_records_only_exact_com
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=uuid4(),
         tool_args={"tool_name": "exec_command", "args": {"cmd": "ls -la"}},
         user_id=uuid4(),
     )
 
-    assert len(recorded) == 1
-    assert recorded[0]["permission_id"] == exact_command_permission_id(
-        "exec_command", {"cmd": "ls -la"}
-    )
+    assert {r["permission_id"] for r in recorded} == {
+        exact_command_permission_id("exec_command", {"cmd": "ls -la"})
+    }
 
 
 @pytest.mark.asyncio
@@ -165,6 +185,7 @@ async def test_approve_for_session_without_tool_name_records_nothing(monkeypatch
     await record_session_approvals(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
+        pod_id=uuid4(),
         tool_args={},
         user_id=uuid4(),
     )

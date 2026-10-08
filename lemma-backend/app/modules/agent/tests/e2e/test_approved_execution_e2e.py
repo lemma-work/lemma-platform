@@ -212,6 +212,7 @@ async def test_a_session_approval_lets_the_agent_repeat_it_in_that_conversation_
         await record_session_approvals(
             conversation_id=pod.conversation_id,
             agent_id=UUID(pod.agent["id"]),
+            pod_id=UUID(pod.pod_id),
             tool_args={
                 "tool_name": approval["tool_name"],
                 "args": approval["args"],

@@ -309,6 +309,36 @@ export interface Pod {
     hiredBy?: string;
 }
 
+/** Another teammate this one can ask. Through you: you are in both, so it asks
+ *  as you, with your access there. Connected: that teammate let this one ask
+ *  it, with nobody present, reading only what it shared. Often both. */
+export interface AskablePod {
+    id: string;
+    name: string;
+    iconUrl: string | null;
+    description?: string;
+    throughYou: boolean;
+    connected: boolean;
+}
+
+/** What a connection lets the other teammate read, past what is Public. */
+export interface LinkShare {
+    kind: "table" | "folder";
+    name: string;
+}
+
+/** Another teammate connected to this one: it can ask this one with nobody
+ *  present, and read what was shared with it. */
+export interface PodLink {
+    podId: string;
+    name: string;
+    iconUrl: string | null;
+    description?: string;
+    /** Who connected it, and looks after it. */
+    stewardName?: string;
+    shared: LinkShare[];
+}
+
 /** Conversation is a tab like any other. It is always first, and it is the
  *  only one that carries a composer. */
 /** `status` is the datastore's processing status for a file (PENDING,
@@ -559,6 +589,14 @@ export interface PodSource {
     joinOrg(orgId: string): Promise<void>;
     createOrg(wanted: NewOrg): Promise<Org>;
     listPods(orgId: string): Promise<Pod[]>;
+    /** The other teammates this one can ask: through you, or connected. */
+    askablePods(podId: string): Promise<AskablePod[]>;
+    /** The teammates connected to this one, which can ask it. */
+    podLinks(podId: string): Promise<PodLink[]>;
+    /** Let another teammate ask this one, reading what is shared. Connecting
+     *  again replaces what is shared. */
+    connectPod(podId: string, askingPodId: string, shares: LinkShare[]): Promise<void>;
+    disconnectPod(podId: string, askingPodId: string): Promise<void>;
     getPod(podId: string): Promise<Pod | null>;
     listTabs(podId: string): Promise<Tab[]>;
     createPod(orgId: string, name: string, description?: string): Promise<Pod>;

@@ -20,6 +20,10 @@ class ActorType(str, Enum):
     DELEGATED_USER_WORKLOAD = "DELEGATED_USER_WORKLOAD"
     SYSTEM = "SYSTEM"
     ANONYMOUS = "ANONYMOUS"
+    #: Another pod, asking this one over a link (``authorization.pod_principal``):
+    #: Public reads here, plus whatever this pod granted that pod, and nothing
+    #: in any other pod.
+    POD = "POD"
 
 
 class ResourceType(str, Enum):

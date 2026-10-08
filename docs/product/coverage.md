@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 171 |
 | `gap` | 2 |
 | `manual` | 21 |
-| `planned` | 11 |
+| `planned` | 14 |
 | `withdrawn` | 0 |
-| **total** | **205** |
+| **total** | **208** |
 
 Scenario tests declaring a promise: 428.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 244 | 277 |
+| OpenAPI operations | 244 | 281 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -79,6 +79,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
 | `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
 | `PS-AGENT-041` Work dispatched to a host runs exactly once | `covered` | `test_dispatched_work_is_claimed_exactly_once`, `test_an_unpaired_host_is_refused` |
+| `PS-AGENT-042` A pod's assistant asks another pod as the person it works for | `planned` | — |
+| `PS-AGENT-043` A person can see which other pods a pod can ask | `planned` | — |
+| `PS-ACCESS-042` An admin lets another pod ask theirs, sharing only what they choose | `planned` | — |
 
 ## [Automating work](journeys/automating-work.md)
 

@@ -31,6 +31,7 @@ import { requestSignIn } from "@/computer/sign-in-bridge";
 import { openSettings } from "@/desktop/open-settings";
 import { useConversationDirectory, useFileBody } from "@/computer/queries";
 import { clockOf } from "./turns";
+import { writeAddress } from "@/shell/address";
 import {
     restLength,
     waitEnding,
@@ -43,6 +44,7 @@ import {
     type SignInAsk,
     type SourceList,
     type SubTask,
+    type TeammateAsk,
     type TerminalRun,
     type ToolCard,
     type WaitFor,
@@ -780,6 +782,64 @@ function TaskCard({ task }: { task: SubTask }) {
     );
 }
 
+/* ── a request put to another teammate ───────────────────────────────── */
+
+/** Where an ask stands, in the words the card's status uses. */
+function askStatus(ask: TeammateAsk): { text: string; tone?: "bad" | "wait" | "ok" } {
+    if (ask.pending) return { text: "asking", tone: "wait" };
+    if (ask.needsApproval) return { text: "needs your OK", tone: "wait" };
+    if (ask.failed) return { text: "not asked", tone: "bad" };
+    switch (ask.status) {
+        case "ANSWERED":
+            return { text: "answered", tone: "ok" };
+        case "WORKING":
+            return { text: "working", tone: "wait" };
+        case "WAITING":
+            return { text: "waiting on you", tone: "wait" };
+        case "UNFINISHED":
+            return { text: "didn't finish", tone: "bad" };
+        default:
+            return { text: "" };
+    }
+}
+
+/** Ask cards stay readable once the turn is over: the request and what came
+ *  back, and the way into the other side of it, which is a conversation of the
+ *  person's own in that teammate's space. */
+function AskCard({ ask }: { ask: TeammateAsk }) {
+    const [open, setOpen] = useState(false);
+    const status = askStatus(ask);
+    const theirs =
+        ask.podId && ask.conversationId
+            ? writeAddress({ podId: ask.podId, tabId: "conversation", conversationId: ask.conversationId, agentName: null })
+            : null;
+    return (
+        <section className="toolcard toolcard--task">
+            <Head
+                icon={<AgentIcon size={14} />}
+                what={"Asked " + ask.teammate}
+                status={status.text}
+                tone={status.tone}
+                open={open}
+                onToggle={() => setOpen((was) => !was)}
+            />
+            {open && (
+                <div className="toolcard__body">
+                    <p className="toolcard__note">{ask.request}</p>
+                    {ask.error && <p className="toolcard__note" data-tone="bad">{ask.error}</p>}
+                    {ask.answer && <pre className="toolcard__out" data-stream="value">{ask.answer}</pre>}
+                    {!ask.answer && ask.note && <p className="toolcard__note">{ask.note}</p>}
+                    {theirs && (
+                        <p className="toolcard__note">
+                            <a className="linkish" href={theirs}>Open {ask.teammate}&rsquo;s conversation</a>
+                        </p>
+                    )}
+                </div>
+            )}
+        </section>
+    );
+}
+
 /* ── one call out to a connected account ─────────────────────────────── */
 
 function ConnectorCard({ run }: { run: ConnectorRun }) {
@@ -1019,5 +1079,7 @@ export function ToolCardView({
             return <SearchCard search={card} />;
         case "task":
             return <TaskCard task={card} />;
+        case "ask":
+            return <AskCard ask={card} />;
     }
 }

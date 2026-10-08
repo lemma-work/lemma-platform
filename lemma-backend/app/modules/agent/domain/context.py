@@ -88,6 +88,10 @@ class AgentContext(BaseModel):
     # not whoever asked. Resolved once from the conversation by every builder of
     # this context, so no tool has to read the conversation to find out.
     answers_outsider: bool = False
+    # On a run answering outside the pod, the pod asking over a link (see
+    # `domain/pod_asks.linked_asker`). Its tools then authorize as that pod --
+    # Public reads plus what this pod granted it -- rather than as nobody.
+    asking_pod_id: UUID | None = None
     # False for a run started by a private note (see `domain/private_notes`):
     # its answer stays in Lemma instead of going to the chat platform the
     # conversation also lives on. Read by the surface's run observer.
