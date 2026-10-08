@@ -237,6 +237,30 @@ async def test_private_html_navigation_can_sign_in_at_its_original_path(
     assert opened.status_code == 200 and "PRIVATE_REPORT" in opened.text
 
 
+async def test_a_navigation_through_the_install_worker_can_sign_in(
+    browser, hosted_app, authenticated_client
+):
+    """The worker an opened app installs forwards every later navigation.
+
+    Chrome resets a forwarded navigation's destination to `empty` and keeps its
+    mode. Read as a script, a lapsed cookie got a bare JSON 401, the page that
+    renews it never loaded, and the app stayed shut until the site was cleared.
+    """
+    forwarded = {
+        "Accept": "text/html,application/xhtml+xml",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "empty",
+    }
+    gate = await browser.get(hosted_app.origin + "/inbox", headers=forwarded)
+    assert_gate(gate)
+    assert "text/html" in gate.headers["content-type"]
+    assert "Opening this app" in gate.text
+
+    await establish(browser, authenticated_client, hosted_app.origin)
+    opened = await browser.get(hosted_app.origin + "/inbox", headers=forwarded)
+    assert opened.status_code == 200 and CONTENT in opened.text
+
+
 async def test_private_missing_document_navigation_offers_workspace_recovery(
     browser, hosted_app, authenticated_client
 ):

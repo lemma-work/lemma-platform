@@ -22,7 +22,10 @@ from app.modules.apps.api.asset_not_found_page import (
     render_asset_not_found_page,
     workspace_file_url,
 )
-from app.modules.apps.api.controllers.public_app_controller import _is_navigation
+from app.modules.apps.api.controllers.public_app_controller import (
+    _can_show_access_page,
+    _is_navigation,
+)
 from app.modules.apps.domain.errors import AppAssetNotFoundError, AppNotFoundError
 from app.modules.apps.services.app_storage_phase import (
     AppStoragePhase,
@@ -40,8 +43,10 @@ class _EmptyStorage:
 
 
 class _Request:
-    def __init__(self, accept: str):
-        self.headers = {"accept": accept}
+    def __init__(self, accept: str, **fetch_metadata: str):
+        self.headers = {"accept": accept} | {
+            f"sec-fetch-{name}": value for name, value in fetch_metadata.items()
+        }
 
 
 def _phase() -> AppStoragePhase:
@@ -92,6 +97,33 @@ def test_only_a_navigation_is_given_a_page():
     assert not _is_navigation(_Request("application/json"))
     assert not _is_navigation(_Request("*/*"))
     assert not _is_navigation(_Request(""))
+
+
+_HTML = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+
+
+def test_a_navigation_forwarded_by_the_install_worker_is_still_a_navigation():
+    """What Chrome sends when a service worker re-fetches `event.request`.
+
+    The destination is reset to `empty`; the mode stays `navigate`, which page
+    script cannot ask for. Read as a script, a lapsed access cookie got a bare
+    JSON 401 instead of the sign-in page, and no page ever renewed it.
+    """
+    forwarded = _Request(_HTML, mode="navigate", dest="empty")
+
+    assert _is_navigation(forwarded)
+    assert _can_show_access_page(forwarded, None)
+    assert _can_show_access_page(forwarded, "library/report.pdf")
+
+
+def test_code_asking_for_html_is_still_code():
+    """A script's fetch keeps its JSON, whatever Accept it sends."""
+    script_fetch = _Request(_HTML, mode="cors", dest="empty")
+    script_tag = _Request(_HTML, mode="no-cors", dest="script")
+
+    assert not _is_navigation(script_fetch)
+    assert not _can_show_access_page(script_fetch, None)
+    assert not _can_show_access_page(script_tag, "reports.html")
 
 
 def test_the_offer_is_made_for_documents_and_withheld_from_build_output():
