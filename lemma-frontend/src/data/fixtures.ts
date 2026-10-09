@@ -2535,15 +2535,15 @@ function sampleSecret(): string {
 /** What each sample table offers people outside, and what is open. */
 const SAMPLE_OFFERED: Record<string, OfferedColumn[]> = {
     orders: [
-        { name: "customer_name", type: "TEXT", required: true, options: [], description: "Your name" },
-        { name: "email", type: "TEXT", required: true, options: [], description: null },
-        { name: "item", type: "TEXT", required: false, options: [], description: null },
-        { name: "quantity", type: "INTEGER", required: false, options: [], description: null },
-        { name: "notes", type: "TEXT", required: false, options: [], description: null },
+        { name: "customer_name", type: "TEXT", required: true, options: [], description: "Your name", input: "text" },
+        { name: "email", type: "TEXT", required: true, options: [], description: null, input: "email" },
+        { name: "item", type: "TEXT", required: false, options: [], description: null, input: "text" },
+        { name: "quantity", type: "INTEGER", required: false, options: [], description: null, input: "number" },
+        { name: "notes", type: "TEXT", required: false, options: [], description: null, input: "textarea" },
     ],
     price_list: [
-        { name: "product", type: "TEXT", required: true, options: [], description: null },
-        { name: "price", type: "FLOAT", required: false, options: [], description: null },
+        { name: "product", type: "TEXT", required: true, options: [], description: null, input: "text" },
+        { name: "price", type: "FLOAT", required: false, options: [], description: null, input: "number" },
     ],
 };
 const SAMPLE_OPEN = new Map<string, { audience: Audience; columns: string[] }>();

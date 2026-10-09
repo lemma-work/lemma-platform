@@ -23,7 +23,8 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.agents import agent_name_for_id
 from app.modules.agent.contracts.contact_conversations import (
-    ExportedMessage,
+    CLIENT_NONCE_KEY,
+    VisibleMessage,
     visible_messages,
 )
 from app.modules.agent_surfaces.domain.web_widgets import (
@@ -94,7 +95,12 @@ class WebChat:
     # -- conversation -------------------------------------------------------
 
     async def send_visitor_message(
-        self, widget: WebWidget, visitor: Visitor, *, text: str
+        self,
+        widget: WebWidget,
+        visitor: Visitor,
+        *,
+        text: str,
+        client_nonce: str | None = None,
     ) -> None:
         message = text.strip()
         if not message:
@@ -122,13 +128,24 @@ class WebChat:
             )
             if not held:
                 await self._start_visitor_turn(
-                    uow, widget, session, conversation_id, owner=owner, text=message
+                    uow,
+                    widget,
+                    session,
+                    conversation_id,
+                    owner=owner,
+                    text=message,
+                    client_nonce=client_nonce,
                 )
             await touch_visitor_session(uow, session.id)
             await uow.commit()
         if held:
             await self._hold_for_a_person(
-                widget, session, conversation_id, owner=owner, text=message
+                widget,
+                session,
+                conversation_id,
+                owner=owner,
+                text=message,
+                client_nonce=client_nonce,
             )
 
     async def _hold_for_a_person(
@@ -139,6 +156,7 @@ class WebChat:
         *,
         owner: UUID,
         text: str,
+        client_nonce: str | None,
     ) -> None:
         """Keep the message for the member, and tell the visitor once a day.
 
@@ -154,11 +172,9 @@ class WebChat:
                 conversation_id=conversation_id,
                 owner_id=owner,
                 text=text,
-                metadata={
-                    "source": "web_widget",
-                    "sender_display_name": await self._display_name(uow, session)
-                    or "Visitor",
-                },
+                metadata=_visitor_metadata(
+                    await self._display_name(uow, session), client_nonce
+                ),
                 tell=tell,
             )
             await uow.commit()
@@ -197,9 +213,12 @@ class WebChat:
         *,
         owner: UUID,
         text: str,
+        client_nonce: str | None,
     ) -> None:
         agent_name = await agent_name_for_id(uow.session, widget.agent_id)
-        name = await self._display_name(uow, session)
+        metadata = _visitor_metadata(
+            await self._display_name(uow, session), client_nonce
+        )
         auth_ctx = await create_authorization_data_service(uow).build_user_context(
             user_id=owner, pod_id=widget.pod_id
         )
@@ -212,10 +231,7 @@ class WebChat:
                 pod_id=widget.pod_id,
                 content=text,
                 agent_name=agent_name,
-                message_metadata={
-                    "source": "web_widget",
-                    "sender_display_name": name or "Visitor",
-                },
+                message_metadata=metadata,
             )
         finally:
             reset_current_context(context_token)
@@ -262,7 +278,7 @@ class WebChat:
 
     async def visitor_history(
         self, visitor: Visitor, *, after: int
-    ) -> tuple[ExportedMessage, ...]:
+    ) -> tuple[VisibleMessage, ...]:
         async with self.uow_factory() as uow:
             session = await self._visitor_session(uow, visitor)
             if session.conversation_id is None:
@@ -326,3 +342,15 @@ class WebChat:
             raise refused(
                 "This isn't taking answers right now", 403, "table_closed"
             ) from exc
+
+
+def _visitor_metadata(name: str | None, client_nonce: str | None) -> dict[str, object]:
+    """What a visitor's message carries: who sent it, and the page's own name
+    for its copy, handed back in history so the page draws the message once."""
+    metadata: dict[str, object] = {
+        "source": "web_widget",
+        "sender_display_name": name or "Visitor",
+    }
+    if client_nonce:
+        metadata[CLIENT_NONCE_KEY] = client_nonce
+    return metadata

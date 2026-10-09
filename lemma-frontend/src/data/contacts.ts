@@ -86,6 +86,26 @@ export function readContacts(wire: ContactListResponse): { items: Contact[]; nex
     return { items: (wire.items ?? []).map(readContact), next: wire.next_before ?? null };
 }
 
+/** The most pages one list follows: far past any space's contacts or tables,
+ *  and short of a server that never stops answering "there's more". */
+const MAX_PAGES = 50;
+
+/** A whole list, page after page until the server says there is no next one.
+ *  A first page alone said "these are all of them" when they were not. */
+export async function everyPage<T>(page: (cursor: string | undefined) => Promise<{ items: T[]; next: string | null | undefined }>): Promise<T[]> {
+    const items: T[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (let count = 0; count < MAX_PAGES; count += 1) {
+        const got = await page(cursor);
+        items.push(...got.items);
+        if (!got.next || seen.has(got.next)) return items;
+        seen.add(got.next);
+        cursor = got.next;
+    }
+    return items;
+}
+
 export function readWidget(wire: WebWidgetResponse): WebWidget {
     return {
         id: wire.id,

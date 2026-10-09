@@ -6,6 +6,7 @@ import {
     answerChoices,
     contactName,
     contactSubline,
+    everyPage,
     followUpRefusal,
     handleText,
     readContact,
@@ -71,4 +72,26 @@ test("the cap says what was spent, with or without one", () => {
 
 test("the three answers are offered in order of who gets in", () => {
     assert.deepEqual(answerChoices("Kit").map((choice) => choice.value), ["off", "known", "anyone"]);
+});
+
+test("a list is followed to its last page, and a page that repeats ends it", async () => {
+    const pages: Record<string, { items: number[]; next: string | null }> = {
+        start: { items: [1, 2], next: "b" },
+        b: { items: [3], next: "c" },
+        c: { items: [4], next: null },
+    };
+    const asked: (string | undefined)[] = [];
+    const all = await everyPage(async (cursor) => {
+        asked.push(cursor);
+        return pages[cursor ?? "start"];
+    });
+    assert.deepEqual(all, [1, 2, 3, 4]);
+    assert.deepEqual(asked, [undefined, "b", "c"]);
+
+    let calls = 0;
+    const looping = await everyPage(async () => {
+        calls += 1;
+        return { items: [calls], next: "same" };
+    });
+    assert.deepEqual(looping, [1, 2]);
 });

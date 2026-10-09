@@ -66,6 +66,21 @@ class ExportedMessage(BaseModel):
     sequence: int
 
 
+#: Where a visitor's own message keeps the name its page gave it.
+CLIENT_NONCE_KEY = "client_nonce"
+
+
+class VisibleMessage(ExportedMessage):
+    """A message as the visitor's page reads it back.
+
+    ``client_nonce`` is the page's own name for a message it sent, so the page
+    can match the server's copy to the one it already drew. It is the page's
+    bookkeeping, not what was said, so an export leaves it out.
+    """
+
+    client_nonce: str | None = None
+
+
 class ExportedConversation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -230,7 +245,7 @@ async def _messages_of(
 
 async def visible_messages(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, after: int, limit: int
-) -> tuple[ExportedMessage, ...]:
+) -> tuple[VisibleMessage, ...]:
     """What the person outside the pod saw of a conversation, after a point.
 
     Their words, the bot's answers and members' follow-ups, oldest first. Never
@@ -247,7 +262,13 @@ async def visible_messages(
         .limit(limit)
     )
     return tuple(
-        _exported(message)
+        VisibleMessage(
+            role=message.role,
+            text=message.text or "",
+            created_at=message.created_at,
+            sequence=message.sequence,
+            client_nonce=_client_nonce(message),
+        )
         for message, run_metadata in rows
         if _was_seen(message, run_metadata)
     )
@@ -268,6 +289,14 @@ def _was_seen(message: MessageModel, run_metadata: dict[str, object] | None) -> 
         and not is_private_note(message.message_metadata)
         and not run_is_private(run_metadata)
     )
+
+
+def _client_nonce(message: MessageModel) -> str | None:
+    """The page's name for a message the visitor sent; nobody else's has one."""
+    if message.role != "user":
+        return None
+    nonce = (message.message_metadata or {}).get(CLIENT_NONCE_KEY)
+    return nonce if isinstance(nonce, str) else None
 
 
 def _was_said_to_them(message: MessageModel) -> bool:

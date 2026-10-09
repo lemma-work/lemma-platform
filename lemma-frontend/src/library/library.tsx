@@ -18,6 +18,7 @@ import { FilterBar } from "./filter-bar";
 import { TableForm } from "./forms";
 import { emptyFor } from "@/space/empty-copy";
 import { SpaceEmpty } from "@/space/empty-state";
+import { useFeature } from "@/site/analytics/flags";
 
 /** How many rows this view will read in full to decide what a table is.
  *
@@ -145,6 +146,8 @@ export function TableView({ podId, name, teammate, onOpenRecord, onAsk }: {
     const [removing, setRemoving] = useState<Row | null>(null);
     const [writeProblem, setWriteProblem] = useState<string | null>(null);
     const [collecting, setCollecting] = useState(false);
+    /* People outside the space are behind the contacts flag, like every other door to them. */
+    const contactsOn = useFeature("contacts");
 
     /** One field, changed where it is.
      *
@@ -271,8 +274,8 @@ export function TableView({ podId, name, teammate, onOpenRecord, onAsk }: {
             view toolbar. Two buttons for the second thing, one here and one up
             there, would be two places to change the wording and two chances for
             them to disagree. */}
-        <div className="library-actions"><button className="btn" onClick={() => setCollecting(true)} title="Let people outside the space add rows, through a form"><GlobeIcon size={16}/>Collect responses</button><button className="btn" onClick={() => { setEditing({ row: null }); setWriteProblem(null); }}><PlusIcon size={16}/>New row</button></div></header>
-        {collecting && <CollectResponses podId={podId} table={name} teammate={teammate} onAsk={onAsk} onClose={() => setCollecting(false)} />}
+        <div className="library-actions">{contactsOn && <button className="btn" onClick={() => setCollecting(true)} title="Let people outside the space add rows, through a form"><GlobeIcon size={16}/>Collect responses</button>}<button className="btn" onClick={() => { setEditing({ row: null }); setWriteProblem(null); }}><PlusIcon size={16}/>New row</button></div></header>
+        {contactsOn && collecting && <CollectResponses podId={podId} table={name} teammate={teammate} onAsk={onAsk} onClose={() => setCollecting(false)} />}
         <div className="library-controls"><label className="library-search"><SearchIcon size={17}/><input aria-label="Search loaded rows" placeholder="Search loaded rows…" value={search} onChange={e => setSearch(e.target.value)}/></label><details className="library-columns"><summary>Columns ({visible.length})</summary><div>{fields.map(f => <label key={f.name}><input type="checkbox" checked={visible.includes(f.name)} onChange={e => setChosen(e.target.checked ? [...visible, f.name] : visible.filter(n => n !== f.name))}/>{f.name}</label>)}</div></details></div>
         {/* Narrowing the table and knowing what shape it is in are one strip.
             `choice` exists exactly when `profile` does, so nothing here can
