@@ -766,7 +766,7 @@ TYPESAFE_PRICE_PER_MILLION_INPUT_TOKENS_USD=
 
 DECISION_INTERACTIVE_TIMEOUT_SECONDS=8
 DECISION_BACKGROUND_TIMEOUT_SECONDS=25
-DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization; 0 for none
+DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization and priority; 0 for none
 ```
 
 Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it

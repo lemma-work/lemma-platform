@@ -19,7 +19,7 @@ A function reaches it through the SDKs (`pod.decisions.make(...)`,
 | `POST /pods/{pod_id}/decisions` | Check the questions, evidence and examples; admit against the organization's rate; ask the configured provider under the caller's usage metering; check the answers; return one per question |
 
 The module owns no tables, events or workers. Its only state is a per-minute
-counter per organization in Redis.
+counter per organization and priority in Redis.
 
 ## Questions and answers
 
@@ -88,7 +88,7 @@ sequenceDiagram
 | Setting | Meaning |
 | --- | --- |
 | `DECISION_INTERACTIVE_TIMEOUT_SECONDS` / `DECISION_BACKGROUND_TIMEOUT_SECONDS` | End-to-end deadline per priority; `interactive` also gets no second model attempt |
-| `DECISION_RATE_LIMIT_PER_MINUTE` | Decisions per organization per clock minute; fails open when Redis does not answer within 0.25 s |
+| `DECISION_RATE_LIMIT_PER_MINUTE` | Decisions per organization per clock minute, counted separately for `interactive` and `background`, so a schedule's backlog never leaves a live call unrouted; fails open when Redis does not answer within 0.25 s |
 | `TYPESAFE_PRICE_PER_MILLION_INPUT_TOKENS_USD` | System One's price, so its calls count toward spend limits |
 
 Model decisions are metered like any model call. System One calls are metered
