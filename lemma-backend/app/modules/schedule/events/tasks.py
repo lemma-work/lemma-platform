@@ -19,3 +19,24 @@ async def prune_schedule_runs_task() -> None:
     removed = await prune_schedule_runs(async_session_maker)
     if removed:
         logger.info("schedule.runs.pruned", deleted_count=removed)
+
+
+# Every quarter hour, on the bulk lane: an orphaned subscription costs a
+# renewal call a few times a day, and an author who left the pod is caught
+# within the quarter.
+@streaq_cron("*/15 * * * *", name="reconcile_mcp_listening", lane=Lane.BULK)
+async def reconcile_mcp_listening_task() -> None:
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.connectors.contracts.mcp_events import (
+        mcp_listening_page,
+        unsubscribe_from_mcp_event,
+    )
+    from app.modules.schedule.services.mcp_listening_reconciler import (
+        McpListeningReconciler,
+    )
+
+    await McpListeningReconciler(
+        SessionUnitOfWorkFactory(async_session_maker),
+        page=mcp_listening_page,
+        unsubscribe=unsubscribe_from_mcp_event,
+    ).run()

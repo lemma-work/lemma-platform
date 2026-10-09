@@ -1,5 +1,6 @@
 """Schedule API controller."""
 
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from app.modules.schedule.api.dependencies import (
 from app.modules.schedule.api.schemas.schedule_schemas import (
     CreateScheduleRequest,
     ScheduleDetailResponse,
+    ListeningResponse,
     ScheduleListResponse,
     UpdateScheduleRequest,
     ScheduleResponse,
@@ -24,6 +26,7 @@ from app.modules.schedule.api.schemas.schedule_schemas import (
     ScheduleRunResponse,
 )
 from app.modules.schedule.domain.schedule import (
+    MCP_EVENT_SOURCE,
     ScheduleCreateEntity,
     ScheduleRunStatus,
     ScheduleType,
@@ -34,10 +37,63 @@ router = APIRouter(prefix="/pods/{pod_id}/schedules", tags=["Schedules"])
 
 
 async def _schedule_detail_response(schedule) -> ScheduleDetailResponse:
-    return ScheduleDetailResponse(
-        **ScheduleResponse.model_validate(schedule).model_dump(),
-        allowed_actions=schedule.allowed_actions,
+    [response] = await _with_listening(
+        [
+            ScheduleDetailResponse(
+                **ScheduleResponse.model_validate(schedule).model_dump(),
+                allowed_actions=schedule.allowed_actions,
+            )
+        ]
     )
+    return response
+
+
+async def _with_listening(
+    responses: list[ScheduleDetailResponse],
+) -> list[ScheduleDetailResponse]:
+    """Say, for each schedule on an MCP server's event, whether it is still
+    hearing from the server. Without it a schedule whose subscription lapsed
+    reads exactly like one that is working and has had no events."""
+    from app.modules.connectors.contracts.mcp_events import mcp_listening_states
+
+    wanted = {
+        response.id: str(response.config.get("provider_trigger_id"))
+        for response in responses
+        if response.config.get("source") == MCP_EVENT_SOURCE
+        and response.config.get("provider_trigger_id")
+    }
+    if not wanted:
+        return responses
+    states = await mcp_listening_states(
+        list(wanted.values()), now=datetime.now(timezone.utc)
+    )
+    shown: list[ScheduleDetailResponse] = []
+    for response in responses:
+        state = states.get(wanted.get(response.id, ""))
+        if state is None:
+            shown.append(response)
+            continue
+        shown.append(
+            response.model_copy(
+                update={
+                    "listening": ListeningResponse(
+                        state=(
+                            "pending"
+                            if not state.granted
+                            else "lapsed"
+                            if state.lapsed
+                            else "retrying"
+                            if state.renew_failures
+                            else "listening"
+                        ),
+                        last_error=state.last_error,
+                        last_event_at=state.last_event_at,
+                        refresh_before=state.refresh_before,
+                    )
+                }
+            )
+        )
+    return shown
 
 
 @router.post(
@@ -121,7 +177,9 @@ async def list_schedules(
     # fixes for the context-building step that runs before this handler.
     await uow.commit()
     return ScheduleListResponse(
-        items=[ScheduleDetailResponse.model_validate(t) for t in schedules],
+        items=await _with_listening(
+            [ScheduleDetailResponse.model_validate(t) for t in schedules]
+        ),
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )

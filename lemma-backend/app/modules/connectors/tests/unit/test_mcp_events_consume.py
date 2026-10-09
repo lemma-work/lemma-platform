@@ -4,6 +4,7 @@ what its deliveries must prove before anything is believed about them."""
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import time
@@ -11,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import SecretStr
 
 from app.core.webhooks.signatures import standard_webhook_signature
 from app.modules.connectors.domain.mcp_events import (
@@ -25,6 +27,11 @@ from app.modules.connectors.infrastructure.repositories.mcp_event_repository imp
 )
 from app.modules.connectors.infrastructure.webhook_sources.mcp import McpWebhookSource
 from app.modules.schedule.contracts import WebhookDelivery, WebhookNotVerified
+
+
+def _digest(event_id: str) -> str:
+    return hashlib.sha256(event_id.encode()).hexdigest()
+
 
 SECRET = "whsec_" + base64.b64encode(os.urandom(32)).decode()
 NOW = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
@@ -130,7 +137,7 @@ def _source(subscription_id: UUID, remote_id: str | None = "sub_remote"):
     async def listening(asked: UUID):
         if asked != subscription_id:
             return None
-        return _stored(subscription_id, remote_id), SECRET
+        return _stored(subscription_id, remote_id), SecretStr(SECRET)
 
     async def note(asked: UUID) -> None:
         heard.append(asked)
@@ -199,7 +206,9 @@ async def test_an_occurrence_routes_by_our_id_and_dedupes_on_its_event_id() -> N
     normalized = source.normalize(verified)
     assert normalized is not None
     assert normalized.match == {"provider_trigger_id": str(subscription_id)}
-    assert normalized.source_event_id == f"mcp:{subscription_id}:evt_1"
+    assert normalized.source_event_id == f"mcp:{subscription_id}:" + _digest("evt_1")
+    assert normalized.account_id is not None
+    assert normalized.account_id == verified.account_id, "only that account's schedules"
     assert normalized.payload["data"] == {"title": "Login is broken"}
 
 

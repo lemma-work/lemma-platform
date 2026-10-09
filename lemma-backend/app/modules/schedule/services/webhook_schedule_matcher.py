@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Dict, List
 
 from app.modules.schedule.domain.schedule import (
@@ -17,7 +18,7 @@ logger = get_logger(__name__)
 
 
 def _provisioned_only(
-    schedules: List[ScheduleEntity], criteria: Dict[str, Any]
+    schedules: List[ScheduleEntity], criteria: Mapping[str, object]
 ) -> List[ScheduleEntity]:
     """A routing key only provisioning writes matches only schedules that were
     provisioned -- those bound to an account. Create and update already drop

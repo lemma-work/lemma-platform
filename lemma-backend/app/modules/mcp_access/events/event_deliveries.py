@@ -9,7 +9,7 @@ job, so one slow receiver retries alone and never holds up the rest.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from faststream import Depends
@@ -70,7 +70,7 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 class _Enqueues(Protocol):
-    async def enqueue(self, job_name: str, **kwargs: Any) -> object: ...
+    async def enqueue(self, job_name: str, **kwargs: object) -> object: ...
 
 
 async def fan_out_record_event(

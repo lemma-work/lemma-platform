@@ -17,7 +17,7 @@ import secrets
 from collections.abc import Callable
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, SecretStr
 
 from app.core.net.http_client import get_shared_http_client
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url, request_guarded
@@ -63,7 +63,7 @@ class McpEventsClient:
         name: str,
         arguments: dict[str, JsonValue],
         url: str,
-        secret: str,
+        secret: SecretStr,
         ttl_ms: int,
     ) -> dict[str, JsonValue]:
         return await self._call(
@@ -71,7 +71,11 @@ class McpEventsClient:
             {
                 "name": name,
                 "arguments": arguments,
-                "delivery": {"mode": "webhook", "url": url, "secret": secret},
+                "delivery": {
+                    "mode": "webhook",
+                    "url": url,
+                    "secret": secret.get_secret_value(),
+                },
                 "ttlMs": ttl_ms,
             },
         )

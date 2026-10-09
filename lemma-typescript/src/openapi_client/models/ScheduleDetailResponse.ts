@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { ListeningResponse } from './ListeningResponse.js';
 import type { ScheduleFireStatus } from './ScheduleFireStatus.js';
 import type { ScheduleType } from './ScheduleType.js';
 /**
@@ -27,6 +28,10 @@ export type ScheduleDetailResponse = {
     last_fire_status?: (ScheduleFireStatus | null);
     last_fired_at?: (string | null);
     last_run_id?: (string | null);
+    /**
+     * For a schedule on an MCP server's event: whether it is still hearing from the server. Absent for every other schedule.
+     */
+    listening?: (ListeningResponse | null);
     name: (string | null);
     /**
      * True when the failure breaker paused this schedule, as opposed to a person pausing it. Reactivating resets the failure count.

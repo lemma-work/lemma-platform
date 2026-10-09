@@ -464,9 +464,17 @@ async def test_a_receiver_that_keeps_failing_is_paused_until_the_app_refreshes(
         SqlDeliveryLedger(_session_factory()), read_record=read_record_for
     )
     receiver.failing = True
-    for _ in range(PAUSE_AFTER_FAILURES):
-        job = _job_for(sub_id, pod_id, table, record_id)
-        assert await delivery.deliver(job) is Outcome.RETRY
+    # Counted by outcome, not by loop: a worker running in the same process
+    # may deliver the table's first row through the stream as well, and that
+    # failure counts toward the same pause.
+    outcomes = [
+        await delivery.deliver(_job_for(sub_id, pod_id, table, record_id))
+        for _ in range(PAUSE_AFTER_FAILURES)
+    ]
+    assert set(outcomes) <= {Outcome.RETRY, Outcome.DROPPED}
+    assert outcomes[: PAUSE_AFTER_FAILURES // 2] == [Outcome.RETRY] * (
+        PAUSE_AFTER_FAILURES // 2
+    ), "a few failures are retried, not paused on"
 
     paused = _job_for(sub_id, pod_id, table, record_id)
     assert await delivery.deliver(paused) is Outcome.DROPPED, "nothing more is sent"

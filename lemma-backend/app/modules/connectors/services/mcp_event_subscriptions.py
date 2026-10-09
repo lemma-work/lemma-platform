@@ -17,10 +17,12 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from pydantic import JsonValue
+from cryptography.fernet import InvalidToken
+from pydantic import JsonValue, SecretStr
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.core.crypto.factory import get_secret_cipher
@@ -54,6 +56,10 @@ from app.modules.connectors.infrastructure.repositories.mcp_event_repository imp
 )
 
 logger = get_logger(__name__)
+
+#: A row still waiting on the server's answer after this was left by a
+#: subscribe that never finished.
+PENDING_ABANDONED_AFTER = timedelta(minutes=10)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,10 +122,23 @@ class McpEventSubscriptions:
         user_id: UUID,
         event: str,
         arguments: dict[str, JsonValue],
+        organization_id: UUID | None = None,
     ) -> UUID:
-        secret = new_secret()
+        """Subscribe on this person's account. ``organization_id`` is the
+        organization of the pod the subscription is for: an account in another
+        organization -- one the person also belongs to -- is refused, so a
+        pod's standing work never listens through credentials that pod's
+        organization does not hold."""
+        secret = SecretStr(new_secret())
         async with self._uow_factory() as uow:
             target = await self._target(uow, account_id, user_id)
+            if (
+                organization_id is not None
+                and target.organization_id != organization_id
+            ):
+                raise ConnectorValidationError(
+                    "That account belongs to another organization than this pod."
+                )
             events = McpEventRepository(uow.session)
             offered = await events.install_event(target.auth_config_id, event)
             if offered is None:
@@ -139,7 +158,9 @@ class McpEventSubscriptions:
                 user_id=user_id,
                 name=event,
                 arguments=dict(arguments),
-                secret_ciphertext=str(get_secret_cipher().encrypt_str(secret)),
+                secret_ciphertext=str(
+                    get_secret_cipher().encrypt_str(secret.get_secret_value())
+                ),
             )
             await uow.commit()
         try:
@@ -190,7 +211,17 @@ class McpEventSubscriptions:
         """
         started = self._clock()
         async with self._uow_factory() as uow:
-            due = await McpEventRepository(uow.session).due_for_renewal(started)
+            events = McpEventRepository(uow.session)
+            abandoned = await events.drop_stale_pending(
+                started - PENDING_ABANDONED_AFTER
+            )
+            await uow.commit()
+            due = await events.due_for_renewal(started)
+        if abandoned:
+            logger.info(
+                "connectors.mcp_events.abandoned_pending_dropped",
+                dropped_count=abandoned,
+            )
         renewed = 0
         for attempted, stored in enumerate(due):
             if self._clock() - started >= RENEW_PASS_BUDGET:
@@ -200,19 +231,44 @@ class McpEventSubscriptions:
                     left_count=len(due) - attempted,
                 )
                 break
-            renewed += int(await self._renew(stored))
+            renewed += int(await self._renew_guarded(stored))
         return renewed
+
+    async def _renew_guarded(self, stored: StoredEventSubscription) -> bool:
+        """One renewal, never the pass's end. A secret that will not decrypt (a
+        retired key: `RuntimeError`, a damaged envelope: `ValueError`,
+        `LookupError`, `InvalidToken`) or a database blip is that row's
+        failure, recorded and backed off like a refusal, rather than an
+        exception that stops every row after it, every pass. A server's own
+        refusal is `McpEventsError`, handled inside."""
+        try:
+            return await self._renew(stored)
+        except (
+            InvalidToken,
+            LookupError,
+            RuntimeError,
+            SQLAlchemyError,
+            ValueError,
+        ) as exc:
+            logger.error(
+                "connectors.mcp_events.renew.failed",
+                subscription_id=str(stored.id),
+                error_type=type(exc).__name__,
+                exc_info=True,
+            )
+            await self._renewal_failed(stored, f"internal: {type(exc).__name__}")
+            return False
 
     async def listening(
         self, subscription_id: UUID
-    ) -> tuple[StoredEventSubscription, str] | None:
+    ) -> tuple[StoredEventSubscription, SecretStr] | None:
         """The subscription a delivery names, and the secret to check it with."""
         async with self._uow_factory() as uow:
             stored = await McpEventRepository(uow.session).subscription(subscription_id)
         if stored is None:
             return None
         secret = get_secret_cipher().decrypt_str(stored.secret_ciphertext)
-        return (stored, secret) if secret else None
+        return (stored, SecretStr(secret)) if secret else None
 
     async def heard(self, subscription_id: UUID) -> None:
         async with self._uow_factory() as uow:
@@ -223,9 +279,15 @@ class McpEventSubscriptions:
 
     async def _renew(self, stored: StoredEventSubscription) -> bool:
         async with self._uow_factory() as uow:
-            target = await self._target_or_none(uow, stored)
-        secret = get_secret_cipher().decrypt_str(stored.secret_ciphertext)
-        if target is None or not secret:
+            # Read again: the due list was loaded before this pass began, and
+            # a schedule deleted since then has already unsubscribed. Renewing
+            # it would subscribe again at the server with nothing listening.
+            current = await McpEventRepository(uow.session).subscription(stored.id)
+            if current is None:
+                return False
+            target = await self._target_or_none(uow, current)
+        plaintext = get_secret_cipher().decrypt_str(stored.secret_ciphertext)
+        if target is None or not plaintext:
             await self._renewal_failed(stored, "account_unavailable")
             return False
         try:
@@ -233,7 +295,7 @@ class McpEventSubscriptions:
                 name=stored.name,
                 arguments=dict(stored.arguments),
                 url=callback_url(stored.id),
-                secret=secret,
+                secret=SecretStr(plaintext),
                 ttl_ms=int(REQUESTED_TTL.total_seconds() * 1000),
             )
         except McpEventsError as exc:

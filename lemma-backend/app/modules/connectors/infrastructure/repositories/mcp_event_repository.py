@@ -41,6 +41,9 @@ class StoredEventSubscription:
     granted_at: datetime | None
     refresh_before: datetime | None
     renew_failures: int = 0
+    created_at: datetime | None = None
+    last_error: str | None = None
+    last_event_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +69,9 @@ def _stored(row: ConnectorEventSubscription) -> StoredEventSubscription:
         granted_at=row.granted_at,
         refresh_before=row.refresh_before,
         renew_failures=row.renew_failures,
+        created_at=row.created_at,
+        last_error=row.last_error,
+        last_event_at=row.last_event_at,
     )
 
 
@@ -256,6 +262,47 @@ class McpEventRepository:
             .returning(ConnectorEventSubscription.id)
         )
         return removed.scalar_one_or_none() is not None
+
+    async def page_after(
+        self, after: UUID | None, *, limit: int
+    ) -> list[StoredEventSubscription]:
+        """Every subscription, a page at a time in id order, for reconciling
+        them against the schedules they were made for."""
+        statement = select(ConnectorEventSubscription)
+        if after is not None:
+            statement = statement.where(ConnectorEventSubscription.id > after)
+        rows = (
+            await self._session.execute(
+                statement.order_by(ConnectorEventSubscription.id).limit(limit)
+            )
+        ).scalars()
+        return [_stored(row) for row in rows]
+
+    async def subscriptions(self, ids: list[UUID]) -> list[StoredEventSubscription]:
+        if not ids:
+            return []
+        rows = (
+            await self._session.execute(
+                select(ConnectorEventSubscription).where(
+                    ConnectorEventSubscription.id.in_(ids)
+                )
+            )
+        ).scalars()
+        return [_stored(row) for row in rows]
+
+    async def drop_stale_pending(self, before: datetime) -> int:
+        """Pending rows nobody finished: subscribe writes one before asking the
+        server and records the grant after, so a crash between leaves a row
+        that is never renewed and verifies nothing worth having."""
+        removed = await self._session.execute(
+            delete(ConnectorEventSubscription)
+            .where(
+                ConnectorEventSubscription.granted_at.is_(None),
+                ConnectorEventSubscription.created_at < before,
+            )
+            .returning(ConnectorEventSubscription.id)
+        )
+        return len(removed.scalars().all())
 
     async def due_for_renewal(self, now: datetime) -> list[StoredEventSubscription]:
         """Those whose renewal or retry is due, longest overdue first.

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import secrets
 import socket
@@ -65,6 +66,10 @@ ISSUE_CREATED = {
     },
     "payloadSchema": {"type": "object"},
 }
+
+
+def _digest(event_id: str) -> str:
+    return hashlib.sha256(event_id.encode()).hexdigest()
 
 
 def _free_port() -> int:
@@ -173,14 +178,19 @@ class _TrackerEvents(ServerExtension):
             if existing.arguments.get("project") in self._tracker.refusing:
                 raise MCPError(code=-32016, message="subscription revoked")
             existing.refreshes += 1
-            existing.secret = params.delivery.secret or existing.secret
+            if params.delivery.secret is not None:
+                existing.secret = params.delivery.secret.get_secret_value()
         else:
             sub = _Subscription(
                 id=f"sub_{secrets.token_hex(6)}",
                 name=params.name,
                 arguments=dict(params.arguments),
                 url=params.delivery.url,
-                secret=params.delivery.secret or "",
+                secret=(
+                    params.delivery.secret.get_secret_value()
+                    if params.delivery.secret is not None
+                    else ""
+                ),
             )
             challenge = secrets.token_urlsafe(16)
             status, body = await self._tracker.send(
@@ -404,6 +414,26 @@ async def test_an_issue_on_a_connected_server_starts_standing_work_once(
     [row] = await _subscriptions(db_session)
     assert schedule["config"]["provider_trigger_id"] == str(row.id)
     assert row.remote_id and row.refresh_before is not None
+    assert schedule["listening"]["state"] == "listening"
+
+    # A schedule in another pod carrying that subscription id with no account
+    # behind it -- however it got there: an import, a path that skipped the
+    # API's checks, a row from before they existed. Nothing the server sends
+    # for this subscription reaches it.
+    from sqlalchemy import update as sql_update
+
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+
+    other_pod = await _pod(authenticated_client, fixed_test_org["id"])
+    forged = await _schedule(
+        authenticated_client, other_pod, str(account.id), project="elsewhere"
+    )
+    await db_session.execute(
+        sql_update(Schedule)
+        .where(Schedule.id == forged["id"])
+        .values(account_id=None, config={"provider_trigger_id": str(row.id)})
+    )
+    await db_session.commit()
 
     assert await tracker.emit("evt_1", "web", "Login is broken") == [200]
     runs = await eventually(
@@ -413,7 +443,7 @@ async def test_an_issue_on_a_connected_server_starts_standing_work_once(
         timeout_seconds=30,
         interval_seconds=0.15,
     )
-    assert runs[0].source_event_id == f"mcp:{row.id}:evt_1"
+    assert runs[0].source_event_id == f"mcp:{row.id}:" + _digest("evt_1")
 
     # The same event again, then a new one: only the new one runs.
     assert await tracker.emit("evt_1", "web", "Login is broken") == [200]
@@ -426,9 +456,10 @@ async def test_an_issue_on_a_connected_server_starts_standing_work_once(
         interval_seconds=0.15,
     )
     assert sorted(run.source_event_id for run in runs) == [
-        f"mcp:{row.id}:evt_1",
-        f"mcp:{row.id}:evt_2",
+        f"mcp:{row.id}:" + digest
+        for digest in sorted([_digest("evt_1"), _digest("evt_2")])
     ]
+    assert await _runs(db_session, forged["id"]) == []
 
 
 async def test_edit_renew_and_delete_keep_the_server_in_step(
@@ -486,8 +517,14 @@ async def test_edit_renew_and_delete_keep_the_server_in_step(
         f"/pods/{pod_id}/schedules/{schedule['id']}"
     )
     assert removed.status_code in (200, 204), removed.text
-    assert tracker.subscriptions == {}
-    assert await _subscriptions(db_session) == []
+    # Unsubscribed once the delete committed, not before it.
+    await eventually(
+        label="unsubscribed after the delete committed",
+        probe=lambda: _subscriptions(db_session),
+        done=lambda found: found == [] and tracker.subscriptions == {},
+        timeout_seconds=10,
+        interval_seconds=0.1,
+    )
     status, _ = await tracker.send(
         live, {"eventId": "evt_late", "name": "issue.created", "data": {}}
     )
@@ -597,3 +634,150 @@ async def test_what_cannot_be_listened_to_is_refused_and_leaves_nothing(
 
     assert await _subscriptions(db_session) == []
     assert tracker.subscriptions == {}
+
+
+def _reconciler(*, is_member=None, clock=None):
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.connectors.contracts.mcp_events import (
+        mcp_listening_page,
+        unsubscribe_from_mcp_event,
+    )
+    from app.modules.schedule.services.mcp_listening_reconciler import (
+        McpListeningReconciler,
+    )
+
+    extra = {}
+    if is_member is not None:
+        extra["is_member"] = is_member
+    if clock is not None:
+        extra["clock"] = clock
+    return McpListeningReconciler(
+        SessionUnitOfWorkFactory(async_session_maker),
+        page=mcp_listening_page,
+        unsubscribe=unsubscribe_from_mcp_event,
+        **extra,
+    )
+
+
+async def _schedule_row(db_session, schedule_id: str):
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+
+    db_session.expire_all()
+    return (
+        await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
+    ).scalar_one_or_none()
+
+
+async def test_a_subscription_no_schedule_holds_is_dropped(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    """A create whose request rolled back after subscribing, or a delete whose
+    unsubscribe failed: the subscription renewed on the author's account with
+    nothing listening. The reconciler drops it."""
+    from sqlalchemy import delete
+
+    from app.modules.schedule.infrastructure.models.schedule import Schedule
+
+    _, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    schedule = await _schedule(
+        authenticated_client, pod_id, str(account.id), project="web"
+    )
+    [row] = await _subscriptions(db_session)
+    await db_session.execute(delete(Schedule).where(Schedule.id == schedule["id"]))
+    await db_session.commit()
+
+    young = await _reconciler().run()
+    assert young.orphans == 0, "a create still in flight is given time"
+
+    later = datetime.now(timezone.utc) + timedelta(minutes=30)
+    done = await _reconciler(clock=lambda: later).run()
+
+    assert done.orphans == 1
+    assert await _subscriptions(db_session) == []
+    assert row.remote_id in tracker.unsubscribed
+
+
+async def test_an_author_who_left_the_pod_stops_their_account_listening(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    _, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    schedule = await _schedule(
+        authenticated_client, pod_id, str(account.id), project="web"
+    )
+    [row] = await _subscriptions(db_session)
+
+    async def gone(*_: object) -> bool:
+        return False
+
+    done = await _reconciler(is_member=gone).run()
+
+    assert done.turned_off == 1
+    off = await _schedule_row(db_session, schedule["id"])
+    assert off.is_active is False
+    assert "provider_trigger_id" not in off.config
+    assert await _subscriptions(db_session) == []
+    assert row.remote_id in tracker.unsubscribed
+
+    # Turned back on by its author, it listens afresh on their account.
+    on = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}", json={"is_active": True}
+    )
+    assert on.status_code == 200, on.text
+    [fresh] = await _subscriptions(db_session)
+    assert on.json()["config"]["provider_trigger_id"] == str(fresh.id)
+    assert fresh.id != row.id
+    assert len(tracker.subscriptions) == 1
+
+
+async def test_a_subscription_the_server_stopped_renewing_turns_the_schedule_off(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    from sqlalchemy import update
+
+    from app.modules.schedule.services.mcp_listening_reconciler import (
+        LAPSED_AFTER_FAILURES,
+    )
+
+    _, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    schedule = await _schedule(
+        authenticated_client, pod_id, str(account.id), project="web"
+    )
+    [row] = await _subscriptions(db_session)
+
+    await db_session.execute(
+        update(ConnectorEventSubscription)
+        .where(ConnectorEventSubscription.id == row.id)
+        .values(
+            refresh_before=datetime.now(timezone.utc) - timedelta(hours=1),
+            renew_failures=LAPSED_AFTER_FAILURES - 1,
+            last_error="-32012: account needs signing in again",
+        )
+    )
+    await db_session.commit()
+    assert (await _reconciler().run()).turned_off == 0, "a short outage is retried"
+    shown = (
+        await authenticated_client.get(f"/pods/{pod_id}/schedules/{schedule['id']}")
+    ).json()
+    assert shown["listening"]["state"] == "lapsed", "and the schedule says so"
+    assert "signing in again" in shown["listening"]["last_error"]
+
+    await db_session.execute(
+        update(ConnectorEventSubscription)
+        .where(ConnectorEventSubscription.id == row.id)
+        .values(renew_failures=LAPSED_AFTER_FAILURES)
+    )
+    await db_session.commit()
+    assert (await _reconciler().run()).turned_off == 1
+
+    off = await _schedule_row(db_session, schedule["id"])
+    assert off.is_active is False
+    assert await _subscriptions(db_session) == []
+    shown = (
+        await authenticated_client.get(f"/pods/{pod_id}/schedules/{schedule['id']}")
+    ).json()
+    assert shown["last_error"].startswith("Turned off: the server stopped accepting")
+    assert shown["listening"] is None

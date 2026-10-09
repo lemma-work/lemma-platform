@@ -231,7 +231,8 @@ async def discover_install_operations(
 async def _discover_events(
     auth_config: AuthConfigEntity, credentials: dict[str, object] | None
 ) -> list[DiscoveredEvent] | None:
-    """An MCP server's events, beside its tools; None for any other kind."""
+    """An MCP server's events, beside its tools; None for any other kind, and
+    for a server that could not be reached -- either way the stored ones stay."""
     if auth_config.kind is not ConnectorKind.MCP:
         return None
     from app.modules.connectors.services.discovery.mcp_events_discoverer import (

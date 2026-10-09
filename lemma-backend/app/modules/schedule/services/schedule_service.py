@@ -156,32 +156,9 @@ class ScheduleService:
         elif schedule_create.schedule_type == ScheduleType.WEBHOOK:
             validate_webhook_source(schedule_create, self.webhook_sources)
         schedule = ScheduleEntity(**schedule_create.model_dump())
-        created = await self.schedule_repository.create(schedule)
-
-        if created.listens_through_account:
-            try:
-                provisioned = (
-                    await self.external_schedule_writer.create_provider_trigger(created)
-                )
-                # A source needing no subscription still supplies a routing key.
-                if provisioned.apply_to(created.config):
-                    updated = await self.schedule_repository.update(
-                        created.id,
-                        config=created.config,
-                    )
-                    if updated:
-                        created = updated
-            except Exception as exc:
-                logger.debug(
-                    "schedule.schedule_service.create_external_schedule_s.propagated",
-                    exc_info=True,
-                )
-                await self.schedule_repository.delete(created.id)
-                raise ScheduleValidationError(
-                    f"Failed to create external schedule: {exc}"
-                ) from exc
-
-        return created
+        if not schedule.listens_through_account:
+            return await self.schedule_repository.create(schedule)
+        return await resub.create_listening(schedule, self)
 
     async def _resolve_create_target(
         self, schedule_create: ScheduleCreateEntity
@@ -455,6 +432,18 @@ class ScheduleService:
         existing = await self.schedule_repository.get(schedule_id)
         if not existing:
             return False
+
+        if existing.listens_to_mcp and existing.config.get("provider_trigger_id"):
+            # Unsubscribed once the row is gone for certain. Unsubscribing
+            # first and then failing to commit left a schedule pointing at a
+            # subscription whose secret was deleted, refusing every delivery
+            # without a word. If this after-commit step fails, the subscription
+            # is an orphan the reconciler finds and drops.
+            deleted = await self.schedule_repository.delete(schedule_id)
+            if deleted:
+                writer = self.external_schedule_writer
+                self.uow.after_commit(lambda: resub.drop_subscription(existing, writer))
+            return deleted
 
         if existing.listens_through_account and existing.config.get(
             "provider_trigger_id"

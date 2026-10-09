@@ -15,10 +15,12 @@ redelivery run nothing twice.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+from pydantic import SecretStr
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.concurrency.offload import run_blocking
@@ -40,7 +42,9 @@ from app.modules.schedule.contracts import (
 
 logger = get_logger(__name__)
 
-Listening = Callable[[UUID], Awaitable[tuple[StoredEventSubscription, str] | None]]
+Listening = Callable[
+    [UUID], Awaitable[tuple[StoredEventSubscription, SecretStr] | None]
+]
 Heard = Callable[[UUID], Awaitable[None]]
 
 
@@ -85,7 +89,7 @@ class McpWebhookSource:
             delivery.header("webhook-id") or "",
             timestamp,
             delivery.raw_body,
-            [secret],
+            [secret.get_secret_value()],
         ):
             raise WebhookNotVerified()
         named = delivery.header("X-MCP-Subscription-Id")
@@ -151,7 +155,13 @@ class McpWebhookSource:
                 "timestamp": payload.get("timestamp"),
                 "data": payload.get("data"),
             },
-            source_event_id=f"{MCP_WEBHOOK_SOURCE}:{subscription_id}:{event_id}",
+            # The server's `eventId` is its own and unbounded; the run ledger's
+            # key is not. A digest keeps every id the same length, so a long one
+            # cannot fail the insert that makes a redelivery run nothing.
+            source_event_id=(
+                f"{MCP_WEBHOOK_SOURCE}:{subscription_id}:"
+                + hashlib.sha256(event_id.encode()).hexdigest()
+            ),
             match={"provider_trigger_id": str(subscription_id)},
             account_id=verified.account_id,
         )

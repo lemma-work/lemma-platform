@@ -40,6 +40,8 @@ logger = get_logger(__name__)
 
 
 class _RowWriter(Protocol):
+    async def create(self, entity: ScheduleEntity) -> ScheduleEntity: ...
+
     async def update(
         self, schedule_id: UUID, **kwargs: object
     ) -> ScheduleEntity | None: ...
@@ -107,6 +109,46 @@ async def resubscribe_for_new_config(
     )
 
 
+async def resubscribe_on_reactivation(
+    existing: ScheduleEntity,
+    update_data: dict[str, object],
+    writer: ExternalScheduleWriter,
+    *,
+    caller_id: UUID | None = None,
+) -> ScheduleEntity | None:
+    """Subscribe again when a schedule that lost its subscription is turned
+    back on; the schedule with its new routing key, or None.
+
+    A schedule listening through an account is turned off with its
+    subscription dropped when it can no longer listen -- its author left the
+    pod, or the server stopped renewing it. Turning it on again without a new
+    subscription would show it active with nothing that could ever reach it.
+    It is the author's account, so it is the author's to turn back on.
+    """
+    if (
+        update_data.get("is_active") is not True
+        or existing.is_active
+        or not existing.listens_to_mcp
+        or existing.config.get("provider_trigger_id")
+    ):
+        return None
+    if caller_id is not None and caller_id != existing.user_id:
+        raise ScheduleAccessDeniedError(
+            "This schedule listens through its author's account, so only its "
+            "author can turn it back on."
+        )
+    config = authored_config(
+        update_data["config"]
+        if isinstance(update_data.get("config"), dict)
+        else existing.config
+    )
+    candidate = existing.model_copy(update={"config": config})
+    provisioned = await writer.create_provider_trigger(candidate)
+    provisioned.apply_to(config)
+    update_data["config"] = config
+    return candidate.model_copy(update={"config": config})
+
+
 async def drop_subscription(
     schedule: ScheduleEntity, writer: ExternalScheduleWriter
 ) -> None:
@@ -135,6 +177,39 @@ class _Writes(Protocol):
     def uow(self) -> _AfterCommit: ...
 
 
+async def create_listening(
+    schedule: ScheduleEntity, service: _Writes
+) -> ScheduleEntity:
+    """Write a schedule that listens through an account, subscribed first.
+
+    Subscribed before the row is written, with the request's connection handed
+    back: an MCP server proves our callback while we wait, and that challenge
+    needs a connection of its own. Holding one here while waiting for another
+    is how a busy pool starves itself. Nothing the provider is told depends on
+    the row, so nothing is lost by the order -- and a row that then fails to
+    write drops the subscription it was given.
+    """
+    writer, uow = service.external_schedule_writer, service.uow
+    try:
+        async with connection_released(uow.session):
+            provisioned = await writer.create_provider_trigger(schedule)
+    except Exception as exc:
+        logger.debug("schedule.trigger_resubscription.create.propagated", exc_info=True)
+        raise ScheduleValidationError(
+            f"Failed to create external schedule: {exc}"
+        ) from exc
+    # A source needing no subscription still supplies a routing key.
+    provisioned.apply_to(schedule.config)
+    created: ScheduleEntity | None = None
+    try:
+        created = await service.schedule_repository.create(schedule)
+    finally:
+        if created is None and provisioned.provider_trigger_id:
+            async with connection_released(uow.session):
+                await drop_subscription(schedule, writer)
+    return created
+
+
 async def update_schedule_resubscribing(
     existing: ScheduleEntity,
     update_data: dict[str, object],
@@ -155,13 +230,22 @@ async def update_schedule_resubscribing(
         swap = await resubscribe_for_new_config(
             existing, update_data, writer, caller_id=caller_id
         )
+        # A reactivation has no old subscription to drop, only a new one.
+        made = (
+            await resubscribe_on_reactivation(
+                existing, update_data, writer, caller_id=caller_id
+            )
+            if swap is None
+            else None
+        )
     updated: ScheduleEntity | None = None
     try:
         updated = await service.schedule_repository.update(existing.id, **update_data)
     finally:
-        if swap is not None and updated is None:
+        fresh = swap.new if swap is not None else made
+        if fresh is not None and updated is None:
             async with connection_released(uow.session):
-                await drop_subscription(swap.new, writer)
+                await drop_subscription(fresh, writer)
     if swap is not None and updated is not None:
         old = swap.old
         uow.after_commit(lambda: drop_subscription(old, writer))

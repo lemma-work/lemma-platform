@@ -15,6 +15,7 @@ is somewhere the caller did not ask about.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.contracts.triggers import (
@@ -48,6 +49,18 @@ from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 BindingResolver = Callable[..., Awaitable[TriggerBinding]]
 TriggerSubscriber = Callable[..., Awaitable[str]]
 TriggerUnsubscriber = Callable[..., Awaitable[None]]
+#: Which organization owns a pod, read in a session of its own: provisioning
+#: runs with the request's connection handed back.
+PodOrganization = Callable[[UUID], Awaitable[UUID | None]]
+
+
+async def _pod_organization(pod_id: UUID) -> UUID | None:
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.pod.contracts.members import pod_organization_id
+
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        return await pod_organization_id(uow, pod_id)
 
 
 def _github_binding(binding: TriggerBinding) -> ScheduleConfig:
@@ -116,6 +129,7 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         unsubscribe: TriggerUnsubscriber = delete_trigger_subscription,
         listen_to_mcp: TriggerSubscriber = subscribe_to_mcp_event,
         stop_listening_to_mcp: TriggerUnsubscriber = unsubscribe_from_mcp_event,
+        pod_organization: PodOrganization = _pod_organization,
     ) -> None:
         self.uow = uow
         self._resolve_binding = resolve_binding
@@ -123,6 +137,7 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         self._unsubscribe = unsubscribe
         self._listen_to_mcp = listen_to_mcp
         self._stop_listening_to_mcp = stop_listening_to_mcp
+        self._pod_organization = pod_organization
 
     async def _binding(self, schedule: ScheduleEntity) -> TriggerBinding | None:
         """This schedule's trigger, or ``None`` when it names none.
@@ -202,12 +217,18 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
             )
         if not isinstance(arguments, dict):
             raise ScheduleValidationError("config.arguments must be an object.")
+        organization_id = (
+            await self._pod_organization(schedule.pod_id) if schedule.pod_id else None
+        )
+        if schedule.pod_id and organization_id is None:
+            raise ScheduleValidationError("This schedule's pod no longer exists.")
         try:
             provider_id = await self._listen_to_mcp(
                 account_id=schedule.account_id,
                 user_id=schedule.user_id,
                 event=event.strip(),
                 arguments=arguments,
+                organization_id=organization_id,
             )
         except ConnectorInfrastructureError as exc:
             raise ScheduleInfrastructureError(str(exc)) from exc

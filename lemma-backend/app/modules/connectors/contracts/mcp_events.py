@@ -13,6 +13,7 @@ A submodule, like `triggers.py`: it pulls the model layer.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import JsonValue
@@ -34,6 +35,7 @@ from app.modules.connectors.infrastructure.adapters.mcp_executor import (
 )
 from app.modules.connectors.infrastructure.repositories.mcp_event_repository import (
     McpEventRepository,
+    StoredEventSubscription,
 )
 from app.modules.connectors.services.mcp_event_subscriptions import (
     McpEventSubscriptions,
@@ -51,6 +53,35 @@ class McpEventOffer:
     description: str | None
     input_schema: dict[str, JsonValue]
     payload_schema: dict[str, JsonValue]
+
+
+@dataclass(frozen=True, slots=True)
+class McpListening:
+    """How one subscription stands, for the schedule it was made for."""
+
+    subscription_id: str
+    created_at: datetime | None
+    #: The server answered `events/subscribe` at least once.
+    granted: bool
+    #: Past the server's `refreshBefore`: it no longer tells us anything.
+    lapsed: bool
+    renew_failures: int
+    last_error: str | None
+    last_event_at: datetime | None
+    refresh_before: datetime | None
+
+
+def _listening(stored: StoredEventSubscription, now: datetime) -> McpListening:
+    return McpListening(
+        subscription_id=str(stored.id),
+        created_at=stored.created_at,
+        granted=stored.granted_at is not None,
+        lapsed=stored.refresh_before is not None and stored.refresh_before <= now,
+        renew_failures=stored.renew_failures,
+        last_error=stored.last_error,
+        last_event_at=stored.last_event_at,
+        refresh_before=stored.refresh_before,
+    )
 
 
 async def mcp_target(
@@ -104,10 +135,16 @@ async def subscribe_to_mcp_event(
     user_id: UUID,
     event: str,
     arguments: dict[str, JsonValue],
+    organization_id: UUID | None = None,
 ) -> str:
-    """Subscribe; our subscription id, which routes its deliveries."""
+    """Subscribe; our subscription id, which routes its deliveries.
+    ``organization_id`` is the pod's: an account outside it is refused."""
     subscription_id = await mcp_event_subscriptions().subscribe(
-        account_id=account_id, user_id=user_id, event=event, arguments=arguments
+        account_id=account_id,
+        user_id=user_id,
+        event=event,
+        arguments=arguments,
+        organization_id=organization_id,
     )
     return str(subscription_id)
 
@@ -118,6 +155,33 @@ async def unsubscribe_from_mcp_event(subscription_id: str) -> None:
     except ValueError:
         return
     await mcp_event_subscriptions().unsubscribe(parsed)
+
+
+async def mcp_listening_page(
+    *, after: str | None, limit: int, now: datetime
+) -> list[McpListening]:
+    """Every subscription, a page at a time, for reconciling them against
+    the schedules they were made for."""
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        stored = await McpEventRepository(uow.session).page_after(
+            UUID(after) if after else None, limit=limit
+        )
+    return [_listening(item, now) for item in stored]
+
+
+async def mcp_listening_states(
+    subscription_ids: list[str], *, now: datetime
+) -> dict[str, McpListening]:
+    """How these subscriptions stand, by id; an unknown id is absent."""
+    parsed: list[UUID] = []
+    for raw in subscription_ids:
+        try:
+            parsed.append(UUID(raw))
+        except ValueError:
+            continue
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        stored = await McpEventRepository(uow.session).subscriptions(parsed)
+    return {str(item.id): _listening(item, now) for item in stored}
 
 
 async def mcp_event_offers(
@@ -144,7 +208,10 @@ __all__ = [
     "ConnectorInfrastructureError",
     "MCP_WEBHOOK_SOURCE",
     "McpEventOffer",
+    "McpListening",
     "mcp_event_offers",
+    "mcp_listening_page",
+    "mcp_listening_states",
     "subscribe_to_mcp_event",
     "unsubscribe_from_mcp_event",
 ]

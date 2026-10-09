@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from typing import Any, ClassVar
@@ -69,7 +70,7 @@ MCP_EVENT_SOURCE = "mcp"
 PROVISIONED_CONFIG_KEYS = frozenset({"provider_trigger_id", "installation_id"})
 
 
-def authored_config(config: dict[str, Any] | None) -> dict[str, Any]:
+def authored_config(config: Mapping[str, object] | None) -> dict[str, object]:
     """`config` without the keys only provisioning may write."""
     return {
         key: value

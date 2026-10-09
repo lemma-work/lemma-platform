@@ -10680,6 +10680,62 @@
         "type": "object"
       },
       "JsonValue": {},
+      "ListeningResponse": {
+        "description": "How a schedule on a connected MCP server's event is hearing from it.",
+        "properties": {
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "refresh_before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Before"
+          },
+          "state": {
+            "description": "listening: the server holds the subscription. retrying: renewing it failed and is being retried. lapsed: the server no longer tells us anything. pending: the server has not answered yet.",
+            "enum": [
+              "listening",
+              "retrying",
+              "lapsed",
+              "pending"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "ListeningResponse",
+        "type": "object"
+      },
       "LiteralInputBinding": {
         "description": "Pass a literal JSON value into the target input without resolution.",
         "properties": {
@@ -14893,6 +14949,17 @@
               }
             ],
             "title": "Last Run Id"
+          },
+          "listening": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ListeningResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a schedule on an MCP server's event: whether it is still hearing from the server. Absent for every other schedule."
           },
           "name": {
             "anyOf": [

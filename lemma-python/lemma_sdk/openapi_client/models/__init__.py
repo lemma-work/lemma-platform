@@ -320,6 +320,8 @@ _NAME_TO_MODULE = {
     'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
+    'ListeningResponse': 'listening_response',
+    'ListeningResponseState': 'listening_response_state',
     'LiteralInputBinding': 'literal_input_binding',
     'LoopNode': 'loop_node',
     'LoopNodeConfig': 'loop_node_config',
@@ -940,6 +942,8 @@ if TYPE_CHECKING:
     from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
+    from .listening_response import ListeningResponse
+    from .listening_response_state import ListeningResponseState
     from .literal_input_binding import LiteralInputBinding
     from .loop_node import LoopNode
     from .loop_node_config import LoopNodeConfig
@@ -1573,6 +1577,8 @@ __all__ = [
     'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
+    'ListeningResponse',
+    'ListeningResponseState',
     'LiteralInputBinding',
     'LoopNode',
     'LoopNodeConfig',
