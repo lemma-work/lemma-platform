@@ -9,6 +9,7 @@ import type { ScheduleType } from './ScheduleType.js';
  */
 export type EventDescriptorResponse = {
     account_id?: (string | null);
+    account_label?: (string | null);
     description: string;
     event?: (string | null);
     input_schema: Record<string, JsonValue>;

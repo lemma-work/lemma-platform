@@ -24,12 +24,14 @@ class ListeningResponse:
         last_error (None | str | Unset):
         last_event_at (datetime.datetime | None | Unset):
         refresh_before (datetime.datetime | None | Unset):
+        server (None | str | Unset): The connected server it listens to, by name.
     """
 
     state: ListeningResponseState
     last_error: None | str | Unset = UNSET
     last_event_at: datetime.datetime | None | Unset = UNSET
     refresh_before: datetime.datetime | None | Unset = UNSET
+    server: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -57,6 +59,12 @@ class ListeningResponse:
         else:
             refresh_before = self.refresh_before
 
+        server: None | str | Unset
+        if isinstance(self.server, Unset):
+            server = UNSET
+        else:
+            server = self.server
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -70,6 +78,8 @@ class ListeningResponse:
             field_dict["last_event_at"] = last_event_at
         if refresh_before is not UNSET:
             field_dict["refresh_before"] = refresh_before
+        if server is not UNSET:
+            field_dict["server"] = server
 
         return field_dict
 
@@ -121,11 +131,21 @@ class ListeningResponse:
 
         refresh_before = _parse_refresh_before(d.pop("refresh_before", UNSET))
 
+        def _parse_server(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        server = _parse_server(d.pop("server", UNSET))
+
         listening_response = cls(
             state=state,
             last_error=last_error,
             last_event_at=last_event_at,
             refresh_before=refresh_before,
+            server=server,
         )
 
         listening_response.additional_properties = d

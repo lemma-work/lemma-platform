@@ -6387,6 +6387,17 @@
             ],
             "title": "Account Id"
           },
+          "account_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Label"
+          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -10717,6 +10728,18 @@
               }
             ],
             "title": "Refresh Before"
+          },
+          "server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The connected server it listens to, by name.",
+            "title": "Server"
           },
           "state": {
             "description": "listening: the server holds the subscription. retrying: renewing it failed and is being retried. lapsed: the server no longer tells us anything. pending: the server has not answered yet.",

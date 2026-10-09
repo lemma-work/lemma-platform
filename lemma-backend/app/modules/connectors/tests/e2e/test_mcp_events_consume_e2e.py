@@ -415,6 +415,7 @@ async def test_an_issue_on_a_connected_server_starts_standing_work_once(
     assert schedule["config"]["provider_trigger_id"] == str(row.id)
     assert row.remote_id and row.refresh_before is not None
     assert schedule["listening"]["state"] == "listening"
+    assert schedule["listening"]["server"] == install.name
 
     # A schedule in another pod carrying that subscription id with no account
     # behind it -- however it got there: an import, a path that skipped the

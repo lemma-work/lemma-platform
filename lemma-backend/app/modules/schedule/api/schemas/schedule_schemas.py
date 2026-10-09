@@ -157,6 +157,9 @@ class ListeningResponse(BaseModel):
     last_error: str | None = None
     last_event_at: datetime | None = None
     refresh_before: datetime | None = None
+    server: str | None = Field(
+        default=None, description="The connected server it listens to, by name."
+    )
 
 
 class ScheduleResponse(BaseModel):

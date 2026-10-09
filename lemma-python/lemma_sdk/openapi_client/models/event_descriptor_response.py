@@ -34,6 +34,7 @@ class EventDescriptorResponse:
         schedule_type (ScheduleType): Type of schedule source.
         title (str):
         account_id (None | Unset | UUID):
+        account_label (None | str | Unset):
         event (None | str | Unset):
         server (None | str | Unset):
     """
@@ -45,6 +46,7 @@ class EventDescriptorResponse:
     schedule_type: ScheduleType
     title: str
     account_id: None | Unset | UUID = UNSET
+    account_label: None | str | Unset = UNSET
     event: None | str | Unset = UNSET
     server: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -69,6 +71,12 @@ class EventDescriptorResponse:
             account_id = str(self.account_id)
         else:
             account_id = self.account_id
+
+        account_label: None | str | Unset
+        if isinstance(self.account_label, Unset):
+            account_label = UNSET
+        else:
+            account_label = self.account_label
 
         event: None | str | Unset
         if isinstance(self.event, Unset):
@@ -96,6 +104,8 @@ class EventDescriptorResponse:
         )
         if account_id is not UNSET:
             field_dict["account_id"] = account_id
+        if account_label is not UNSET:
+            field_dict["account_label"] = account_label
         if event is not UNSET:
             field_dict["event"] = event
         if server is not UNSET:
@@ -146,6 +156,15 @@ class EventDescriptorResponse:
 
         account_id = _parse_account_id(d.pop("account_id", UNSET))
 
+        def _parse_account_label(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        account_label = _parse_account_label(d.pop("account_label", UNSET))
+
         def _parse_event(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -172,6 +191,7 @@ class EventDescriptorResponse:
             schedule_type=schedule_type,
             title=title,
             account_id=account_id,
+            account_label=account_label,
             event=event,
             server=server,
         )

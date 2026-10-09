@@ -48,6 +48,7 @@ class McpEventOffer:
     """One event a person could start standing work on."""
 
     account_id: UUID
+    account_label: str | None
     server: str
     name: str
     description: str | None
@@ -69,9 +70,13 @@ class McpListening:
     last_error: str | None
     last_event_at: datetime | None
     refresh_before: datetime | None
+    #: The server it listens to, by the name its install was given.
+    server: str | None = None
 
 
-def _listening(stored: StoredEventSubscription, now: datetime) -> McpListening:
+def _listening(
+    stored: StoredEventSubscription, now: datetime, server: str | None = None
+) -> McpListening:
     return McpListening(
         subscription_id=str(stored.id),
         created_at=stored.created_at,
@@ -81,6 +86,7 @@ def _listening(stored: StoredEventSubscription, now: datetime) -> McpListening:
         last_error=stored.last_error,
         last_event_at=stored.last_event_at,
         refresh_before=stored.refresh_before,
+        server=server,
     )
 
 
@@ -180,8 +186,15 @@ async def mcp_listening_states(
         except ValueError:
             continue
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        stored = await McpEventRepository(uow.session).subscriptions(parsed)
-    return {str(item.id): _listening(item, now) for item in stored}
+        events = McpEventRepository(uow.session)
+        stored = await events.subscriptions(parsed)
+        names = await events.install_names(
+            list({item.auth_config_id for item in stored})
+        )
+    return {
+        str(item.id): _listening(item, now, names.get(item.auth_config_id))
+        for item in stored
+    }
 
 
 async def mcp_event_offers(
@@ -193,6 +206,7 @@ async def mcp_event_offers(
     return [
         McpEventOffer(
             account_id=offer.account_id,
+            account_label=offer.account_label,
             server=offer.install_name,
             name=offer.event.name,
             description=offer.event.description,

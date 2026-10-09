@@ -90,6 +90,9 @@ export interface StandingJob {
     scope: Scope;
     /** What is missing before it can fire, in words — empty when nothing is. */
     needsSetup: string;
+    /** For a schedule on a connected server's event: whether it is still
+     *  hearing from the server. Null for every other schedule. */
+    listening: Listening | null;
     /** Who made it, and so who it runs as (`user_id`). */
     ownerId: string;
     /** PERSONAL | POD | RESTRICTED | PUBLIC, upper-cased; "" when absent. */
@@ -99,6 +102,19 @@ export interface StandingJob {
 }
 
 export type Scope = "space" | "person" | "mine";
+
+export interface Listening {
+    state: "listening" | "retrying" | "lapsed" | "pending";
+    lastError: string;
+    server: string;
+}
+
+function listeningOf(raw: unknown): Listening | null {
+    const row = record(raw);
+    const state = text(row["state"]);
+    if (state !== "listening" && state !== "retrying" && state !== "lapsed" && state !== "pending") return null;
+    return { state, lastError: text(row["last_error"]), server: text(row["server"]) };
+}
 
 export const SCOPE_LABEL: Record<Scope, string> = { space: "Admin", person: "Each person", mine: "Only you" };
 export const SCOPE_NOTE: Record<Scope, string> = {
@@ -297,6 +313,7 @@ export function readSchedule(raw: unknown): StandingJob {
         visibility: text(row["visibility"]).toUpperCase(),
         raw: row,
         needsSetup: setupOf(kind, text(row["account_id"]), text(row["connector_trigger_id"]), text(config["source"])),
+        listening: listeningOf(row["listening"]),
     };
 }
 
@@ -344,6 +361,21 @@ export function healthOf(job: StandingJob): { tone: Tone; line: string } {
     if (!job.active) return { tone: "off", line: "It will not fire until somebody resumes it." };
     if (job.target.kind === "none") return { tone: "bad", line: "No agent or workflow is assigned to this schedule." };
     if (job.needsSetup) return { tone: "warn", line: job.needsSetup };
+    if (job.listening?.state === "lapsed") {
+        return {
+            tone: "bad",
+            line: (job.listening.server || "The server") + " has stopped telling it about events" +
+                (job.listening.lastError ? ": " + job.listening.lastError : "") + ".",
+        };
+    }
+    if (job.listening?.state === "retrying") {
+        return {
+            tone: "warn",
+            line: "Could not renew its subscription to " + (job.listening.server || "the server") + "; trying again" +
+                (job.listening.lastError ? " (" + job.listening.lastError + ")" : "") + ".",
+        };
+    }
+    if (job.listening?.state === "pending") return { tone: "warn", line: "Waiting for the server to confirm it will send events." };
     if (job.failures > 0) {
         const times = job.failures === 1 ? "once" : job.failures + " times in a row";
         return { tone: "bad", line: "Failed " + times + "." };
@@ -515,11 +547,31 @@ export interface ServerEvent {
     /** The picker's value; unique across servers and accounts. */
     key: string;
     accountId: string;
+    /** Which of your accounts it listens through, in words; may be empty. */
+    accountLabel: string;
     server: string;
     event: string;
     description: string;
-    /** The arguments the server requires, each a field on the form. */
-    asks: { name: string; description: string }[];
+    /** The arguments the server takes, each a field on the form: the
+     *  required ones first. */
+    asks: EventArgument[];
+}
+
+/** One argument an event takes, as much of its JSON Schema as a form needs. */
+export interface EventArgument {
+    name: string;
+    description: string;
+    type: "string" | "integer" | "number" | "boolean";
+    /** Its `enum`, as text, when it has one: a choice, not a text box. */
+    options: string[];
+    required: boolean;
+}
+
+function argumentOf(name: string, schema: Record<string, unknown>, required: boolean): EventArgument {
+    const declared = Array.isArray(schema["type"]) ? (schema["type"] as unknown[]).map(text) : [text(schema["type"])];
+    const type = (["integer", "number", "boolean"] as const).find((kind) => declared.includes(kind)) ?? "string";
+    const options = Array.isArray(schema["enum"]) ? (schema["enum"] as unknown[]).map(text).filter(Boolean) : [];
+    return { name, description: text(schema["description"]), type, options, required };
 }
 
 /** The connected-server events in `GET /pods/{id}/events`; the platform's own
@@ -533,16 +585,58 @@ export function readServerEvents(raw: unknown): ServerEvent[] {
         if (!accountId || !event) return [];
         const schema = record(row["input_schema"]);
         const properties = record(schema["properties"]);
-        const required = Array.isArray(schema["required"]) ? (schema["required"] as unknown[]).map(text).filter(Boolean) : [];
+        const required = new Set(Array.isArray(schema["required"]) ? (schema["required"] as unknown[]).map(text).filter(Boolean) : []);
+        const names = [...new Set([...required, ...Object.keys(properties)])];
         return [{
             key: MCP_SOURCE + ":" + accountId + ":" + event,
             accountId,
+            accountLabel: text(row["account_label"]),
             server: text(row["server"]),
             event,
             description: text(row["description"]),
-            asks: required.map((name) => ({ name, description: text(record(properties[name])["description"]) })),
+            asks: names
+                .map((name) => argumentOf(name, record(properties[name]), required.has(name)))
+                .sort((a, b) => Number(b.required) - Number(a.required)),
         }];
     });
+}
+
+/** The picker's groups: one per server, and per account when you have more
+ *  than one on the same server — the events are the same, the account is
+ *  the difference. */
+export function serverGroups(events: ServerEvent[]): { label: string; events: ServerEvent[] }[] {
+    const accountsOn = new Map<string, Set<string>>();
+    for (const one of events) (accountsOn.get(one.server) ?? accountsOn.set(one.server, new Set()).get(one.server)!).add(one.accountId);
+    const groups = new Map<string, { label: string; events: ServerEvent[] }>();
+    for (const one of events) {
+        const several = (accountsOn.get(one.server)?.size ?? 0) > 1;
+        const key = one.server + (several ? "\u0000" + one.accountId : "");
+        const label = "From " + one.server + (several ? " (" + (one.accountLabel || "account " + one.accountId.slice(0, 8)) + ")" : "");
+        (groups.get(key) ?? groups.set(key, { label, events: [] }).get(key)!).events.push(one);
+    }
+    return [...groups.values()];
+}
+
+/** What a typed argument is sent as, or why it cannot be. Text in a form is
+ *  always a string; the server is owed the type its schema declares. */
+export function argumentValue(ask: EventArgument, typed: string): { value?: unknown; problem?: string } {
+    const raw = typed.trim();
+    if (!raw) return {};
+    if (ask.options.length && !ask.options.includes(raw)) return { problem: ask.name + " is one of " + ask.options.join(", ") + "." };
+    if (ask.type === "boolean") {
+        if (raw !== "true" && raw !== "false") return { problem: ask.name + " is true or false." };
+        return { value: raw === "true" };
+    }
+    if (ask.type === "integer") {
+        if (!/^-?\d+$/.test(raw)) return { problem: ask.name + " is a whole number." };
+        return { value: Number(raw) };
+    }
+    if (ask.type === "number") {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return { problem: ask.name + " is a number." };
+        return { value };
+    }
+    return { value: raw };
 }
 
 export const WHENS: { value: DraftWhen; label: string }[] = [
@@ -600,9 +694,12 @@ export function draftProblems(draft: ScheduleDraft): Record<string, string> {
     if (!draft.name.trim()) wrong.name = "Give it a name. It is what this row will be called.";
     if (draft.when === "record.created" && !draft.table.trim()) wrong.table = "Pick the table to watch.";
     if (draft.when === "server") {
-        const missing = (draft.serverEvent?.asks ?? []).filter((ask) => !(draft.eventArguments[ask.name] ?? "").trim());
+        const asks = draft.serverEvent?.asks ?? [];
+        const missing = asks.filter((ask) => ask.required && !(draft.eventArguments[ask.name] ?? "").trim());
+        const unfit = asks.map((ask) => argumentValue(ask, draft.eventArguments[ask.name] ?? "").problem).filter(Boolean);
         if (!draft.serverEvent) wrong.event = "Pick the event to listen for.";
         else if (missing.length) wrong.event = "Fill in " + missing.map((ask) => ask.name).join(", ") + ".";
+        else if (unfit.length) wrong.event = unfit.join(" ");
         /* The server's event wakes an agent; a workflow listens to the app
            event its own start names, and refuses to be told another. */
         if (draft.target === "workflow") wrong.target = "An event from a connected server wakes an agent, not a workflow.";
@@ -645,11 +742,11 @@ export function createRequest(draft: ScheduleDraft): Record<string, unknown> {
 /** The schedule type and config a draft's "when" becomes. */
 function startOf(draft: ScheduleDraft): { schedule_type: string; config: Record<string, unknown> } {
     if (draft.when === "server" && draft.serverEvent) {
-        const asked = new Set(draft.serverEvent.asks.map((ask) => ask.name));
         const args = Object.fromEntries(
-            Object.entries(draft.eventArguments)
-                .filter(([name, value]) => asked.has(name) && value.trim())
-                .map(([name, value]) => [name, value.trim()]),
+            draft.serverEvent.asks.flatMap((ask) => {
+                const { value } = argumentValue(ask, draft.eventArguments[ask.name] ?? "");
+                return value === undefined ? [] : [[ask.name, value]];
+            }),
         );
         return { schedule_type: "WEBHOOK", config: { source: MCP_SOURCE, event: draft.serverEvent.event, arguments: args } };
     }
@@ -697,6 +794,14 @@ export function copyNeedOf(job: StandingJob): CopyNeed {
     if (job.kind === "WEBHOOK") return "account";
     if (job.kind === "TIME") return "none";
     return "impossible";
+}
+
+/** Your accounts a copy of this server-event schedule could listen through:
+ *  those on the server it listens to that offer its event. */
+export function accountsOffering(events: ServerEvent[], job: Pick<StandingJob, "listening" | "raw">): Set<string> {
+    const event = text(record(job.raw["config"])["event"]);
+    const server = job.listening?.server ?? "";
+    return new Set(events.filter((one) => one.event === event && (!server || one.server === server)).map((one) => one.accountId));
 }
 
 /** The create request for your own copy — personal, so it is yours alone. */

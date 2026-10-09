@@ -89,6 +89,7 @@ async def _with_listening(
                         last_error=state.last_error,
                         last_event_at=state.last_event_at,
                         refresh_before=state.refresh_before,
+                        server=state.server,
                     )
                 }
             )

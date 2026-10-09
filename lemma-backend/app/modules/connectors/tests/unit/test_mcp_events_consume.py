@@ -75,6 +75,27 @@ def test_arguments_are_checked_for_what_is_certain() -> None:
     assert arguments_problem({}, {"anything": 1}) is None
 
 
+def test_an_argument_of_the_wrong_kind_is_named_before_the_server_refuses_it() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer"},
+            "urgent": {"type": "boolean"},
+            "state": {"type": "string", "enum": ["open", "closed"]},
+            "label": {"type": ["string", "null"]},
+            "free": {},
+        },
+    }
+    fine = {"limit": 5, "urgent": True, "state": "open", "label": None, "free": [1]}
+    assert arguments_problem(schema, fine) is None
+    assert "limit" in (arguments_problem(schema, {"limit": "5"}) or "")
+    assert "limit" in (arguments_problem(schema, {"limit": True}) or ""), (
+        "a boolean is not a JSON integer, whatever Python thinks"
+    )
+    assert "urgent" in (arguments_problem(schema, {"urgent": "true"}) or "")
+    assert "state" in (arguments_problem(schema, {"state": "merged"}) or "")
+
+
 def test_a_subscription_is_renewed_halfway_or_when_the_next_pass_is_too_late() -> None:
     lapses = NOW + timedelta(hours=24)
     assert renew_at(granted_at=NOW, refresh_before=lapses) == NOW + timedelta(hours=12)

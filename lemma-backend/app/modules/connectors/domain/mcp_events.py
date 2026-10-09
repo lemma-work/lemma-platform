@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -108,11 +109,14 @@ def arguments_problem(
     """Why these arguments cannot narrow this event, or None.
 
     Only what is cheap and certain is checked here -- required keys present,
-    unknown keys refused when the schema says so -- because the server is the
-    authority on its own arguments and refuses the rest when subscribing.
+    unknown keys refused when the schema says so, each value of the declared
+    JSON type and among the declared `enum` -- because the server is the
+    authority on its own arguments and refuses the rest when subscribing. A
+    refusal said here names the argument; the server's, at subscribe time,
+    often does not.
     """
     properties = input_schema.get("properties")
-    known = set(properties) if isinstance(properties, dict) else set()
+    known = properties if isinstance(properties, dict) else {}
     required = input_schema.get("required")
     missing = [
         key
@@ -122,10 +126,48 @@ def arguments_problem(
     if missing:
         return "Missing: " + ", ".join(sorted(missing)) + "."
     if input_schema.get("additionalProperties") is False:
-        unknown = sorted(set(arguments) - known)
+        unknown = sorted(set(arguments) - set(known))
         if unknown:
             return "Not arguments of this event: " + ", ".join(unknown) + "."
+    wrong = sorted(
+        name
+        for name, value in arguments.items()
+        if not _fits(_object_schema(known.get(name)), value)
+    )
+    if wrong:
+        return "Not the kind of value the server takes: " + ", ".join(wrong) + "."
     return None
+
+
+#: JSON Schema's primitive types, as Python checks them. `bool` is excluded
+#: from the numbers on purpose: in Python it is one, and in JSON it is not.
+_JSON_TYPES: dict[str, Callable[[object], bool]] = {
+    "string": lambda value: isinstance(value, str),
+    "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
+    "number": lambda value: (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+    ),
+    "boolean": lambda value: isinstance(value, bool),
+    "array": lambda value: isinstance(value, list),
+    "object": lambda value: isinstance(value, dict),
+    "null": lambda value: value is None,
+}
+
+
+def _fits(schema: dict[str, JsonValue], value: JsonValue) -> bool:
+    """Whether one argument has the type and, if listed, one of the values its
+    property schema declares. An undeclared type is not checked."""
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        return False
+    declared = schema.get("type")
+    kinds = declared if isinstance(declared, list) else [declared]
+    checks = [
+        _JSON_TYPES[kind]
+        for kind in kinds
+        if isinstance(kind, str) and kind in _JSON_TYPES
+    ]
+    return not checks or any(check(value) for check in checks)
 
 
 def new_secret() -> str:

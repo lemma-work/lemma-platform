@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +53,7 @@ class EventOffer:
     account_id: UUID
     install_name: str
     event: DiscoveredEvent
+    account_label: str | None = None
 
 
 def _stored(row: ConnectorEventSubscription) -> StoredEventSubscription:
@@ -148,7 +149,12 @@ class McpEventRepository:
         """Every event on every MCP server this person has connected here."""
         rows = (
             await self._session.execute(
-                select(Account.id, AuthConfig.name, AuthConfigEvent)
+                select(
+                    Account.id,
+                    AuthConfig.name,
+                    AuthConfigEvent,
+                    func.coalesce(Account.display_name, Account.email),
+                )
                 .join(AuthConfig, AuthConfig.id == Account.auth_config_id)
                 .join(
                     AuthConfigEvent,
@@ -165,8 +171,13 @@ class McpEventRepository:
             )
         ).all()
         return [
-            EventOffer(account_id=account_id, install_name=name, event=_event(row))
-            for account_id, name, row in rows
+            EventOffer(
+                account_id=account_id,
+                install_name=name,
+                event=_event(row),
+                account_label=label,
+            )
+            for account_id, name, row, label in rows
         ]
 
     async def add_subscription(
@@ -289,6 +300,17 @@ class McpEventRepository:
             )
         ).scalars()
         return [_stored(row) for row in rows]
+
+    async def install_names(self, auth_config_ids: list[UUID]) -> dict[UUID, str]:
+        """What each install is called -- the server, as people know it."""
+        if not auth_config_ids:
+            return {}
+        rows = await self._session.execute(
+            select(AuthConfig.id, AuthConfig.name).where(
+                AuthConfig.id.in_(auth_config_ids)
+            )
+        )
+        return {row[0]: row[1] for row in rows.all()}
 
     async def drop_stale_pending(self, before: datetime) -> int:
         """Pending rows nobody finished: subscribe writes one before asking the

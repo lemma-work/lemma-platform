@@ -12,7 +12,7 @@ import {
     useCreateSchedule, useRetryRun, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules, useServerEvents,
 } from "./queries";
 import {
-    CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, WHENS, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may,
+    CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, WHENS, accountsOffering, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may, serverGroups,
     type DraftWhen, type ScheduleDraft, type StandingJob,
 } from "./schedules";
 
@@ -274,7 +274,15 @@ function CopyForMe({ podId, job, orgId }: { podId: string; job: StandingJob; org
         queryFn: () => source.listAccounts(orgId!),
         staleTime: 60_000,
     });
-    const usable = (accounts.data ?? []).filter((account) => account.usable);
+    /* A copy of a schedule on a connected server's event listens through your
+       own account on that same server — not whichever account comes first,
+       which would ask a different server for an event it may not offer. */
+    const onServer = job.listening !== null;
+    const serverEvents = useServerEvents(podId, picking && onServer && !sample);
+    const sameServer = onServer ? accountsOffering(serverEvents.data ?? [], job) : null;
+    const usable = (accounts.data ?? []).filter(
+        (account) => account.usable && (sameServer === null || sameServer.has(account.id)),
+    );
     const chosen = accountId || usable[0]?.id || "";
     const copy = useMutation({
         mutationFn: () => lemma(podId).request("POST", "/pods/" + podId + "/schedules", { body: copyRequest(job, chosen || undefined) }),
@@ -285,8 +293,14 @@ function CopyForMe({ podId, job, orgId }: { podId: string; job: StandingJob; org
     if (need === "account" && picking) {
         return (
             <span className="sched-copy">
-                {accounts.isPending ? <small>Finding your accounts…</small>
-                    : usable.length === 0 ? <small>Connect an account of your own first.</small>
+                {accounts.isPending || (onServer && serverEvents.isPending) ? <small>Finding your accounts…</small>
+                    : usable.length === 0 ? (
+                        <small>
+                            {onServer
+                                ? "Connect " + (job.listening?.server || "that server") + " with an account of your own first."
+                                : "Connect an account of your own first."}
+                        </small>
+                    )
                     : (
                         <select value={chosen} onChange={(event) => setAccountId(event.target.value)} aria-label="Your account">
                             {usable.map((account) => <option key={account.id} value={account.id}>{account.label || account.ref || account.connectorId}</option>)}
@@ -458,13 +472,20 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                     {WHENS.map((one) => <option key={one.value} value={one.value}>{one.label}</option>)}
                     {/* Grouped by server: each is listened to through your own
                         connection to it, so only servers you connected appear. */}
-                    {Object.entries(groupBy(serverEvents.data ?? [], (one) => one.server)).map(([server, events]) => (
-                        <optgroup key={server} label={"From " + server}>
-                            {events.map((one) => <option key={one.key} value={one.key}>{one.event}</option>)}
+                    {serverGroups(serverEvents.data ?? []).map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                            {group.events.map((one) => <option key={one.key} value={one.key}>{one.event}</option>)}
                         </optgroup>
                     ))}
                 </select>
             </label>
+            {serverEvents.isPending && <p className="sched-new__note" role="status">Asking your connected servers what they can tell you about…</p>}
+            {serverEvents.isError && (
+                <p className="sched-new__note" role="alert">
+                    Events from your connected servers could not be loaded, so only these are offered.{" "}
+                    <button className="linkish" onClick={() => void serverEvents.refetch()}>Try again</button>
+                </p>
+            )}
 
             {draft.when === "server" && draft.serverEvent && <>
                 {/* Closed, the select says only the event's name; two servers
@@ -472,17 +493,30 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                 <p className="sched-new__note">
                     {"From " + draft.serverEvent.server + "." + (draft.serverEvent.description ? " " + draft.serverEvent.description : "")}
                 </p>
-                {draft.serverEvent.asks.map((ask) => (
-                    <label key={ask.name} className="sched-field">
-                        <span>{ask.name}</span>
-                        <input
-                            value={draft.eventArguments[ask.name] ?? ""}
-                            placeholder={ask.description || undefined}
-                            spellCheck={false}
-                            onChange={(event) => change({ eventArguments: { ...draft.eventArguments, [ask.name]: event.target.value } })}
-                        />
-                    </label>
-                ))}
+                {draft.serverEvent.asks.map((ask) => {
+                    const value = draft.eventArguments[ask.name] ?? "";
+                    const set = (next: string) => change({ eventArguments: { ...draft.eventArguments, [ask.name]: next } });
+                    const choices = ask.options.length ? ask.options : ask.type === "boolean" ? ["true", "false"] : [];
+                    return (
+                        <label key={ask.name} className="sched-field">
+                            <span>{ask.name}{ask.required ? "" : " (optional)"}</span>
+                            {choices.length ? (
+                                <select value={value} onChange={(event) => set(event.target.value)}>
+                                    <option value="">{ask.required ? "Pick one…" : "Any"}</option>
+                                    {choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+                                </select>
+                            ) : (
+                                <input
+                                    value={value}
+                                    inputMode={ask.type === "string" ? undefined : "decimal"}
+                                    placeholder={ask.description || undefined}
+                                    spellCheck={false}
+                                    onChange={(event) => set(event.target.value)}
+                                />
+                            )}
+                        </label>
+                    );
+                })}
             </>}
             {tried && wrong.event && <p className="sched-field__problem">{wrong.event}</p>}
 
@@ -491,9 +525,16 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                     <span>Table</span>
                     <select value={draft.table} onChange={(event) => change({ table: event.target.value })}>
                         <option value="">Pick one…</option>
+                        {tables.isPending && <option value="" disabled>Reading the tables…</option>}
                         {(tables.data?.items ?? []).map((one) => <option key={one.name} value={one.name}>{one.name}</option>)}
                     </select>
                 </label>
+            )}
+            {draft.when === "record.created" && tables.isError && (
+                <p className="sched-new__note" role="alert">
+                    The tables could not be read.{" "}
+                    <button className="linkish" onClick={() => void tables.refetch()}>Try again</button>
+                </p>
             )}
             {tried && wrong.table && <p className="sched-field__problem">{wrong.table}</p>}
 
@@ -591,10 +632,4 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
             </div>
         </div>
     );
-}
-
-function groupBy<T>(items: T[], key: (item: T) => string): Record<string, T[]> {
-    const groups: Record<string, T[]> = {};
-    for (const item of items) (groups[key(item)] ??= []).push(item);
-    return groups;
 }

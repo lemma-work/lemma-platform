@@ -10,6 +10,10 @@ export type ListeningResponse = {
     last_event_at?: (string | null);
     refresh_before?: (string | null);
     /**
+     * The connected server it listens to, by name.
+     */
+    server?: (string | null);
+    /**
      * listening: the server holds the subscription. retrying: renewing it failed and is being retried. lapsed: the server no longer tells us anything. pending: the server has not answered yet.
      */
     state: ListeningResponse.state;

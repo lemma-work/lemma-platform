@@ -28,6 +28,9 @@ class EventDescriptorResponse(BaseModel):
     #: listens through, the server it is on, and the event's own name -- what
     #: a WEBHOOK schedule's config names as `event`.
     account_id: UUID | None = None
+    #: Which of the caller's accounts that is, in words -- two accounts on the
+    #: same server offer the same events, and the account is the difference.
+    account_label: str | None = None
     server: str | None = None
     event: str | None = None
 
@@ -78,6 +81,7 @@ async def list_events(
                 input_schema=offer.input_schema,
                 payload_schema=offer.payload_schema,
                 account_id=offer.account_id,
+                account_label=offer.account_label,
                 server=offer.server,
                 event=offer.name,
             )
