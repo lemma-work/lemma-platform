@@ -269,7 +269,9 @@ def expired_marker(response: Response) -> bool:
     expired = [
         c for c in response.headers.get_list("set-cookie") if c.startswith(MARKER)
     ]
-    return len(expired) == 1 and "Max-Age=0" in expired[0] and "Path=/" in expired[0]
+    # SameSite=None and Secure, or a frame on another site refuses it.
+    attributes = ("Max-Age=0", "Path=/", "SameSite=none", "Secure")
+    return len(expired) == 1 and all(part in expired[0] for part in attributes)
 
 
 async def test_a_page_load_drops_the_session_marker_a_failed_refresh_left(
@@ -309,6 +311,14 @@ async def test_a_page_load_drops_the_session_marker_a_failed_refresh_left(
     revalidated = await load("/", framed | {"If-None-Match": back.headers["etag"]})
     assert revalidated.status_code == 304 and expired_marker(revalidated)
 
+    # Apps on a registrable domain of their own (self-hosting allows it): the
+    # workspace's frame is cross-site, and its Referer names the workspace.
+    workspace = framed | {
+        "Sec-Fetch-Site": "cross-site",
+        "Referer": settings.frontend_url + "/pod/p1",
+    }
+    assert expired_marker(await load("/", workspace))
+
 
 @pytest.mark.parametrize(
     ("headers", "front_token"),
@@ -327,8 +337,17 @@ async def test_a_page_load_drops_the_session_marker_a_failed_refresh_left(
         # Typed, bookmarked or from a search: not the loop, so no refused refresh.
         (PAGE | {"Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "none"}, False),
         (PAGE | {"Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "cross-site"}, False),
+        (
+            PAGE
+            | {
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Site": "cross-site",
+                "Referer": "https://search.example/?q=app",
+            },
+            False,
+        ),
     ],
-    ids=["signed-in", "script", "typed", "cross-site"],
+    ids=["signed-in", "script", "typed", "cross-site", "from-a-search"],
 )
 async def test_the_session_marker_is_left_alone_outside_the_loop(
     browser, hosted_app, authenticated_client, headers, front_token

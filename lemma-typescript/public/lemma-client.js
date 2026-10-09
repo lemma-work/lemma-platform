@@ -9693,7 +9693,11 @@ var LemmaClient = (() => {
   }
   function isHalfCleared() {
     if (typeof document === "undefined") return false;
-    return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
+    try {
+      return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
+    } catch {
+      return false;
+    }
   }
   function dropUpdateMarker() {
     document.cookie = `${UPDATE_MARKER_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;

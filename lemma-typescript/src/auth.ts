@@ -400,7 +400,13 @@ function hasCookie(name: string): boolean {
 /** The update marker with no front token: SuperTokens' "no session", decided without asking. */
 export function isHalfCleared(): boolean {
   if (typeof document === "undefined") return false;
-  return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
+  try {
+    return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
+  } catch {
+    // A sandboxed frame without allow-same-origin throws on any cookie read.
+    // It has no marker to recover, and the check must still settle.
+    return false;
+  }
 }
 
 /** Forget the stale answer, so SuperTokens asks the server the next time. */

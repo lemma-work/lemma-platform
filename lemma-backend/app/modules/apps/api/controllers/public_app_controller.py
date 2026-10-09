@@ -12,12 +12,14 @@ a slug that does not exist -- gets the same sign-in page. See
 """
 
 from pathlib import PurePosixPath
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from supertokens_python.exceptions import SuperTokensError
 
+from app.core.config import settings
 from app.modules.apps.api.app_access import (
     ACCESS_COOKIE,
     PRIVATE_NO_STORE,
@@ -179,22 +181,52 @@ def _expire_stale_session_marker(request: Request, response: Response) -> None:
     here, on the page load, because each app bundles the SDK it was built
     with; a fix in the SDK reaches a bundled app only when it is rebuilt.
 
-    Only for a page reached from this site: back from the portal, framed by
-    the workspace, or from the app itself (its own links, its access page's
-    reload, a navigation its install worker forwarded). Those are the loop's
-    shapes. A visitor who typed the address or came from a search pays no
-    refused refresh for it; a signed-in one on a half-cleared host is shown the
-    app's sign-in once, and the trip back from the portal repairs it.
+    Only for a page reached the loop's way (see ``_came_the_loops_way``). A
+    visitor who typed the address or came from a search pays no refused
+    refresh for it; a signed-in one on a half-cleared host is shown the app's
+    sign-in once, and the trip back from the portal repairs it.
     """
     cookies = request.cookies
     if _SESSION_MARKER not in cookies or _FRONT_TOKEN in cookies:
         return
-    # Absent from browsers that predate fetch metadata, which keep the repair.
-    if request.headers.get("sec-fetch-site", "same-site") not in _FROM_THIS_SITE:
+    if not _came_the_loops_way(request):
         return
-    response.delete_cookie(_SESSION_MARKER, path="/")
+    # SameSite=None, so a frame on another site takes the deletion too; Secure
+    # is what None requires, and what an HTTPS app host already is.
+    secure = settings.api_url.startswith("https://")
+    response.delete_cookie(
+        _SESSION_MARKER,
+        path="/",
+        secure=secure,
+        samesite="none" if secure else "lax",
+    )
     # A response that sets a cookie is this browser's alone.
     response.headers["Cache-Control"] = "private, no-cache"
+
+
+def _came_the_loops_way(request: Request) -> bool:
+    """Back from the portal, framed by the workspace, or from the app itself.
+
+    The app itself covers its own links, its access page's reload, and a
+    navigation its install worker forwarded. Fetch metadata says so when the
+    app shares a registrable domain with the workspace, which hosted Lemma
+    does. Self-hosting may give apps a registrable domain of their own
+    (``docs/self-hosting.md``), and then the trip back from the portal and the
+    workspace's frame are both cross-site; their Referer still names the
+    portal. A browser that predates fetch metadata keeps the repair.
+    """
+    if request.headers.get("sec-fetch-site", "same-site") in _FROM_THIS_SITE:
+        return True
+    portal = {_origin(settings.frontend_url), _origin(settings.auth_frontend_url)}
+    referrer = _origin(request.headers.get("referer"))
+    return referrer is not None and referrer in portal
+
+
+def _origin(url: str | None) -> str | None:
+    parts = urlsplit(url or "")
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}".lower()
 
 
 async def _serve_host_asset(

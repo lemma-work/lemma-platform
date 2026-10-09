@@ -94,6 +94,19 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     expect((await auth.checkAuth()).status).toBe("unreachable");
   });
 
+  it("settles signed out in a frame that may not read cookies at all", async () => {
+    // A sandbox without allow-same-origin throws SecurityError on any cookie
+    // read; the check has to end, not reject and leave the frame loading.
+    vi.spyOn(document, "cookie", "get").mockImplementation(() => {
+      throw new DOMException("The document is sandboxed", "SecurityError");
+    });
+    doesSessionExist.mockResolvedValue(false);
+    vi.mocked(Session.attemptRefreshingSession).mockResolvedValue(false);
+
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    expect((await auth.checkAuth()).status).toBe("unauthenticated");
+  });
+
   it("the recovery is tried once per page, so a signed-out app cannot storm refresh", async () => {
     doesSessionExist.mockResolvedValue(false);
     vi.mocked(Session.attemptRefreshingSession).mockResolvedValue(false);

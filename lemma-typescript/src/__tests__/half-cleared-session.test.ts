@@ -1,7 +1,7 @@
 import Session from "supertokens-web-js/recipe/session/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AuthManager, resetMarkerRecoveryForTests } from "../auth.js";
+import { AuthManager, dropUpdateMarker, resetMarkerRecoveryForTests } from "../auth.js";
 import { ensureCookieSessionSupport } from "../supertokens.js";
 
 /* The real SuperTokens browser SDK, with only the network faked. `auth.test.ts`
@@ -95,6 +95,12 @@ describe("a pod app whose host kept the update marker from an ended session", ()
     auth.markUnauthenticated();
     expect((await auth.checkAuth()).status).toBe("unauthenticated");
     expect(calledUrls()).toEqual([REFRESH]);
+
+    // The refusal had the SDK write the marker back. The drop is a domain-less
+    // path=/ write, so it has to match the way the SDK itself wrote it.
+    expect(document.cookie).toMatch(new RegExp(`${MARKER}=(?!1700000000000)`));
+    dropUpdateMarker();
+    expect(document.cookie).not.toContain(`${MARKER}=`);
   });
 
   it.each([
