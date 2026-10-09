@@ -14,6 +14,12 @@ from app.modules.schedule.domain.schedule import (
     normalize_datastore_schedule_config,
 )
 
+_INCLUDE_OUTSIDE_ROWS = (
+    "DATASTORE schedules only: also fire on rows people outside the pod added "
+    "to an open table. Off by default. When it fires, the run is told the row's "
+    "content came from outside and is untrusted."
+)
+
 
 class CreateScheduleRequest(BaseModel):
     """Request to create a pod schedule."""
@@ -75,6 +81,7 @@ class CreateScheduleRequest(BaseModel):
             "the schedule, not the workflow start."
         ),
     )
+    include_outside_rows: bool = Field(default=False, description=_INCLUDE_OUTSIDE_ROWS)
     visibility: str | None = None
 
     @model_validator(mode="after")
@@ -113,6 +120,9 @@ class UpdateScheduleRequest(BaseModel):
     instruction: str | None = Field(default=None, max_length=8000)
     filter_instruction: str | None = None
     filter_output_schema: dict | None = None
+    include_outside_rows: bool | None = Field(
+        default=None, description=_INCLUDE_OUTSIDE_ROWS
+    )
     is_active: bool | None = None
     visibility: str | None = None
 
@@ -149,6 +159,7 @@ class ScheduleResponse(BaseModel):
     connector_trigger_id: str | None
     filter_instruction: str | None
     filter_output_schema: dict | None
+    include_outside_rows: bool = False
     visibility: str
     is_active: bool
     is_internal: bool

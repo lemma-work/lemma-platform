@@ -658,7 +658,7 @@ async def test_pod_get_file_url_public_mints_signed_url(monkeypatch):
     entity = SimpleNamespace(path="/pod/report.pdf")
     expires = datetime(2026, 1, 1, tzinfo=timezone.utc)
     create_signed_url = AsyncMock(
-        return_value=(entity, "https://api/s/abc123", expires, 5)
+        return_value=(entity, "https://api/public/s/abc123", expires, 5)
     )
     services = SimpleNamespace(
         file=SimpleNamespace(create_signed_url=create_signed_url),
@@ -675,7 +675,7 @@ async def test_pod_get_file_url_public_mints_signed_url(monkeypatch):
 
     assert result["success"] is True
     assert result["url_type"] == "public"
-    assert result["signed_url"] == "https://api/s/abc123"
+    assert result["signed_url"] == "https://api/public/s/abc123"
     assert result["max_hits"] == 5
     assert result["expires_at"] == expires.isoformat()
     create_signed_url.assert_awaited_once()

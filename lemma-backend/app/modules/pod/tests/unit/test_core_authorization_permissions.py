@@ -73,6 +73,13 @@ def test_system_role_permissions_are_explicit_unions():
     assert Permissions.SCHEDULE_CREATE in POD_USER_PERMISSIONS
     assert Permissions.SCHEDULE_UPDATE not in POD_USER_PERMISSIONS
     assert Permissions.SCHEDULE_DELETE not in POD_USER_PERMISSIONS
+    # Writing first to a contact speaks for the pod: an editor's, not a user's,
+    # and not implied by writing in one's own conversations.
+    assert Permissions.CONTACT_MESSAGE in POD_EDITOR_PERMISSIONS
+    assert Permissions.CONTACT_MESSAGE not in POD_USER_PERMISSIONS
+    assert equivalent_permission_ids(Permissions.CONTACT_MESSAGE) == {
+        Permissions.CONTACT_MESSAGE
+    }
 
 
 def test_schedule_owner_can_fully_manage_owned_schedules():

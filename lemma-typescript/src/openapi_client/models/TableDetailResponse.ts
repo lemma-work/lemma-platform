@@ -10,6 +10,8 @@ export type TableDetailResponse = {
     allowed_actions?: Array<string>;
     columns: Array<ColumnSchema>;
     config: (Record<string, any> | null);
+    contact_columns?: Array<string>;
+    contact_owned?: boolean;
     created_at: string;
     enable_rls: boolean;
     id: string;

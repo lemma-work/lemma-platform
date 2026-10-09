@@ -1,0 +1,82 @@
+<!doctype html>
+<!--
+  Lemma app cover: LETTER. What every app without a cover already gets: the
+  host draws this from the app's name, description and slug
+  (lemma-backend/app/modules/apps/services/app_cover.py) and serves it at
+  /.lemma/cover.png. You never need to render or ship it. It is here so you
+  can see what an app looks like when it has no cover of its own.
+
+  Open at a 1200x630 viewport with
+    ?name=Hiring&description=...&address=hiring.lemma.work&slug=hiring
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cover</title>
+<style>
+  html, body { margin: 0; }
+  body {
+    position: relative; width: 1200px; height: 630px; overflow: hidden;
+    background: #141413; color: #ffffff;
+    font: 400 30px/1.4 "DejaVu Sans", "Liberation Sans", Arial, sans-serif;
+  }
+  canvas { position: absolute; inset: 0; }
+  .mark { position: absolute; left: 64px; top: 56px; height: 36px; display: flex; align-items: flex-end; gap: 6px; }
+  .mark i { display: block; width: 8px; border-radius: 4px; background: #8b7af5; }
+  .mark i:nth-child(1) { height: 15px; }
+  .mark i:nth-child(2) { height: 24px; }
+  .mark i:nth-child(3) { height: 36px; }
+  .copy { position: absolute; left: 64px; top: 176px; width: 560px; }
+  h1 {
+    margin: 0; font-size: 88px; line-height: 1.08; font-weight: 400;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  }
+  p {
+    margin: 28px 0 0; color: #a6a6a5;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  }
+  .address { position: absolute; left: 64px; bottom: 42px; font-size: 22px; color: #7e7e7d; }
+</style>
+</head>
+<body>
+  <canvas id="letter" width="1200" height="630" aria-hidden="true"></canvas>
+  <div class="mark" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="copy"><h1 id="name"></h1><p id="description"></p></div>
+  <div class="address" id="address"></div>
+<script>
+  const q = new URLSearchParams(location.search);
+  const name = q.get("name") || "";
+  const slug = q.get("slug") || "";
+  document.getElementById("name").textContent = name;
+  document.getElementById("description").textContent = q.get("description") || "";
+  document.getElementById("address").textContent = q.get("address") || "";
+
+  // The icon's letter: the first ASCII letter or digit of the name, else of
+  // the slug. Its colour is the slug's step on a twelve-step ring that starts
+  // at the brand violet.
+  const letter = ([...name, ...slug].find((ch) => /[A-Za-z0-9]/.test(ch)) || "L").toUpperCase();
+  let digest = 0;
+  for (const ch of slug) digest = (digest * 31 + ch.codePointAt(0)) % 4294967296;
+  const hue = (248 + (digest % 12) * 30) % 360;
+
+  // Ink 1.12x the cover's height, centred, and cut by the right edge: 88% of
+  // its width shows, never more than 560px.
+  const canvas = document.getElementById("letter");
+  const ctx = canvas.getContext("2d");
+  document.fonts.ready.then(() => {
+    const face = (size) => `700 ${size}px "DejaVu Sans", "Liberation Sans", Arial, sans-serif`;
+    ctx.font = face(200);
+    let m = ctx.measureText(letter);
+    const size = 200 * (630 * 1.12) / (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent);
+    ctx.font = face(size);
+    m = ctx.measureText(letter);
+    const width = m.actualBoundingBoxLeft + m.actualBoundingBoxRight;
+    const height = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+    const shown = Math.min(width * 0.88, 560);
+    ctx.fillStyle = `hsl(${hue} 72% 68%)`;
+    ctx.fillText(letter, 1200 - shown + m.actualBoundingBoxLeft, (630 - height) / 2 + m.actualBoundingBoxAscent);
+    document.body.dataset.ready = "yes";
+  });
+</script>
+</body>
+</html>

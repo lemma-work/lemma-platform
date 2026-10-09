@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from app.core.config import settings as core_settings
 from app.modules.agent_surfaces.config import surface_settings
-from app.core.security import _is_surface_webhook_path
+from app.core.auth_exemptions import _is_surface_webhook_path
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,

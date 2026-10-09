@@ -94,6 +94,7 @@ class FunctionExecutionRepository:
             or run.revision_hash != dispatch.revision_hash
             or (run.input_data or {}) != dispatch.input_data
             or run.user_id != dispatch.user_id
+            or run.contact_id != dispatch.contact_id
             or function.pod_id != dispatch.pod_id
             or run.function_id != dispatch.function_id
         ):
@@ -143,6 +144,7 @@ class FunctionExecutionRepository:
             function_name=function.name,
             revision_hash=run.revision_hash,
             delegated_tokens_enabled=delegated_tokens_enabled,
+            run_id=run.id,
         ):
             return None
         return self._runtime_context(run, function)
@@ -345,6 +347,7 @@ class FunctionExecutionRepository:
             function_name=function.name,
             user_id=run.user_id,
             user_email=run.user_email,
+            contact_id=run.contact_id,
             config=function.config,
             mode=mode,
             deadline_at=run.deadline_at,
@@ -370,6 +373,7 @@ class FunctionExecutionRepository:
             config=function.config,
             user_id=run.user_id,
             user_email=run.user_email,
+            contact_id=run.contact_id,
             pod_id=function.pod_id,
             function_id=function.id,
             function_name=function.name,
@@ -379,18 +383,29 @@ class FunctionExecutionRepository:
     def _principal_matches(
         principal: FunctionSessionPrincipal,
         *,
-        user_id: UUID,
+        user_id: UUID | None,
         pod_id: UUID,
         function_id: UUID,
         function_name: str,
         revision_hash: str,
         delegated_tokens_enabled: bool,
+        run_id: UUID | None = None,
     ) -> bool:
-        if (
-            principal.user_id != user_id
-            or principal.pod_id != pod_id
-            or principal.function_id != function_id
-        ):
+        if principal.pod_id != pod_id or principal.function_id != function_id:
+            return False
+        if principal.run_id is not None:
+            # A function-run token was minted for one run of one revision. It
+            # fetches that revision's code and reports that run's end, and
+            # nothing else -- in particular not a member's run of the same
+            # function, which ``user_id`` being set marks.
+            return (
+                user_id is None
+                and principal.revision_hash == revision_hash
+                and (run_id is None or principal.run_id == run_id)
+            )
+        if user_id is None or principal.user_id != user_id:
+            return False
+        if principal.session_id is None:
             return False
         expected_session_id = FunctionSessionTokenKey(
             user_id=user_id,

@@ -304,6 +304,13 @@ adopt any one design system.
   the **view-image** capability on a screenshot to actually *see* the rendered app;
   and view-image works directly on pod/workspace files too (a `…/pages/page_0001.jpg`
   child, an uploaded image) — see `file-viewer.md`.
+- **Ship a cover.** Before the final deploy, make the app's 1200×630 cover — the
+  picture its links unfurl with and its card shows — and put it in the build at
+  `.lemma/cover.png` (`public/.lemma/cover.png` for Vite). It is the first
+  screen with **invented sample rows, never real data**: follow
+  `lemma-app-design`'s `references/cover.md`
+  (`load_skill(name="lemma-app-design", resource_path="references/cover.md")`).
+  Without one the host serves a plain lettered cover.
 - Deploy, then `lemma apps open <slug>` and repeat the core scenario served.
 - **Confirm the deploy landed** — don't trust CLI "success": note the release
   id/timestamp, re-`lemma apps get <name>`, hard-refresh with cache-busting, and
@@ -313,6 +320,13 @@ adopt any one design system.
 
 - Apps run inside an iframe in the shell — keep them self-contained; no top-level
   navigation assumptions.
+- An app can also be opened inside ChatGPT, through the pod's MCP connector.
+  There it is framed in ChatGPT's page, has no Lemma cookie, and signs in with a
+  token the Lemma view around it hands the SDK — automatically, as long as all
+  API traffic goes through `LemmaClient` (no hand-rolled `fetch` with
+  `credentials: "include"`). `isEmbeddedInHost()` says when it is; hide
+  sign-out there. A Vite app needs a build with this SDK release or later;
+  HTML apps load the current SDK and need nothing.
 - **Don't poll for fresh data.** A `setInterval` refetch flickers and hammers the API;
   use `useLiveRecords` / `useWatchChanges` (the table WebSocket). For a filtered live
   list, pass `reconcile: "refetch"` or an `accept` predicate (`app-recipes/rls-table.md`).

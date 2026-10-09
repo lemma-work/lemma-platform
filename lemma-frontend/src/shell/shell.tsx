@@ -32,6 +32,7 @@ import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
 import { SettingsPage, type SettingsSection as SpaceSettingsSection } from "@/space/settings-page";
 import { WorkflowsPage } from "@/space/workflows-page";
 import { GroupsPage } from "@/space/groups-page";
+import { ContactsPage } from "@/space/contacts-page";
 import { GroupPage } from "@/space/group-page";
 import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
@@ -151,12 +152,13 @@ function Pane({ hidden, onStage, children, ...rest }: HTMLAttributes<HTMLDivElem
     return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden && onStage}>{children}</PaneVisibleContext.Provider></div>;
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["contacts", "Contacts"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
     const groupsOn = useFeature("groups");
+    const contactsOn = useFeature("contacts");
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
     const incoming = useSearchParams();
@@ -192,7 +194,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     /** Words handed to the Chat tab to send, and the bot to start the
      *  conversation with. Cleared by any other change of conversation, so a
      *  hand-over never outlives the new chat it was for. */
-    const [handoff, setHandoff] = useState<{ text: string; createWith?: Record<string, unknown>; id: number; podId: string; sent: boolean } | null>(null);
+    const [handoff, setHandoff] = useState<{ text: string; createWith?: Record<string, unknown>; files?: File[]; id: number; podId: string; sent: boolean } | null>(null);
     const setConversationId = useCallback((id: string | null) => {
         setHandoff(null);
         setSelection(previous => ({ id, generation: previous.generation + 1 }));
@@ -207,7 +209,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
      *  its conversation mounted, and the reveal sets a fill in the same batch
      *  that switches pods. Without it the words land in whichever composer was
      *  already standing there, and the new teammate opens empty. */
-    const [fill, setFill] = useState<{ text: string; id: number; podId: string } | null>(() => {
+    const [fill, setFill] = useState<{ text: string; id: number; podId: string; files?: File[] } | null>(() => {
         const raw = incoming.get("remixSource");
         if (!raw || !podId) return null;
         try {
@@ -1064,13 +1066,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
      *  person decides. */
     const asks = useRef(0);
     /* Start a conversation somewhere that is not one — Home, a bot's page —
-       by handing the words to the Chat tab, which creates it and sends them. */
-    const startChat = useCallback((text: string, createWith?: Record<string, unknown>) => {
+       by handing the words and any files to the Chat tab, which creates it,
+       uploads them into its working directory and sends them. */
+    const startChat = useCallback((text: string, createWith?: Record<string, unknown>, files?: File[]) => {
         if (!pod) return;
         asks.current += 1;
         setConversationId(NEW_CONVERSATION);
-        if (source.label === "live") setHandoff({ text, createWith, id: asks.current, podId: pod.id, sent: false });
-        else setFill({ text, id: asks.current, podId: pod.id });
+        if (source.label === "live") setHandoff({ text, createWith, files, id: asks.current, podId: pod.id, sent: false });
+        else setFill({ text, id: asks.current, podId: pod.id, files });
         pickTab("conversation");
     }, [pod, setConversationId, pickTab]);
     const collapseCall = huddle.collapse;
@@ -1860,7 +1863,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onAbout={() => openAbout(null)}
-                                            onAsk={(text) => startChat(text)}
+                                            onAsk={(text, files) => startChat(text, undefined, files)}
                                         />
                                     ) : tab.view === "about" ? (
                                         <AboutPage
@@ -1893,6 +1896,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
                                     ) : tab.view === "groups" ? (
                                         groupsOn && <GroupsPage pod={pod} onOpenGroup={openGroup} onConnect={() => setReaching(true)} />
+                                    ) : tab.view === "contacts" ? (
+                                        contactsOn && <ContactsPage pod={pod} />
                                     ) : tab.view === "settings" ? (
                                         <SettingsPage
                                             pod={pod}

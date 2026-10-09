@@ -121,15 +121,9 @@ def _public_app_social_metadata(app: dict[str, str] | None) -> str:
     name = app.get("name") or "A Lemma app"
     description = app.get("description") or f"Run {name} on Lemma."
     public_url = app["url"]
-    image_query = urlencode(
-        {
-            "variant": "run",
-            "title": name,
-            "detail": description,
-            "label": public_url.removeprefix("https://").removeprefix("http://"),
-        }
-    )
-    image_url = f"https://lemma.work/api/social-card?{image_query}"
+    # On the app's own origin: the build's cover when it ships one, or one the
+    # host draws from the app's name (``apps.services.app_cover``).
+    image_url = f"{public_url.rstrip('/')}{app_install.COVER_PATH}"
     escaped_name = html.escape(name, quote=True)
     escaped_description = html.escape(description, quote=True)
     escaped_url = html.escape(public_url, quote=True)
@@ -141,6 +135,8 @@ def _public_app_social_metadata(app: dict[str, str] | None) -> str:
         '<meta property="og:type" content="website">'
         f'<meta property="og:url" content="{escaped_url}">'
         f'<meta property="og:image" content="{escaped_image}">'
+        '<meta property="og:image:width" content="1200">'
+        '<meta property="og:image:height" content="630">'
         '<meta name="twitter:card" content="summary_large_image">'
         f'<meta name="twitter:title" content="{escaped_name}">'
         f'<meta name="twitter:description" content="{escaped_description}">'
@@ -269,19 +265,19 @@ def runtime_config_token(
 ) -> str:
     """Short, stable hash of the runtime config, for cache busting (ETags)."""
     config = build_runtime_config(pod_id, app=app, api_url=api_url)
-    install = _public_app_install(app)
+    head = _public_app_social_metadata(app) + _public_app_install(app)
     token_payload: object = (
         {"config": config, "branding": branding} if branding else config
     )
-    if install:
-        # Deploying a new install script has to reach pages already cached.
-        # Nothing else in the tag moves when only the host's own injection
-        # changes -- the release version does not, and no-cache revalidation
-        # would keep answering 304 against the old one.
+    if head:
+        # Deploying new share tags or a new install script has to reach pages
+        # already cached. Nothing else in the tag moves when only the host's own
+        # injection changes -- the release version does not, and no-cache
+        # revalidation would keep answering 304 against the old one.
         token_payload = {
             "config": config,
             "branding": branding,
-            "install": hashlib.sha256(install.encode("utf-8")).hexdigest()[:12],
+            "head": hashlib.sha256(head.encode("utf-8")).hexdigest()[:12],
         }
     payload = json.dumps(token_payload, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]

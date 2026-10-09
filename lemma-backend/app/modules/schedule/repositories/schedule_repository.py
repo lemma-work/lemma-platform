@@ -95,6 +95,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             instruction=entity.instruction,
             filter_instruction=entity.filter_instruction,
             filter_output_schema=entity.filter_output_schema,
+            include_outside_rows=entity.include_outside_rows,
             account_id=entity.account_id,
             connector_trigger_id=entity.connector_trigger_id,
             visibility=entity.visibility,

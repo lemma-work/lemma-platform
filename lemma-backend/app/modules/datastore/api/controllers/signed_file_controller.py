@@ -1,8 +1,8 @@
 """Public (unauthenticated) short-link serving for datastore files.
 
-A short link ``{api_url}/s/{code}`` resolves a Redis-backed capability code and
-streams the file bytes — but only while the link is unexpired and has budget
-left. Bytes are proxied through the backend (never a redirect to a real
+A short link ``{api_url}/public/s/{code}`` resolves a Redis-backed capability
+code and streams the file bytes — but only while the link is unexpired and has
+budget left. Bytes are proxied through the backend (never a redirect to a real
 object-store signed URL) so the budget genuinely bounds egress.
 
 This is the one route in the product whose audience is "whoever the recipient
@@ -13,7 +13,10 @@ inline, and it renders its errors as a page when a browser asks for one. The
 headers themselves are built by ``file_stream_response``, shared with the
 token-based public route.
 
-Mounted under ``/s`` which is auth-excluded in ``security.py``.
+Served under ``/public/s``, which the global auth gate lets through (see
+``app.core.auth_exemptions``). The old ``/s`` path answers too, on the same
+handler, until its ``LEGACY_ALIASES`` date: a link lives at most seven days, so
+the ones handed out before the move expire on the old path.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ from app.modules.datastore.services.files.signed_url import (
     get_signed_url_store,
 )
 
-router = APIRouter(prefix="/s", tags=["Public Datastore Files"], redirect_slashes=False)
+router = APIRouter(tags=["Public Datastore Files"], redirect_slashes=False)
 
 _ERROR_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -80,21 +83,13 @@ def _raise_or_return(result: HTTPException | Response) -> Response:
     return result
 
 
-@router.get("", include_in_schema=False)
-async def missing_code() -> Response:
-    """`/s` with no code is a missing link, not an authentication problem.
-
-    Without this route the request falls through to the app's global auth
-    dependency, whose exclusion list holds the prefix `/s/` — and
-    `TrailingSlashMiddleware` has by then rewritten `/s/` to `/s`, which no
-    longer matches it. The result was a 401 for what is plainly a 404. Fixed
-    here rather than by loosening the exclusion to `/s`, which would quietly
-    make every future `/s*` path public.
-    """
-    raise HTTPException(status_code=404, detail="Link not found or expired")
-
-
-@router.api_route("/{code}", methods=["GET", "HEAD"], include_in_schema=False)
+# No route for a root without a code (`/public/s`, or `/s` -- which
+# `TrailingSlashMiddleware` makes of `/s/`). Both are exempt as whole segments,
+# so a link that lost its code is an ordinary 404 rather than a 401.
+@router.api_route("/public/s/{code}", methods=["GET", "HEAD"], include_in_schema=False)
+# The old path, for links minted before the move. Same handler and the same
+# Redis budget, so a link spent on one path is spent on both.
+@router.api_route("/s/{code}", methods=["GET", "HEAD"], include_in_schema=False)
 async def serve_signed_url(code: str, request: Request) -> Response:
     store = get_signed_url_store()
 

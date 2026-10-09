@@ -41,6 +41,7 @@ import {
   canComposeInConversation,
   composeInConversation,
 } from "./browser-compose.js";
+import { isEmbeddedInHost } from "./embedded.js";
 
 export {
   startAppAccess,
@@ -63,6 +64,7 @@ export {
   LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
   canComposeInConversation,
   composeInConversation,
+  isEmbeddedInHost,
 };
 
 // Browser globals. We standardize on `window.LemmaClient` (the skills, the app
@@ -93,6 +95,7 @@ if (typeof globalThis !== "undefined") {
     LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
     canComposeInConversation,
     composeInConversation,
+    isEmbeddedInHost,
   };
   if (!scope.LemmaClient) {
     scope.LemmaClient = surface;

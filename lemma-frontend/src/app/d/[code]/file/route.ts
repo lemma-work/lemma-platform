@@ -4,7 +4,7 @@ import { sharedFileHeaders } from "@/site/shared-file-headers";
 
 /** The bytes, proxied.
  *
- *  A shared image cannot be pointed straight at `{api}/s/{code}`: that is a
+ *  A shared image cannot be pointed straight at `{api}/public/s/{code}`: that is a
  *  second fetch, and the link is counted in opens rather than in bytes, so the
  *  picture on the page would cost the reader one of their fifty every time it
  *  loaded. Going through here does not make it free — the API still counts one
@@ -31,7 +31,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cod
         });
     }
 
-    const upstream = await fetch(origin + "/s/" + encodeURIComponent(code), { cache: "no-store" });
+    const upstream = await fetch(origin + "/public/s/" + encodeURIComponent(code), { cache: "no-store" });
     if (!upstream.ok || !upstream.body) {
         return new Response("This link is no longer available.", {
             status: upstream.status === 404 ? 404 : 502,

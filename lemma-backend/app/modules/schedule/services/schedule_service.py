@@ -33,6 +33,7 @@ from app.modules.schedule.repositories.schedule_repository import (
     ScheduleRepository as ScheduleRepositoryImpl,
 )
 from app.modules.schedule.services.time_schedule_policy import (
+    refuse_time_schedule_filter,
     validated_time_schedule_config,
 )
 from app.modules.schedule.services.schedule_run_service import ScheduleRunService
@@ -107,18 +108,6 @@ class ScheduleService:
             target_resolver = SqlAlchemyScheduleTargetResolver(uow)
         self.target_resolver = target_resolver
 
-    async def list_schedule_runs(
-        self,
-        *,
-        pod_id: UUID,
-        schedule_id: UUID,
-        ctx: Context,
-        limit: int,
-    ):
-        return await self.run_service.list_schedule_runs(
-            pod_id=pod_id, schedule_id=schedule_id, ctx=ctx, limit=limit
-        )
-
     async def retry_schedule_run(
         self,
         *,
@@ -154,6 +143,10 @@ class ScheduleService:
         await self._require_target_execute(schedule_create, ctx=ctx)
         await self._require_datastore_table_update(schedule_create, ctx=ctx)
         if schedule_create.schedule_type == ScheduleType.TIME:
+            refuse_time_schedule_filter(
+                schedule_create.filter_instruction,
+                schedule_create.filter_output_schema,
+            )
             await validated_time_schedule_config(
                 schedule_create.config, session=self.uow.session
             )

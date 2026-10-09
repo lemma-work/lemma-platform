@@ -29,7 +29,6 @@ from app.modules.workflow.domain.run import (
     WorkflowRunStatus,
 )
 from app.modules.workflow.domain.wait import (
-    WaitRequest,
     WorkflowRunWaitEntity,
     WorkflowRunWaitType,
 )
@@ -41,11 +40,13 @@ from app.modules.workflow.execution.form_submission import (
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
 from app.modules.workflow.domain.ports import (
     AgentPort,
+    DecisionPort,
     FunctionPort,
     SchedulePort,
     WorkflowNotificationPort,
 )
 from app.modules.workflow.execution.wait_failure import fail_run_for_wait
+from app.modules.workflow.execution.wait_persistence import wait_entity_for
 from app.modules.workflow.execution.underlying_work import (
     stop_underlying_work,
     stop_underlying_work_for_wait,
@@ -64,9 +65,10 @@ logger = get_logger(__name__)
 class WorkflowEngine:
     """Advances runs. Every collaborator arrives already bound.
 
-    The four adapters have no defaults on purpose: resolving them here made the
-    deepest file in this module choose which agent, function, scheduler and
-    notifier the application runs on. `build_workflow_engine` decides instead.
+    The adapters have no defaults on purpose: resolving them here made the
+    deepest file in this module choose which agent, function, scheduler,
+    decision queue and notifier the application runs on.
+    `build_workflow_engine` decides instead.
     """
 
     def __init__(
@@ -76,6 +78,7 @@ class WorkflowEngine:
         agent_adapter: AgentPort,
         function_adapter: FunctionPort,
         schedule_adapter: SchedulePort,
+        decision_adapter: DecisionPort,
         notification_adapter: WorkflowNotificationPort,
     ):
         self.uow = uow
@@ -86,6 +89,7 @@ class WorkflowEngine:
         self.agent_adapter = agent_adapter
         self.function_adapter = function_adapter
         self.schedule_adapter = schedule_adapter
+        self.decision_adapter = decision_adapter
         self.notification_adapter = notification_adapter
 
     def _stepper(self, ctx: Context | None) -> RunStepper:
@@ -93,6 +97,7 @@ class WorkflowEngine:
             agent=self.agent_adapter,
             function=self.function_adapter,
             schedule=self.schedule_adapter,
+            decision=self.decision_adapter,
             authz_ctx=ctx,
         )
 
@@ -304,11 +309,13 @@ class WorkflowEngine:
         output: Dict[str, Any] | None = None,
         *,
         ctx: Context | None = None,
+        next_node_id: str | None = None,
     ) -> WorkflowRunEntity | None:
         """Resume the run waiting on (wait_type, external_ref).
 
         Returns None when no ACTIVE wait matches — stale or duplicate
-        completion events are no-ops by construction.
+        completion events are no-ops by construction. `next_node_id` is the
+        branch a decision's answer chose; otherwise the run follows the edge.
         """
         wait = await self.wait_repo.find_active_by_external_ref(wait_type, external_ref)
         if wait is None:
@@ -340,7 +347,9 @@ class WorkflowEngine:
         await self.wait_repo.update(wait)
 
         run.resume(wait.node_id, normalized)
-        result = await self._stepper(ctx).continue_after(run, flow, wait.node_id)
+        result = await self._stepper(ctx).continue_after(
+            run, flow, wait.node_id, forced=next_node_id
+        )
 
         run = await self.run_repo.update(run)
         pending_wait = await self._persist_wait(run, result)
@@ -547,8 +556,7 @@ class WorkflowEngine:
             WorkflowRunStatus.RUNNING,
         ):
             return None
-        assert run.current_node_id is not None
-        return await self.wait_repo.create(self._wait_entity(run, result.wait))
+        return await self.wait_repo.create(wait_entity_for(run, result.wait))
 
     async def _announce_human_wait(
         self, run: WorkflowRunEntity, wait: WorkflowRunWaitEntity
@@ -577,24 +585,4 @@ class WorkflowEngine:
             flow_name=getattr(flow, "name", None),
             schema=wait.payload.get("input_schema"),
             actor_user_id=run.user_id,
-        )
-
-    def _wait_entity(
-        self, run: WorkflowRunEntity, request: WaitRequest
-    ) -> WorkflowRunWaitEntity:
-        payload = dict(request.payload)
-        if request.scheduled_at is not None:
-            payload.setdefault("scheduled_at", request.scheduled_at.isoformat())
-        return WorkflowRunWaitEntity(
-            run_id=run.id,
-            flow_id=run.flow_id,
-            pod_id=run.pod_id,
-            node_id=run.current_node_id,
-            wait_type=request.wait_type,
-            assigned_pod_member_id=request.assigned_pod_member_id,
-            external_ref=request.external_ref,
-            # Kept in `payload` too: the reconcile sweep still reads it from
-            # there, and older rows have only that copy.
-            scheduled_at=request.scheduled_at,
-            payload=payload,
         )

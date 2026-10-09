@@ -1,8 +1,14 @@
-"""One instance of each service, built on first use.
+"""One instance of each stateful piece, built on first use.
 
 Lazily, because the pieces hold a Redis client and a metadata-document cache,
 and building them at import would open a connection pool in every process that
 merely imports the contracts -- including the worker, which serves none of this.
+
+The services that carry the issuer are built per call instead, around those
+cached pieces: a service cached once keeps whatever ``settings.api_url`` was
+when its first caller reached it, and a verifier holding a different issuer
+from the server that minted the token refuses every token as for another
+resource.
 """
 
 from __future__ import annotations
@@ -59,7 +65,6 @@ def _ephemeral() -> EphemeralStore:
     return EphemeralStore()
 
 
-@lru_cache(maxsize=1)
 def authorization_server() -> LemmaAuthorizationServer:
     return LemmaAuthorizationServer(
         uow_factory=_uow_factory(),
@@ -72,7 +77,6 @@ def authorization_server() -> LemmaAuthorizationServer:
     )
 
 
-@lru_cache(maxsize=1)
 def consent_service() -> ConsentService:
     return ConsentService(
         uow_factory=_uow_factory(),
@@ -82,7 +86,6 @@ def consent_service() -> ConsentService:
     )
 
 
-@lru_cache(maxsize=1)
 def access_token_verifier() -> AccessTokenVerifier:
     return AccessTokenVerifier(
         uow_factory=_uow_factory(),

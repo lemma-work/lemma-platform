@@ -26,6 +26,7 @@ from app.modules.apps.domain.entities import AppReleaseEntity
 from app.modules.apps.domain.entities import AppAssetDocument
 from app.modules.apps.domain.errors import AppAssetNotFoundError, AppNotFoundError
 from app.modules.apps.domain.ports import AppStorageFactoryPort, AppStoragePort
+from app.modules.apps.services.app_cover import AppCoverSpec
 from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
 from app.core.concurrency.offload import run_blocking
 
@@ -34,6 +35,11 @@ logger = structlog.get_logger()
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/wasm", ".wasm")
 mimetypes.add_type("image/svg+xml", ".svg")
+
+
+def guess_media_type(path: str) -> str:
+    media_type, _encoding = mimetypes.guess_type(path)
+    return media_type or "application/octet-stream"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +58,8 @@ class _AssetReadInputs:
     app: dict[str, str] | None = None
     branding: dict[str, str] | None = None
     private: bool = False
+    # Set only for the cover path: what to draw when the build ships no cover.
+    cover: AppCoverSpec | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,11 +100,6 @@ class AppStoragePhase:
 
     def __init__(self, file_manager_factory: AppStorageFactoryPort):
         self.file_manager_factory = file_manager_factory
-
-    @staticmethod
-    def _guess_media_type(path: str) -> str:
-        media_type, _encoding = mimetypes.guess_type(path)
-        return media_type or "application/octet-stream"
 
     async def read_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
         """Read the asset bytes for resolved inputs. Holds NO DB connection."""
@@ -147,7 +150,7 @@ class AppStoragePhase:
             )
         return AppAssetDocument(
             content=content,
-            media_type=self._guess_media_type(
+            media_type=guess_media_type(
                 requested_storage_path if not is_entrypoint else "index.html"
             ),
             etag=inputs.quoted_etag,

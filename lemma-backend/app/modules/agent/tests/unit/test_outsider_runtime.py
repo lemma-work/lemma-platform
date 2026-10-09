@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.outsiders import Audience
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.outsiders import OutsiderRunRefused
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
@@ -125,7 +126,7 @@ class _NoTokens:
 
 async def test_agent_host_is_never_handed_a_token_for_a_strangers_run():
     stranger_run = SimpleNamespace(
-        answers_outsider=True,
+        audience=Audience.outsiders(),
         user_id=uuid4(),
         pod_id=uuid4(),
         org_id=uuid4(),

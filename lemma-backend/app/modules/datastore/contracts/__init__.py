@@ -1,9 +1,7 @@
 """Public datastore DTOs used by resource consumers."""
 
-from app.modules.datastore.api.schemas.datastore_schemas import (
-    RecordFilter,
-    TableResponse,
-)
+from app.modules.datastore.api.schemas.datastore_schemas import RecordFilter
+from app.modules.datastore.api.schemas.table_schemas import TableResponse
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,

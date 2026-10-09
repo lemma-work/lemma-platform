@@ -45,6 +45,12 @@ class MeteringScope:
         self.parent = parent
         self.execution_id = uuid4()
         self.meters: dict[str, tuple[RequestMeter, RateCard]] = {}
+        # Inherited, so an execution opened inside an outside run with a
+        # context of its own -- one that never heard of the audience -- is
+        # still that run's spend.
+        self.outside_audience = context.outside_audience or (
+            parent.outside_audience if parent is not None else None
+        )
 
     @property
     def inside_admitted_run(self) -> bool:
@@ -66,6 +72,17 @@ class MeteringScope:
             scope = scope.parent
         return False
 
+    def recorded_source(self, source: str | None) -> str:
+        """The source one request is recorded under, ``source`` overriding the
+        execution's own.
+
+        The ledger knows an outside run's spend only by its source -- that is
+        what the contacts cap sums and the member's windows leave out -- so
+        under such a run every request is recorded as the run's outside
+        source, whatever it was spent on.
+        """
+        return self.outside_audience or source or self.context.source_type
+
     def meter(
         self, profile: Mapping[str, object], source: str | None
     ) -> tuple[RequestMeter, RateCard]:
@@ -78,7 +95,7 @@ class MeteringScope:
             conversation_id=self.context.conversation_id,
             agent_run_id=self.context.agent_run_id,
             parent_agent_run_id=self.context.parent_agent_run_id,
-            source_type=source or self.context.source_type,
+            source_type=self.recorded_source(source),
             source_id=self.context.source_id,
             profile_id=str(profile.get("profile_id") or "unknown"),
             profile_scope=str(profile.get("scope") or "ORGANIZATION"),

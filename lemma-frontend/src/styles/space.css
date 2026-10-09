@@ -4660,10 +4660,10 @@ samp,
     color: var(--tone-bad) !important;
 }
 
-/* ── A box that hands its words to the Chat tab ─────────────────────── */
+/* ── A box that hands its words and its files to the Chat tab ───────── */
 .askbox {
     display: flex;
-    align-items: flex-end;
+    flex-direction: column;
     gap: 8px;
     padding: 8px 8px 8px 18px;
     border-radius: var(--r-xl);
@@ -4672,6 +4672,50 @@ samp,
 }
 .askbox:focus-within {
     box-shadow: 0 0 0 1px var(--ink-3), 0 4px 16px rgb(0 0 0 / 0.05);
+}
+/* The whole box is the drop target, so the whole box is what lights up —
+   the same as the composer, which accepts the same drag. */
+.askbox--over {
+    background: var(--accent-soft);
+}
+.askbox__row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+}
+.askbox__files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.askbox__picker {
+    display: none;
+}
+/* Sat against the first line of the text rather than the bottom of a box
+   that grows: 7px is the textarea's own bottom margin. */
+.askbox__attach {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 34px;
+    height: 34px;
+    margin-bottom: 7px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: none;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+.askbox__attach:hover {
+    background: var(--chrome);
+    color: var(--ink);
+}
+.askbox__note {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.askbox__note[data-bad] {
+    color: var(--bad);
 }
 .askbox textarea {
     flex: 1;
@@ -6096,6 +6140,17 @@ samp,
     align-items: flex-start;
     justify-content: flex-start;
     background: var(--paper);
+}
+/* An app's card shows its cover, edge to edge: the picture its links unfurl
+   with, drawn by the host or shipped in the app's build. */
+.all__card-top:has(> .app-cover) {
+    padding: 0;
+}
+.app-cover {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 .all__preview {
     display: -webkit-box;

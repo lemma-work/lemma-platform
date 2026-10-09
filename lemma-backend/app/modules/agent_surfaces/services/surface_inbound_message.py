@@ -127,7 +127,7 @@ def may_answer_a_pause(context: SurfaceChatContext) -> bool:
     member who answers for the group, so a resolved pause would be recorded as
     that member's decision.
     """
-    return not context.answers_outsider
+    return not context.audience.answers_outsiders
 
 
 async def write_inbound_message(

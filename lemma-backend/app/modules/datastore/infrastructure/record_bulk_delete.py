@@ -27,6 +27,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.core.domain.events import DomainEvent
 from app.core.log.log import get_logger
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreRecordNotFoundError,
@@ -169,8 +170,7 @@ async def bulk_delete_records(
             if ctx.enable_rls:
                 await schema_manager.set_rls_context(
                     session,
-                    user_id,
-                    is_pod_admin=not enforce_user_scope,
+                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
                 )
 
             events: list[DomainEvent] = []

@@ -408,7 +408,7 @@ async def test_mint_embed_url():
         services=_services(artifact=artifact, owner_id=user_id, pod_id=pod_id),
     )
 
-    assert f"/widgets/serve/{conversation_id}/tc_1" in resp.url
+    assert f"/public/widgets/serve/{conversation_id}/tc_1" in resp.url
     token = parse_qs(urlparse(resp.url).query)["token"][0]
     # The minted token authenticates this exact widget for this user.
     assert (

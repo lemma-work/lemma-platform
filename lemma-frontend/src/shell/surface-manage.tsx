@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentSurfaceResponse, SurfaceSetupResponse } from "lemma-sdk";
 import { source, type Group, type Pod, type Surface } from "@/data";
-import { filtersSupported, routesSupported, surfaceDraft, surfacePatch, type SurfaceDraft } from "@/data/surface-settings";
+import { contactsSupported, filtersSupported, isOwnBot, routesSupported, surfaceDraft, surfacePatch, type SurfaceDraft } from "@/data/surface-settings";
+import { answerChoices } from "@/data/contacts";
 import { answering, byActivity, isGroupPlatform, sayAnswering, sayAnsweringFully } from "@/data/groups";
 import { groupTitle } from "@/data/surface-groups";
 import { useMe } from "@/session/use-me";
@@ -111,6 +112,7 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
     const [draft, setDraft] = useState(() => surfaceDraft(surface));
     const [dropping, setDropping] = useState(false);
     const groupsOn = useFeature("groups");
+    const contactsOn = useFeature("contacts");
     const cache = useQueryClient();
     const change = (patch: Partial<SurfaceDraft>) => setDraft(current => ({ ...current, ...patch }));
     const agents = useQuery({ queryKey: ["surface-agents", pod.id], queryFn: () => source.listAgents(pod.id) });
@@ -188,6 +190,19 @@ function SurfaceForm({ pod, surface, listed, bot, onSaved, onLeave }: {
                         <span className="smanage__label">Answer people outside {pod.name}</span>
                         <small>From what {pod.name} has made Public, in every group this bot is in.</small>
                     </span>
+                </label>
+            )}
+            {contactsOn && contactsSupported(surface.platform) && (
+                <label className="record-form__field smanage__field">
+                    <span className="smanage__label">Private messages from people outside {pod.name}</span>
+                    <select value={draft.contactsAnswer} disabled={!isOwnBot(surface)} onChange={event => change({ contactsAnswer: event.target.value as SurfaceDraft["contactsAnswer"] })}>
+                        {answerChoices(pod.name).map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+                    </select>
+                    <small>
+                        {!isOwnBot(surface)
+                            ? "Only a bot on your own account or number answers contacts."
+                            : answerChoices(pod.name).find(choice => choice.value === draft.contactsAnswer)?.note}
+                    </small>
                 </label>
             )}
         </fieldset>

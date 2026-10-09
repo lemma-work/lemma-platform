@@ -723,7 +723,8 @@ A `401 AGENT_HOST_REVOKED_OR_MISSING` would stop the old host faster, but it
 drops its pairing after three refusals, and the person would have to pair again
 after updating.
 
-**Removal.** Delete the controller, its `/agent-runtime/conversations/` entry in
-`EXCLUDED_PATHS`, and this section no earlier than 2027-03-25 (six months after
-protocol 3 shipped on 2026-09-25), and only after
+**Removal.** Delete the controller, its `/agent-runtime/conversations` entry in
+`SELF_AUTHENTICATED` (`app/core/auth_exemptions.py`), and this section no
+earlier than 2027-03-25 (six months after protocol 3 shipped on 2026-09-25),
+and only after
 `agent.agent_host_legacy.upgrade_required` has not been logged for 30 days.

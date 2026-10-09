@@ -255,6 +255,10 @@ export function FloatingChat({ pod, resource, live, state, onOpenFile, onOpenTab
                             pod={pod}
                             conversationId={conversationId}
                             createWith={createWith}
+                            /* Beside a doc nothing has been sent yet, and the
+                               draft still belongs to that doc's chat rather
+                               than to whichever one is open next. */
+                            draftScope={threadKey}
                             fill={state.fill}
                             onFilled={state.clearFill}
                             autoSend={state.pending}

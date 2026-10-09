@@ -195,6 +195,7 @@ async def open_notifications_for_conversation(conversation_id: UUID) -> list[dic
             "action": n.action,
             "from_outside": n.from_outside,
             "origin_group_title": n.origin_group_title,
+            "asked_in_private": n.asked_in_private,
             "asked_by_name": n.asked_by_name,
         }
         for n in notifications
@@ -265,6 +266,7 @@ async def outside_question(
     return {
         "notification_id": str(notification.id),
         "group_title": notification.origin_group_title,
+        "asked_in_private": notification.asked_in_private,
         "asked_by_name": notification.asked_by_name,
         "status": notification.status.value,
     }

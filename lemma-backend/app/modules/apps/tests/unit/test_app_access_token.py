@@ -76,3 +76,25 @@ def test_a_changed_payload_is_refused():
 )
 def test_malformed_tokens_are_refused(token):
     assert _verify(token) is None
+
+
+def test_a_connection_id_is_signed_in_with_the_rest():
+    """An app opened inside an AI tool carries the connection it came through,
+    so its access ends when that connection does."""
+    claims = _claims(grant_id=uuid4())
+    token = mint_app_access_token(AppAccessPurpose.TICKET, claims)
+
+    assert _verify(token) == claims
+
+
+def test_a_token_without_a_connection_still_verifies():
+    """Cookies issued before connections existed keep working, as no one's."""
+    claims = _claims()
+    assert claims.grant_id is None
+    assert (
+        _verify(
+            mint_app_access_token(AppAccessPurpose.COOKIE, claims),
+            purpose=AppAccessPurpose.COOKIE,
+        )
+        == claims
+    )

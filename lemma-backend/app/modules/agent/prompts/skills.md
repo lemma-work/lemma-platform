@@ -7,6 +7,7 @@ Load `lemma-builder` before designing or changing pod resource definitions.
 - `lemma-builder`: resource design, bundles, import/export.
 - `lemma-user`: pod operations, approvals, grants, RLS troubleshooting.
 - `lemma-widget`: inline HTML views.
+- `lemma-form`: forms and sign-ups for people outside the pod; responses are table rows.
 - `lemma-app-design`: app UX and visual design.
 - `lemma-app-qa`: browser journeys and release checks.
 - `lemma-research`: source-backed investigations.

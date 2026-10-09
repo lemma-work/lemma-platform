@@ -41,6 +41,7 @@ class AgentSurfaceResponse:
         agent_id (None | Unset | UUID):
         agent_name (None | str | Unset):
         connection (None | SurfaceConnection | Unset):
+        contacts_warning (None | str | Unset):
         credential_mode (SurfaceCredentialMode | Unset):
         reach (None | SurfaceReach | Unset):
         status (AgentSurfaceStatus | Unset):
@@ -60,6 +61,7 @@ class AgentSurfaceResponse:
     agent_id: None | Unset | UUID = UNSET
     agent_name: None | str | Unset = UNSET
     connection: None | SurfaceConnection | Unset = UNSET
+    contacts_warning: None | str | Unset = UNSET
     credential_mode: SurfaceCredentialMode | Unset = UNSET
     reach: None | SurfaceReach | Unset = UNSET
     status: AgentSurfaceStatus | Unset = UNSET
@@ -113,6 +115,12 @@ class AgentSurfaceResponse:
             connection = self.connection.to_dict()
         else:
             connection = self.connection
+
+        contacts_warning: None | str | Unset
+        if isinstance(self.contacts_warning, Unset):
+            contacts_warning = UNSET
+        else:
+            contacts_warning = self.contacts_warning
 
         credential_mode: str | Unset = UNSET
         if not isinstance(self.credential_mode, Unset):
@@ -175,6 +183,8 @@ class AgentSurfaceResponse:
             field_dict["agent_name"] = agent_name
         if connection is not UNSET:
             field_dict["connection"] = connection
+        if contacts_warning is not UNSET:
+            field_dict["contacts_warning"] = contacts_warning
         if credential_mode is not UNSET:
             field_dict["credential_mode"] = credential_mode
         if reach is not UNSET:
@@ -271,6 +281,15 @@ class AgentSurfaceResponse:
 
         connection = _parse_connection(d.pop("connection", UNSET))
 
+        def _parse_contacts_warning(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        contacts_warning = _parse_contacts_warning(d.pop("contacts_warning", UNSET))
+
         _credential_mode = d.pop("credential_mode", UNSET)
         credential_mode: SurfaceCredentialMode | Unset
         if isinstance(_credential_mode, Unset):
@@ -356,6 +375,7 @@ class AgentSurfaceResponse:
             agent_id=agent_id,
             agent_name=agent_name,
             connection=connection,
+            contacts_warning=contacts_warning,
             credential_mode=credential_mode,
             reach=reach,
             status=status,

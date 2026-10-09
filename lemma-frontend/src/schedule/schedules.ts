@@ -372,6 +372,9 @@ export interface ScheduleRun {
     subjectId: string;
     /** Set when this run is itself a retry of an earlier one. */
     retryOf: string;
+    /** What the schedule's filter concluded about this event, in a person's
+     *  words — "The filter said no (82% sure)" — or empty when nothing judged it. */
+    judgement: string;
     error: string;
     at: string;
     startedAt: string;
@@ -391,6 +394,28 @@ const OUTCOMES: Record<string, { word: string; tone: Tone }> = {
     DEAD_LETTERED: { word: "Retries exhausted", tone: "bad" },
 };
 
+/** Why a filtered fire ended where it did, said for a person rather than as the
+ *  class name the ledger keeps. */
+const FILTER_FAILURES: Record<string, string> = {
+    ScheduleFilterUnavailable: "The filter could not be asked; no decision provider answered",
+    ScheduleFilterNotConfigured: "The filter could not be asked; this server has no decision provider",
+    ScheduleFilterQuotaExhausted: "The filter could not be asked; the usage limit was reached",
+    ScheduleFilterEventTooLarge: "The event was too large for the filter to read",
+    ScheduleFilterInvalid: "The filter's questions could not be asked",
+};
+
+/** The filter's verdict, from the answers the run carries. A run that fired
+ *  through a filter carries them too, but only a skip needs explaining. */
+export function judgementOf(output: Record<string, unknown>): string {
+    if (!("should_proceed" in output)) return "";
+    const decision = record(output["_decision"]);
+    const sure = record(decision["confidence"])["should_proceed"];
+    const percent = typeof sure === "number" ? ` (${Math.round(sure * 100)}% sure)` : "";
+    const unsure = output["should_proceed"] !== true && decision["unsure"] === true;
+    if (unsure) return "The filter could not tell from this event, so it was skipped.";
+    return output["should_proceed"] === true ? `The filter let it through${percent}.` : `The filter said no${percent}.`;
+}
+
 export function readRun(raw: unknown): ScheduleRun {
     const row = record(raw);
     const id = text(row["id"]);
@@ -400,7 +425,8 @@ export function readRun(raw: unknown): ScheduleRun {
     /* `error_type` is the class of fault and `error_code` the specific one.
        Both are often null on a target failure — the detail lives on the
        target's own run — so the outcome word has to stand on its own. */
-    const error = [text(row["error_type"]), text(row["error_code"])].filter(Boolean).join(" · ");
+    const errorType = text(row["error_type"]);
+    const error = [FILTER_FAILURES[errorType] ?? errorType, text(row["error_code"])].filter(Boolean).join(" · ");
     return {
         id,
         status,
@@ -411,6 +437,7 @@ export function readRun(raw: unknown): ScheduleRun {
         targetRunId: text(row["target_run_id"]),
         subjectId: text(record(row["payload"])["id"]) || text(record(row["metadata"])["record_id"]),
         retryOf: text(row["redrive_of_run_id"]),
+        judgement: judgementOf(record(row["llm_output"])),
         error,
         /* When the event happened, falling back to when the row was written.
            A TIME schedule has no source event, so `source_occurred_at` is the
@@ -598,9 +625,14 @@ export function copyRequest(job: StandingJob, accountId?: string): Record<string
     if (job.target.kind === "workflow") body.workflow_name = job.target.name;
     else body.agent_name = job.target.name;
     if (job.instruction) body.instruction = job.instruction;
-    if (job.filter) body.filter_instruction = job.filter;
-    const schema = row["filter_output_schema"];
-    if (schema && typeof schema === "object") body.filter_output_schema = schema;
+    /* A time schedule fires on the clock: there is no event for a filter to
+       judge, and the server refuses one on a new time schedule. Older ones may
+       still carry a filter that was never asked; it is not copied. */
+    if (job.kind !== "TIME") {
+        if (job.filter) body.filter_instruction = job.filter;
+        const schema = row["filter_output_schema"];
+        if (schema && typeof schema === "object") body.filter_output_schema = schema;
+    }
     if (job.kind === "WEBHOOK") {
         body.account_id = accountId;
         /* An agent's webhook names its trigger; a workflow's derives it and

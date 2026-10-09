@@ -72,12 +72,13 @@ async def test_on_pod_deleted_removes_pod_surfaces(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_on_pod_deleted_ignores_non_delete_events(monkeypatch):
+    """A member leaving is heard here too; see the contact keepers' e2e test."""
     service = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_service", lambda uow: service)
 
     event = {
-        "event_type": "pod.member.removed",
+        "event_type": "pod.member.added",
         "pod_id": str(uuid4()),
         "user_id": str(uuid4()),
     }

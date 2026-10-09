@@ -98,7 +98,7 @@ def allowed_actions_expr(
         ]
     empty_actions = _text_array([])
 
-    if ctx.actor_type == ActorType.ANONYMOUS:
+    if ctx.is_outsider:
         return _anonymous_allowed_actions_expr(
             resource_actions=resource_actions,
             visibility_col=visibility_col,
