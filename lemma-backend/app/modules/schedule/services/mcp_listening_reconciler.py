@@ -134,8 +134,12 @@ class McpListeningReconciler:
                     await self._unsubscribe(state.subscription_id)
                     done.orphans += 1
                 continue
-            if not schedule.is_active or schedule.pod_id is None:
+            if schedule.pod_id is None:
                 continue
+            # A paused schedule is reconciled too: its subscription keeps
+            # renewing on the author's account while it is paused, so an
+            # author who has left would otherwise keep listening until
+            # somebody resumed it.
             reason = await self._reason_to_stop(schedule, state)
             if reason is not None:
                 await self._turn_off(schedule, state, reason)
@@ -155,7 +159,11 @@ class McpListeningReconciler:
         self, schedule: ScheduleEntity, state: McpListening, reason: str
     ) -> None:
         """Off, routing key cleared, and said -- committed together -- and only
-        then unsubscribed, so a failed commit leaves the schedule as it was."""
+        then unsubscribed, so a failed commit leaves the schedule as it was.
+
+        A schedule somebody had already paused is not announced again: nothing
+        it was doing has stopped. Its reason is still written where its author
+        will look, and resuming it subscribes afresh."""
         config = {
             key: value
             for key, value in schedule.config.items()
@@ -169,18 +177,19 @@ class McpListeningReconciler:
                 last_error=WHY[reason]
                 + (f" ({state.last_error})" if state.last_error else ""),
             )
-            uow.collect_events(
-                [
-                    ScheduleDeactivated(
-                        schedule_id=schedule.id,
-                        user_id=schedule.user_id,
-                        pod_id=schedule.pod_id,
-                        schedule_type=schedule.schedule_type,
-                        consecutive_failures=state.renew_failures,
-                        reason=reason,
-                    )
-                ]
-            )
+            if schedule.is_active:
+                uow.collect_events(
+                    [
+                        ScheduleDeactivated(
+                            schedule_id=schedule.id,
+                            user_id=schedule.user_id,
+                            pod_id=schedule.pod_id,
+                            schedule_type=schedule.schedule_type,
+                            consecutive_failures=state.renew_failures,
+                            reason=reason,
+                        )
+                    ]
+                )
             await uow.commit()
         logger.info(
             "schedule.mcp_listening.turned_off",

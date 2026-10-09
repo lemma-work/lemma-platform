@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -129,15 +130,52 @@ async def _wait_for_run_count(
 TRIGGER_ID = "github:http:pull_request"
 
 
+async def _github_account(db_session: AsyncSession, org_id: str, user_id: str) -> str:
+    """The account the App install redirected back with, carrying the
+    installation. The routing key comes from it, never from the author."""
+    from app.modules.connectors.infrastructure.models.account import Account
+    from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+
+    auth_config = AuthConfig(
+        organization_id=org_id,
+        connector_id="github",
+        kind="http",
+        name=f"github-{INSTALLATION_ID}-{uuid4().hex[:8]}",
+    )
+    db_session.add(auth_config)
+    await db_session.flush()
+    account = Account(
+        user_id=user_id,
+        organization_id=org_id,
+        connector_id="github",
+        auth_config_id=auth_config.id,
+        external_ref=INSTALLATION_ID,
+        credentials={"access_token": "gho_x"},
+    )
+    db_session.add(account)
+    await db_session.commit()
+    return str(account.id)
+
+
 async def _github_schedule(
-    client: AsyncClient, db_session: AsyncSession, org_id: str, *, config: dict
+    client: AsyncClient,
+    db_session: AsyncSession,
+    org_id: str,
+    *,
+    config: dict,
+    user_id: str,
 ) -> tuple[str, str]:
+    """A workflow on GitHub's pull requests, listening through an account.
+
+    `config` may still name `installation_id`: it is dropped, as anything an
+    author types there is, and bound again from the account."""
     await _seed_connector_trigger(
         db_session,
         connector_id="github",
         trigger_id=TRIGGER_ID,
         event_type="pull_request",
     )
+    account_id = await _github_account(db_session, org_id, user_id)
     pod_id = await _create_pod(client, org_id)
     workflow = await _create_workflow(
         client,
@@ -157,6 +195,7 @@ async def _github_schedule(
         pod_id,
         schedule_type=ScheduleType.WEBHOOK.value,
         workflow_name=workflow["name"],
+        account_id=account_id,
         config=config,
     )
     return pod_id, schedule["id"]
@@ -164,13 +203,18 @@ async def _github_schedule(
 
 @pytest.mark.asyncio
 async def test_a_signed_pull_request_delivery_starts_one_run(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession, worker
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
 ):
     _ = worker
     _, schedule_id = await _github_schedule(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -187,7 +231,11 @@ async def test_a_signed_pull_request_delivery_starts_one_run(
 
 @pytest.mark.asyncio
 async def test_a_redelivery_does_not_run_the_schedule_twice(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession, worker
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
 ):
     """GitHub reissues the delivery id, so it cannot be the idempotency key.
 
@@ -199,6 +247,7 @@ async def test_a_redelivery_does_not_run_the_schedule_twice(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -247,12 +296,16 @@ async def test_a_redelivery_does_not_run_the_schedule_twice(
 
 @pytest.mark.asyncio
 async def test_an_unsigned_delivery_is_refused_and_stores_nothing(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
 ):
     _, schedule_id = await _github_schedule(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -267,7 +320,10 @@ async def test_an_unsigned_delivery_is_refused_and_stores_nothing(
 
 @pytest.mark.asyncio
 async def test_another_installations_events_do_not_match(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
 ):
     """The routing key is tenant-scoped, and this is why.
 
@@ -279,6 +335,7 @@ async def test_another_installations_events_do_not_match(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -315,7 +372,11 @@ async def test_another_installations_events_do_not_match(
 
 @pytest.mark.asyncio
 async def test_a_schedule_scoped_to_actions_ignores_the_others(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession, worker
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
+    worker,
 ):
     """`actions` cannot live in the routing key.
 
@@ -328,6 +389,7 @@ async def test_a_schedule_scoped_to_actions_ignores_the_others(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -386,7 +448,10 @@ async def test_an_unknown_source_is_still_refused(authenticated_client: AsyncCli
 
 @pytest.mark.asyncio
 async def test_uninstalling_the_app_stands_its_schedules_down(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
 ):
     """An uninstall invalidates everything at once, and silently.
 
@@ -402,6 +467,7 @@ async def test_uninstalling_the_app_stands_its_schedules_down(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,
@@ -432,7 +498,10 @@ async def test_uninstalling_the_app_stands_its_schedules_down(
 
 @pytest.mark.asyncio
 async def test_another_installations_uninstall_leaves_this_one_alone(
-    authenticated_client: AsyncClient, fixed_test_org, db_session: AsyncSession
+    authenticated_client: AsyncClient,
+    fixed_test_user,
+    fixed_test_org,
+    db_session: AsyncSession,
 ):
     from sqlalchemy import select
 
@@ -442,6 +511,7 @@ async def test_another_installations_uninstall_leaves_this_one_alone(
         authenticated_client,
         db_session,
         fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
         config={
             "source": "github",
             "installation_id": INSTALLATION_ID,

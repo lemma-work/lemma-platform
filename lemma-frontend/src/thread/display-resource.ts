@@ -88,7 +88,15 @@ export function resourceHref(site: string, podId: string, resource: DisplayResou
     const name = resource.name ? encodeURIComponent(resource.name) : null;
     switch (resource.type) {
         case "BROWSER":
-            return resource.liveUrl && !liveEnded(resource, now) ? resource.liveUrl : null;
+            /* Opened in a new tab from a link: only a web address, whatever
+               the deployment's sandbox URL setting says. */
+            if (!resource.liveUrl || liveEnded(resource, now)) return null;
+            try {
+                const protocol = new URL(resource.liveUrl).protocol;
+                return protocol === "http:" || protocol === "https:" ? resource.liveUrl : null;
+            } catch {
+                return null;
+            }
         case "FILE": {
             const segments = (resource.path ?? "").split("/").filter(Boolean).map(encodeURIComponent);
             return segments.length ? base + "/file/" + segments.join("/") : base + "/files";

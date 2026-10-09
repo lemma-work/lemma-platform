@@ -48,3 +48,12 @@ test("a live browser whose address has expired stops offering it", async () => {
     assert.equal(liveEnded(ended, now), true);
     assert.equal(liveEnded(parseDisplayResource({ type: "BROWSER" }, { url: "https://b.example" })!, now), false);
 });
+
+test("a live browser link is only ever a web address", () => {
+    const now = Date.parse("2026-10-09T12:00:00Z");
+    const at = (url: string) => resourceHref(SITE, POD, parseDisplayResource({ type: "BROWSER" }, { url })!, now);
+    assert.equal(at("https://browser.example/live"), "https://browser.example/live");
+    assert.equal(at("javascript:alert(1)"), null);
+    assert.equal(at("data:text/html,hi"), null);
+    assert.equal(at("not a url"), null);
+});

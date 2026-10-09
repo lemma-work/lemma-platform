@@ -628,8 +628,10 @@ export function argumentValue(ask: EventArgument, typed: string): { value?: unkn
         return { value: raw === "true" };
     }
     if (ask.type === "integer") {
-        if (!/^-?\d+$/.test(raw)) return { problem: ask.name + " is a whole number." };
-        return { value: Number(raw) };
+        const value = Number(raw);
+        /* Past 2^53 a JavaScript number is not the integer that was typed. */
+        if (!/^-?\d+$/.test(raw) || !Number.isSafeInteger(value)) return { problem: ask.name + " is a whole number." };
+        return { value };
     }
     if (ask.type === "number") {
         const value = Number(raw);

@@ -130,15 +130,16 @@ class ScheduleService:
         """Create a new schedule and schedule/provider-create side effects."""
 
         schedule_create = schedule_create.model_copy(
-            update={
-                "name": schedule_name_for(schedule_create),
-                "config": authored_config(schedule_create.config),
-            }
+            update={"name": schedule_name_for(schedule_create)}
         )
         schedule_create = await self._resolve_create_target(schedule_create)
+        # After the target: a workflow's start merges its own trigger config
+        # in, and that is no more a provisioned routing key than what the
+        # author sent.
         schedule_create = schedule_create.model_copy(
             update={
-                "visibility": await self._resolve_create_visibility(schedule_create)
+                "visibility": await self._resolve_create_visibility(schedule_create),
+                "config": authored_config(schedule_create.config),
             }
         )
         await self._validate_name_available(schedule_create)

@@ -782,3 +782,32 @@ async def test_a_subscription_the_server_stopped_renewing_turns_the_schedule_off
     ).json()
     assert shown["last_error"].startswith("Turned off: the server stopped accepting")
     assert shown["listening"] is None
+
+
+async def test_a_paused_schedule_stops_listening_when_its_author_leaves(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    """Paused, its subscription still renews on the author's account; their
+    leaving must end that too, not wait for someone to resume it."""
+    _, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    schedule = await _schedule(
+        authenticated_client, pod_id, str(account.id), project="web"
+    )
+    [row] = await _subscriptions(db_session)
+    paused = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}", json={"is_active": False}
+    )
+    assert paused.status_code == 200, paused.text
+
+    async def gone(*_: object) -> bool:
+        return False
+
+    assert (await _reconciler(is_member=gone).run()).turned_off == 1
+
+    off = await _schedule_row(db_session, schedule["id"])
+    assert off.is_active is False
+    assert "provider_trigger_id" not in off.config
+    assert off.last_error.startswith("Turned off: the person whose account")
+    assert await _subscriptions(db_session) == []
+    assert row.remote_id in tracker.unsubscribed

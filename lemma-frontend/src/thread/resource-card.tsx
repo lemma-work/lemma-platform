@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { AppsIcon, FileIcon, TableIcon, AgentIcon, CodeIcon, WorkflowIcon, ClockIcon, ExternalIcon, GlobeIcon } from "@/ui/icons";
 import { siteUrl } from "@/session/client";
 import { FileView } from "./file-view";
@@ -33,6 +34,16 @@ export function ResourceCard({
 }) {
     const label = resourceLabel(resource);
     const ResourceIcon = RESOURCE_ICONS[resource.type];
+    /* A card left on screen re-renders when its browser address expires, so
+       it says Ended rather than keeping a Watch link that no longer works. */
+    const [, tick] = useState(0);
+    useEffect(() => {
+        if (resource.type !== "BROWSER" || !resource.liveUntil) return;
+        const wait = Date.parse(resource.liveUntil) - Date.now();
+        if (!Number.isFinite(wait) || wait <= 0) return;
+        const timer = setTimeout(() => tick((n) => n + 1), Math.min(wait + 50, 2 ** 31 - 1));
+        return () => clearTimeout(timer);
+    }, [resource.type, resource.liveUntil]);
 
     if (resource.type === "WIDGET") {
         return (

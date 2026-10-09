@@ -456,6 +456,8 @@ test("an event's arguments are sent as the type the server declares, optional on
 
     const draft = { ...blankDraft(), name: "triage", when: "server" as const, serverEvent: event, agentName: "pod_default" };
     assert.match(draftProblems({ ...draft, eventArguments: { project: "web", limit: "five" } }).event ?? "", /limit is a whole number/);
+    assert.match(draftProblems({ ...draft, eventArguments: { project: "web", limit: "90071992547409930" } }).event ?? "", /limit is a whole number/,
+        "a number past 2^53 would reach the server as a different number");
     assert.match(draftProblems({ ...draft, eventArguments: { project: "web", state: "merged" } }).event ?? "", /one of open, closed/);
     assert.deepEqual(draftProblems({ ...draft, eventArguments: { project: "web", limit: "5", urgent: "true" } }), {});
 
