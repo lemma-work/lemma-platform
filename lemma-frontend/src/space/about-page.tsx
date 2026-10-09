@@ -12,17 +12,31 @@ import { RunsOn } from "@/shell/runs-on";
 import { WhoCanJoin } from "@/shell/who-can-join";
 import { AtTheDoor } from "@/shell/at-the-door";
 import { AddPeople } from "@/shell/add-people";
+import { ModelsSection } from "@/org/models";
+import { ConnectorsSection } from "@/org/connectors";
+import { OrgUsageSection } from "@/org/org-usage";
+import { UsagePanel } from "@/usage/usage-panel";
 import { ChevronRightIcon, EditIcon, LockIcon, PlusIcon } from "@/ui/icons";
+import { AgentAccess } from "./agent-access";
 import { AgentMark } from "./agent-mark";
 import { WhatItRemembers } from "./what-it-remembers";
 import { sayHired } from "./teammates";
 import { TeammateFace } from "./teammate-face";
 import { DeleteTeammate } from "./delete-teammate";
 
-/** Where a link into About lands. Each is a section of the one page. */
-export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "model";
+/** Where a link into About lands. Each is a section of the one page.
+ *
+ *  The last five are the space's own settings — how it is reached from an AI
+ *  tool, the accounts and models the organization shares, and what has been
+ *  spent. They are sections here rather than a page of their own: one page
+ *  about a teammate, and one way into it, at the top of its sidebar. */
+export type AboutSection = "people" | "channels" | "skills" | "memory" | "schedules" | "agents" | "model"
+    | "ai-tools" | "connectors" | "models" | "usage" | "org-usage";
 
-const SECTIONS: readonly string[] = ["people", "channels", "skills", "memory", "schedules", "agents", "model"] satisfies AboutSection[];
+const SECTIONS: readonly string[] = [
+    "people", "channels", "skills", "memory", "schedules", "agents", "model",
+    "ai-tools", "connectors", "models", "usage", "org-usage",
+] satisfies AboutSection[];
 
 /** Whether a word from an address is one of About's sections. */
 export function isAboutSection(value: string | null | undefined): value is AboutSection {
@@ -37,9 +51,10 @@ export function isAboutSection(value: string | null | undefined): value is About
  *  These used to be settings of a place. They are facts about the teammate,
  *  and read that way: "what Kit has been taught", not "Skills". Each section
  *  is the same working component Settings stacked before — nothing here is a
- *  second copy of how a schedule or a channel works. What is left in
- *  Settings is about the space rather than the teammate. */
-export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onAskFor, onOpenRun, onOpenConversation, onFile, onSettings, onDeleted }: {
+ *  second copy of how a schedule or a channel works. What Settings had left
+ *  was about the space rather than the teammate, and it is at the foot of
+ *  this page: there is no second page, and no second door into one. */
+export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, onOpenAgent, onAskFor, onOpenRun, onOpenConversation, onFile, onDeleted }: {
     pod: Pod;
     orgId: string | null;
     orgName: string;
@@ -56,7 +71,6 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
     onOpenRun: (runId: string, label: string) => void;
     onOpenConversation: (id: string) => void;
     onFile: (path: string) => void;
-    onSettings: () => void;
     /** The teammate has just been deleted: leave its space. */
     onDeleted: () => void;
 }) {
@@ -117,10 +131,50 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
                     <RunsOn podId={pod.id} orgId={pod.orgId} />
                 </Section>
 
-                <p className="aboutpage__foot">
-                    AI tools, the models {orgName} can use, and usage are in{" "}
-                    <button className="linkish" onClick={onSettings}>Settings</button>.
-                </p>
+                {/* The space's own settings, after everything about the
+                    teammate. The gear at the top of the sidebar lands on the
+                    first of them, which is what makes them noticeable. */}
+                <Section id="ai-tools" title="AI tools" note={"Use " + pod.name + " from Claude, ChatGPT, Claude Code and other AI tools."}>
+                    <AgentAccess pod={pod} />
+                </Section>
+
+                {orgId ? (
+                    /* The accounts are the organization's: connected once, by
+                       whoever may, and reached by every teammate in it. Saying
+                       so up front stops "disconnect" from reading as something
+                       that only touches this teammate. */
+                    <Section id="connectors" title={"Connectors in " + orgName}
+                        note={"Accounts " + orgName + " has connected — Gmail, Slack, GitHub and the rest. They belong to the organization, not to " + pod.name + ", so every teammate here shares them."}>
+                        <ConnectorsSection orgId={orgId} />
+                    </Section>
+                ) : (
+                    <Section id="connectors" title="Connectors">
+                        <p className="aboutpage__quiet">No organization to read connectors from.</p>
+                    </Section>
+                )}
+
+                {orgId ? (
+                    /* The catalog is the organization's too: a provider key is
+                       bought and billed once, for every teammate. What this
+                       one thinks with is the section above. */
+                    <Section id="models" title={"Models available in " + orgName} note="Providers, keys and computers every teammate here can use.">
+                        <ModelsSection orgId={orgId} />
+                    </Section>
+                ) : (
+                    <Section id="models" title="Models">
+                        <p className="aboutpage__quiet">No organization to read models from.</p>
+                    </Section>
+                )}
+
+                <Section id="usage" title="Your usage" note="What your conversations and runs have used.">
+                    <UsagePanel orgId={orgId} />
+                </Section>
+
+                {orgId && (
+                    <Section id="org-usage" title={orgName + " usage"} note="Across every teammate and person in the organization.">
+                        <OrgUsageSection orgId={orgId} />
+                    </Section>
+                )}
 
                 {/* Last, and after everything that says how it works: the one
                     act on this page that cannot be taken back. Not one of the
@@ -132,8 +186,8 @@ export function AboutPage({ pod, orgId, orgName, section, request = 0, onAsk, on
 }
 
 /** The page's sections, as a row that stays at the top while you scroll.
- *  About grew to seven sections; this is how you get to the fifth without
- *  scrolling past the first four. The section in view is marked. */
+ *  About grew past a screenful; this is how you get to the last of them
+ *  without scrolling past the rest. The section in view is marked. */
 const JUMPS: { id: AboutSection; label: string }[] = [
     { id: "people", label: "People" },
     { id: "channels", label: "Channels" },
@@ -142,6 +196,11 @@ const JUMPS: { id: AboutSection; label: string }[] = [
     { id: "schedules", label: "Standing work" },
     { id: "agents", label: "Hands work to" },
     { id: "model", label: "Runs on" },
+    { id: "ai-tools", label: "AI tools" },
+    { id: "connectors", label: "Connectors" },
+    { id: "models", label: "Models" },
+    { id: "usage", label: "Usage" },
+    { id: "org-usage", label: "Org usage" },
 ];
 
 function Jumps({ page }: { page: RefObject<HTMLDivElement | null> }) {

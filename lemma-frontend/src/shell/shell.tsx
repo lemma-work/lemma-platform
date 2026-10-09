@@ -11,7 +11,7 @@ import { ViewActions } from "./view-actions";
 import { HumanProfile } from "@/session/human-profile";
 import { FirstProfileStep } from "@/session/first-profile-step";
 import { AllowanceNote } from "@/usage/allowance-note";
-import { MinimizeIcon, ChevronUpIcon, SidebarIcon, MenuIcon, PlusIcon, SearchIcon, LinkIcon } from "@/ui/icons";
+import { MinimizeIcon, ChevronUpIcon, SidebarIcon, MenuIcon, PlusIcon, SearchIcon, LinkIcon, SettingsIcon } from "@/ui/icons";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes } from "react";
 import { PaneVisibleContext } from "./pane-visible";
@@ -29,7 +29,6 @@ import { SignInPane } from "@/computer/sign-in-pane";
 import { AgentPage } from "@/space/agent-page";
 import { WorkflowPage } from "@/space/workflow-page";
 import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
-import { SettingsPage, type SettingsSection as SpaceSettingsSection } from "@/space/settings-page";
 import { WorkflowsPage } from "@/space/workflows-page";
 import { GroupsPage } from "@/space/groups-page";
 import { ContactsPage } from "@/space/contacts-page";
@@ -152,7 +151,7 @@ function Pane({ hidden, onStage, children, ...rest }: HTMLAttributes<HTMLDivElem
     return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden && onStage}>{children}</PaneVisibleContext.Provider></div>;
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["contacts", "Contacts"], ["settings", "Settings"], ["about", "About"]] as [SpaceView, string][])
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
@@ -608,7 +607,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const [shareOpen, setShareOpen] = useState(false);
     /* Share opened to add somebody — a group page's Invite. */
     const [shareAdding, setShareAdding] = useState(false);
-    const [settingsSection, setSettingsSection] = useState<SpaceSettingsSection>("agents");
     const shareSubject: ShareSubject = !chatResource ? { kind: "space" }
         : chatResource.kind === "file" ? { kind: "file", path: chatResource.name, label: chatResource.label }
         : { kind: chatResource.kind === "app" ? "app" : "table", label: chatResource.label };
@@ -936,6 +934,10 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         let wanted = address.tabId;
         for (let hops = 0; renamed.current[pod.id + "|" + wanted] && hops < 20; hops++) wanted = renamed.current[pod.id + "|" + wanted];
         if (wanted !== address.tabId) replaceNext.current = true;
+        /* The space's settings are sections of the teammate's page now, so a
+           tab remembered from before the merge, or a link that still names
+           them, opens that page instead of falling back to Home. */
+        if (wanted === "space:settings") { wanted = "space:about"; replaceNext.current = true; }
 
         setTabs((previous) => (previous[pod.id] === wanted ? previous : { ...previous, [pod.id]: wanted }));
         if (address.agentName) setOpenAgentName(address.agentName);
@@ -1398,6 +1400,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     aria-label={"About " + pod.name} onClick={() => { openAbout(null); setMobileOpen(false); }}>
                                     <span className="side__mate-name">{pod.name}</span>
                                 </button>
+                                {/* What this space can be reached from, and what
+                                    it may spend: sections of that page, and the
+                                    one door to them. At the top beside the name,
+                                    because at the foot nobody found it. */}
+                                <button className="icon-button side__gear" title="Settings" aria-label={"Settings for " + pod.name}
+                                    onClick={() => { openAbout("ai-tools"); setMobileOpen(false); }}>
+                                    <SettingsIcon size={18} />
+                                </button>
                                 {/* On a phone the toolbar is already full; the
                                     drawer has space for it. */}
                                 <button className="icon-button side__search" title="Search" aria-label="Search"
@@ -1416,7 +1426,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 recents={((pod && extraTabs[pod.id]) || []).slice().reverse()}
                                 onPick={(id) => { pickTab(id); setMobileOpen(false); }}
                                 onWorkflows={() => { pickTab("space:workflows"); setMobileOpen(false); }}
-                                onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); setMobileOpen(false); }}
                                 openChatId={openConversationId}
                                 onOpenChat={(id) => { setConversationId(id); pickTab("conversation"); setMobileOpen(false); }}
                             />
@@ -1878,7 +1887,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onFile={(path) => openFile(path, "space:about")}
-                                            onSettings={() => { setSettingsSection("agents"); pickTab("space:settings"); }}
                                             onDeleted={() => goToTeam(null)}
                                         />
                                     ) : tab.view === "chats" ? (
@@ -1898,15 +1906,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         groupsOn && <GroupsPage pod={pod} onOpenGroup={openGroup} onConnect={() => setReaching(true)} />
                                     ) : tab.view === "contacts" ? (
                                         contactsOn && <ContactsPage pod={pod} />
-                                    ) : tab.view === "settings" ? (
-                                        <SettingsPage
-                                            pod={pod}
-                                            orgId={activeOrgId}
-                                            orgName={activeOrg?.name ?? "this organization"}
-                                            section={settingsSection}
-                                            onSection={setSettingsSection}
-                                            onAbout={() => openAbout(null)}
-                                        />
                                     ) : <AllView
                                         podId={pod.id}
                                         spaceName={pod.name}

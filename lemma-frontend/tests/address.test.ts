@@ -34,7 +34,6 @@ const PLACES: [Address, string][] = [
     [at("space:groups"), "/t/" + POD + "/groups"],
     [at("space:contacts"), "/t/" + POD + "/contacts"],
     [at("group:7f3c9a2e-4b1d-4e8a"), "/t/" + POD + "/group/7f3c9a2e-4b1d-4e8a"],
-    [at("space:settings"), "/t/" + POD + "/settings"],
     [at("space:about"), "/t/" + POD + "/about"],
     [at("library"), "/t/" + POD + "/library"],
     [at("history"), "/t/" + POD + "/history"],
@@ -52,6 +51,13 @@ test("every place has a URL, and every URL reads back as the place", () => {
         assert.equal(writeAddress(address), url, "writing " + (address.tabId ?? "the teammate"));
         assert.deepEqual(readAddress(url), address, "reading " + url);
     }
+});
+
+test("a link to the space's old Settings page opens the teammate's page", () => {
+    // The space's settings are sections of the teammate's page now. An address
+    // from before that opens the page carrying them, rather than falling back
+    // to wherever this teammate happened to be left.
+    assert.deepEqual(readAddress("/t/" + POD + "/settings"), at("space:about"));
 });
 
 test("every teammate at once has an address of its own", () => {
