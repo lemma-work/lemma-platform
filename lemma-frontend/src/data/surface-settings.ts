@@ -1,7 +1,7 @@
 import type { Surface } from "./types";
 import { isPodDefaultAgent } from "./agent-names";
 import { isGroupPlatform } from "./groups";
-import type { AgentSurfaceResponse, SurfaceUpdateRequest } from "lemma-sdk";
+import type { AgentSurfaceResponse, SurfaceContactsConfig, SurfaceUpdateRequest } from "lemma-sdk";
 
 export interface SurfaceDraft {
     agent: string;
@@ -14,6 +14,19 @@ export interface SurfaceDraft {
     /** The bot answers people outside the space, from what the space made
      *  Public, in every group it is in. On unless it was switched off. */
     answersOutsiders: boolean;
+    /** Whom the bot answers in private chats beyond the space's people. */
+    contactsAnswer: "off" | "known" | "anyone";
+    originalContactsAnswer: "off" | "known" | "anyone";
+}
+
+/** Platforms whose bot can answer a contact in a private chat. */
+export const contactsSupported = (platform: string) => ["WHATSAPP", "TELEGRAM", "RESEND"].includes(platform);
+
+/** Whether this bot is the space's own -- its own token, number or address --
+ *  which is the only kind that answers contacts. Lemma's shared bot is every
+ *  space's at once, and a stranger writing to it is writing to Lemma. */
+export function isOwnBot(surface: AgentSurfaceResponse): boolean {
+    return surface.platform === "RESEND" || Boolean(surface.account_id) || surface.credential_mode === "CUSTOM";
 }
 
 export const routesSupported = (platform: string) => ["SLACK", "TEAMS"].includes(platform);
@@ -31,7 +44,14 @@ export function surfaceDraft(surface: AgentSurfaceResponse): SurfaceDraft {
         emails: (surface.config.identity?.allowed_email_addresses ?? []).join(", "),
         allowSend: surface.config.send_policy?.allow_send ?? false,
         answersOutsiders: surface.config.groups?.answers_outsiders !== false,
+        contactsAnswer: contactsAnswerOf(surface),
+        originalContactsAnswer: contactsAnswerOf(surface),
     };
+}
+
+function contactsAnswerOf(surface: AgentSurfaceResponse): "off" | "known" | "anyone" {
+    const answer = surface.config.contacts?.answer;
+    return answer === "known" || answer === "anyone" ? answer : "off";
 }
 
 const split = (value: string) => [...new Set(value.split(/[,\n]/).map(part => part.trim()).filter(Boolean))];
@@ -48,6 +68,11 @@ export function surfacePatch(platform: string, draft: SurfaceDraft): SurfaceUpda
             /* Only where the bot can be in a group; elsewhere the section is
                left as it is. */
             ...(isGroupPlatform(platform) ? { groups: { answers_outsiders: draft.answersOutsiders } } : {}),
+            /* Only when it changed: the API keeps who looks after contacts,
+               and makes it whoever turned them on. */
+            ...(contactsSupported(platform) && draft.contactsAnswer !== draft.originalContactsAnswer
+                ? { contacts: { answer: draft.contactsAnswer as SurfaceContactsConfig["answer"] } }
+                : {}),
         },
     };
 }

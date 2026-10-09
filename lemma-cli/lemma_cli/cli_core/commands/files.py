@@ -692,7 +692,7 @@ def list_shares(
 @app.command("unshare")
 def revoke_share(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="The code from the /s/<code> link."),
+    code: str = typer.Argument(..., help="The code from the /public/s/<code> link."),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Kill a public link now, rather than waiting out its expiry.

@@ -24,6 +24,7 @@ from uuid import UUID
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.usage.domain.accounting import OUTSIDE_AUDIENCE_SOURCES
 from app.modules.usage.infrastructure.cost_expressions import recorded_cost
 from app.modules.usage.infrastructure.models import UsageLimitCounter
 from app.modules.usage.infrastructure.models import UsageRecord as UsageRecordModel
@@ -72,7 +73,12 @@ async def system_cost_by_window(
     if organization_id is not None:
         stmt = stmt.where(UsageRecordModel.organization_id == organization_id)
     if user_id is not None:
-        stmt = stmt.where(UsageRecordModel.user_id == user_id)
+        # A member's spend is never what answering people outside cost: that
+        # is the organization's, and counts towards its contacts cap.
+        stmt = stmt.where(
+            UsageRecordModel.user_id == user_id,
+            UsageRecordModel.source_type.notin_(OUTSIDE_AUDIENCE_SOURCES),
+        )
     if exclude_organization_ids:
         stmt = stmt.where(
             or_(

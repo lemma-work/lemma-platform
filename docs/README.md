@@ -41,6 +41,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Database connection scope](design/db-connection-scope.md) | How long a pooled connection is held, the gates that keep it short, and what authorization costs |
 | [App and function versions](design/app-function-versioning.md) | Revision identity, previews, rollback, bounded retention, and concurrent cleanup |
 | [Product analytics](design/product-analytics.md) | The product-analytics plane, its event contract, origins, and the privacy boundary |
+| [Contacts](design/contacts.md) | Draft: people a pod knows who aren't members — identity without sign-in, scoped authority, hand-off, forms |
 
 The sandbox set breaks down further:
 [protocol](architecture/sandbox/sandbox-protocol.md) ·

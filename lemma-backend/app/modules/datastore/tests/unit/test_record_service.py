@@ -1044,10 +1044,18 @@ def _rls_table_entity() -> DatastoreTableEntity:
     )
 
 
+def _member_ctx() -> AsyncMock:
+    """A member's context: no contact on it, and not an outsider."""
+    ctx = AsyncMock()
+    ctx.contact_id = None
+    ctx.is_outsider = False
+    return ctx
+
+
 async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin():
     # Without admin mode, an RLS query is row-scoped to the caller even when they
     # administer the table — the admin signal is never consulted.
-    ctx = AsyncMock()
+    ctx = _member_ctx()
     ctx.can.return_value = True  # caller administers the table
     table_service = AsyncMock()
     table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
@@ -1069,13 +1077,15 @@ async def test_execute_readonly_query_scopes_to_user_by_default_even_for_admin()
     table_service.get_tables.assert_awaited_once()  # per-table read authorization
     ctx.can.assert_not_awaited()
     assert (
-        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        record_repository.execute_readonly_query.await_args.kwargs[
+            "principal"
+        ].is_pod_admin
         is False
     )
 
 
 async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on_all_rls_tables():
-    ctx = AsyncMock()
+    ctx = _member_ctx()
     ctx.can.return_value = True  # caller administers the table
     table_service = AsyncMock()
     table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
@@ -1102,7 +1112,9 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
     assert (rows, total) == ([{"merchant": "x"}], 1)
     table_service.get_tables.assert_awaited_once()  # per-table read authorization
     assert (
-        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        record_repository.execute_readonly_query.await_args.kwargs[
+            "principal"
+        ].is_pod_admin
         is True
     )
 
@@ -1110,7 +1122,7 @@ async def test_execute_readonly_query_admin_mode_grants_admin_rows_when_admin_on
 async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin():
     from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 
-    ctx = AsyncMock()
+    ctx = _member_ctx()
     ctx.can.return_value = False  # caller does not administer the table
     table_service = AsyncMock()
     table_service.get_tables.return_value = {"expenses": _rls_table_entity()}
@@ -1134,7 +1146,7 @@ async def test_execute_readonly_query_admin_mode_rejected_when_not_table_admin()
 
 
 async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced():
-    ctx = AsyncMock()
+    ctx = _member_ctx()
     table_service = AsyncMock()
     record_repository = AsyncMock()
     record_repository.execute_readonly_query.return_value = ([{"n": 1}], 1, False)
@@ -1155,7 +1167,9 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     ctx.require.assert_awaited()
     table_service.get_table.assert_not_awaited()
     assert (
-        record_repository.execute_readonly_query.await_args.kwargs["is_pod_admin"]
+        record_repository.execute_readonly_query.await_args.kwargs[
+            "principal"
+        ].is_pod_admin
         is False
     )
 

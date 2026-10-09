@@ -1,4 +1,6 @@
 import { key } from "@/session/storage";
+import { readOrigins, type Contact, type ContactReach, type ContactsCap, type WebWidget, type WidgetAnswer, type WidgetDraft } from "./contacts";
+import type { Audience, OfferedColumn, TableOpening } from "./public-rows";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
 import type { Conversation, FileContent, Invitation, LibraryItem, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
@@ -2504,6 +2506,71 @@ async function sampleFile(path: string): Promise<FileContent> {
     };
 }
 
+/* ── contacts ───────────────────────────────────────────────────────── */
+
+const CONTACTS = new Map<string, Contact[]>();
+const WIDGETS = new Map<string, WebWidget[]>();
+const REACH = new Map<string, ContactReach>();
+const SAMPLE_CAP: ContactsCap = { limit: 25, spentThisMonth: 3.2 };
+
+function sampleContacts(podId: string): Contact[] {
+    if (!CONTACTS.has(podId)) {
+        const day = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+        CONTACTS.set(podId, [
+            { id: podId + "-contact-dana", name: "Dana Ruiz", createdAt: day(1), handles: [{ kind: "EMAIL", value: "dana@client.example", strength: "CHANNEL" }] },
+            { id: podId + "-contact-tiago", name: "Tiago", createdAt: day(3), handles: [{ kind: "PHONE", value: "16505551234", strength: "CHANNEL" }] },
+            { id: podId + "-contact-ana", name: null, createdAt: day(6), handles: [{ kind: "HOST", value: "w:cust-42", strength: "HOST" }, { kind: "EMAIL", value: "ana@shop.example", strength: "CODE" }] },
+        ]);
+    }
+    return CONTACTS.get(podId) ?? [];
+}
+
+/** A sample widget's signing secret. Shaped like the real thing, so it is made
+ *  the way a secret must be made, even though nothing ever checks it. */
+function sampleSecret(): string {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return "sk_sample_" + Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** What each sample table offers people outside, and what is open. */
+const SAMPLE_OFFERED: Record<string, OfferedColumn[]> = {
+    orders: [
+        { name: "customer_name", type: "TEXT", required: true, options: [], description: "Your name", input: "text" },
+        { name: "email", type: "TEXT", required: true, options: [], description: null, input: "email" },
+        { name: "item", type: "TEXT", required: false, options: [], description: null, input: "text" },
+        { name: "quantity", type: "INTEGER", required: false, options: [], description: null, input: "number" },
+        { name: "notes", type: "TEXT", required: false, options: [], description: null, input: "textarea" },
+    ],
+    price_list: [
+        { name: "product", type: "TEXT", required: true, options: [], description: null, input: "text" },
+        { name: "price", type: "FLOAT", required: false, options: [], description: null, input: "number" },
+    ],
+};
+const SAMPLE_OPEN = new Map<string, { audience: Audience; columns: string[] }>();
+
+function sampleOpening(table: string): TableOpening {
+    const offered = SAMPLE_OFFERED[table];
+    if (!offered) throw Object.assign(new Error("There is no table called " + table), { statusCode: 404 });
+    const open = SAMPLE_OPEN.get(table);
+    return { table, perUser: false, contactOwned: table === "orders", offered, audience: open?.audience ?? null, columns: open?.columns ?? [] };
+}
+
+function sampleReach(podId: string): ContactReach {
+    if (!REACH.has(podId)) {
+        REACH.set(podId, {
+            tables: [
+                { name: "orders", contactOwned: true, perPerson: false, contactColumns: ["item", "status"] },
+                { name: "price_list", contactOwned: false, perPerson: false, contactColumns: [] },
+            ],
+            functions: [
+                { name: "create_ticket", description: "Open a support ticket", contactsInvoke: true },
+                { name: "refund_order", description: "Refund an order in full", contactsInvoke: false },
+            ],
+        });
+    }
+    return REACH.get(podId) as ContactReach;
+}
+
 export const fixtureSource: PodSource = {
     label: "sample",
     async listOrgs() {
@@ -2658,7 +2725,7 @@ export const fixtureSource: PodSource = {
         await wait(260);
         const code = "sample" + Math.random().toString(36).slice(2, 8);
         const link = {
-            rawUrl: "https://api.example/s/" + code,
+            rawUrl: "https://api.example/public/s/" + code,
             readUrl: (typeof window === "undefined" ? "" : window.location.origin) + "/d/" + code,
             code,
             expiresAt: new Date(Date.now() + (options?.expiresSeconds ?? 10800) * 1000).toISOString(),
@@ -2882,6 +2949,106 @@ export const fixtureSource: PodSource = {
             waiting: entry.waiting.filter((ask) => ask.notification_id !== notificationId),
             lines: [...entry.lines, relayed],
         } : candidate);
+    },
+    async listContacts(podId: string) {
+        await wait(140);
+        return sampleContacts(podId);
+    },
+    async renameContact(podId: string, contactId: string, name: string | null) {
+        await wait(300);
+        const contact = sampleContacts(podId).find((entry) => entry.id === contactId);
+        if (!contact) throw Object.assign(new Error("That contact is not here any more."), { statusCode: 404 });
+        contact.name = name?.trim() || null;
+        return contact;
+    },
+    async forgetContact(podId: string, contactId: string) {
+        await wait(300);
+        CONTACTS.set(podId, sampleContacts(podId).filter((entry) => entry.id !== contactId));
+    },
+    async exportContact(podId: string, contactId: string) {
+        await wait(300);
+        const contact = sampleContacts(podId).find((entry) => entry.id === contactId);
+        if (!contact) throw Object.assign(new Error("That contact is not here any more."), { statusCode: 404 });
+        return {
+            contact: { id: contact.id, display_name: contact.name, created_at: contact.createdAt, identities: contact.handles.map((h) => ({ kind: h.kind, value: h.value, strength: h.strength, verified_at: contact.createdAt })) },
+            conversations: [],
+        } as unknown as Awaited<ReturnType<PodSource["exportContact"]>>;
+    },
+    async followUpContact() {
+        await wait(500);
+        return { delivered: true, platform: "RESEND" };
+    },
+    async listWidgets(podId: string) {
+        await wait(120);
+        return WIDGETS.get(podId) ?? [];
+    },
+    async createWidget(podId: string, draft: WidgetDraft) {
+        await wait(500);
+        const id = "sample-widget-" + Date.now().toString(16);
+        const key = "pk_sample" + id.slice(-6);
+        const widget: WebWidget = {
+            id, name: draft.name.trim(), publicKey: key, allowedOrigins: readOrigins(draft.origins),
+            answer: draft.answer, lookedAfterBy: "sample-user",
+            embed: `<script src="https://api.example.invalid/public/web/widget.js" data-lemma-key="${key}" async></script>`,
+            pageUrl: `https://api.example.invalid/public/web/${key}/page`,
+        };
+        WIDGETS.set(podId, [...(WIDGETS.get(podId) ?? []), widget]);
+        return { ...widget, signingSecret: sampleSecret() };
+    },
+    async updateWidget(podId: string, widgetId: string, change: { answer?: WidgetAnswer; origins?: string[] }) {
+        await wait(300);
+        const widget = (WIDGETS.get(podId) ?? []).find((entry) => entry.id === widgetId);
+        if (!widget) throw Object.assign(new Error("That widget is not here any more."), { statusCode: 404 });
+        if (change.answer) widget.answer = change.answer;
+        if (change.origins) widget.allowedOrigins = change.origins;
+        return widget;
+    },
+    async reissueWidget() {
+        await wait(300);
+        return sampleSecret();
+    },
+    async deleteWidget(podId: string, widgetId: string) {
+        await wait(300);
+        WIDGETS.set(podId, (WIDGETS.get(podId) ?? []).filter((entry) => entry.id !== widgetId));
+    },
+    async tableOpening(_podId: string, table: string) {
+        await wait(160);
+        return sampleOpening(table);
+    },
+    async openTable(_podId: string, table: string, audience: Audience, columns: string[]) {
+        await wait(300);
+        SAMPLE_OPEN.set(table, { audience, columns });
+        return sampleOpening(table);
+    },
+    async closeTable(_podId: string, table: string) {
+        await wait(300);
+        SAMPLE_OPEN.delete(table);
+    },
+    async contactReach(podId: string) {
+        await wait(160);
+        return sampleReach(podId);
+    },
+    async setTableContactOwned(podId: string, table: string, on: boolean, columns?: string[]) {
+        await wait(300);
+        const row = sampleReach(podId).tables.find((entry) => entry.name === table);
+        if (row) {
+            row.contactOwned = on;
+            row.contactColumns = on ? (columns ?? row.contactColumns) : [];
+        }
+    },
+    async setFunctionContactsInvoke(podId: string, fn: string, on: boolean) {
+        await wait(300);
+        const row = sampleReach(podId).functions.find((entry) => entry.name === fn);
+        if (row) row.contactsInvoke = on;
+    },
+    async contactsCap() {
+        await wait(120);
+        return { ...SAMPLE_CAP };
+    },
+    async setContactsCap(_orgId: string, limit: number | null) {
+        await wait(300);
+        SAMPLE_CAP.limit = limit;
+        return { ...SAMPLE_CAP };
     },
     async createSurfaceAccount() { throw new Error("Connect accounts in a connected workspace."); },
     async listConnectable() {

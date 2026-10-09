@@ -125,16 +125,45 @@ def test_the_grants_own_url_shape_reaches_the_proxy() -> None:
     from app.modules.workspace.api.controllers.port_proxy_controller import router
 
     paths = {getattr(route, "path", "") for route in router.routes}
-    assert "/workspace-ports/{token}" in paths
-    assert "/workspace-ports/{token}/{path:path}" in paths
+    for prefix in ("/public/workspace-ports", "/workspace-ports"):
+        assert f"{prefix}/{{token}}" in paths
+        assert f"{prefix}/{{token}}/{{path:path}}" in paths
 
 
 def test_the_proxy_is_not_behind_the_session_gate() -> None:
     """The signed grant in the path IS the credential, and this URL is handed to
     a browser that has no Lemma session and never will."""
-    from app.core.security import EXCLUDED_PATHS
+    from app.core.auth_exemptions import exemption_of
 
-    assert any(path.startswith("/workspace-ports") for path in EXCLUDED_PATHS)
+    assert exemption_of("/public/workspace-ports/t/", "GET") == "public"
+    assert exemption_of("/workspace-ports/t/", "GET") == "legacy alias"
+
+
+@pytest.mark.parametrize("prefix", ["/public/workspace-ports", "/workspace-ports"])
+def test_both_paths_reach_the_handler_until_the_alias_goes(
+    monkeypatch: pytest.MonkeyPatch, prefix: str
+) -> None:
+    """A grant minted before the move still names `/workspace-ports/`.
+
+    A forged token is a 403 from the handler on both paths -- not a 404 from a
+    path nothing serves.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.modules.workspace.api.controllers import port_proxy_controller
+
+    monkeypatch.setattr(
+        port_proxy_controller.workspace_settings,
+        "runtime_credential_key",
+        "k" * 32,
+    )
+    app = FastAPI()
+    app.include_router(port_proxy_controller.router)
+
+    with TestClient(app) as client:
+        assert client.get(f"{prefix}/forged/").status_code == 403
+        assert client.get(f"{prefix}/forged/deeper/page").status_code == 403
 
 
 def test_the_proxy_carries_whatever_the_fabrics_own_door_needs() -> None:

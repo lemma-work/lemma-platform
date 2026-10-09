@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 from pydantic_ai import ModelRetry
 
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
 from app.modules.agent.services import pod_mcp_service as pod_mcp_module
@@ -176,7 +177,9 @@ async def test_approval_executor_runs_nothing_for_a_strangers_run():
     def no_database():
         raise AssertionError("nothing should be read for a stranger's run")
 
-    deps = _ctx(uuid4(), uuid4(), uuid4()).model_copy(update={"answers_outsider": True})
+    deps = _ctx(uuid4(), uuid4(), uuid4()).model_copy(
+        update={"audience": Audience.outsiders()}
+    )
     with pytest.raises(OutsiderRunRefused):
         await ApprovalExecutor(no_database).execute_as_user(
             deps=deps, tool_name="exec_command", args={"cmd": "env"}

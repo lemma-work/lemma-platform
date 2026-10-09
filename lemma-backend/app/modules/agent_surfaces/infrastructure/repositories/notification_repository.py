@@ -58,6 +58,7 @@ class NotificationRepository:
             origin_conversation_id=entity.origin_conversation_id,
             from_outside=entity.from_outside,
             origin_group_title=entity.origin_group_title,
+            asked_in_private=entity.asked_in_private,
             asked_by_name=entity.asked_by_name,
             title=entity.title,
             body=entity.body,

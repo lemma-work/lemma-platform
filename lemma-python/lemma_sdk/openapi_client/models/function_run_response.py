@@ -30,7 +30,9 @@ class FunctionRunResponse:
         id (UUID):
         started_at (datetime.datetime | None):
         status (FunctionRunStatus): Status of a function run.
-        user_id (UUID):
+        actor (None | str | Unset): Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call
+            (which runs as the function itself, with no member), or `anonymous`.
+        contact_id (None | Unset | UUID):
         error (None | str | Unset):
         input_data (JsonObject | None | Unset):
         job_id (None | str | Unset):
@@ -38,6 +40,7 @@ class FunctionRunResponse:
         output_data (JsonObject | None | Unset):
         revision_hash (None | str | Unset):
         user_email (None | str | Unset):
+        user_id (None | Unset | UUID):
     """
 
     completed_at: datetime.datetime | None
@@ -46,7 +49,8 @@ class FunctionRunResponse:
     id: UUID
     started_at: datetime.datetime | None
     status: FunctionRunStatus
-    user_id: UUID
+    actor: None | str | Unset = UNSET
+    contact_id: None | Unset | UUID = UNSET
     error: None | str | Unset = UNSET
     input_data: JsonObject | None | Unset = UNSET
     job_id: None | str | Unset = UNSET
@@ -54,6 +58,7 @@ class FunctionRunResponse:
     output_data: JsonObject | None | Unset = UNSET
     revision_hash: None | str | Unset = UNSET
     user_email: None | str | Unset = UNSET
+    user_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -83,7 +88,19 @@ class FunctionRunResponse:
 
         status = self.status.value
 
-        user_id = str(self.user_id)
+        actor: None | str | Unset
+        if isinstance(self.actor, Unset):
+            actor = UNSET
+        else:
+            actor = self.actor
+
+        contact_id: None | str | Unset
+        if isinstance(self.contact_id, Unset):
+            contact_id = UNSET
+        elif isinstance(self.contact_id, UUID):
+            contact_id = str(self.contact_id)
+        else:
+            contact_id = self.contact_id
 
         error: None | str | Unset
         if isinstance(self.error, Unset):
@@ -131,6 +148,14 @@ class FunctionRunResponse:
         else:
             user_email = self.user_email
 
+        user_id: None | str | Unset
+        if isinstance(self.user_id, Unset):
+            user_id = UNSET
+        elif isinstance(self.user_id, UUID):
+            user_id = str(self.user_id)
+        else:
+            user_id = self.user_id
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -141,9 +166,12 @@ class FunctionRunResponse:
                 "id": id,
                 "started_at": started_at,
                 "status": status,
-                "user_id": user_id,
             }
         )
+        if actor is not UNSET:
+            field_dict["actor"] = actor
+        if contact_id is not UNSET:
+            field_dict["contact_id"] = contact_id
         if error is not UNSET:
             field_dict["error"] = error
         if input_data is not UNSET:
@@ -158,6 +186,8 @@ class FunctionRunResponse:
             field_dict["revision_hash"] = revision_hash
         if user_email is not UNSET:
             field_dict["user_email"] = user_email
+        if user_id is not UNSET:
+            field_dict["user_id"] = user_id
 
         return field_dict
 
@@ -218,7 +248,31 @@ class FunctionRunResponse:
 
         status = FunctionRunStatus(d.pop("status"))
 
-        user_id = UUID(d.pop("user_id"))
+        def _parse_actor(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        actor = _parse_actor(d.pop("actor", UNSET))
+
+        def _parse_contact_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                contact_id_type_0 = UUID(data)
+
+                return contact_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        contact_id = _parse_contact_id(d.pop("contact_id", UNSET))
 
         def _parse_error(data: object) -> None | str | Unset:
             if data is None:
@@ -299,6 +353,23 @@ class FunctionRunResponse:
 
         user_email = _parse_user_email(d.pop("user_email", UNSET))
 
+        def _parse_user_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                user_id_type_0 = UUID(data)
+
+                return user_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        user_id = _parse_user_id(d.pop("user_id", UNSET))
+
         function_run_response = cls(
             completed_at=completed_at,
             created_at=created_at,
@@ -306,7 +377,8 @@ class FunctionRunResponse:
             id=id,
             started_at=started_at,
             status=status,
-            user_id=user_id,
+            actor=actor,
+            contact_id=contact_id,
             error=error,
             input_data=input_data,
             job_id=job_id,
@@ -314,6 +386,7 @@ class FunctionRunResponse:
             output_data=output_data,
             revision_hash=revision_hash,
             user_email=user_email,
+            user_id=user_id,
         )
 
         function_run_response.additional_properties = d

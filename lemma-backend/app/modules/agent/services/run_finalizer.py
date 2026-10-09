@@ -309,7 +309,7 @@ class RunFinalizer:
                     run.agent_id, pod_id=run.pod_id
                 ),
             ),
-            source_type="agent_run",
+            source_type=run.usage_source,
             source_id=str(run.agent_run_id),
         )
         await self.usage_recorder.record(

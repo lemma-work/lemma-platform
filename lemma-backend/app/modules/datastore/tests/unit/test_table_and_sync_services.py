@@ -576,3 +576,40 @@ class TestALongNameIsRefusedRatherThanTruncated:
         name = "a" * MAX_IDENTIFIER_BYTES
 
         assert ensure_identifier_fits(name, kind="Table name") == name
+
+
+@pytest.mark.asyncio
+async def test_a_contact_owned_table_whose_policy_fails_is_not_left_half_made(
+    table_service: TableService,
+    table_repository_mock: AsyncMock,
+    schema_manager_mock,
+):
+    """The table exists before its policy does; a policy that fails takes the
+    table back with it, so nobody is left with a contact-owned table that
+    holds no contact to their rows."""
+    pod_id = uuid4()
+    table = _make_table(pod_id=pod_id, name="tickets")
+    table.enable_rls = False
+    table_repository_mock.get_by_datastore_and_name.return_value = None
+    table_repository_mock.create.return_value = table
+
+    def refuse():
+        raise RuntimeError("policy refused")
+
+    schema_manager_mock.session_factory.side_effect = refuse
+
+    with pytest.raises(DatastoreInfrastructureError):
+        await table_service.create_table(
+            pod_id=pod_id,
+            table_name="tickets",
+            primary_key_column="id",
+            columns=table.columns,
+            config=None,
+            enable_rls=False,
+            ctx=allow_all_context(user_id=uuid4(), pod_id=pod_id),
+            contact_owned=True,
+            contact_columns=["name"],
+        )
+
+    schema_manager_mock.create_table.assert_awaited_once()
+    schema_manager_mock.drop_table.assert_awaited_once_with(pod_id, "tickets")
