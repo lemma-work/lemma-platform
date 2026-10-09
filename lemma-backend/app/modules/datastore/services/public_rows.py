@@ -1,11 +1,13 @@
 """Opening a table to people outside the pod, and adding their rows.
 
 Members open and close a table here (``open_table`` / ``close_table``), as
-themselves: it takes what changing the table takes. A visitor's page asks what
-it may fill (``visitor_table``) and adds a row (``add_visitor_row``) with no
-session of its own -- the grant is the whole permission, and the row is added as
-the member who opened the table, through the same validation, permission check
-and insert events as their own hand.
+themselves: it takes what changing the table takes, and each is written to the
+log as an audit line. A visitor's page asks what it may fill
+(``visitor_table``) and adds a row (``add_visitor_row``) with no session of its
+own -- the grant is the whole permission, and the row is added as the member
+who opened the table, through the same validation and permission check as their
+own hand. Its insert event is not theirs, though: it names the outsider, so a
+schedule watching the table can tell a stranger's words from a member's.
 """
 
 from __future__ import annotations
@@ -20,33 +22,46 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.datastore.api.dependencies import (
-    build_record_service,
-    build_table_service,
-    get_schema_manager,
-)
+from app.core.log.log import get_logger
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
+    DatastoreConflictError,
     DatastoreValidationError,
 )
 from app.modules.datastore.domain.public_rows import (
-    CONTACT_COLUMN,
+    UNSAVED,
     OpenTable,
     PublicAudience,
-    PublicRowsClosed,
     PublicColumn,
     PublicRowRefused,
+    PublicRowsClosed,
     is_fillable,
     opening_problem,
     public_column,
     public_values,
+    refusal_for,
 )
+from app.modules.datastore.domain.row_security import CONTACT_COLUMN
 from app.modules.datastore.infrastructure.models import (
     DatastorePublicRowsModel,
     DatastoreTable,
 )
+from app.modules.datastore.infrastructure.repositories.table_repository import (
+    readable_by,
+)
+from app.modules.datastore.services.record_validator import (
+    RecordValidator,
+    convert_record,
+)
 from app.modules.datastore.services.table_context import TableContext
+from app.modules.datastore.services.wiring import (
+    build_record_service,
+    build_table_service,
+    get_schema_manager,
+)
+
+logger = get_logger(__name__)
 
 #: The most open tables one pod lists.
 MAX_OPEN_TABLES = 100
@@ -124,7 +139,13 @@ async def open_table(
             "Each member sees only their own rows in this table, so it can't "
             "take rows from outside"
         )
-    problem = opening_problem(table.columns, table.primary_key_column, columns)
+    problem = opening_problem(
+        table.columns,
+        table.primary_key_column,
+        columns,
+        audience=audience,
+        contact_owned=table.contact_owned,
+    )
     if problem:
         raise OpeningRefused(problem)
     grant = await _grant(uow, table.id)
@@ -143,6 +164,14 @@ async def open_table(
         grant.columns = list(columns)
         grant.opened_by = ctx.user_id
     await uow.session.flush()
+    logger.info(
+        "datastore.public_rows.opened",
+        pod_id=str(pod_id),
+        table_id=str(table.id),
+        user_id=str(ctx.user_id),
+        audience=audience.value,
+        column_count=len(columns),
+    )
     return await table_opening(uow, pod_id=pod_id, table_name=table_name, ctx=ctx)
 
 
@@ -157,22 +186,39 @@ async def close_table(uow, *, pod_id: UUID, table_name: str, ctx: Context) -> No
         table_name=table.table_name,
         ctx=ctx,
     )
-    await uow.session.execute(
+    closed = await uow.session.execute(
         delete(DatastorePublicRowsModel).where(
             DatastorePublicRowsModel.table_id == table.id
         )
     )
+    if closed.rowcount:
+        logger.info(
+            "datastore.public_rows.closed",
+            pod_id=str(pod_id),
+            table_id=str(table.id),
+            user_id=str(ctx.user_id),
+        )
 
 
-async def open_tables(uow, *, pod_id: UUID) -> list[tuple[str, PublicAudience]]:
-    """Every table of the pod that takes rows from outside, and from whom."""
-    rows = await uow.session.execute(
+async def open_tables(
+    uow, *, pod_id: UUID, readable_by_ctx: Context | None = None
+) -> list[tuple[str, PublicAudience]]:
+    """Every table of the pod that takes rows from outside, and from whom.
+
+    ``readable_by_ctx`` keeps only the tables that context may read: a member
+    listing them learns no table name they could not already see. A visitor's
+    run, which is told only which forms it may help fill, passes none.
+    """
+    statement = (
         select(DatastoreTable.table_name, DatastorePublicRowsModel.audience)
         .join(DatastoreTable, DatastoreTable.id == DatastorePublicRowsModel.table_id)
         .where(DatastorePublicRowsModel.pod_id == pod_id)
         .order_by(DatastoreTable.table_name)
         .limit(MAX_OPEN_TABLES)
     )
+    if readable_by_ctx is not None:
+        statement = statement.where(readable_by(readable_by_ctx))
+    rows = await uow.session.execute(statement)
     return [(name, PublicAudience(audience)) for name, audience in rows]
 
 
@@ -231,13 +277,20 @@ async def add_visitor_row(
     table_name: str,
     answers: dict[str, object],
     contact_id: UUID | None,
+    actor: str | None = None,
 ) -> None:
     """Add one row from outside, as the member who opened the table.
 
+    ``actor`` names the outsider for the row's insert event --
+    ``visitor:{session}`` or ``contact:{id}``; a contact is named by default.
+
     Raises :class:`PublicRowRefused` for answers that do not fit -- before
-    anything is written -- and :class:`PublicRowsClosed` when the table does
-    not take rows from this person, or the member can no longer write it.
+    anything is written -- and for any row the database refuses, in one
+    sentence that names neither the table nor the value. Raises
+    :class:`PublicRowsClosed` when the table does not take rows from this
+    person, or the member can no longer write it.
     """
+    outside_actor = actor or (f"contact:{contact_id}" if contact_id else "visitor")
     async with uow_factory() as uow:
         found = await _open_row(uow, pod_id, table_name)
         opened = _visitor_view(pod_id, *found) if found else None
@@ -248,29 +301,62 @@ async def add_visitor_row(
         row = public_values(opened.columns, answers)
         if opened.contact_owned and contact_id is not None:
             row[CONTACT_COLUMN] = str(contact_id)
-        await _insert_as(uow, found[1].opened_by, pod_id, table_name, row)
+        await _insert_as(uow, found[1].opened_by, opened, row, outside_actor)
         await uow.commit()
 
 
 async def _insert_as(
-    uow, user_id: UUID, pod_id: UUID, table_name: str, row: dict[str, object]
+    uow,
+    user_id: UUID,
+    opened: OpenTable,
+    row: dict[str, object],
+    outside_actor: str,
 ) -> None:
     try:
         ctx = await create_authorization_data_service(uow).build_user_context(
-            user_id=user_id, pod_id=pod_id
+            user_id=user_id, pod_id=opened.pod_id
         )
     except DomainError as exc:
-        raise PublicRowsClosed(table_name) from exc
+        raise PublicRowsClosed(opened.name) from exc
     token = set_current_context(ctx)
     try:
-        table = await build_table_service(uow).get_table(pod_id, table_name, ctx)
-        table_ctx = TableContext.from_table_entity(
-            table, get_schema_manager().get_schema_name(pod_id), events_enabled=True
+        table = await build_table_service(uow).get_table(
+            opened.pod_id, opened.name, ctx
         )
+        table_ctx = TableContext.from_table_entity(
+            table,
+            get_schema_manager().get_schema_name(opened.pod_id),
+            events_enabled=True,
+            outside_actor=outside_actor,
+        )
+        _check(table_ctx, opened, row)
         await build_record_service(uow).create_record(table_ctx, row, user_id)
-    except DatastoreValidationError as exc:
-        raise PublicRowRefused(str(exc)) from exc
-    except (DatastoreAccessDeniedError, DomainError) as exc:
-        raise PublicRowsClosed(table_name) from exc
+    except DatastoreAccessDeniedError as exc:
+        raise PublicRowsClosed(opened.name) from exc
+    except (DatastoreValidationError, DatastoreConflictError) as exc:
+        # Past ``_check``, only the database refuses: a duplicate, a missing
+        # reference. Saying which would tell a stranger what the table holds.
+        raise PublicRowRefused(UNSAVED) from exc
+    except DomainError as exc:
+        raise PublicRowsClosed(opened.name) from exc
     finally:
         reset_current_context(token)
+
+
+def _check(table_ctx: TableContext, opened: OpenTable, row: dict[str, object]) -> None:
+    """Ask the record validator about the row, and say what it finds in words.
+
+    The validator is the authority on what a value must be, here as on every
+    other write; it is asked first, apart from the insert, so that what it
+    refuses can be told to the person and what the database refuses cannot.
+    """
+    by_name = {column.name: column for column in opened.columns}
+    for name, value in row.items():
+        try:
+            convert_record(table_ctx.columns, {name: value})
+        except DatastoreValidationError as exc:
+            raise refusal_for(by_name.get(name), "type") from exc
+    valid, _errors, details = RecordValidator(table_ctx).validate(row, is_creation=True)
+    if not valid:
+        first = details[0] if details else {}
+        raise refusal_for(by_name.get(str(first.get("field"))), first.get("reason"))

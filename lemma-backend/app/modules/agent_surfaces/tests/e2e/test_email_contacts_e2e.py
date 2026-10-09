@@ -426,9 +426,11 @@ async def test_a_contact_reads_only_their_own_rows_of_a_contact_owned_table(
             "primary_key_column": "id",
             "enable_rls": False,
             "contact_owned": True,
+            "contact_columns": ["item"],
             "columns": [
                 {"name": "id", "type": "UUID", "required": True, "auto": True},
                 {"name": "item", "type": "TEXT", "required": True},
+                {"name": "cost_price", "type": "FLOAT"},
             ],
         },
     )
@@ -514,6 +516,8 @@ async def test_a_contact_reads_only_their_own_rows_of_a_contact_owned_table(
         if message.get("tool_name") == "contact_records" and message.get("tool_result")
     }
     assert "Blue kettle" in results["rows-1"] and "Teapot" in results["rows-1"]
+    # Only the columns a member chose to show contacts.
+    assert "cost_price" not in results["rows-1"]
     assert "Secret order" not in results["rows-1"]
     assert "Unassigned" not in results["rows-1"]
     # A table that is not contact-owned reads as missing.
@@ -537,6 +541,7 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
             "primary_key_column": "id",
             "enable_rls": False,
             "contact_owned": True,
+            "contact_columns": ["subject"],
             "columns": [
                 {"name": "id", "type": "UUID", "required": True, "auto": True},
                 {"name": "subject", "type": "TEXT", "required": True},
@@ -555,19 +560,28 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
     schema = get_schema_manager()
     await schema.ensure_query_role()
     schema_name = schema.get_schema_name(UUID(pod_id))
-    async with schema.session_factory() as session:
-        await session.execute(
-            text("SELECT set_config('app.current_contact_id', :c, true)"), {"c": mine}
-        )
-        await session.execute(
-            text(f'SET LOCAL ROLE "{datastore_settings.datastore_query_role}"')
-        )
-        rows = (
+
+    async def subjects(**settings: str) -> list[str]:
+        async with schema.session_factory() as session:
+            for name, value in settings.items():
+                await session.execute(
+                    text("SELECT set_config(:name, :value, true)"),
+                    {"name": f"app.{name}", "value": value},
+                )
             await session.execute(
-                text(f'SELECT subject FROM "{schema_name}"."tickets"')
+                text(f'SET LOCAL ROLE "{datastore_settings.datastore_query_role}"')
             )
-        ).all()
-    assert [row.subject for row in rows] == ["Mine"]
+            rows = (
+                await session.execute(
+                    text(f'SELECT subject FROM "{schema_name}"."tickets"')
+                )
+            ).all()
+        return sorted(row.subject for row in rows)
+
+    assert await subjects(rls_audience="contact", current_contact_id=mine) == ["Mine"]
+    assert await subjects(rls_audience="member") == ["Mine", "Theirs"]
+    # Naming nobody is not being a member: it sees nothing.
+    assert await subjects() == []
 
 
 async def test_a_member_follows_up_by_email_until_the_contact_unsubscribes(

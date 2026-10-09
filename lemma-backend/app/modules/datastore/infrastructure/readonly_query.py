@@ -10,6 +10,7 @@ from sqlalchemy.exc import DBAPIError
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreDomainError
 from app.modules.datastore.domain.ports import DatastoreSchemaPort
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.infrastructure.record_query_cost import guard_query_plan
 from app.modules.datastore.infrastructure.rls_context import verify_rls_context
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
@@ -39,10 +40,7 @@ async def execute_readonly_query(
     schema_manager: DatastoreSchemaPort,
     pod_id: UUID,
     query: str,
-    user_id: UUID,
-    *,
-    enable_rls: bool,
-    is_pod_admin: bool,
+    principal: RowPrincipal,
 ) -> QueryRows:
     """Run a pre-validated query; repair a legacy pod schema's access once.
 
@@ -56,26 +54,20 @@ async def execute_readonly_query(
     await schema_manager.ensure_query_role()
     schema_name = schema_manager.get_schema_name(pod_id)
     try:
-        return await _run(
-            schema_manager, schema_name, query, user_id, enable_rls, is_pod_admin
-        )
+        return await _run(schema_manager, schema_name, query, principal)
     except (DBAPIError, DatastoreDomainError) as exc:
         if not _is_access_error(exc):
             raise
         if not await schema_manager.heal_query_role_access(schema_name):
             raise
-    return await _run(
-        schema_manager, schema_name, query, user_id, enable_rls, is_pod_admin
-    )
+    return await _run(schema_manager, schema_name, query, principal)
 
 
 async def _run(
     schema_manager: DatastoreSchemaPort,
     schema_name: str,
     query: str,
-    user_id: UUID,
-    enable_rls: bool,
-    is_pod_admin: bool,
+    principal: RowPrincipal,
 ) -> QueryRows:
     max_rows = datastore_settings.datastore_query_max_rows
     query_role = sanitize_identifier(datastore_settings.datastore_query_role)
@@ -88,10 +80,9 @@ async def _run(
         # All SETs are transaction-local so nothing leaks back to the pool.
         await session.execute(text(f'SET LOCAL search_path TO "{schema_name}"'))
 
-        if enable_rls:
-            await schema_manager.set_rls_context(
-                session, user_id, is_pod_admin=is_pod_admin
-            )
+        # Always, and in full: both row policies fail closed, so a session
+        # that named nobody would see no contact-owned row even as a member.
+        await schema_manager.set_rls_context(session, principal)
 
         # Run the user's SQL as the non-superuser, NOBYPASSRLS role so RLS
         # policies are enforced (the app's own connection bypasses RLS).
@@ -118,6 +109,5 @@ async def _run(
         truncated = len(rows) > max_rows
         if truncated:
             rows = rows[:max_rows]
-        if enable_rls:
-            await verify_rls_context(session, user_id, is_pod_admin=is_pod_admin)
+        await verify_rls_context(session, principal)
         return rows, len(rows), truncated

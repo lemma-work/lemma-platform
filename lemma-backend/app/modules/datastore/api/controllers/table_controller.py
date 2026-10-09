@@ -11,7 +11,7 @@ from app.modules.datastore.api.dependencies import (
     TableServiceDep,
 )
 from app.modules.datastore.api.responses import detail_response
-from app.modules.datastore.api.schemas.datastore_schemas import (
+from app.modules.datastore.api.schemas.table_schemas import (
     AddColumnRequest,
     CreateTableRequest,
     TableDetailResponse,
@@ -69,6 +69,7 @@ async def create_table(
         visibility=data.visibility,
         ctx=ctx,
         contact_owned=data.contact_owned,
+        contact_columns=data.contact_columns,
     )
     return await _table_detail_response(table)
 
@@ -120,6 +121,7 @@ async def list_tables(
                 enable_rls=table.enable_rls,
                 visibility=table.visibility,
                 contact_owned=table.contact_owned,
+                contact_columns=table.contact_columns,
                 created_at=table.created_at,
                 updated_at=table.updated_at,
                 allowed_actions=table.allowed_actions,
@@ -204,6 +206,7 @@ async def update_table(
         visibility=data.visibility,
         enable_rls=data.enable_rls,
         contact_owned=data.contact_owned,
+        contact_columns=data.contact_columns,
     )
     return await _table_detail_response(updated_table)
 

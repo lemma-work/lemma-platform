@@ -10,6 +10,7 @@ from app.core.authorization.context import Context
 from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.datastore_entities import DatastoreDataType
 from app.modules.datastore.domain.ports import DatastoreRecordRepositoryPort
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.infrastructure.record_bulk_delete import (
     bulk_delete_records as write_bulk_deletes,
@@ -236,8 +237,9 @@ class RecordService:
 
         Parses the statement (single, read-only, no cross-schema references) and
         enforces per-table ``DATASTORE_TABLE_READ`` for every referenced table via
-        ``resolve_query_row_scope``. RLS-enabled tables are row-filtered at the
-        database layer.
+        ``resolve_query_row_scope``. RLS-enabled and contact-owned tables are
+        row-filtered at the database layer, as the principal ``ctx`` names: a
+        member, a contact, or nobody.
 
         Rows of RLS tables are scoped to ``user_id`` by default — for every
         caller, pod admins included — so apps and functions reading through this
@@ -269,9 +271,7 @@ class RecordService:
         return await self.record_repository.execute_readonly_query(
             pod_id=pod_id,
             query=query,
-            user_id=user_id,
-            enable_rls=True,
-            is_pod_admin=is_pod_admin,
+            principal=RowPrincipal.of(ctx, is_pod_admin=is_pod_admin),
         )
 
     async def list_records(

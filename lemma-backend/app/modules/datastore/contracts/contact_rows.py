@@ -2,9 +2,10 @@
 
 A contact holds no grant, so these do not go through the authorizer. What
 stands in for it is narrower: only a table its pod marked contact-owned, only
-rows naming the contact the platform says is asking, read under a database
-policy scoped to that contact. The caller passes the contact id it was handed
-by routing, never one a model chose.
+the columns a member chose to show contacts, only rows naming the contact the
+platform says is asking, read under a database policy scoped to that contact.
+The caller passes the contact id it was handed by routing, never one a model
+chose.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.datastore.api.dependencies import get_schema_manager
 from app.modules.datastore.domain.errors import DatastoreDomainError
 from app.modules.datastore.infrastructure.contact_rows import (
     MAX_CONTACT_ROWS,
@@ -25,13 +25,13 @@ from app.modules.datastore.infrastructure.contact_rows import (
 from app.modules.datastore.infrastructure.models.datastore_models import (
     DatastoreTable,
 )
+from app.modules.datastore.services.wiring import get_schema_manager
 
 __all__ = [
     "MAX_CONTACT_ROWS",
     "ContactRowsUnavailable",
     "ContactTable",
     "contact_owned_tables",
-    "is_contact_owned",
     "rows_for_contact",
 ]
 
@@ -54,39 +54,45 @@ class ContactTable(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
+    #: Only the columns a member chose to show contacts, and that still exist.
     columns: tuple[str, ...]
+    primary_key: str = "id"
+
+
+def _contact_table(row: DatastoreTable) -> ContactTable:
+    present = {str(column.get("name")) for column in row.columns or []}
+    return ContactTable(
+        name=row.table_name,
+        columns=tuple(name for name in row.contact_columns or [] if name in present),
+        primary_key=row.primary_key_column,
+    )
 
 
 async def contact_owned_tables(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID
 ) -> list[ContactTable]:
-    """The pod's contact-owned tables and their column names."""
+    """The pod's contact-owned tables, each with the columns a contact may read."""
     rows = await uow.session.scalars(
         select(DatastoreTable)
         .where(DatastoreTable.pod_id == pod_id, DatastoreTable.contact_owned.is_(True))
         .order_by(DatastoreTable.table_name)
         .limit(MAX_LISTED_TABLES)
     )
-    return [
-        ContactTable(
-            name=row.table_name,
-            columns=tuple(str(column.get("name")) for column in row.columns or []),
-        )
-        for row in rows
-    ]
+    return [table for row in rows if (table := _contact_table(row)).columns]
 
 
-async def is_contact_owned(
+async def _contact_owned(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, table_name: str
-) -> bool:
-    """Whether this pod has a contact-owned table by this name."""
-    return bool(
-        await uow.session.scalar(
-            select(DatastoreTable.contact_owned).where(
-                DatastoreTable.pod_id == pod_id, DatastoreTable.table_name == table_name
-            )
+) -> ContactTable | None:
+    row = await uow.session.scalar(
+        select(DatastoreTable).where(
+            DatastoreTable.pod_id == pod_id,
+            DatastoreTable.table_name == table_name,
+            DatastoreTable.contact_owned.is_(True),
         )
     )
+    table = _contact_table(row) if row is not None else None
+    return table if table is not None and table.columns else None
 
 
 async def rows_for_contact(
@@ -98,7 +104,7 @@ async def rows_for_contact(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, object]]:
-    """This contact's rows of one contact-owned table.
+    """This contact's rows of one contact-owned table, the chosen columns only.
 
     The table is checked on one short unit of work, closed before the rows are
     read on a datastore connection of their own. A table that is not
@@ -106,15 +112,17 @@ async def rows_for_contact(
     exist: which of the pod's tables exist is not the contact's to learn.
     """
     async with uow_factory() as uow:
-        owned = await is_contact_owned(uow, pod_id=pod_id, table_name=table_name)
-    if not owned:
+        table = await _contact_owned(uow, pod_id=pod_id, table_name=table_name)
+    if table is None:
         raise ContactRowsUnavailable(f"Table '{table_name}' not found")
     try:
         return await read_contact_rows(
             get_schema_manager(),
             pod_id,
-            table_name,
+            table.name,
             contact_id,
+            columns=table.columns,
+            primary_key=table.primary_key,
             limit=limit,
             offset=offset,
         )

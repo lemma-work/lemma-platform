@@ -150,13 +150,27 @@ class DatastoreAuthorization:
             fallback_action=Permissions.DATASTORE_TABLE_DELETE,
         )
 
+    @staticmethod
+    def _refuse_outsider_on_contact_rows(auth_ctx: Context, ctx: TableContext) -> None:
+        """Keep an outsider's record tools off a contact-owned table.
+
+        Record reads and writes run on the application's own connection, which
+        bypasses row security, so the contact policy cannot hold them. A
+        contact's own rows reach their run only through ``contact_records``,
+        which reads under that policy and only the columns a member chose.
+        """
+        if ctx.contact_owned and auth_ctx.is_outsider:
+            raise DatastoreAccessDeniedError("This table is not readable here")
+
     async def require_record_read(
         self,
         *,
         user_id: UUID,
         ctx: TableContext,
     ) -> None:
-        await self._context().require(
+        auth_ctx = self._context()
+        self._refuse_outsider_on_contact_rows(auth_ctx, ctx)
+        await auth_ctx.require(
             Permissions.DATASTORE_RECORD_READ,
             ResourceRef.table(ctx.pod_id, ctx.table_id),
         )
@@ -174,7 +188,9 @@ class DatastoreAuthorization:
         # ``should_enforce_record_user_scope``), not which permission a write
         # demands — so an explicit record.write grant, e.g. a function granted
         # access to a non-RLS table, is honored.
-        await self._context().require(
+        auth_ctx = self._context()
+        self._refuse_outsider_on_contact_rows(auth_ctx, ctx)
+        await auth_ctx.require(
             Permissions.DATASTORE_RECORD_WRITE,
             ResourceRef.table(ctx.pod_id, ctx.table_id),
         )

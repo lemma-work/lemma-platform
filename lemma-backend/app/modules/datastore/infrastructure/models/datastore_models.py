@@ -51,6 +51,8 @@ class DatastoreTable(UUIDAuditBase):
     contact_owned: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+    #: What a contact may read of their own rows: a member's explicit choice.
+    contact_columns: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         Index(
@@ -75,6 +77,7 @@ class DatastoreTable(UUIDAuditBase):
             enable_rls=self.enable_rls,
             visibility=self.visibility,
             contact_owned=self.contact_owned,
+            contact_columns=list(self.contact_columns or []),
             created_at=self.created_at,
             updated_at=self.updated_at,
         )

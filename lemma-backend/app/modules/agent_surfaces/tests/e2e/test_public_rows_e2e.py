@@ -104,11 +104,11 @@ async def test_an_open_table_takes_one_row_per_answer_and_nothing_more(
     assert described.headers["access-control-allow-origin"] == SHOP
     asks = described.json()
     assert asks["contacts_only"] is False
-    assert [c["name"] for c in asks["columns"]] == [
-        "full_name",
-        "work_email",
-        "seats",
-        "track",
+    assert [(c["name"], c["input"]) for c in asks["columns"]] == [
+        ("full_name", "text"),
+        ("work_email", "email"),
+        ("seats", "number"),
+        ("track", "select"),
     ]
 
     added = await authenticated_client.post(
@@ -178,7 +178,13 @@ async def test_a_contacts_only_table_asks_a_stranger_to_confirm_first(
     authenticated_client: AsyncClient, test_pod
 ):
     pod_id = test_pod["id"]
-    table = await _signups(authenticated_client, pod_id, "requests", contact_owned=True)
+    table = await _signups(
+        authenticated_client,
+        pod_id,
+        "requests",
+        contact_owned=True,
+        contact_columns=["full_name", "track"],
+    )
     opened = await _open(authenticated_client, pod_id, table, audience="contacts")
     assert opened.status_code == 200, opened.text
     widget = await _widget(authenticated_client, pod_id, name="Requests door")
