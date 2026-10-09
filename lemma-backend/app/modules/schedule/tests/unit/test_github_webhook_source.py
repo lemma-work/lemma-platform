@@ -501,6 +501,14 @@ class TestCheckRuns:
             _check_run(conclusion="success")
         )
 
+    def test_a_run_completed_again_with_the_same_conclusion_is_a_new_event(self):
+        """An App can re-run a check in place, and it can fail the same way
+        twice. Only the finishing time tells the second completion from a
+        redelivery of the first."""
+        again = _check_run()
+        again["check_run"]["completed_at"] = "2024-07-15T09:48:13Z"
+        assert self._id(_check_run()) != self._id(again)
+
     def test_a_rerun_request_is_not_the_completion_it_follows(self):
         """`rerequested` arrives for a run that has already completed, with the
         same status and conclusion as the delivery before it."""
@@ -525,3 +533,42 @@ class TestCheckRuns:
             _check_run(head_branch=None, pull_requests=[]), "check_run"
         )
         assert normalized.context == {"repo": {"owner": "octo", "repo": "api"}}
+
+
+FORK = {
+    "id": 7704532,
+    "name": "api",
+    "full_name": "contributor/api",
+    "owner": {"login": "contributor", "id": 1029384, "type": "User"},
+}
+
+
+@pytest.mark.parametrize(
+    "event", ["pull_request_review", "pull_request_review_comment"]
+)
+class TestPullRequestsFromForks:
+    """The checkout clones the base repository, where a fork's branch is not.
+
+    `--branch` with it fails the clone, or -- when the base has a branch of the
+    same name, as with a fork's `main` -- checks out the wrong code without a
+    word. Neither is better than the default branch.
+    """
+
+    async def test_a_head_in_a_fork_binds_no_branch(self, event):
+        payload = NEW_EVENTS[event]()
+        payload["pull_request"]["head"]["repo"] = FORK
+        normalized = await _normalize(payload, event)
+        assert normalized.context == {"repo": {"owner": "octo", "repo": "api"}}
+
+    async def test_a_head_whose_fork_was_deleted_binds_no_branch(self, event):
+        payload = NEW_EVENTS[event]()
+        payload["pull_request"]["head"]["repo"] = None
+        normalized = await _normalize(payload, event)
+        assert normalized.context == {"repo": {"owner": "octo", "repo": "api"}}
+
+
+async def test_a_check_runs_pull_request_from_a_fork_binds_no_branch():
+    payload = _check_run(head_branch=None)
+    payload["check_run"]["pull_requests"][0]["head"]["repo"] = FORK
+    normalized = await _normalize(payload, "check_run")
+    assert normalized.context == {"repo": {"owner": "octo", "repo": "api"}}

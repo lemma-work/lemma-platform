@@ -21,6 +21,15 @@ does not pick up an event added to it later: subscribe to the event by hand
 under the App's **Permissions & events**, in every environment, or its trigger
 can be scheduled and never fires.
 
+That is half of it. The triggers a schedule can choose come from the connector
+catalog, and a deploy does not reload the catalog: it runs only
+`alembic upgrade head`. After a release that adds a GitHub trigger, import the
+catalog in every environment, or the new trigger cannot be scheduled at all:
+
+```bash
+uv run python scripts/import_connector_catalog.py --provider native --app github
+```
+
 ```bash
 uv run python scripts/create_github_app.py --name lemma-dev --base-url https://api.dev.example.com
 uv run python scripts/create_github_app.py --name Lemma --base-url https://api.lemma.work --org lemma-work

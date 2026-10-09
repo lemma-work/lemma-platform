@@ -115,11 +115,14 @@ def _check_run_key(payload: WebhookPayload) -> str | None:
     # and `requested_action` arrive for a run that has already completed, with
     # the same status and conclusion as the `completed` delivery before them,
     # and two different buttons on one run differ only by their identifier.
+    # An App may also re-run a check in place, and it can finish with the
+    # conclusion it had before; `completed_at` is what tells that second
+    # completion from a redelivery of the first.
     run = payload.get("check_run") or {}
     button = (payload.get("requested_action") or {}).get("identifier")
     return (
         f"{run.get('id')}:{payload.get('action')}:{run.get('status')}"
-        f":{run.get('conclusion')}:{button}"
+        f":{run.get('conclusion')}:{run.get('completed_at')}:{button}"
     )
 
 
@@ -295,9 +298,16 @@ def _ref_for(payload: WebhookPayload, event: str) -> str | None:
     looking at the wrong code. Everything else is about wherever the
     repository's default branch is, which is what a clone gives you without
     asking.
+
+    A pull request from a fork binds no branch. Its head lives in the fork,
+    and the checkout clones the base repository: `--branch` with the fork's
+    branch either fails the clone outright or, when the base happens to have a
+    branch of the same name -- a fork's `main` -- silently checks out the
+    wrong code. The default branch is at least the right repository, and
+    `gh pr checkout` gets the head from there.
     """
     if event in _PULL_REQUEST_EVENTS:
-        return ((payload.get("pull_request") or {}).get("head") or {}).get("ref")
+        return _head_ref(payload.get("pull_request"), payload.get("repository"))
     if event == "push":
         # `refs/heads/topic` -> `topic`. A tag push gives `refs/tags/...`, which
         # this deliberately does not turn into a branch name.
@@ -326,7 +336,24 @@ def _check_run_ref(payload: WebhookPayload) -> str | None:
     pull_requests = run.get("pull_requests") or []
     if not pull_requests:
         return None
-    return ((pull_requests[0] or {}).get("head") or {}).get("ref")
+    return _head_ref(pull_requests[0], payload.get("repository"))
+
+
+def _head_ref(pull_request: object, repository: object) -> str | None:
+    """A pull request's head branch, if it lives in the repository cloned.
+
+    A head with no repository is a fork that has since been deleted, which is
+    no more cloneable than a live one.
+    """
+    if not isinstance(pull_request, dict) or not isinstance(repository, dict):
+        return None
+    head = pull_request.get("head") or {}
+    head_repository = head.get("repo") or {}
+    if head_repository.get("id") is None or head_repository.get("id") != repository.get(
+        "id"
+    ):
+        return None
+    return head.get("ref")
 
 
 def _repo_context(payload: WebhookPayload, event: str) -> WebhookPayload:
