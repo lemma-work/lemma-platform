@@ -1,6 +1,8 @@
 """Writing first to a contact, and the link a contact uses to make it stop.
 
-Following up takes what writing in a conversation takes. The unsubscribe page
+Following up takes ``contact.message``, an editor's: writing first to somebody
+outside the pod speaks for the pod, which writing in one's own conversations
+does not. The unsubscribe page
 is public: the signed token in its link is the credential, and it names one
 handle. Opening the link only asks; the button does it -- mail scanners open
 links, and a person should not be unsubscribed by their spam filter.
@@ -49,7 +51,7 @@ class FollowUpResponse(BaseModel):
     "/{contact_id}/messages",
     operation_id="contact.follow_up",
     response_model=FollowUpResponse,
-    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+    dependencies=[require_action(Permissions.CONTACT_MESSAGE)],
 )
 async def follow_up_contact(
     pod_id: UUID,
@@ -61,7 +63,9 @@ async def follow_up_contact(
     """Write to a contact in their most recent conversation, where the channel allows.
 
     Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-    has closed, or when they have never written to the pod.
+    has closed, or when they have never written to the pod; 429 past the day's
+    follow-ups for this contact; 502 when the platform did not take it, which
+    the conversation then shows as not sent.
     """
     sent = await send_follow_up(
         uow_factory,

@@ -49,16 +49,41 @@ def test_the_contact_tables_upgrade_and_roll_back_cleanly() -> None:
                 assert row is not None
                 return tuple(row)
 
+        def beside() -> tuple[bool, bool]:
+            """The link index and the notifications column the revision adds."""
+            with psycopg.connect(plain_url) as connection:
+                row = connection.execute(
+                    "SELECT to_regclass('ix_agent_surface_link_external_user') "
+                    "IS NOT NULL, EXISTS (SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'notifications' "
+                    "AND column_name = 'asked_in_private')"
+                ).fetchone()
+                assert row is not None
+                return bool(row[0]), bool(row[1])
+
+        def cap_goes_with_its_organization() -> bool:
+            with psycopg.connect(plain_url) as connection:
+                row = connection.execute(
+                    "SELECT confdeltype FROM pg_constraint WHERE contype = 'f' "
+                    "AND conrelid = 'usage_contacts_caps'::regclass "
+                    "AND confrelid = 'organizations'::regclass"
+                ).fetchone()
+                return row is not None and row[0] == "c"
+
         absent = (None,) * len(TABLES)
 
         migrate("upgrade", BEFORE)
         assert present() == absent
+        assert beside() == (False, False)
 
         migrate("upgrade", AFTER)
         assert present() == TABLES
+        assert beside() == (True, True)
+        assert cap_goes_with_its_organization()
 
         migrate("downgrade", BEFORE)
         assert present() == absent
+        assert beside() == (False, False)
 
         migrate("upgrade", "head")
         assert present() == TABLES

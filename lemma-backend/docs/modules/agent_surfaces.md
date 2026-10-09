@@ -401,6 +401,18 @@ email provider metadata, timestamp windows, and challenge responses. Identity
 policy controls whether unknown external senders are rejected, linked, or
 represented as contacts. Redis dedup guards repeat provider deliveries.
 
+The contact path (`services/contacts.py`) never answers mail a machine sent
+(`platforms/email_automated.py`, plus the pod's own addresses), and treats a
+message that is only "STOP" as an unsubscribe. What it says or notes without a
+model -- a refusal, a parked-mail note, "a person will reply" -- is windowed in
+Redis by `services/contact_windows.py`, failing closed. Before a run for
+somebody outside the pod starts, `services/outside_cap.py` asks whether the
+organization's contacts cap is reached or a member has the conversation; if so
+the message is kept, no run starts, the member is told, and the person hears
+once a day that a person will reply. `SurfaceTurnStarter` calls it for chat and
+email surfaces, before the typing indicator and any file handling. Writing first to a
+contact takes `contact.message`.
+
 A contact shared during Telegram signup is matched by `onboarding_contact`: a
 verified profile number first, then -- only with
 `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH` -- exactly one unverified claim, the same

@@ -19,6 +19,8 @@ SurfaceReplyKind = Literal[
     "identity_link",
     "surface_setup",
     "pod_access",
+    # A stranger at a bot that answers only the pod's known contacts.
+    "contact_refusal",
 ]
 
 

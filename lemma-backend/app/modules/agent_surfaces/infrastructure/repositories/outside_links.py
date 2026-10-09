@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.infrastructure.models import (
 from app.modules.contacts.contracts.visitor_sessions import (
     conversation_has_visitor,
     latest_visitor_conversation,
+    visitor_conversation_contact,
 )
 
 
@@ -89,18 +90,12 @@ async def outside_link(
             )
         )
     ).all()
-    web = (
-        await session.execute(
-            select(WebSessionModel.contact_id)
-            .where(WebSessionModel.conversation_id == conversation_id)
-            .limit(1)
-        )
-    ).first()
-    if not users and web is None:
+    on_the_web, web_contact = await visitor_conversation_contact(
+        session, conversation_id
+    )
+    if not users and not on_the_web:
         return None
-    contacts = {_contact_in(user) for user in users} | {
-        web.contact_id if web is not None else None
-    }
+    contacts = {_contact_in(user) for user in users} | {web_contact}
     contacts.discard(None)
     # Two contacts on one conversation is not something routing writes; name
     # neither rather than pick one, and the run still answers as nobody.

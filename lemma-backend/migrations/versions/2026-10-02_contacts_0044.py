@@ -18,9 +18,16 @@ cascade from the pod, and
 identities from their contact, so forgetting a contact forgets their handles.
 
 **`usage_contacts_caps`** is what an organization lets its bots spend answering
-contacts in a month, set by an organization admin. Contacts are never billed;
-this is the ceiling on what they can cost. No row means no cap of the
-organization's own.
+contacts in a month, set by an organization owner. Contacts are never billed;
+this is the ceiling on what they can cost. No row means the deployment's
+default cap; a row with no limit means an owner removed it. It goes with its
+organization.
+
+**`agent_surface_conversation_links`** gains an index led by `external_user_id`:
+a contact's conversation is found by its `~contact:{id}` link alone, whichever
+bot and thread it is on. **`notifications.asked_in_private`** marks a question
+passed on from a contact's or a web visitor's private chat, so the member is
+not told it was asked in a group.
 
 **`datastore_tables.contact_owned`** marks a table whose rows the pod keeps about
 its contacts: it carries a `contact_id`, every member sees every row, and a
@@ -121,7 +128,12 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column(
+            "organization_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("organizations.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("monthly_limit_usd", sa.Numeric(24, 9), nullable=True),
         sa.Column("updated_by_user_id", postgresql.UUID(as_uuid=True), nullable=True),
     )
@@ -265,6 +277,7 @@ def upgrade() -> None:
         ),
     )
     _upgrade_contact_function_runs()
+    _upgrade_contact_links_and_questions()
 
 
 def _upgrade_contact_function_runs() -> None:
@@ -299,7 +312,38 @@ def _downgrade_contact_function_runs() -> None:
     op.alter_column("function_runs", "user_id", nullable=False)
 
 
+def _upgrade_contact_links_and_questions() -> None:
+    """Finding a contact's conversation by its link, and private-chat questions.
+
+    The index is declared here only, not on the link model: autogenerating a
+    migration from the models would propose dropping it, and must not.
+    """
+    op.create_index(
+        "ix_agent_surface_link_external_user",
+        "agent_surface_conversation_links",
+        ["external_user_id", "updated_at"],
+    )
+    op.add_column(
+        "notifications",
+        sa.Column(
+            "asked_in_private",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+    )
+
+
+def _downgrade_contact_links_and_questions() -> None:
+    op.drop_column("notifications", "asked_in_private")
+    op.drop_index(
+        "ix_agent_surface_link_external_user",
+        table_name="agent_surface_conversation_links",
+    )
+
+
 def downgrade() -> None:
+    _downgrade_contact_links_and_questions()
     _downgrade_contact_function_runs()
     op.drop_index("ix_web_code_session", table_name="agent_surface_web_codes")
     op.drop_table("agent_surface_web_codes")

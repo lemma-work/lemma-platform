@@ -16,7 +16,10 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
 )
-from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceChatContext,
+    SurfaceReplyContext,
+)
 from app.modules.agent_surfaces.services.contacts import ContactDoor
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
@@ -40,18 +43,19 @@ async def answer_outside_the_pod(
     surface: AgentSurfaceEntity,
     parsed: ParsedInboundSurfaceEvent,
     sender: ResolvedSurfaceUser,
-) -> SurfaceChatContext | None | NotOutside:
+) -> SurfaceChatContext | SurfaceReplyContext | None | NotOutside:
     """The run for a sender from outside the pod, ``None``, or ``NOT_OUTSIDE``.
 
     ``None`` is a door that applied and decided nothing should run -- a limit,
-    parked mail, nobody looking after them -- and gets no reply.
+    parked mail, nobody looking after them -- and gets no reply. A reply
+    context is the one refusal a bot for known contacts gives a stranger.
     """
     membership = router.pod_membership_port
     outsiders = OutsiderDoor(uow=uow, membership=membership)
     group = await outsiders.group_welcoming(
         surface=surface, parsed=parsed, sender=sender
     )
-    contacts = ContactDoor.for_unit_of_work(uow, membership=membership)
+    contacts = ContactDoor(uow=uow, membership=membership)
     if group is None and not await contacts.applies(
         surface=surface, parsed=parsed, sender=sender
     ):

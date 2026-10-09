@@ -357,16 +357,19 @@ async def test_with_contacts_off_no_stranger_becomes_one(
     ] == []
 
 
-async def test_an_organization_admin_sets_and_clears_the_contacts_cap(
+async def test_an_organization_owner_sets_and_clears_the_contacts_cap(
     authenticated_client: AsyncClient, fixed_test_org
 ):
     org_id = fixed_test_org["id"]
 
+    # Nobody chose: the deployment's default holds, so a bot anybody can write
+    # to has a ceiling from the start.
     initial = await authenticated_client.get(
         f"/usage/organizations/{org_id}/contacts-cap"
     )
     assert initial.status_code == 200, initial.text
-    assert initial.json()["monthly_limit_usd"] is None
+    assert initial.json()["monthly_limit_usd"] == 50
+    assert initial.json()["is_default"] is True
     assert initial.json()["spent_this_month_usd"] == 0
 
     capped = await authenticated_client.put(
@@ -375,13 +378,16 @@ async def test_an_organization_admin_sets_and_clears_the_contacts_cap(
     )
     assert capped.status_code == 200, capped.text
     assert capped.json()["monthly_limit_usd"] == 25
+    assert capped.json()["is_default"] is False
 
+    # Removing it is the owner's choice of no limit; the default stays away.
     cleared = await authenticated_client.put(
         f"/usage/organizations/{org_id}/contacts-cap",
         json={"monthly_limit_usd": None},
     )
     assert cleared.status_code == 200, cleared.text
     assert cleared.json()["monthly_limit_usd"] is None
+    assert cleared.json()["is_default"] is False
 
     refused = await authenticated_client.put(
         f"/usage/organizations/{org_id}/contacts-cap",

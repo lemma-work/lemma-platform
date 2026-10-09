@@ -273,10 +273,19 @@ one:
 
 - **Contacts and identities.** The `contacts` module owns `contacts` and
   `contact_identities`, with `GET`/`PATCH`/`DELETE /pods/{pod_id}/contacts` and
-  `GET .../contacts/{id}/export`. Forgetting a contact deletes their
-  conversations in the same transaction; export returns their words and the
-  bot's answers, never tool calls or members' private notes. Strengths
+  `GET .../contacts/{id}/export`. Reading contacts takes `conversation.read`.
+  Forgetting a contact deletes their rows in contact-owned tables first (the
+  pod's database), then in one main-database transaction their conversations,
+  handles, web chat sessions and codes, and the platform profiles stored for
+  their handles; the questions of theirs passed on to members are blanked.
+  Export pages (`cursor`) through their words and the bot's answers -- never
+  tool calls or members' private notes -- and then their rows. Strengths
   `channel` and `member` exist; `host` and `code` come with web widgets.
+- **Who looks after them.** When that member leaves the pod, its
+  administrators are told, and the surface carries `contacts_warning` until
+  somebody else is chosen. A contact's conversation is found by its
+  `~contact:` link and moves, history and all, to whoever looks after
+  contacts now.
 - **Who the bot answers.** `config.contacts` on every surface, `answer`
   defaulting to `off`, `looked_after_by` defaulting to whoever turns it on and
   required to be a pod member. Only the pod's own bots answer contacts:
@@ -318,19 +327,32 @@ one:
   contact on a contact-owned table. `/public/web/widget.js` is the chat and the
   form drawer. Limits per widget,
   session, address and email, failing closed.
-- **Follow-ups.** `POST /pods/{pod_id}/contacts/{id}/messages` writes to a
-  contact in their most recent conversation: WhatsApp within 24 hours of their
+- **Follow-ups.** `POST /pods/{pod_id}/contacts/{id}/messages` (`contact.message`,
+  editors and up; at most `SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY` per
+  contact) writes to a contact in their most recent conversation, sent first
+  and recorded as not sent when the platform refuses it: WhatsApp within 24 hours of their
   last message (`contact_identities.last_inbound_at`), Telegram any time, email
   with an unsubscribe line and a signed link (`/public/contacts/unsubscribe`,
   a confirmation page whose button does it), a web chat by leaving it for
   their next visit. Never to a handle they unsubscribed
-  (`unsubscribed_at`); writing again opts them back in.
+  (`unsubscribed_at`); writing again opts them back in, except a message that
+  is only "STOP" or "unsubscribe", which unsubscribes the handle instead. A bot
+  for known contacts gives a stranger one short refusal a day.
 - **Unverified email** is parked as an inbox note to the member who looks after
-  contacts, once an hour per sender.
+  contacts, once an hour per sender and at most
+  `SURFACE_PARKED_MAIL_NOTES_PER_SURFACE_PER_HOUR` notes a bot, then one
+  summary. Mail a machine sent (`Auto-Submitted`, `Precedence`, list headers,
+  mailer-daemon and no-reply senders, our own addresses) is neither answered
+  nor parked.
 - **Cost.** Runs for contacts and group outsiders are recorded as `contact_run`
   and `outsider_run`, skip the member's personal windows, and count towards a
   `contacts_month` window held to `usage_contacts_caps`
-  (`GET`/`PUT /usage/organizations/{id}/contacts-cap`, owners and editors).
+  (`GET /usage/organizations/{id}/contacts-cap` for owners and editors, `PUT`
+  for owners). No row is the deployment default
+  (`USAGE_CONTACTS_MONTHLY_DEFAULT_USD`, $50); removing the cap is recorded as
+  no limit. Past the cap a surface starts no run: the person is told once a day
+  that a person will reply, the member is told, and the conversation is handed
+  to them for the rest of the month.
 - **The app.** A Contacts place in the space (People with a sheet per
   contact; On your website; What contacts can use), a "Private messages from
   people outside" select in a bot's settings, and the contacts cap in the

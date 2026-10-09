@@ -11,7 +11,12 @@ each channel allows a business to write:
 * **A web widget:** the message waits in their chat for their next visit.
 
 Never to a handle the contact unsubscribed, and always in the contact's most
-recent conversation, so the agent and the contact both see it in context.
+recent conversation, so the agent and the contact both see it in context. At
+most ``surface_contact_follow_ups_per_contact_per_day`` a day per contact.
+
+Sent first, then written into the conversation, and written as not sent when
+the platform refused it: the thread never shows the contact as having been told
+something they were not.
 """
 
 from __future__ import annotations
@@ -33,8 +38,13 @@ from app.modules.agent_surfaces.infrastructure.repositories.outside_links import
     WEB_PLATFORM,
     latest_contact_thread,
 )
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.services.contact_windows import (
+    ContactWindows,
+    Window,
+)
 from app.modules.contacts.contracts import (
-    ContactHandleRef,
+    ContactHandle,
     IdentityKind,
     contact_handles,
 )
@@ -86,15 +96,15 @@ def handle_for_unsubscribe(token: str) -> UUID | None:
         return None
 
 
-def _unsubscribe_line(handle: ContactHandleRef) -> str:
+def _unsubscribe_line(handle: ContactHandle) -> str:
     base = str(settings.api_url).rstrip("/")
     link = f"{base}/public/contacts/unsubscribe?token={quote(unsubscribe_token(handle.id))}"
     return f"\n\n--\nTo stop these emails: {link}"
 
 
 def _check_channel(
-    platform: str, handles: list[ContactHandleRef], now: datetime
-) -> ContactHandleRef | None:
+    platform: str, handles: list[ContactHandle], now: datetime
+) -> ContactHandle | None:
     """The handle a follow-up goes to on this platform, or a refusal."""
     kind = _KIND_FOR_PLATFORM.get(platform)
     if kind is None:
@@ -132,6 +142,7 @@ async def send_follow_up(
     contact_id: UUID,
     message: str,
     sent_by_user_id: UUID,
+    windows: ContactWindows | None = None,
 ) -> FollowUpSent:
     text = message.strip()[:MAX_FOLLOW_UP_CHARS]
     if not text:
@@ -143,31 +154,78 @@ async def send_follow_up(
                 "Contact not found", code="not_found", status_code=404
             )
         thread = await latest_contact_thread(uow.session, contact_id)
-        if thread is None:
-            raise FollowUpRefused(
-                "The contact has not written to the pod yet", code="no_conversation"
-            )
-        conversation_id, platform = thread
-        handle = _check_channel(platform, handles, datetime.now(timezone.utc))
-        if handle is not None and handle.kind is IdentityKind.EMAIL:
-            text += _unsubscribe_line(handle)
+    if thread is None:
+        raise FollowUpRefused(
+            "The contact has not written to the pod yet", code="no_conversation"
+        )
+    conversation_id, platform = thread
+    handle = _check_channel(platform, handles, datetime.now(timezone.utc))
+    await _within_the_days_follow_ups(windows or ContactWindows(), contact_id)
+    if handle is not None and handle.kind is IdentityKind.EMAIL:
+        text += _unsubscribe_line(handle)
+    # A web chat has nobody to hand it to: it waits in the conversation for
+    # the contact's next visit, which is what writing it down does.
+    delivered = (
+        None
+        if platform == WEB_PLATFORM
+        else await _send(uow_factory, conversation_id, text, platform)
+    )
+    async with uow_factory() as uow:
         await append_follow_up(
             uow,
             conversation_id=conversation_id,
             message=text,
             sent_by_user_id=sent_by_user_id,
+            delivered=delivered,
         )
-        await uow.commit()
-    if platform == WEB_PLATFORM:
-        # Waits in the chat; the widget shows it on their next visit.
-        return FollowUpSent(conversation_id, platform, delivered=False)
-    async with uow_factory() as uow:
-        delivered = await build_surface_egress(uow).send_agent_message_for_conversation(
-            conversation_id=conversation_id, message=text
+    if delivered is False:
+        raise FollowUpRefused(
+            "The message could not be delivered. Try again later.",
+            code="not_delivered",
+            status_code=502,
         )
+    return FollowUpSent(conversation_id, platform, delivered=bool(delivered))
+
+
+async def _within_the_days_follow_ups(
+    windows: ContactWindows, contact_id: UUID
+) -> None:
+    window = await windows.follow_up(contact_id)
+    if window is Window.SHUT:
+        raise FollowUpRefused(
+            "That is as many messages as one contact gets in a day",
+            code="rate_limited",
+            status_code=429,
+        )
+    if window is Window.UNKNOWN:
+        raise FollowUpRefused(
+            "Messages to contacts are unavailable right now. Try again shortly.",
+            code="unavailable",
+            status_code=503,
+        )
+
+
+async def _send(
+    uow_factory: UnitOfWorkFactory, conversation_id: UUID, text: str, platform: str
+) -> bool:
+    """Hand the follow-up to the platform; whether it took it."""
+    try:
+        async with uow_factory() as uow:
+            delivered = await build_surface_egress(
+                uow
+            ).send_agent_message_for_conversation(
+                conversation_id=conversation_id, message=text
+            )
+    except PLATFORM_TRANSPORT_ERRORS as exc:
+        logger.warning(
+            "agent_surfaces.contact_follow_ups.send_failed.degraded",
+            platform=platform,
+            error_type=type(exc).__name__,
+        )
+        delivered = False
     logger.info(
         "agent_surfaces.contact_follow_ups.sent.observed",
         platform=platform,
         delivered=delivered,
     )
-    return FollowUpSent(conversation_id, platform, delivered=delivered)
+    return delivered

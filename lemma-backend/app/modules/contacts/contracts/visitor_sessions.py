@@ -44,6 +44,7 @@ __all__ = [
     "attach_visitor_conversation",
     "consume_visitor_code",
     "conversation_has_visitor",
+    "forget_contact_visitor_sessions",
     "forget_session_liveness",
     "identify_visitor_session",
     "latest_visitor_conversation",
@@ -56,6 +57,7 @@ __all__ = [
     "touch_visitor_session",
     "visitor_session",
     "visitor_session_by_secret",
+    "visitor_conversation_contact",
     "visitor_session_is_live",
 ]
 
@@ -292,6 +294,23 @@ async def conversation_has_visitor(
 ) -> bool:
     """Whether a visitor's session leads to this conversation."""
     return await VisitorSessionRepository(session).leads_to(conversation_id)
+
+
+async def visitor_conversation_contact(
+    session: AsyncSession, conversation_id: UUID
+) -> tuple[bool, UUID | None]:
+    """Whether a visitor's session leads here, and the contact it names if any."""
+    return await VisitorSessionRepository(session).contact_for_conversation(
+        conversation_id
+    )
+
+
+async def forget_contact_visitor_sessions(
+    uow: SqlAlchemyUnitOfWork, *, contact_id: UUID
+) -> list[UUID]:
+    """Delete the contact's sessions and codes. Pass the ids to
+    ``forget_session_liveness`` once the transaction has committed."""
+    return await VisitorSessionRepository(uow.session).delete_for_contact(contact_id)
 
 
 async def latest_visitor_conversation(

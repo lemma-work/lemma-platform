@@ -37,8 +37,12 @@ from app.modules.usage.domain.errors import UsageAccessDeniedError
 from app.modules.usage.infrastructure.contacts_cap_repository import (
     UsageContactsCapRepository,
 )
+from app.modules.usage.services.contacts_cap import contacts_cap_status
+from app.core.authorization.permissions import Permissions, SYSTEM_ROLE_PERMISSIONS
+from app.core.log.log import get_logger
 
 router = APIRouter(prefix="/usage", tags=["Usage"], redirect_slashes=False)
+logger = get_logger(__name__)
 
 
 def _datetime_range(params: UsageQueryParams) -> tuple[datetime, datetime]:
@@ -354,22 +358,30 @@ async def get_my_usage(
     return _summary_response(summary)
 
 
-def _this_month(now: datetime) -> tuple[datetime, datetime]:
-    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    return start, (start.replace(day=28) + timedelta(days=4)).replace(day=1)
-
-
 async def _contacts_cap(uow: UoWDep, organization_id: UUID) -> ContactsCapResponse:
-    caps = UsageContactsCapRepository(uow.session)
-    start, end = _this_month(datetime.now(timezone.utc))
-    limit = await caps.monthly_limit(organization_id)
+    status_now = await contacts_cap_status(uow, organization_id)
+    limit = status_now.cap.limit_usd
     return ContactsCapResponse(
         organization_id=organization_id,
         monthly_limit_usd=None if limit is None else float(limit),
-        spent_this_month_usd=float(
-            await caps.spend(organization_id, start=start, end=end)
-        ),
+        is_default=status_now.cap.is_default,
+        spent_this_month_usd=float(status_now.spent_usd),
     )
+
+
+async def _require_billing_manager(
+    *, user: UserEntity, organization_id: UUID, uow: UoWDep
+) -> None:
+    """Only a role carrying ``org.billing.manage`` -- the organization's owners."""
+    role = await organization_member_role(
+        uow, user_id=user.id, organization_id=organization_id
+    )
+    if role is None or Permissions.ORG_BILLING_MANAGE not in (
+        SYSTEM_ROLE_PERMISSIONS.get(role.value, frozenset())
+    ):
+        raise UsageAccessDeniedError(
+            "Only organization owners can change the contacts cap"
+        )
 
 
 @router.get(
@@ -396,20 +408,31 @@ async def get_contacts_cap(
 async def update_contacts_cap(
     request: Request, organization_id: UUID, body: ContactsCapUpdate, uow: UoWDep
 ) -> ContactsCapResponse:
-    """Set or remove the cap. Organization owners and editors only.
+    """Set the cap, or remove it for no limit. Organization owners only.
 
     Contacts are never billed, so this is the ceiling on what people outside
-    the organization can cost it. Past it, its bots stop answering them until
-    the month turns.
+    the organization can cost it: past it, its bots stop answering them until
+    the month turns, and hand their conversations to members. Billing is an
+    owner's, and so is this.
     """
     user: UserEntity = request.state.user
-    await _require_usage_org_access(user=user, organization_id=organization_id, uow=uow)
+    await _require_billing_manager(user=user, organization_id=organization_id, uow=uow)
+    limit = None if body.monthly_limit_usd is None else money(body.monthly_limit_usd)
+    previous = await contacts_cap_status(uow, organization_id)
     await UsageContactsCapRepository(uow.session).set_monthly_limit(
         organization_id,
-        monthly_limit_usd=(
-            None if body.monthly_limit_usd is None else money(body.monthly_limit_usd)
-        ),
+        monthly_limit_usd=limit,
         updated_by_user_id=user.id,
+    )
+    logger.info(
+        "usage.contacts_cap.changed.observed",
+        organization_id=str(organization_id),
+        changed_by_user_id=str(user.id),
+        previous_limit_usd=(
+            None if previous.cap.limit_usd is None else float(previous.cap.limit_usd)
+        ),
+        previous_was_default=previous.cap.is_default,
+        monthly_limit_usd=None if limit is None else float(limit),
     )
     await uow.commit()
     return await _contacts_cap(uow, organization_id)

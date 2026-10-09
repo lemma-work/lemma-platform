@@ -339,6 +339,8 @@ class AgentSurfaceResponse(BaseModel):
     reach: SurfaceReach | None = None
     config: SurfaceConfigResponse
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
+    #: Set while nobody in the space looks after the contacts this bot answers.
+    contacts_warning: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

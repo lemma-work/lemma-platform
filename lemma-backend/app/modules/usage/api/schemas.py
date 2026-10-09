@@ -206,7 +206,17 @@ class ContactsCapResponse(BaseModel):
 
     organization_id: UUID
     monthly_limit_usd: float | None = Field(
-        default=None, description="No cap of the organization's own when absent."
+        default=None,
+        description=(
+            "The cap that applies this month. Absent when an owner removed it: "
+            "no limit."
+        ),
+    )
+    is_default: bool = Field(
+        default=False,
+        description=(
+            "Nobody in the organization set a cap, so the deployment's default applies."
+        ),
     )
     spent_this_month_usd: float = Field(
         description=(
@@ -220,5 +230,8 @@ class ContactsCapUpdate(BaseModel):
     monthly_limit_usd: float | None = Field(
         default=None,
         ge=0,
-        description="Null removes the cap. Zero stops bots answering contacts.",
+        description=(
+            "Null removes the cap: no limit, kept as the owner's choice. Zero "
+            "stops bots answering contacts."
+        ),
     )

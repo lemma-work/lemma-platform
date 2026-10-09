@@ -216,6 +216,38 @@ class VisitorSessionRepository:
         )
         return list(result.scalars())
 
+    async def delete_for_contact(self, contact_id: UUID) -> list[UUID]:
+        """Delete every session that named this contact, and its codes; their ids.
+
+        Forgetting a person removes what was kept about them, not only their
+        access, so these go rather than being marked ended.
+        """
+        sessions = select(VisitorSessionModel.id).where(
+            VisitorSessionModel.contact_id == contact_id
+        )
+        await self.session.execute(
+            delete(VisitorCodeModel).where(VisitorCodeModel.session_id.in_(sessions))
+        )
+        result = await self.session.execute(
+            delete(VisitorSessionModel)
+            .where(VisitorSessionModel.contact_id == contact_id)
+            .returning(VisitorSessionModel.id)
+        )
+        return list(result.scalars())
+
+    async def contact_for_conversation(
+        self, conversation_id: UUID
+    ) -> tuple[bool, UUID | None]:
+        """Whether a session leads to this conversation, and the contact it names."""
+        row = (
+            await self.session.execute(
+                select(VisitorSessionModel.contact_id)
+                .where(VisitorSessionModel.conversation_id == conversation_id)
+                .limit(1)
+            )
+        ).first()
+        return (False, None) if row is None else (True, row.contact_id)
+
     async def leads_to(self, conversation_id: UUID) -> bool:
         return bool(
             await self.session.scalar(
