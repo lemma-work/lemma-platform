@@ -506,6 +506,13 @@ entries: [installation](docs/installation.md) for the full setup guide,
 [`lemma-backend/README.md`](lemma-backend/README.md) /
 [`lemma-frontend/README.md`](lemma-frontend/README.md) for per-component detail.
 
+## Community
+
+Questions, ideas, and "how do I…" belong in
+[Discussions](https://github.com/lemma-work/lemma-platform/discussions). The team
+and other builders are in [Discord](https://discord.gg/x2NVyNPQR).
+[SUPPORT.md](SUPPORT.md) says where to go for what.
+
 ## Licensing
 
 The Lemma platform uses a dual-licensing model:
