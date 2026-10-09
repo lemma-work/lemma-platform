@@ -424,7 +424,6 @@
     padding: 0 0 13px 0;
 }
 .wf-spine__row:last-child { padding-bottom: 0; }
-.wf-spine--loose .wf-spine__row { padding-bottom: 13px; }
 .wf-spine__row:not(:last-child)::before {
     content: "";
     position: absolute;
@@ -434,9 +433,9 @@
     width: 1px;
     background: var(--line-2);
 }
-/* Nothing reaches an orphan, so nothing joins it to what is above it. The rule
-   would be drawing a connection the graph does not have. */
-.wf-spine--loose .wf-spine__row::before { display: none; }
+/* Nothing reaches an orphaned chain, so nothing joins it to the chain above
+   it: a gap between them, and the rule only inside each. */
+.wf-spine--loose + .wf-spine--loose { margin-top: 16px; }
 
 .wf-spine__mark {
     width: 7px;
@@ -472,6 +471,62 @@
     line-height: 1.5;
     overflow-wrap: anywhere;
 }
+
+/* ── where it forks ──
+   A decision's mark is the one that is not round, so the places where the
+   column splits can be found by running an eye down the marks alone. Child
+   combinators throughout from here: a fork's row holds whole spines, and a
+   descendant selector on it would restyle every mark inside it. */
+.wf-spine__row[data-kind="DECISION"] > .wf-spine__mark {
+    border-radius: 1px;
+    transform: rotate(45deg) scale(.86);
+}
+
+/* The arms sit on a panel of their own. Without one their labels start at
+   the same indent as the main line's steps, and "Otherwise" reads as the
+   next thing that happens rather than one of the ways out. A fork inside an
+   arm flips back to paper, so the two never merge into one panel. */
+.wf-fork {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: var(--r-sm);
+    background: var(--chrome);
+}
+.wf-fork .wf-fork { background: var(--paper); }
+.wf-spine--inner { margin-top: 8px; padding-left: 0; }
+.wf-arm > .wf-spine--inner { margin-top: 6px; }
+
+.wf-arm__when {
+    margin: 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+}
+.wf-arm__when code,
+.wf-spine__note code { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+
+/* A line that points at a step drawn elsewhere, or says the path stops.
+   Neither is a step, so neither gets a step's mark: an arrow for the one
+   that goes somewhere, the filled End mark for the one that does not. */
+.wf-spine__row--jump > .wf-spine__mark {
+    display: flex;
+    justify-content: center;
+    height: auto;
+    margin-top: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font-size: 11px;
+    line-height: 17px;
+    color: var(--ink-3);
+}
+.wf-spine__row--end > .wf-spine__mark { background: var(--ink-3); border-color: var(--ink-3); }
+.wf-spine__row--jump .wf-spine__title i,
+.wf-spine__row--end .wf-spine__title i { color: var(--ink-2); }
 
 /* A graph the engine will refuse to start. Said in the same furniture a failed
    run says its failure in, because it is the same kind of news. */
@@ -522,5 +577,7 @@
        characters for the sentence. Stacked, each gets the width. */
     .wf-spine__title { gap: 2px 8px; }
     .wf-spine__title i { flex-basis: 100%; }
+    /* "Back to" is not a sentence beside an id, it is half of one. */
+    .wf-spine__row--jump .wf-spine__title i { flex-basis: auto; }
     .wf-ask { width: 100%; justify-content: center; }
 }

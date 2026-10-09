@@ -7,12 +7,12 @@ function run -- and what it gets back is a token carrying that workload's
 delegation claims, or a plain impersonation token when delegation is off or the
 workload is not pod-scoped.
 
-**Two operations, not one.** The expiry is not free: SuperTokens reports it from
-`get_session_information`, a second round trip to the core after the session is
-minted. A caller that uses the token immediately must not pay for it, and a
-caller that caches the token must not guess at it -- a local TTL that outlives
-the issuer's is a token cache handing out dead tokens. So the choice is at the
-call site, named.
+**The expiry is the access token's.** A caller that caches the token must not
+guess at its lifetime -- a local TTL that outlives the issuer's is a token cache
+handing out dead tokens -- so `mint_delegated_token_with_expiry` reports the
+token's own `exp`. Not the SuperTokens session's expiry, which is the refresh
+token's lifetime: reporting that once let the function session cache serve
+tokens the gateway had already stopped accepting.
 
 `DelegatedToken` rather than the caller's own token type: the composition file
 imported `function`'s `FunctionSessionToken` to build one, which pointed identity
