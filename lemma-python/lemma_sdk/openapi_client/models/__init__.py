@@ -350,6 +350,7 @@ _NAME_TO_MODULE = {
     'NotifyMemberRequest': 'notify_member_request',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
+    'OpenReadsRequest': 'open_reads_request',
     'OpenTableRequest': 'open_table_request',
     'OpenTableSummary': 'open_table_summary',
     'OpenTablesResponse': 'open_tables_response',
@@ -419,6 +420,9 @@ _NAME_TO_MODULE = {
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
     'PublishStatusResponse': 'publish_status_response',
+    'ReadColumnItem': 'read_column_item',
+    'ReadColumnResponse': 'read_column_response',
+    'ReadsOpeningResponse': 'reads_opening_response',
     'RecordAccessMode': 'record_access_mode',
     'RecordCreateResponseRecordCreate': 'record_create_response_record_create',
     'RecordGetResponseRecordGet': 'record_get_response_record_get',
@@ -437,6 +441,8 @@ _NAME_TO_MODULE = {
     'ResourceVisibility': 'resource_visibility',
     'RowRequest': 'row_request',
     'RowRequestValues': 'row_request_values',
+    'RowsResponse': 'rows_response',
+    'RowsResponseRowsItem': 'rows_response_rows_item',
     'RuntimeModelCapability': 'runtime_model_capability',
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
@@ -964,6 +970,7 @@ if TYPE_CHECKING:
     from .notify_member_request import NotifyMemberRequest
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
+    from .open_reads_request import OpenReadsRequest
     from .open_table_request import OpenTableRequest
     from .open_table_summary import OpenTableSummary
     from .open_tables_response import OpenTablesResponse
@@ -1033,6 +1040,9 @@ if TYPE_CHECKING:
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
     from .publish_status_response import PublishStatusResponse
+    from .read_column_item import ReadColumnItem
+    from .read_column_response import ReadColumnResponse
+    from .reads_opening_response import ReadsOpeningResponse
     from .record_access_mode import RecordAccessMode
     from .record_create_response_record_create import RecordCreateResponseRecordCreate
     from .record_get_response_record_get import RecordGetResponseRecordGet
@@ -1051,6 +1061,8 @@ if TYPE_CHECKING:
     from .resource_visibility import ResourceVisibility
     from .row_request import RowRequest
     from .row_request_values import RowRequestValues
+    from .rows_response import RowsResponse
+    from .rows_response_rows_item import RowsResponseRowsItem
     from .runtime_model_capability import RuntimeModelCapability
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
@@ -1591,6 +1603,7 @@ __all__ = [
     'NotifyMemberRequest',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
+    'OpenReadsRequest',
     'OpenTableRequest',
     'OpenTableSummary',
     'OpenTablesResponse',
@@ -1660,6 +1673,9 @@ __all__ = [
     'PublishStartRequest',
     'PublishStatus',
     'PublishStatusResponse',
+    'ReadColumnItem',
+    'ReadColumnResponse',
+    'ReadsOpeningResponse',
     'RecordAccessMode',
     'RecordCreateResponseRecordCreate',
     'RecordGetResponseRecordGet',
@@ -1678,6 +1694,8 @@ __all__ = [
     'ResourceVisibility',
     'RowRequest',
     'RowRequestValues',
+    'RowsResponse',
+    'RowsResponseRowsItem',
     'RuntimeModelCapability',
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',

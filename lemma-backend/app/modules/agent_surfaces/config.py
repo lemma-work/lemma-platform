@@ -278,6 +278,14 @@ class SurfaceSettings(BaseSettings):
         default=500,
         description="How many times one web form may be submitted in a day.",
     )
+    surface_web_reads_per_widget_per_day: int = Field(
+        default=20000,
+        description=(
+            "How many times pages may read the tables one web widget opened for "
+            "reads in a day. Reads start no agent work, so this is a crawl "
+            "ceiling, not a cost one."
+        ),
+    )
     surface_web_stream_seconds: int = Field(
         default=300,
         description=(

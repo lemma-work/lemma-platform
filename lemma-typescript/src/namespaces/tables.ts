@@ -1,6 +1,7 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { AddColumnRequest } from "../openapi_client/models/AddColumnRequest.js";
 import type { CreateTableRequest } from "../openapi_client/models/CreateTableRequest.js";
+import type { OpenReadsRequest } from "../openapi_client/models/OpenReadsRequest.js";
 import type { OpenTableRequest } from "../openapi_client/models/OpenTableRequest.js";
 import type { UpdateTableRequest } from "../openapi_client/models/UpdateTableRequest.js";
 import { TablesService } from "../openapi_client/services/TablesService.js";
@@ -69,5 +70,18 @@ export class TablesNamespace {
     close: (tableName: string) =>
       this.client.request(() => TablesService.tablePublicRowsClose(this.podId(), tableName)),
     list: () => this.client.request(() => TablesService.tablePublicRowsList(this.podId())),
+  };
+
+  /**
+   * Who outside the pod may read a table: chosen columns of every row, through a
+   * web widget's key. A table that takes rows from outside can't be opened for reads.
+   */
+  readonly publicReads = {
+    get: (tableName: string) =>
+      this.client.request(() => TablesService.tablePublicReadsGet(this.podId(), tableName)),
+    open: (tableName: string, payload: OpenReadsRequest) =>
+      this.client.request(() => TablesService.tablePublicReadsOpen(this.podId(), tableName, payload)),
+    close: (tableName: string) =>
+      this.client.request(() => TablesService.tablePublicReadsClose(this.podId(), tableName)),
   };
 }

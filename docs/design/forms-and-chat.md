@@ -55,6 +55,15 @@ What a stranger's row may set off:
   cannot probe what is there.
 - **Nothing opens while forms are switched off** (`PUBLIC_WEB_ENABLED`).
 
+## Reading, the other way
+
+A table can instead be **opened for reads**: chosen columns of every row,
+read through a widget's key (`GET /public/web/{key}/rows?table=`,
+`Lemma.readRows(table)`), as the member who opened it. A table takes rows
+from outside or is read from outside, never both, so adding a row still reads
+nothing back. Per-member and contact-owned tables never open for reads. The
+first use is booking a member's time ([booking.md](booking.md)).
+
 ## Not building
 
 - A form object, a form builder, or generated function code for forms.

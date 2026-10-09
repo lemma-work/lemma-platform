@@ -129,6 +129,22 @@ class TableResponse(BaseModel):
     columns: list[TableColumn]
 
 
+class ReadColumnItem(BaseModel):
+    name: str
+    type: str
+
+
+class RowsResponse(BaseModel):
+    table: str
+    columns: list[ReadColumnItem] = Field(description="The open columns, in order.")
+    rows: list[dict[str, str | int | float | bool | None]] = Field(
+        description=(
+            "Every row's open columns, at most 500, in the order the pod chose. "
+            "Dates and times are ISO 8601."
+        )
+    )
+
+
 class RowRequest(BaseModel):
     table: str = Field(max_length=255)
     values: dict[str, object] = Field(default_factory=dict)
@@ -350,6 +366,37 @@ async def web_read_table(
             )
             for column in opened.columns
         ],
+    )
+
+
+@router.get(
+    "/{public_key}/rows",
+    operation_id="public.web.rows.read",
+    response_model=RowsResponse,
+)
+async def web_read_rows(
+    widget: PublicWidgetDep,
+    visitor: OptionalVisitorDep,
+    address: VisitorAddressDep,
+    table: str = Query(max_length=255),
+    chat: WebChat = Depends(web_chat),
+) -> RowsResponse:
+    """Read a table the pod opened for reads: its open columns, every row.
+
+    The read side of a form. A booking page reads its free slots here; nothing
+    else about the pod is reachable, and a table that takes rows from outside
+    is never readable.
+    """
+    readable, rows = await chat.visitor_rows(
+        widget, visitor, table=table, address=address
+    )
+    return RowsResponse(
+        table=readable.name,
+        columns=[
+            ReadColumnItem(name=column.name, type=column.type)
+            for column in readable.columns
+        ],
+        rows=rows,
     )
 
 

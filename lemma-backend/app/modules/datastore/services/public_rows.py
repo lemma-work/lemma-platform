@@ -44,6 +44,7 @@ from app.modules.datastore.domain.public_rows import (
 )
 from app.modules.datastore.domain.row_security import CONTACT_COLUMN
 from app.modules.datastore.infrastructure.models import (
+    DatastorePublicReadsModel,
     DatastorePublicRowsModel,
     DatastoreTable,
 )
@@ -95,6 +96,15 @@ async def _grant(uow, table_id: UUID) -> DatastorePublicRowsModel | None:
     )
 
 
+async def _read_from_outside(uow, table_id: UUID) -> bool:
+    found = await uow.session.scalar(
+        select(DatastorePublicReadsModel.id).where(
+            DatastorePublicReadsModel.table_id == table_id
+        )
+    )
+    return found is not None
+
+
 async def table_opening(
     uow, *, pod_id: UUID, table_name: str, ctx: Context
 ) -> TableOpening:
@@ -138,6 +148,11 @@ async def open_table(
         raise OpeningRefused(
             "Each member sees only their own rows in this table, so it can't "
             "take rows from outside"
+        )
+    if await _read_from_outside(uow, table.id):
+        raise OpeningRefused(
+            "People outside read this table, and a table that takes rows never "
+            "shows them. Close it to reads first"
         )
     problem = opening_problem(
         table.columns,

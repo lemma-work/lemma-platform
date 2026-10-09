@@ -4,8 +4,10 @@
 /* eslint-disable */
 import type { AddColumnRequest } from '../models/AddColumnRequest.js';
 import type { CreateTableRequest } from '../models/CreateTableRequest.js';
+import type { OpenReadsRequest } from '../models/OpenReadsRequest.js';
 import type { OpenTableRequest } from '../models/OpenTableRequest.js';
 import type { OpenTablesResponse } from '../models/OpenTablesResponse.js';
+import type { ReadsOpeningResponse } from '../models/ReadsOpeningResponse.js';
 import type { TableDetailResponse } from '../models/TableDetailResponse.js';
 import type { TableListResponse } from '../models/TableListResponse.js';
 import type { TableOpeningResponse } from '../models/TableOpeningResponse.js';
@@ -215,6 +217,80 @@ export class TablesService {
                 'table_name': tableName,
                 'column_name': columnName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Stop People Outside Reading Rows
+     * @param podId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    public static tablePublicReadsClose(
+        podId: string,
+        tableName: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/datastore/tables/{table_name}/public-reads',
+            path: {
+                'pod_id': podId,
+                'table_name': tableName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Who Outside May Read Rows
+     * @param podId
+     * @param tableName
+     * @returns ReadsOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    public static tablePublicReadsGet(
+        podId: string,
+        tableName: string,
+    ): CancelablePromise<ReadsOpeningResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/datastore/tables/{table_name}/public-reads',
+            path: {
+                'pod_id': podId,
+                'table_name': tableName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Let People Outside Read Rows
+     * Open the table's rows to people outside the pod -- confirmed contacts, or anyone -- for the chosen columns only. Rows are read as the member opening it, who must be able to change the table. A table that takes rows from outside can't be opened for reads.
+     * @param podId
+     * @param tableName
+     * @param requestBody
+     * @returns ReadsOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    public static tablePublicReadsOpen(
+        podId: string,
+        tableName: string,
+        requestBody: OpenReadsRequest,
+    ): CancelablePromise<ReadsOpeningResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/datastore/tables/{table_name}/public-reads',
+            path: {
+                'pod_id': podId,
+                'table_name': tableName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

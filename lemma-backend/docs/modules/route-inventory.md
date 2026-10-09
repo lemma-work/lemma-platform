@@ -65,6 +65,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
 | GET | `/public/web/{public_key}/challenge` | `public.web.challenge.read` | Web Challenge |
 | GET | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
+| GET | `/public/web/{public_key}/rows` | `public.web.rows.read` | Web Read Rows |
 | GET | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
 | GET | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
@@ -169,6 +170,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/datastore/files/signed-urls/{code}` | `file.signed_url.revoke` | Revoke a public signed URL |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.delete` | Delete Table |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.remove` | Remove Column |
+| DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/public-reads` | `table.public_reads.close` | Stop People Outside Reading Rows |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.close` | Stop People Outside Adding Rows |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.delete` | Delete Record |
 | GET | `/pods/{pod_id}/datastore/files` | `file.list` | List Files |
@@ -183,6 +185,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/public-rows` | `table.public_rows.list` | Tables Open To People Outside |
 | GET | `/pods/{pod_id}/datastore/tables` | `table.list` | List Tables |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.get` | Get Table |
+| GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-reads` | `table.public_reads.get` | Who Outside May Read Rows |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.get` | Who Outside May Add Rows |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records` | `record.list` | List Records |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.get` | Get Record |
@@ -202,6 +205,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/delete` | `record.bulk_delete` | Bulk Delete |
 | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/update` | `record.bulk_update` | Bulk Update |
 | PUT | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.attach` | Attach Document Markdown |
+| PUT | `/pods/{pod_id}/datastore/tables/{table_name}/public-reads` | `table.public_reads.open` | Let People Outside Read Rows |
 | PUT | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.open` | Let People Outside Add Rows |
 
 ## decisions

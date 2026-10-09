@@ -45,6 +45,8 @@ LOD = "LOD"
 uncatalogued = "uncatalogued"
 appliable = "appliable"
 playwrite = "playwrite"
+# India Standard Time, on booking pages.
+IST = "IST"
 Playwrite = "Playwrite"
 Bellweather = "Bellweather"
 Ines = "Ines"

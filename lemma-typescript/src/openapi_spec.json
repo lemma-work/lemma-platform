@@ -11593,6 +11593,39 @@
         "title": "OAuth2DefaultsResponseSchema",
         "type": "object"
       },
+      "OpenReadsRequest": {
+        "properties": {
+          "audience": {
+            "$ref": "#/components/schemas/PublicAudience"
+          },
+          "columns": {
+            "description": "The columns people outside may see, in the order to show them. Checked against the table when it is opened.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One of the open columns, to read rows in ascending order of.",
+            "title": "Order By"
+          }
+        },
+        "required": [
+          "audience",
+          "columns"
+        ],
+        "title": "OpenReadsRequest",
+        "type": "object"
+      },
       "OpenTableRequest": {
         "properties": {
           "audience": {
@@ -14000,6 +14033,116 @@
         "title": "PublishStatusResponse",
         "type": "object"
       },
+      "ReadColumnItem": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "ReadColumnItem",
+        "type": "object"
+      },
+      "ReadColumnResponse": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "ReadColumnResponse",
+        "type": "object"
+      },
+      "ReadsOpeningResponse": {
+        "properties": {
+          "audience": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicAudience"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who outside may read it; null when it is closed."
+          },
+          "columns": {
+            "description": "The open columns, in order.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "contact_owned": {
+            "description": "Each row is one contact's, so it can't be opened.",
+            "title": "Contact Owned",
+            "type": "boolean"
+          },
+          "offered": {
+            "description": "The columns people outside could be shown.",
+            "items": {
+              "$ref": "#/components/schemas/ReadColumnResponse"
+            },
+            "title": "Offered",
+            "type": "array"
+          },
+          "order_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The open column rows are read in ascending order of.",
+            "title": "Order By"
+          },
+          "per_user": {
+            "description": "Each member sees only their own rows, so it can't be opened.",
+            "title": "Per User",
+            "type": "boolean"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "takes_rows": {
+            "description": "It takes rows from outside, so it can't be opened for reads.",
+            "title": "Takes Rows",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table",
+          "per_user",
+          "contact_owned",
+          "takes_rows",
+          "offered",
+          "audience",
+          "columns",
+          "order_by"
+        ],
+        "title": "ReadsOpeningResponse",
+        "type": "object"
+      },
       "RecordAccessMode": {
         "description": "Row-visibility mode for record reads/writes on RLS-enabled tables.\n\n``USER`` (the default when the ``mode`` param is omitted) scopes rows to the\ncaller's own ``user_id`` so app apps keep their per-user semantics \u2014 pod\nadmins included. ``ADMIN`` returns and operates on every member's rows and\nrequires the caller to administer the table (otherwise the request is\nrejected). The mode is a no-op for non-RLS tables, whose rows are shared by\nevery member regardless.\n\nEndpoints expose this as an *optional* query param (default ``None`` ==\n``USER``) rather than one defaulting to ``RecordAccessMode.USER``: a named\nenum query param carrying a literal default makes the TypeScript generator\nemit ``mode: RecordAccessMode = 'USER'``, which fails strict typecheck (a raw\nstring is not assignable to the enum). An optional param generates the valid\n``mode?: RecordAccessMode`` while keeping one shared, CAPS-valued enum type.",
         "enum": [
@@ -14444,6 +14587,56 @@
           "table"
         ],
         "title": "RowRequest",
+        "type": "object"
+      },
+      "RowsResponse": {
+        "properties": {
+          "columns": {
+            "description": "The open columns, in order.",
+            "items": {
+              "$ref": "#/components/schemas/ReadColumnItem"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "rows": {
+            "description": "Every row's open columns, at most 500, in the order the pod chose. Dates and times are ISO 8601.",
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "columns",
+          "rows"
+        ],
+        "title": "RowsResponse",
         "type": "object"
       },
       "RuntimeModelCapability": {
@@ -31348,6 +31541,189 @@
         }
       }
     },
+    "/pods/{pod_id}/datastore/tables/{table_name}/public-reads": {
+      "delete": {
+        "operationId": "table.public_reads.close",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop People Outside Reading Rows",
+        "tags": [
+          "tables"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "table.public_reads"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "table.public_reads",
+          "result": "void",
+          "verb": "close"
+        }
+      },
+      "get": {
+        "operationId": "table.public_reads.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadsOpeningResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Who Outside May Read Rows",
+        "tags": [
+          "tables"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "table.public_reads",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "put": {
+        "description": "Open the table's rows to people outside the pod -- confirmed contacts, or anyone -- for the chosen columns only. Rows are read as the member opening it, who must be able to change the table. A table that takes rows from outside can't be opened for reads.",
+        "operationId": "table.public_reads.open",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenReadsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadsOpeningResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Let People Outside Read Rows",
+        "tags": [
+          "tables"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "table.public_reads"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "table.public_reads",
+          "result": "entity",
+          "verb": "open"
+        }
+      }
+    },
     "/pods/{pod_id}/datastore/tables/{table_name}/public-rows": {
       "delete": {
         "operationId": "table.public_rows.close",
@@ -39004,6 +39380,64 @@
       }
     },
     "/public/web/{public_key}/rows": {
+      "get": {
+        "description": "Read a table the pod opened for reads: its open columns, every row.\n\nThe read side of a form. A booking page reads its free slots here; nothing\nelse about the pod is reachable, and a table that takes rows from outside\nis never readable.",
+        "operationId": "public.web.rows.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "title": "Table",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Read Rows",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "public.web.rows",
+          "result": "entity",
+          "verb": "read"
+        }
+      },
       "post": {
         "description": "Add one row to a table the pod opened to visitors. Nothing is read back.",
         "operationId": "public.web.row.add",

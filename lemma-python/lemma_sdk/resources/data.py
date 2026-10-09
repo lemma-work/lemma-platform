@@ -25,6 +25,9 @@ from ..openapi_client.api.tables import (
     table_delete,
     table_get,
     table_list,
+    table_public_reads_close,
+    table_public_reads_get,
+    table_public_reads_open,
     table_public_rows_close,
     table_public_rows_get,
     table_public_rows_list,
@@ -39,11 +42,13 @@ from ..openapi_client.models.create_record_request import CreateRecordRequest
 from ..openapi_client.models.create_table_request import CreateTableRequest
 from ..openapi_client.models.datastore_query_request import DatastoreQueryRequest
 from ..openapi_client.models.datastore_query_response import DatastoreQueryResponse
+from ..openapi_client.models.open_reads_request import OpenReadsRequest
 from ..openapi_client.models.open_table_request import OpenTableRequest
 from ..openapi_client.models.open_tables_response import OpenTablesResponse
 from ..openapi_client.models.record_list_response import RecordListResponse
 from ..openapi_client.models.table_detail_response import TableDetailResponse
 from ..openapi_client.models.table_list_response import TableListResponse
+from ..openapi_client.models.reads_opening_response import ReadsOpeningResponse
 from ..openapi_client.models.table_opening_response import TableOpeningResponse
 from ..openapi_client.models.update_record_request import UpdateRecordRequest
 from ..openapi_client.models.update_table_request import UpdateTableRequest
@@ -172,6 +177,34 @@ class PodTables(BoundResource):
     def list_public_rows(self) -> OpenTablesResponse:
         """The pod's tables that take rows from outside, and from whom."""
         return self._call(table_public_rows_list, self._pod_uuid())
+
+    def public_reads(self, table: str) -> ReadsOpeningResponse:
+        """Who outside the pod may read ``table``, and which columns could be open."""
+        return self._call(table_public_reads_get, self._pod_uuid(), table)
+
+    def open_public_reads(
+        self,
+        table: str,
+        *,
+        columns: list[str],
+        audience: str = "anyone",
+        order_by: str | None = None,
+    ) -> ReadsOpeningResponse:
+        """Let a page read ``columns`` of every row of ``table`` through a web
+        widget's key -- ``"anyone"`` or confirmed ``"contacts"`` -- in ascending
+        order of ``order_by``. A table that takes rows from outside can't be
+        opened for reads."""
+        return self._call(
+            table_public_reads_open,
+            self._pod_uuid(),
+            table,
+            body={"audience": audience, "columns": columns, "order_by": order_by},
+            body_model=OpenReadsRequest,
+        )
+
+    def close_public_reads(self, table: str) -> None:
+        """Stop people outside the pod reading ``table``."""
+        self._call(table_public_reads_close, self._pod_uuid(), table)
 
 
 class PodRecords(BoundResource):

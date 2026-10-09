@@ -149,6 +149,9 @@ _CODES_PER_EMAIL_PER_HOUR = 5
 _VERIFIES_PER_SESSION_PER_10_MINUTES = 10
 _VERIFIES_PER_EMAIL_PER_HOUR = 20
 _VERIFIES_PER_ADDRESS_PER_HOUR = 60
+#: Reads of a table opened for reads. A page reads once when it opens, so
+#: this is generous for a person and still stops one address crawling a key.
+_READS_PER_ADDRESS_PER_10_MINUTES = 120
 #: Live streams one session may hold open: a tab, and the one replacing it.
 _STREAMS_PER_SESSION = 2
 _HOUR = 3600
@@ -228,6 +231,20 @@ class WebWidgetLimiter:
                 f"web:submissions:{widget_id}",
                 _DAY,
                 surface_settings.surface_web_submissions_per_widget_per_day,
+            ),
+        )
+
+    async def allow_read(self, *, widget_id: UUID, address: str) -> bool:
+        return await self._within(
+            (
+                f"web:reads:addr:{address}",
+                _TEN_MINUTES,
+                _READS_PER_ADDRESS_PER_10_MINUTES,
+            ),
+            (
+                f"web:reads:{widget_id}",
+                _DAY,
+                surface_settings.surface_web_reads_per_widget_per_day,
             ),
         )
 

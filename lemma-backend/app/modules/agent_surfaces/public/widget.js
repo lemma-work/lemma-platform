@@ -22,7 +22,10 @@
  *
  * A page with its own design marks <form data-lemma-table="signups">, or calls
  * Lemma.addRow("signups", {...}). Either way the table decides which columns
- * may be written; the page only asks. Such a form is never submitted by the
+ * may be written; the page only asks. A table the pod opened for reads is read
+ * with Lemma.readRows("open_slots"): its open columns, every row, nothing else.
+ * Lemma.sendCode(email) and Lemma.verifyCode(email, code) confirm the visitor's
+ * email, which a table open to contacts only asks for first. Such a form is never submitted by the
  * browser itself once this script runs; give it method="post" anyway, so a
  * submit before the script arrives keeps the answers out of the URL.
  * data-lemma-page is set by Lemma's hosted page.
@@ -1098,6 +1101,30 @@
     });
   }
 
+  // A table opened for reads. Sent with the session when there is one, since a
+  // table open to contacts only answers a confirmed visitor alone.
+  function readRows(table) {
+    var path = "/rows?table=" + encodeURIComponent(table);
+    return state.access ? withSession(function () { return call(path); }) : call(path, { auth: false });
+  }
+
+  function sendCode(email) {
+    return withSession(function () {
+      return proof("code").then(function (altcha) {
+        return call("/code", { body: { email: email, altcha: altcha } });
+      });
+    });
+  }
+
+  function verifyCode(email, code) {
+    return withSession(function () {
+      return call("/code/verify", { body: { email: email, code: code } });
+    }).then(function (data) {
+      adopt(data);
+      return { isContact: state.isContact };
+    });
+  }
+
   function describeTable(table) {
     return call("/table?table=" + encodeURIComponent(table), { auth: false });
   }
@@ -1353,6 +1380,12 @@
   // What a page of its own can call: an app, or any website with the script.
   window.Lemma = window.LemmaChat = {
     addRow: addRow,
+    readRows: readRows,
+    sendCode: sendCode,
+    verifyCode: verifyCode,
+    isContact: function () {
+      return state.isContact;
+    },
     describeTable: describeTable,
     openChat: function () {
       launchOpen();

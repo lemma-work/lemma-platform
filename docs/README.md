@@ -42,6 +42,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [App and function versions](design/app-function-versioning.md) | Revision identity, previews, rollback, bounded retention, and concurrent cleanup |
 | [Product analytics](design/product-analytics.md) | The product-analytics plane, its event contract, origins, and the privacy boundary |
 | [Contacts](design/contacts.md) | Draft: people a pod knows who aren't members — identity without sign-in, scoped authority, hand-off, forms |
+| [Booking a member's time](design/booking.md) | A booking page from two tables: one opened for reads (free slots), one for rows (bookings) |
 
 The sandbox set breaks down further:
 [protocol](architecture/sandbox/sandbox-protocol.md) ·

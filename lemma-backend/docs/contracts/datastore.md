@@ -44,6 +44,9 @@ The table below is generated from the committed OpenAPI specification by `script
 | `table.delete` | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | Delete Table |
 | `table.get` | GET | `/pods/{pod_id}/datastore/tables/{table_name}` | Get Table |
 | `table.list` | GET | `/pods/{pod_id}/datastore/tables` | List Tables |
+| `table.public_reads.close` | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/public-reads` | Stop People Outside Reading Rows |
+| `table.public_reads.get` | GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-reads` | Who Outside May Read Rows |
+| `table.public_reads.open` | PUT | `/pods/{pod_id}/datastore/tables/{table_name}/public-reads` | Let People Outside Read Rows |
 | `table.public_rows.close` | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | Stop People Outside Adding Rows |
 | `table.public_rows.get` | GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | Who Outside May Add Rows |
 | `table.public_rows.list` | GET | `/pods/{pod_id}/datastore/public-rows` | Tables Open To People Outside |

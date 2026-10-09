@@ -65,6 +65,14 @@ anybody unless the deployment has `PUBLIC_WEB_ENABLED` on.
 its rows through a widget's key: the hosted `{page_url}?table=t`, the embed script
 with `data-lemma-table`, a `<form data-lemma-table>`, or `Lemma.addRow(t, values)`.
 Rows are added as the member who opened the table, with only the open columns.
+
+**Reading** — the other way round: a table **opened for reads**
+(`PUT /pods/{pod}/datastore/tables/{t}/public-reads`, SDK
+`pod.tables.open_public_reads(t, columns=[...], order_by=..., audience=...)`) lets a
+page show the chosen columns of every row (`Lemma.readRows(t)`, at most 500). Use it
+for what a page must show strangers: free slots, a menu, a price list. Only the pod
+writes such a table, usually a function on a schedule. A table is read from outside
+or takes rows from outside, never both.
 The chat beside the form can fill it in (`fill_form`); it never sends it. Build forms
 with the **`lemma-form`** skill.
 

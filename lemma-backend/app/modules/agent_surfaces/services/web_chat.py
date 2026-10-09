@@ -47,6 +47,12 @@ from app.modules.contacts.contracts.visitor_sessions import (
     touch_visitor_session,
     visitor_session,
 )
+from app.modules.datastore.contracts.public_reads import (
+    PublicReadsClosed,
+    PublicValue,
+    ReadableTable,
+    visitor_rows,
+)
 from app.modules.datastore.contracts.public_rows import (
     OpenTable,
     PublicAudience,
@@ -342,6 +348,33 @@ class WebChat:
             raise refused(
                 "This isn't taking answers right now", 403, "table_closed"
             ) from exc
+
+    async def visitor_rows(
+        self,
+        widget: WebWidget,
+        visitor: Visitor | None,
+        *,
+        table: str,
+        address: str,
+    ) -> tuple[ReadableTable, list[dict[str, PublicValue]]]:
+        """The open columns of every row of a table the pod opened for reads.
+
+        Said the same way whether the table was never open, was closed, or is
+        open to confirmed contacts only and this visitor is not one: which
+        tables exist is not the visitor's to learn.
+        """
+        contact_id = visitor.session.contact_id if visitor else None
+        if not await self.limiter.allow_read(widget_id=widget.id, address=address):
+            raise refused("Too many requests. Try again later.", 429, "rate_limited")
+        try:
+            return await visitor_rows(
+                self.uow_factory,
+                pod_id=widget.pod_id,
+                table_name=table,
+                contact_id=contact_id,
+            )
+        except PublicReadsClosed as exc:
+            raise refused("There is nothing to read here", 404, "table_closed") from exc
 
 
 def _visitor_metadata(name: str | None, client_nonce: str | None) -> dict[str, object]:

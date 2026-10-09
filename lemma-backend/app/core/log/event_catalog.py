@@ -632,6 +632,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.projection.delete_derived_child_artifacts_s.diagnostic': EventSpec('debug', frozenset()),
     'datastore.projection.delete_file_s_s.diagnostic': EventSpec('debug', frozenset()),
     'datastore.projection.remove_indexed_chunks_s_s.diagnostic': EventSpec('debug', frozenset()),
+    'datastore.public_reads.closed': EventSpec('info', frozenset({'pod_id', 'table_id', 'user_id'})),
+    'datastore.public_reads.opened': EventSpec('info', frozenset({'audience', 'column_count', 'pod_id', 'table_id', 'user_id'})),
     'datastore.public_rows.closed': EventSpec('info', frozenset({'pod_id', 'table_id', 'user_id'})),
     'datastore.public_rows.opened': EventSpec('info', frozenset({'audience', 'column_count', 'pod_id', 'table_id', 'user_id'})),
     'datastore.query_role.ensure.degraded': EventSpec('warning', frozenset({'role'})),

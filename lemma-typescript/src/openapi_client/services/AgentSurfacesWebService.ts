@@ -7,6 +7,7 @@ import type { CodeRequest } from '../models/CodeRequest.js';
 import type { HistoryResponse } from '../models/HistoryResponse.js';
 import type { MessageRequest } from '../models/MessageRequest.js';
 import type { RowRequest } from '../models/RowRequest.js';
+import type { RowsResponse } from '../models/RowsResponse.js';
 import type { SessionRequest } from '../models/SessionRequest.js';
 import type { SessionResponse } from '../models/SessionResponse.js';
 import type { TableResponse } from '../models/TableResponse.js';
@@ -137,6 +138,36 @@ export class AgentSurfacesWebService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Web Read Rows
+     * Read a table the pod opened for reads: its open columns, every row.
+     *
+     * The read side of a form. A booking page reads its free slots here; nothing
+     * else about the pod is reachable, and a table that takes rows from outside
+     * is never readable.
+     * @param publicKey
+     * @param table
+     * @returns RowsResponse Successful Response
+     * @throws ApiError
+     */
+    public static publicWebRowsRead(
+        publicKey: string,
+        table: string,
+    ): CancelablePromise<RowsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/public/web/{public_key}/rows',
+            path: {
+                'public_key': publicKey,
+            },
+            query: {
+                'table': table,
+            },
             errors: {
                 422: `Validation Error`,
             },
