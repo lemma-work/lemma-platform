@@ -17,12 +17,15 @@
  *                                    visitors, where the script tag is; the chat
  *                                    stays beside it to answer and fill it in
  *   data-lemma-title / -intro / -thanks   the form's words
- *   data-lemma-chat="off"            no chat bubble
+ *   data-lemma-chat="off"            no chat bubble (on the script, or on a
+ *                                    page's own <form data-lemma-table>)
  *
  * A page with its own design marks <form data-lemma-table="signups">, or calls
  * Lemma.addRow("signups", {...}). Either way the table decides which columns
- * may be written; the page only asks. data-lemma-page is set by Lemma's hosted
- * page.
+ * may be written; the page only asks. Such a form is never submitted by the
+ * browser itself once this script runs; give it method="post" anyway, so a
+ * submit before the script arrives keeps the answers out of the URL.
+ * data-lemma-page is set by Lemma's hosted page.
  *
  * Everything the server says is built into the page as DOM nodes -- markdown
  * included -- and never parsed as markup.
@@ -155,8 +158,14 @@
     remember();
     return data;
   }
+  // Bumped by Lemma.identify: a session asked for on behalf of whoever was
+  // here before is not adopted for whoever is here now.
+  var identity = 0;
   function exchange(body) {
-    return call("/session", { body: body, auth: false }).then(adopt);
+    var asked = identity;
+    return call("/session", { body: body, auth: false }).then(function (data) {
+      return asked === identity ? adopt(data) : ensureSession();
+    });
   }
   // A session, kept or new, and a fresh access token for it.
   function start() {
@@ -166,6 +175,7 @@
           if (error.code !== "no_session" || token) throw error;
           state.secret = null;
           remember();
+          restartConversation();
           return start();
         });
       }
@@ -186,10 +196,10 @@
       }
     }
     if (!starting) {
-      starting = start().then(
-        function () { starting = null; },
-        function (error) { starting = null; throw error; }
-      );
+      var mine = (starting = start().then(
+        function () { if (starting === mine) starting = null; },
+        function (error) { if (starting === mine) starting = null; throw error; }
+      ));
     }
     return starting;
   }
@@ -201,7 +211,10 @@
       .catch(function (error) {
         if (error.status !== 401 || (error.code !== "bad_token" && error.code !== "no_session")) throw error;
         state.access = null;
-        if (error.code === "no_session") state.secret = null;
+        if (error.code === "no_session") {
+          state.secret = null;
+          restartConversation();
+        }
         return ensureSession().then(fn);
       });
   }
@@ -258,6 +271,8 @@
     ".lw-assistant blockquote{border-left:3px solid var(--line);padding-left:10px;color:var(--ink2)}",
     ".lw-assistant .lw-h{font-weight:500;font-size:15px;margin:4px 0 6px}",
     ".lw-assistant hr{border:0;border-top:1px solid var(--line);margin:10px 0}",
+    ".lw-assistant .lw-raw{white-space:pre-wrap;margin:0}",
+    ".lw-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}",
     ".lw-caret{display:inline-block;width:7px;height:1em;margin-left:2px;vertical-align:-2px;",
     "border-radius:2px;background:var(--a);animation:lw-blink 1s steps(2) infinite}",
     ".lw-typing{display:flex;gap:4px;padding:13px 14px}",
@@ -368,9 +383,14 @@
   var INLINE =
     /(`+)([^`]+?)\1|\*\*([^*]+?)\*\*|__([^_]+?)__|\*([^*\s][^*]*?)\*|\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<]*[^\s<.,;:!?)\]'"])/g;
 
+  // A link only when the model wrote its scheme, and the scheme is the web's or
+  // mail's: never javascript: or data:, and never a relative or "//host" link,
+  // which would take its meaning from whatever page the chat sits on.
   function safeHref(url) {
+    var text = String(url).trim();
+    if (!/^(https?|mailto):/i.test(text)) return null;
     try {
-      var parsed = new URL(url, window.location.href);
+      var parsed = new URL(text);
       return /^(https?|mailto):$/.test(parsed.protocol) ? parsed.href : null;
     } catch (e) {
       return null;
@@ -474,14 +494,38 @@
 
   // ------------------------------------------------------------------- chat
 
-  var log, input, sendButton, foot, verifyLink;
+  var log, input, sendButton, foot, verifyLink, announcer;
   var launchOpen = function () {};
   var lastSequence = -1, busy = false, typingRow = null, live = null;
-  var streaming = false, noStream = !window.ReadableStream || !window.TextDecoder;
-  var poller = null, pollUntil = 0, slowPoller = null;
+  var streaming = false, noStream = !window.ReadableStream || !window.TextDecoder, streamStop = null;
+  var poller = null, pollUntil = 0, slowPoller = null, loaded = false;
   // What the visitor sent, drawn at once and confirmed when the server's copy
-  // arrives in history -- so it is never drawn twice.
+  // arrives in history -- so it is never drawn twice. Matched by the name the
+  // page gave each message, never by its text: the same words twice are two
+  // messages, and a message from another tab is not this one.
   var unconfirmed = [];
+  var nonces = 0;
+  function nonce() {
+    if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+    return Date.now().toString(36) + "-" + nonces++ + "-" + Math.random().toString(36).slice(2);
+  }
+
+  // Sequence numbers count within one conversation, so a new session -- a
+  // different person signed in, or a chat that ended -- starts the log over.
+  function restartConversation() {
+    // The old conversation's stream says nothing more into the new one's log.
+    if (streamStop) streamStop.abort();
+    streamStop = null;
+    lastSequence = -1;
+    unconfirmed = [];
+    live = null;
+    busy = false;
+    loaded = false;
+    hideTyping();
+    if (!log) return;
+    log.textContent = "";
+    log.appendChild(el("div", "lw-msg lw-assistant", greeting));
+  }
 
   function isOpen() {
     return shell.classList.contains("lw-open");
@@ -496,8 +540,13 @@
     if (!isOpen()) shell.classList.add("lw-unread");
     return node;
   }
+  // Screen readers hear what is finished, once: never a reply mid-sentence.
+  function announce(text) {
+    if (announcer) announcer.textContent = text;
+  }
   function note(text) {
     add(el("div", "lw-note", text));
+    announce(text);
   }
   function showTyping() {
     if (typingRow || live) return;
@@ -515,23 +564,36 @@
   }
 
   // A reply being written: the text received so far, revealed a little behind
-  // it so chunks arriving in bursts read as steady typing.
-  function Reply(text, animate) {
+  // it so chunks arriving in bursts read as steady typing. While it is being
+  // written each new piece is one more text node; the markdown is built once,
+  // when the reply is finished, rather than the whole bubble on every frame.
+  function Reply(animate) {
     this.node = add(el("div", "lw-msg lw-assistant"));
-    this.target = text || "";
-    this.shown = animate && !calm ? 0 : this.target.length;
+    this.raw = this.node.appendChild(el("p", "lw-raw"));
+    this.caret = this.raw.appendChild(el("span", "lw-caret"));
+    this.target = "";
+    this.shown = 0;
+    this.painted = 0;
+    this.animate = !!animate && !calm;
     this.finished = false;
-    this.paint();
-    if (this.shown < this.target.length) this.tick();
+    this.done = false;
   }
-  Reply.prototype.write = function (text) {
-    this.target = text;
-    if (this.shown > text.length) this.shown = 0;
-    if (calm) this.shown = text.length;
+  Reply.prototype.append = function (text) {
+    this.target += text;
     this.tick();
   };
+  Reply.prototype.reset = function () {
+    this.target = "";
+    this.shown = this.painted = 0;
+    while (this.caret.previousSibling) this.raw.removeChild(this.caret.previousSibling);
+  };
   Reply.prototype.tick = function () {
-    if (this.frame) return;
+    if (this.done || this.frame) return;
+    if (!this.animate) {
+      this.shown = this.target.length;
+      this.paint();
+      return;
+    }
     var self = this;
     this.frame = window.requestAnimationFrame(function () {
       self.frame = null;
@@ -543,17 +605,31 @@
   };
   Reply.prototype.paint = function () {
     var nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-    markdown(this.target.slice(0, this.shown), this.node);
-    if (!this.finished || this.shown < this.target.length) {
-      var last = this.node.lastElementChild || this.node;
-      while (last.lastElementChild && /^(UL|OL|LI|BLOCKQUOTE)$/.test(last.tagName)) last = last.lastElementChild;
-      last.appendChild(el("span", "lw-caret"));
+    if (this.shown > this.painted) {
+      var piece = this.target.slice(this.painted, this.shown);
+      this.raw.insertBefore(document.createTextNode(piece), this.caret);
+      this.painted = this.shown;
+    }
+    if (this.finished && this.shown >= this.target.length) {
+      this.done = true;
+      if (!this.target.trim()) {
+        this.node.remove();
+        return;
+      }
+      markdown(this.target, this.node);
+      announce(this.node.textContent);
     }
     if (nearBottom) scrollDown();
   };
+  /** The whole reply, when the server has it; what was streamed when it does not. */
   Reply.prototype.finish = function (text) {
     this.finished = true;
-    this.write(text != null ? text : this.target);
+    if (text == null || text === this.target) this.tick();
+    else if (text.indexOf(this.target) === 0) this.append(text.slice(this.target.length));
+    else {
+      this.reset();
+      this.append(text);
+    }
   };
 
   function setBusy(value) {
@@ -568,10 +644,10 @@
     } else if (frame.type === "delta") {
       busy = true;
       hideTyping();
-      if (!live) live = new Reply("", true);
-      live.write(live.target + frame.text);
+      if (!live) live = new Reply(true);
+      live.append(frame.text);
     } else if (frame.type === "reset") {
-      if (live) live.write("");
+      if (live) live.reset();
     } else if (frame.type === "message") {
       if (typeof frame.sequence === "number") {
         if (frame.sequence <= lastSequence) return;
@@ -579,7 +655,7 @@
       }
       hideTyping();
       if (live) live.finish(frame.text);
-      else new Reply(frame.text, true).finish(frame.text);
+      else new Reply(true).finish(frame.text);
       live = null;
       if (busy) showTyping();
     } else if (frame.type === "fill") {
@@ -590,6 +666,27 @@
       setBusy(false);
       window.setTimeout(poll, 400);
     }
+  }
+
+  // The stream's frames, one JSON object a line, from pieces that may end
+  // anywhere -- mid-line included. A line that is not JSON is skipped.
+  function lineSplitter(onFrame) {
+    var buffer = "";
+    return function (text) {
+      buffer += text;
+      var parts = buffer.split("\n");
+      buffer = parts.pop();
+      parts.forEach(function (line) {
+        if (!line.trim()) return;
+        var frame;
+        try {
+          frame = JSON.parse(line);
+        } catch (e) {
+          return; /* a line we do not understand */
+        }
+        if (frame && typeof frame === "object") onFrame(frame);
+      });
+    };
   }
 
   // A stream that will not open is retried with growing, jittered waits, and
@@ -603,8 +700,12 @@
     if (streaming || noStream || !state.access) return;
     streaming = true;
     var opened = false, quiet = false;
+    var stop = null;
     withSession(function () {
-      return request("/stream").then(function (response) {
+      // Asked afresh on a retry: a session that ended aborted the last one.
+      stop = window.AbortController ? new AbortController() : null;
+      streamStop = stop;
+      return request("/stream", { signal: stop ? stop.signal : undefined }).then(function (response) {
         if (response.status === 401) {
           return response.json().then(function (data) {
             var error = new Error((data && data.message) || "Sign in again");
@@ -624,31 +725,22 @@
         if (!response.ok || !response.body) throw new Error("no stream");
         var reader = response.body.getReader();
         var decoder = new TextDecoder();
-        var buffer = "";
+        var push = lineSplitter(function (frame) {
+          if (stop && stop.signal.aborted) return;
+          if (frame.type === "open") {
+            // The handshake: the stream is up. Whatever was said while it
+            // was down is in the history.
+            opened = true;
+            streamFailures = 0;
+            poll();
+            return;
+          }
+          onFrame(frame);
+        });
         function pump() {
           return reader.read().then(function (chunk) {
             if (chunk.done) return;
-            buffer += decoder.decode(chunk.value, { stream: true });
-            var parts = buffer.split("\n");
-            buffer = parts.pop();
-            parts.forEach(function (line) {
-              if (!line.trim()) return;
-              var frame;
-              try {
-                frame = JSON.parse(line);
-              } catch (e) {
-                return; /* a line we do not understand */
-              }
-              if (frame.type === "open") {
-                // The handshake: the stream is up. Whatever was said while it
-                // was down is in the history.
-                opened = true;
-                streamFailures = 0;
-                poll();
-                return;
-              }
-              onFrame(frame);
-            });
+            push(decoder.decode(chunk.value, { stream: true }));
             return pump();
           });
         }
@@ -679,8 +771,9 @@
     if (message.sequence <= lastSequence) return;
     lastSequence = message.sequence;
     if (message.role === "user") {
-      if (unconfirmed.length && unconfirmed[0] === message.text) {
-        unconfirmed.shift();
+      var mine = message.client_nonce ? unconfirmed.indexOf(message.client_nonce) : -1;
+      if (mine >= 0) {
+        unconfirmed.splice(mine, 1);
         return;
       }
       add(el("div", "lw-msg lw-user", message.text));
@@ -688,7 +781,7 @@
     }
     if (live) return;
     hideTyping();
-    new Reply(message.text, animate).finish(message.text);
+    new Reply(animate).finish(message.text);
     if (busy && message.role === "assistant" && !streaming) setBusy(false);
   }
   function poll(initial) {
@@ -716,21 +809,29 @@
   }
 
   function send(text) {
-    unconfirmed.push(text);
-    add(el("div", "lw-msg lw-user", text));
+    var id = nonce();
+    unconfirmed.push(id);
+    var bubble = add(el("div", "lw-msg lw-user", text));
     setBusy(true);
     withSession(function () {
-      return call("/messages", { body: { text: text } });
+      return call("/messages", { body: { text: text, client_nonce: id } });
     })
       .then(function () {
         if (noStream) keepPolling(120);
         else openStream();
       })
       .catch(function (error) {
-        var at = unconfirmed.indexOf(text);
+        // Not sent: take it back off the log and give the words back, so the
+        // visitor can shorten or resend them.
+        var at = unconfirmed.indexOf(id);
         if (at >= 0) unconfirmed.splice(at, 1);
+        bubble.remove();
         setBusy(false);
-        note(error.message);
+        note(error.code === "VALIDATION_ERROR" ? "Keep it under 4000 characters." : error.message);
+        if (input && !input.value) {
+          input.value = text;
+          input.dispatchEvent(new Event("input"));
+        }
       });
   }
 
@@ -804,14 +905,21 @@
   function buildChat() {
     var launch = el("button", "lw-launch");
     launch.setAttribute("aria-label", "Open chat");
+    launch.setAttribute("aria-expanded", "false");
+    launch.setAttribute("aria-controls", "lw-panel");
     launch.appendChild(icon(ICON_CHAT));
     launch.appendChild(icon(ICON_X));
     launch.appendChild(el("span", "lw-dot"));
 
-    var panel = el("div", "lw-panel");
-    panel.setAttribute("role", "dialog");
-    var head = el("div", "lw-head");
     var title = state.title || "Chat";
+    var panel = el("div", "lw-panel");
+    panel.id = "lw-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", title);
+    // A floating chat holds the visitor until it is closed; the hosted page's
+    // chat is the page.
+    if (!shell.classList.contains("lw-page")) panel.setAttribute("aria-modal", "true");
+    var head = el("div", "lw-head");
     head.appendChild(el("div", "lw-face", title.trim().charAt(0).toUpperCase() || "?"));
     var who = el("div", "lw-who");
     who.appendChild(el("div", "lw-title", title));
@@ -822,9 +930,13 @@
     close.appendChild(icon(ICON_X.replace('class="lw-x" ', 'width="18" height="18" ')));
     head.appendChild(close);
 
+    // Not a live region itself: a reply being written would be read out a
+    // word at a time. Finished messages go to the announcer instead.
     log = el("div", "lw-log");
-    log.setAttribute("aria-live", "polite");
     log.appendChild(el("div", "lw-msg lw-assistant", greeting));
+    announcer = el("div", "lw-sr");
+    announcer.setAttribute("role", "status");
+    announcer.setAttribute("aria-live", "polite");
 
     foot = el("div", "lw-foot");
     var compose = el("div", "lw-compose");
@@ -853,17 +965,21 @@
     panel.appendChild(head);
     panel.appendChild(log);
     panel.appendChild(foot);
+    panel.appendChild(announcer);
     shell.appendChild(panel);
     shell.appendChild(launch);
 
-    var loaded = false;
     function toggle(open) {
       if (shell.classList.contains("lw-page") && !open) return;
+      var wasOpen = isOpen();
       shell.classList.toggle("lw-open", open);
       launch.setAttribute("aria-label", open ? "Close chat" : "Open chat");
+      launch.setAttribute("aria-expanded", open ? "true" : "false");
+      // One slow poller at most, and none while the chat is closed.
+      if (slowPoller) window.clearInterval(slowPoller);
+      slowPoller = null;
       if (!open) {
-        if (slowPoller) window.clearInterval(slowPoller);
-        slowPoller = null;
+        if (wasOpen) launch.focus();
         return;
       }
       shell.classList.remove("lw-unread");
@@ -942,33 +1058,14 @@
     return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
   }
 
-  function inputFor(column) {
-    switch (column.type) {
-      case "INTEGER":
-      case "FLOAT":
-        return "number";
-      case "BOOLEAN":
-        return "checkbox";
-      case "DATE":
-        return "date";
-      case "DATETIME":
-        return "datetime";
-      case "ENUM":
-        return "choice";
-    }
-    var name = column.name.toLowerCase();
-    if (name.indexOf("email") >= 0) return "email";
-    if (/phone|mobile/.test(name)) return "phone";
-    if (/message|note|description|detail|comment/.test(name)) return "long";
-    return "text";
-  }
-
+  // The table says which control asks for each column (``column.input``), so
+  // this form, the members' snippet and any other page draw the same one.
   function fieldInput(column) {
-    var kind = inputFor(column);
+    var kind = column.input || "text";
     var control;
-    if (kind === "long") {
+    if (kind === "textarea") {
       control = el("textarea");
-    } else if (kind === "choice") {
+    } else if (kind === "select") {
       control = el("select");
       var blank = el("option", null, "Choose…");
       blank.value = "";
@@ -980,13 +1077,9 @@
       });
     } else {
       control = el("input");
-      control.type = {
-        email: "email", phone: "tel", number: "number", date: "date",
-        datetime: "datetime-local", checkbox: "checkbox",
-      }[kind] || "text";
+      control.type = kind;
       if (kind === "number") control.step = column.type === "INTEGER" ? "1" : "any";
-      if (kind === "email") control.autocomplete = "email";
-      if (kind === "phone") control.autocomplete = "tel";
+      if (kind === "email" || kind === "tel") control.autocomplete = kind;
     }
     control.name = column.name;
     control.id = "lw-f-" + column.name;
@@ -1009,18 +1102,21 @@
     return call("/table?table=" + encodeURIComponent(table), { auth: false });
   }
 
-  function renderForm(into, spec) {
+  // ``session`` settles once the visitor's session has started or failed to:
+  // the form is drawn either way, and without one it says why and takes nothing.
+  function renderForm(into, spec, session) {
     var card = el("div", "lw-fc");
     into.appendChild(card);
-    if (state.title) card.appendChild(el("div", "lw-eyebrow", state.title));
-    card.appendChild(el("h1", null, script.getAttribute("data-lemma-title") || spoken(spec.table)));
+    var heading = el("h1", null, script.getAttribute("data-lemma-title") || spoken(spec.table));
+    card.appendChild(heading);
     var intro = script.getAttribute("data-lemma-intro");
     if (intro) card.appendChild(el("p", "lw-intro", intro));
     var form = el("form");
     form.noValidate = true;
-    var rows = {};
+    // No prototype, so a column named like one of Object's own keys is just a column.
+    var rows = Object.create(null);
     spec.columns.forEach(function (column) {
-      var check = inputFor(column) === "checkbox";
+      var check = column.input === "checkbox";
       var row = el("div", "lw-field" + (check ? " lw-check" : ""));
       var control = fieldInput(column);
       var label = el("label", null, column.description || spoken(column.name));
@@ -1044,9 +1140,19 @@
     form.appendChild(problem);
     form.appendChild(submit);
     card.appendChild(form);
+    session.then(
+      function () {
+        if (state.title) card.insertBefore(el("div", "lw-eyebrow", state.title), heading);
+      },
+      function (error) {
+        problem.textContent = (error && error.message) || "This form isn't taking answers right now.";
+        submit.disabled = true;
+      }
+    );
     fillers.push({
       table: spec.table,
       fill: function (values) {
+        // Only the table's open columns have a field here, so only they fill.
         Object.keys(values).forEach(function (name) {
           var hit = rows[name];
           if (!hit) return;
@@ -1113,7 +1219,7 @@
       again.onclick = function () {
         into.textContent = "";
         fillers = fillers.filter(function (filler) { return filler.table !== spec.table; });
-        renderForm(into, spec);
+        renderForm(into, spec, session);
       };
       box.appendChild(again);
       card.appendChild(box);
@@ -1157,52 +1263,85 @@
     };
   }
 
-  function placeForm(table) {
+  function placeForm(table, session) {
     var wrap = el("div", pageMode ? "lw-pagewrap" : "lw-inlinewrap");
     shell.appendChild(wrap);
     var target = pageMode && document.getElementById("lemma-page");
     if (target) target.appendChild(host);
     else script.parentNode.insertBefore(host, script.nextSibling);
     return describeTable(table).then(function (spec) {
-      renderForm(wrap, spec);
+      renderForm(wrap, spec, session);
     }).catch(function (error) {
       wrap.appendChild(el("div", "lw-fc", error.message));
     });
   }
 
-  /** A plain <form data-lemma-table="signups"> on the page: send its fields. */
+  /** The columns a table opened, asked once a table: what a fill may touch. */
+  var openColumns = Object.create(null);
+  function columnsOf(table) {
+    if (!openColumns[table]) {
+      openColumns[table] = describeTable(table).then(function (spec) {
+        return spec.columns.map(function (column) { return column.name; });
+      });
+    }
+    return openColumns[table];
+  }
+
+  /** A plain <form data-lemma-table="signups"> on the page: what the chat fills. */
   function bindPageForms() {
     var forms = document.querySelectorAll("form[data-lemma-table]");
     Array.prototype.forEach.call(forms, function (form) {
       var table = form.getAttribute("data-lemma-table");
       fillers.push({
         table: table,
+        // The page's form may hold fields of its own; only the table's open
+        // columns are the chat's to fill.
         fill: function (values) {
-          Object.keys(values).forEach(function (name) {
-            var control = form.elements.namedItem(name);
-            if (control && control.nodeName) setValue(control, values[name]);
+          columnsOf(table).then(function (open) {
+            open.forEach(function (name) {
+              if (!Object.prototype.hasOwnProperty.call(values, name)) return;
+              var control = form.elements.namedItem(name);
+              if (control && control.nodeName) setValue(control, values[name]);
+            });
+          }, function () {
+            /* the table is closed now: nothing to fill */
           });
         },
       });
-      form.addEventListener("submit", function (event) {
-        event.preventDefault();
-        var values = {};
-        new FormData(form).forEach(function (value, name) {
-          if (typeof value === "string") values[name] = value;
-        });
-        addRow(table, values)
-          .then(function () {
-            form.dispatchEvent(new CustomEvent("lemma:added", { bubbles: true }));
-            form.reset();
-          })
-          .catch(function (error) {
-            form.dispatchEvent(
-              new CustomEvent("lemma:error", { bubbles: true, detail: { code: error.code, message: error.message } })
-            );
-          });
-      });
     });
   }
+
+  /** Send a page's own form: its fields, as the table's row. */
+  function sendPageForm(form) {
+    var values = {};
+    new FormData(form).forEach(function (value, name) {
+      if (typeof value === "string") values[name] = value;
+    });
+    addRow(form.getAttribute("data-lemma-table"), values)
+      .then(function () {
+        form.dispatchEvent(new CustomEvent("lemma:added", { bubbles: true }));
+        form.reset();
+      })
+      .catch(function (error) {
+        form.dispatchEvent(
+          new CustomEvent("lemma:error", { bubbles: true, detail: { code: error.code, message: error.message } })
+        );
+      });
+  }
+
+  // A marked form must never fall back to the browser's own submit, which
+  // would send the answers to the page itself. So this listens from the moment
+  // the script runs -- before the page has loaded, or any session started.
+  document.addEventListener(
+    "submit",
+    function (event) {
+      var form = event.target;
+      if (!form || !form.matches || !form.matches("form[data-lemma-table]")) return;
+      event.preventDefault();
+      sendPageForm(form);
+    },
+    true
+  );
 
   function onFill(frame) {
     fillers.forEach(function (filler) {
@@ -1227,37 +1366,58 @@
      *  asked again whenever the chat needs a fresh one. */
     identify: function (token) {
       hostToken = token;
+      identity += 1;
+      starting = null;
       state.access = null;
       state.secret = null;
+      state.isContact = false;
       remember();
-      return ensureSession();
+      // Another person's conversation, numbered from its own start.
+      restartConversation();
+      return ensureSession().then(function () {
+        if (isOpen()) {
+          loaded = true;
+          return poll(true);
+        }
+      });
     },
   };
 
   function boot() {
-    ensureSession()
-      .then(function () {
-        var table = script.getAttribute("data-lemma-table");
-        var chat = script.getAttribute("data-lemma-chat") !== "off";
-        bindPageForms();
-        if (table) {
-          placeForm(table);
-          if (chat) buildChat();
-          return;
-        }
-        var target = pageMode && document.getElementById("lemma-page");
-        (target || document.body).appendChild(host);
-        if (pageMode) shell.classList.add("lw-page");
-        buildChat();
-        if (pageMode) launchOpen();
-      })
-      .catch(function () {
-        /* the widget is off, or not allowed on this page */
-      });
+    var table = script.getAttribute("data-lemma-table");
+    // "off" on the script, or on a page's own form, means no chat bubble.
+    var chat =
+      script.getAttribute("data-lemma-chat") !== "off" &&
+      !document.querySelector('form[data-lemma-table][data-lemma-chat="off"]');
+    bindPageForms();
+    // Nothing to draw: a page's own forms start a session when one is sent.
+    if (!table && !chat) return;
+    var session = ensureSession();
+    var quiet = function () {
+      /* the widget is off, or not allowed on this page */
+    };
+    session.catch(quiet);
+    if (table) {
+      placeForm(table, session);
+      if (chat) session.then(buildChat, quiet);
+      return;
+    }
+    session.then(function () {
+      var target = pageMode && document.getElementById("lemma-page");
+      (target || document.body).appendChild(host);
+      if (pageMode) shell.classList.add("lw-page");
+      buildChat();
+      if (pageMode) launchOpen();
+    }, quiet);
   }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
   } else {
     boot();
+  }
+
+  // The pure pieces, for widget.js's own tests only: a page never sets this.
+  if (window.__LEMMA_WIDGET_TEST__) {
+    window.__LEMMA_WIDGET_TEST__ = { safeHref: safeHref, markdown: markdown, lineSplitter: lineSplitter };
   }
 })();
