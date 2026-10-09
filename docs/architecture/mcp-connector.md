@@ -119,10 +119,15 @@ once across every replica rather than once per process. Tokens carry a
 from Lemma session tokens without asking SuperTokens, and how a secret scanner
 recognises a leaked one.
 
-**Scopes: `pod:read` and `pod:write`.** The pod tools split cleanly into those
-that read and those that write, and a finer set would ask a person to reason
-about tools they have never seen. A client granted only `pod:read` is not shown
-the writing tools and is refused if it calls one. `offline_access` is accepted
+**Scopes: `pod:read`, `pod:write` and `pod:events`.** The pod tools split
+cleanly into those that read and those that write, and a finer set would ask a
+person to reason about tools they have never seen. A client granted only
+`pod:read` is not shown the writing tools and is refused if it calls one.
+`pod:events` is being told about new rows (see [Events](#events)): not a kind
+of reading, because rows then go to a server the client chose, as they are
+added, while the person is away. The consent screen asks it separately, off
+until ticked; "read only" never includes it, and a connection made before it
+existed does not have it. `offline_access` is accepted
 and ignored: refresh tokens are always issued, and the spec asks servers not to
 advertise it.
 
@@ -295,22 +300,27 @@ draft with no SEP, so it is kept to `app/mcp_events.py` (the wire) and
   middleware adds it after the sieve. The methods are a FastMCP server
   extension (`work.lemma/events`) gated to protocol 2026-07-28.
 - **One event**, `record.created`, with one argument, `table`. A client may
-  subscribe only to a table the person can read at that moment
-  (`-32012 Forbidden` otherwise).
+  subscribe only with `pod:events`, and only to a table the person can read at
+  that moment (`-32012 Forbidden` otherwise).
 - **Subscribing** takes the client's own `whsec_` secret (24 to 64 bytes) and a
   callback URL that must pass the SSRF guard. Before anything is stored the
   callback is sent a signed `{"type": "verification", "challenge": ...}` and
   must echo the challenge, compared in constant time; a URL this connection
   already proved is not challenged again. Identity is `(grant, url, name,
   arguments)`: subscribing again with the same four refreshes the row and may
-  rotate the secret. `refreshBefore` is never more than the client asked for,
-  never more than 24 hours, never null. At most 50 per connection
-  (`-32013`). The secret is stored encrypted.
+  rotate the secret. `refreshBefore` is what the client asked for, clamped to
+  between 5 minutes and 24 hours (1 hour when it asks for nothing), never
+  null. At most 50 live subscriptions per connection (`-32013`), counted under
+  a lock on the connection; lapsed and stopped ones do not count. The secret is
+  stored encrypted, and is in the key-rotation registry.
 - **Delivering** is one worker job per subscriber per row, fanned out from the
   datastore stream after a cheap "is anything listening to this pod" check.
-  Every delivery re-checks the grant (live, still `pod:read`) and reads the row
-  as the person under their permissions and row-level security; a row they
-  cannot read is never sent. The body is the draft's `EventOccurrence`,
+  Every delivery re-checks the grant (live, still `pod:read` and `pod:events`)
+  and reads the row as the person under their permissions and row-level
+  security; a row they cannot read is never sent. One subscription is sent at
+  most 120 a minute; past that a delivery waits for the next window without
+  spending a retry. Twenty failures in a row pause it until the client's next
+  refresh. The body is the draft's `EventOccurrence`,
   Standard Webhooks signed over the exact bytes, `webhook-id` = the source
   event id on every retry, capped at 256 KiB (a larger row is sent as its id).
   Redirects are refused. 2xx is delivered; 410 ends the subscription; 413 and a
@@ -318,10 +328,14 @@ draft with no SEP, so it is kept to `app/mcp_events.py` (the wire) and
   five tries in all.
 - **Ending**: `events/unsubscribe` (idempotent), Stop beside the subscription
   in the person's connected apps (`DELETE /oauth/grants/{id}/subscriptions/
-  {sub}`), revoking the connection (deliveries stop at once, the rows go with
-  the grant), or the client letting `refreshBefore` pass. `terminated` is not
-  sent: ChatGPT does not handle it, and the next delivery's re-check is what
-  enforces revocation.
+  {sub}`), revoking the connection, or the client letting `refreshBefore`
+  pass. Stop keeps the row as a tombstone: the client's refresh is refused
+  (`-32012`, `reason: stopped`), and unsubscribing does not clear it, until the
+  person resumes it (`POST .../resume`). Revoking keeps the grant row, so its
+  `CASCADE` never fires: deliveries stop at the next re-check, and an hourly
+  sweep deletes a revoked connection's subscriptions and any lapsed for a
+  week. `terminated` is not sent: ChatGPT does not handle it, and the next
+  delivery's re-check is what enforces revocation.
 
 ## Not built yet
 

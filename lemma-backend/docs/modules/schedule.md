@@ -88,8 +88,16 @@ against that one secret. The server proves the callback with a signed
 challenge before it answers `events/subscribe`; the plugin returns it as
 `VerifiedDelivery.reply`, which the endpoint echoes without matching anything.
 An occurrence routes by `{"provider_trigger_id": <our subscription id>}`, the
-same key a Composio trigger uses, and its `eventId` makes the
-`source_event_id`.
+same key a Composio trigger uses, and a digest of its `eventId` makes the
+`source_event_id`. The plugin also names the account whose secret verified the
+delivery (`NormalizedWebhook.account_id`), and only that account's schedules
+fire.
+
+**Routing keys only provisioning writes.** `provider_trigger_id` and
+`installation_id` (`PROVISIONED_CONFIG_KEYS`) are dropped from whatever config
+an author sends, on create and on update, and a match on either keeps only
+schedules bound to an account. Matching searches every tenant's schedules, so a
+schedule that could type one in would receive someone else's events.
 
 Each plugin does two things, and they are separate because they fail
 differently. `verify` proves the delivery came from the source and parses it; a
@@ -125,6 +133,20 @@ now distinguishable, which they were not:
   look like success: the row was written, nothing was subscribed, and the
   schedule could never fire. Slack's three triggers were inert for years for
   exactly that reason.
+
+Provisioning runs before the row is written, with the request's connection
+handed back (an MCP server proves our callback while we wait); a row that then
+fails to write drops the subscription. Only the schedule's author may change
+what their account listens for, and a schedule that listens through an account
+cannot be edited into one that does not. An MCP schedule is unsubscribed after
+its delete commits.
+
+`McpListeningReconciler` (every 15 minutes) unsubscribes what no schedule
+holds, and turns a schedule off -- emailing its author why, clearing its
+routing key -- when its author has left the pod or the server has stopped
+renewing its subscription. Turning it back on subscribes afresh, by its author
+only. Schedule responses carry `listening` for an MCP schedule: listening,
+retrying, lapsed or pending, with the server's last error.
 
 ### Declared defaults
 

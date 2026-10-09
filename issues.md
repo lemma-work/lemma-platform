@@ -37,6 +37,22 @@ the thing that is wrong — resolve it with a product decision before writing co
 
 ## Open
 
+### DEV-SCHED-001 — A schedule cannot fire at a surface
+**Violates:** PS-SCHED-030
+**Severity:** question
+**Where:** `lemma-backend/app/modules/schedule/api/schemas/schedule_schemas.py:90`
+**Required:** "When a schedule fires at a surface, the system shall deliver the
+message to that surface."
+**Actual:** a schedule names exactly one agent or one workflow
+(`require_one_target_name`); there is no surface target. The last tie between a
+surface and a schedule, `agent_surfaces.schedule_id`, was dropped in migration
+`0024_drop_surface_schedule_id` with the polled email surfaces it served.
+Found reading the schedule target validation while reviewing pull request #906.
+**Why it matters:** the specification promises a message-to-a-surface schedule
+nobody can create.
+**Fix:** a product decision first. Either withdraw the bullet (an agent on a
+schedule can already message a surface), or add a surface target.
+
 ### DEV-SURF-001 — A disabled surface drops every message to it, in silence
 **Violates:** nothing — and that is the finding. No statement defines what a
 *disabled* surface does with an inbound message.

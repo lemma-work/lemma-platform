@@ -234,6 +234,26 @@ async def test_an_occurrence_routes_by_our_id_and_dedupes_on_its_event_id() -> N
 
 
 @pytest.mark.asyncio
+async def test_a_long_event_id_still_fits_the_run_ledgers_key() -> None:
+    """`schedule_runs.source_event_id` is 255 characters; the server's
+    `eventId` has no bound, and an insert that fails is an event never run."""
+    subscription_id = uuid4()
+    source, _ = _source(subscription_id)
+    long_id = "evt_" + "x" * 2000
+    verified = await source.verify(
+        _delivery(
+            subscription_id,
+            {"eventId": long_id, "name": "issue.created", "data": {}},
+        )
+    )
+    normalized = source.normalize(verified)
+    assert normalized is not None
+    assert normalized.source_event_id is not None
+    assert len(normalized.source_event_id) < 255
+    assert normalized.payload["event_id"] == long_id, "the agent still sees the id"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tamper",
     ["wrong_secret", "unknown_subscription", "other_remote_id", "stale", "no_query"],

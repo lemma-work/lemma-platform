@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy import case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -325,12 +325,15 @@ class EventSubscriptionRepository:
         """Delete what can never deliver again: subscriptions the client let
         lapse long ago, and every subscription of a revoked connection (revoke
         keeps the grant row, so its `CASCADE` never fires)."""
-        revoked = select(McpOAuthGrant.id).where(McpOAuthGrant.revoked_at.is_not(None))
+        revoked = exists().where(
+            McpOAuthGrant.id == McpEventSubscription.grant_id,
+            McpOAuthGrant.revoked_at.is_not(None),
+        )
         doomed = (
             select(McpEventSubscription.id)
             .where(
                 or_(
-                    McpEventSubscription.grant_id.in_(revoked),
+                    revoked,
                     (McpEventSubscription.refresh_before < lapsed_before)
                     & McpEventSubscription.stopped_at.is_(None),
                 )

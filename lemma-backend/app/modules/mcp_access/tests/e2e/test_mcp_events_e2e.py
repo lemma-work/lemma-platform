@@ -601,3 +601,34 @@ async def test_the_sweep_removes_what_can_never_deliver_again(
         await uow.commit()
     async with _session_factory()() as uow:
         assert await EventSubscriptionRepository(uow).get(sub_id) is None
+
+
+async def test_the_sweep_removes_a_revoked_connections_subscriptions(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    """Revoking keeps the grant row, so its CASCADE never fires; the sweep is
+    what removes what the connection subscribed to."""
+    from datetime import timedelta
+
+    from app.modules.mcp_access.infrastructure.subscription_repository import (
+        EventSubscriptionRepository,
+    )
+
+    pod_id = test_pod["id"]
+    _, _, sub_id, _, _ = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    grant_id = (await authenticated_client.get("/oauth/grants")).json()["items"][0][
+        "grant_id"
+    ]
+    revoked = await authenticated_client.delete(f"/oauth/grants/{grant_id}")
+    assert revoked.status_code in (200, 204), revoked.text
+
+    now = datetime.now(timezone.utc)
+    async with _session_factory()() as uow:
+        assert await EventSubscriptionRepository(uow).sweep(
+            lapsed_before=now - timedelta(days=7), batch=50
+        )
+        await uow.commit()
+    async with _session_factory()() as uow:
+        assert await EventSubscriptionRepository(uow).get(sub_id) is None
