@@ -82,13 +82,17 @@ class ResendPlatformService:
         Read off metadata rather than added to every signature between here and
         the notification service: ``agent_display_name`` already travels that
         way for the chat platforms, and both send paths already forward the
-        dict. A caller that knows neither name gets ``self._from_name`` back,
-        which is what the header said before any of this existed.
+        dict. ``email_sender_name`` is mail's own key and wins where it is set:
+        it names the pod when the pod's assistant is writing, and a chat bot
+        answering to the pod's name is not what that key is for. A caller that
+        knows neither gets ``self._from_name`` back, which is what the header
+        said before any of this existed.
         """
         data = metadata or {}
         return sender_display_name(
-            agent_name=data.get("agent_display_name"),
-            actor_display_name=data.get("actor_display_name"),
+            sender_name=(
+                data.get("email_sender_name") or data.get("agent_display_name")
+            ),
             product_name=self._from_name,
         )
 
