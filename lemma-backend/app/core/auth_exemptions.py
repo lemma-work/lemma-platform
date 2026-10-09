@@ -135,14 +135,16 @@ SELF_AUTHENTICATED_WEBSOCKETS: tuple[str, ...] = ("/workspace/browser/view",)
 
 #: Old paths of routes that moved under `/public/`, and the day each goes. The
 #: same handler serves both until then; the gate fails once a date passes, so
-#: the alias cannot outlive the reason for it.
+#: the alias cannot outlive the reason for it. Each date is the old URL's longest
+#: life counted from the release that moved it, with room for that release to
+#: wait in review.
 LEGACY_ALIASES: dict[str, date] = {
     # Tool results saved the token-less widget URL into conversation history.
-    "/widgets/serve": date(2026, 11, 8),
+    "/widgets/serve": date(2026, 12, 15),
     # Short file links live at most seven days.
-    "/s": date(2026, 10, 17),
+    "/s": date(2026, 11, 30),
     # Port grants are minted per preview and expire within the hour.
-    "/workspace-ports": date(2026, 10, 10),
+    "/workspace-ports": date(2026, 11, 30),
 }
 
 
