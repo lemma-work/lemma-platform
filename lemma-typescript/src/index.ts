@@ -41,6 +41,7 @@ export * from "./types.js";
 export { readSSE, parseSSEJson } from "./streams.js";
 export type { SseRawEvent } from "./streams.js";
 export { watchDatastoreChanges } from "./datastore-changes.js";
+export { isEmbeddedInHost } from "./embedded.js";
 export type {
   DatastoreChangeFrame,
   ChangeStreamStatus,
@@ -257,11 +258,16 @@ export type { PodRolesNamespace } from "./namespaces/pod-roles.js";
 export type { PodsNamespace } from "./namespaces/pods.js";
 export type { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
 export type { PodGroupsNamespace } from "./namespaces/pod-groups.js";
+export type { ContactsNamespace } from "./namespaces/contacts.js";
 export type { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 export type { RecordsNamespace } from "./namespaces/records.js";
 export type { ResourceAccessNamespace } from "./namespaces/resource-access.js";
 export type { DecisionPayload, DecisionsNamespace } from "./namespaces/decisions.js";
-export type { ScheduleListOptions, SchedulesNamespace } from "./namespaces/schedules.js";
+export type {
+  ScheduleListOptions,
+  ScheduleRunListOptions,
+  SchedulesNamespace,
+} from "./namespaces/schedules.js";
 export type { TablesNamespace } from "./namespaces/tables.js";
 export type { UsersNamespace } from "./namespaces/users.js";
 export type { WorkflowsNamespace } from "./namespaces/workflows.js";

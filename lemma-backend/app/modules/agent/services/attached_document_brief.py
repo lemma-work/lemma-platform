@@ -21,7 +21,7 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.datastore.contracts import (
     DatastoreAccessDeniedError,
     DatastoreFileNotFoundError,
@@ -41,7 +41,7 @@ def attached_file_path(conversation: Conversation) -> str | None:
     (see `domain/outsiders`). A doc they opened beside it is theirs; it must
     never be the text a stranger's turn starts from.
     """
-    if answers_outsiders(conversation):
+    if Audience.of(conversation).answers_outsiders:
         return None
     value = (conversation.metadata or {}).get(ATTACHED_FILE_KEY)
     return value if isinstance(value, str) and value.startswith("/") else None

@@ -19,11 +19,13 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS
+from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS, Audience
 from app.modules.agent.domain.private_notes import (
     IN_GROUP,
     IN_OUTSIDERS_THREAD,
+    NOTE_IN_DM_KEY,
     PRIVATE_NOTE_FROM_KEEPER_LABEL,
+    PRIVATE_NOTE_IN_DM_LABEL,
     PRIVATE_NOTE_KEY,
     PRIVATE_NOTE_LABEL,
     WRITTEN_BY_KEEPER_LABEL,
@@ -58,6 +60,12 @@ _OUTSIDERS_THREAD = {
 }
 _MEMBERS_GROUP = {"surface_platform": "TELEGRAM", "conversation_kind": "CHANNEL"}
 _DIRECT_CHAT = {"surface_platform": "TELEGRAM", "conversation_kind": "DM"}
+#: A contact's private chat: a DM on the platform, with somebody outside the pod.
+_CONTACT_CHAT = {
+    **Audience.contact(uuid4()).to_metadata(),
+    "surface_platform": "WHATSAPP",
+    "conversation_kind": "DM",
+}
 
 
 # ------------------------------------------------------------------ the stamp
@@ -69,11 +77,20 @@ _DIRECT_CHAT = {"surface_platform": "TELEGRAM", "conversation_kind": "DM"}
         (_OUTSIDERS_THREAD, IN_OUTSIDERS_THREAD),
         (_MEMBERS_GROUP, IN_GROUP),
         (_DIRECT_CHAT, None),
+        (_CONTACT_CHAT, IN_OUTSIDERS_THREAD),
         ({"surface_platform": "RESEND", "conversation_kind": "EMAIL"}, None),
         ({}, None),
         (None, None),
     ],
-    ids=["outsiders", "members-group", "dm", "email", "lemma-only", "no-metadata"],
+    ids=[
+        "outsiders",
+        "members-group",
+        "dm",
+        "contact-dm",
+        "email",
+        "lemma-only",
+        "no-metadata",
+    ],
 )
 def test_only_a_groups_conversation_marks_what_is_typed_into_it(
     conversation_metadata, expected
@@ -196,6 +213,56 @@ async def test_typing_in_lemma_into_a_direct_chat_marks_nothing():
     assert WRITTEN_IN_LEMMA_KEY not in run
 
 
+async def test_a_note_in_a_members_own_dm_is_labelled_as_theirs():
+    saved, _ = await _start(
+        _conversation(dict(_DIRECT_CHAT)),
+        metadata={PRIVATE_NOTE_KEY: True},
+        typed_in_lemma=True,
+    )
+
+    assert saved[NOTE_IN_DM_KEY] is True
+    assert lemma_label(saved) == PRIVATE_NOTE_IN_DM_LABEL
+
+
+async def test_a_note_in_a_contacts_dm_is_the_keepers_never_the_contacts():
+    """The person in a contact's chat is the contact. A note typed there in
+    Lemma was labelled as theirs -- "by the person in this chat" -- so the
+    model took the keeper's private words as the contact's own."""
+    saved, run = await _start(
+        _conversation(dict(_CONTACT_CHAT)),
+        metadata={PRIVATE_NOTE_KEY: True},
+        typed_in_lemma=True,
+    )
+
+    assert NOTE_IN_DM_KEY not in saved
+    assert saved[WRITTEN_IN_LEMMA_KEY] == IN_OUTSIDERS_THREAD
+    assert lemma_label(saved) == PRIVATE_NOTE_FROM_KEEPER_LABEL
+    assert keeper_started(run)
+
+
+async def test_a_plain_message_typed_into_a_contacts_dm_is_the_keepers():
+    saved, run = await _start(
+        _conversation(dict(_CONTACT_CHAT)),
+        metadata=None,
+        typed_in_lemma=True,
+    )
+
+    assert lemma_label(saved) == WRITTEN_BY_KEEPER_LABEL
+    assert keeper_started(run)
+
+
+def test_a_dm_stamp_never_relabels_a_note_in_a_thread_answering_outsiders():
+    """A row stamped before contacts counted as outsiders keeps the keeper's
+    label: the thread decides whose words they were, not the stamp."""
+    note = {
+        PRIVATE_NOTE_KEY: True,
+        NOTE_IN_DM_KEY: True,
+        WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD,
+    }
+
+    assert lemma_label(note) == PRIVATE_NOTE_FROM_KEEPER_LABEL
+
+
 def test_a_resume_or_retry_keeps_answering_the_keeper():
     marks = privacy_of(run_metadata_for({WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD}))
 
@@ -262,7 +329,7 @@ def _deps(*, keeper_asking: bool) -> BaseAgentContext:
         org_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),
-        answers_outsider=True,
+        audience=Audience.outsiders(),
         keeper_asking=keeper_asking,
     )
 

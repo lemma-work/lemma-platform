@@ -12,7 +12,7 @@ import {
     type RunDetail, type StepRow,
 } from "@/workflow/runs";
 import {
-    buildTree, idsIn, leadOf, progressOf, stateOfTrace, stateOfUnvisited, tracesByNode,
+    buildTree, idsIn, leadOf, progressOf, sayDecided, stateOfTrace, stateOfUnvisited, tracesByNode,
     type Arm, type Graph, type GraphNode, type NodeState, type TreeItem,
 } from "@/workflow/run-tree";
 import { useRun, useWorkflowGraph, useWorkflowList } from "@/workflow/use-run";
@@ -248,6 +248,19 @@ function Standing({ pod, run, graph, bots, onOpenConversation, onChanged }: {
             </section>
         );
     }
+    if (wait?.type === "DECISION") {
+        return (
+            <section className="standing" data-tone="going">
+                <header>
+                    <span className="standing__dot" />
+                    <div>
+                        <b>Weighing a question — {nodeLabel}</b>
+                        <p>{wait.question ? "“" + wait.question + "” " : ""}It goes on down the branch the answer picks; nothing is needed from you.</p>
+                    </div>
+                </header>
+            </section>
+        );
+    }
     const agent = wait?.agentName ?? (node?.kind === "AGENT" ? String(node.config.agent_name ?? "") : "");
     const who = agent ? bots.get(agent)?.label ?? agent : node?.kind === "FUNCTION" ? String(node.config.function_name ?? "A function") : null;
     return (
@@ -480,18 +493,13 @@ function Body({ node, trace, ctx }: { node: GraphNode; trace: StepRow; ctx: Ctx 
                     : <DataView value={output} />
             )}
 
-            {node.kind === "DECISION" && <p className="rtree__lead">{decisionSays(output)}</p>}
+            {node.kind === "DECISION" && (
+                <p className="rtree__lead">{sayDecided(output, (id) => ctx.graph.nodes.get(id)?.label || id)}</p>
+            )}
 
             {node.kind !== "AGENT" && node.kind !== "FORM" && node.kind !== "DECISION" && <DataView value={output} lead={lead} showLead />}
         </div>
     );
-}
-
-function decisionSays(output: unknown): string {
-    const matched = output && typeof output === "object" ? (output as Record<string, unknown>).matched_condition : undefined;
-    if (typeof matched === "string" && matched) return "Matched " + matched + ".";
-    if (matched === null) return "No rule matched, so it took the default path.";
-    return "Decided.";
 }
 
 /** A history row when the workflow's graph could not be read. */

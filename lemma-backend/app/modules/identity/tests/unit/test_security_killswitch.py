@@ -14,7 +14,7 @@ from supertokens_python.recipe.session.exceptions import (
     InvalidClaimsError,
 )
 
-from app.core import security
+from app.core import auth_exemptions, security
 from app.core.authorization.delegation import (
     CLAIM_ACTOR_ID,
     CLAIM_ACTOR_TYPE,
@@ -42,32 +42,45 @@ def _connection() -> SimpleNamespace:
     return SimpleNamespace(
         url=SimpleNamespace(path="/pods/does-not-matter"),
         scope={"type": "http", "method": "GET"},
+        headers={},
         state=SimpleNamespace(),
     )
 
 
 def test_only_desktop_request_creation_and_exchange_are_public():
-    assert security._is_public_desktop_auth_path("/auth/desktop/requests", "POST")
-    assert security._is_public_desktop_auth_path("/auth/desktop/session", "POST")
-    assert not security._is_public_desktop_auth_path(
+    assert auth_exemptions._is_public_desktop_auth_path(
+        "/auth/desktop/requests", "POST"
+    )
+    assert auth_exemptions._is_public_desktop_auth_path("/auth/desktop/session", "POST")
+    assert not auth_exemptions._is_public_desktop_auth_path(
         "/auth/desktop/requests/request-id/complete", "POST"
     )
-    assert not security._is_public_desktop_auth_path("/auth/desktop/requests", "GET")
+    assert not auth_exemptions._is_public_desktop_auth_path(
+        "/auth/desktop/requests", "GET"
+    )
 
 
 def test_signed_bounce_webhooks_are_public_but_other_auth_posts_are_not():
-    assert security._is_public_identity_auth_path("/auth/email/bounces", "POST")
-    assert security._is_public_identity_auth_path("/auth/email/bounces/resend", "POST")
-    assert not security._is_public_identity_auth_path(
+    assert auth_exemptions._is_public_identity_auth_path("/auth/email/bounces", "POST")
+    assert auth_exemptions._is_public_identity_auth_path(
+        "/auth/email/bounces/resend", "POST"
+    )
+    assert not auth_exemptions._is_public_identity_auth_path(
         "/auth/email/bounces/resend", "GET"
     )
-    assert not security._is_public_identity_auth_path("/auth/verify-token", "POST")
+    assert not auth_exemptions._is_public_identity_auth_path(
+        "/auth/verify-token", "POST"
+    )
 
 
 def test_altcha_config_and_challenges_are_public():
-    assert security._is_public_identity_auth_path("/auth/altcha/config", "GET")
-    assert security._is_public_identity_auth_path("/auth/altcha/challenge", "GET")
-    assert not security._is_public_identity_auth_path("/auth/altcha/config", "POST")
+    assert auth_exemptions._is_public_identity_auth_path("/auth/altcha/config", "GET")
+    assert auth_exemptions._is_public_identity_auth_path(
+        "/auth/altcha/challenge", "GET"
+    )
+    assert not auth_exemptions._is_public_identity_auth_path(
+        "/auth/altcha/config", "POST"
+    )
 
 
 def _patch(monkeypatch, *, flag: bool, payload: dict):

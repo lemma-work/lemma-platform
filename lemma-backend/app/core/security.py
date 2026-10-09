@@ -13,6 +13,7 @@ from supertokens_python.recipe.session.exceptions import (
     TryRefreshTokenError,
 )
 from app.core.authorization.current import set_current_context
+from app.core.auth_exemptions import exemption_of, is_self_authenticated_websocket
 from app.core.config import settings
 from app.core.authorization.delegation import (
     CLAIM_ACTOR_ID,
@@ -20,6 +21,10 @@ from app.core.authorization.delegation import (
     parse_delegation_claims,
 )
 from app.core.authorization.delegation_revocation import is_delegation_revoked
+from app.core.authorization.function_run import (
+    admit_function_run,
+    function_run_bearer,
+)
 from app.core.log.log import get_logger
 from app.core.domain.entity import AuthenticatedPrincipal
 from app.core.auth_state_cache import (
@@ -203,167 +208,17 @@ async def account_may_sign_in(user_id: UUID) -> bool:
 # auto_error=False allows us to handle the error manually and support exclusions
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="HTTPBearer")
 
-# Paths that should differ from the global auth requirement
-# Note: These are prefix matches provided to startswith()
-EXCLUDED_PATHS = (
-    "/docs",
-    "/redoc",
-    "/openapi.json",
-    "/health",
-    "/livez",
-    "/public/icons",
-    "/public/apps",
-    "/public/sdk",  # browser SDK bundle for no-build apps
-    "/widgets/serve",  # widget HTML; handler self-validates session-or-signed-token
-    "/public/datastore",  # signed-token file serving validates its own token
-    # Short signed-URL file serving; validates its own Redis-backed code.
-    # Deliberately the trailing-slash form, so this stays a prefix for one
-    # route rather than making every future `/s*` path public. Bare `/s` is a
-    # real 404 route, reachable via EXCLUDED_EXACT_PATHS below.
-    "/s/",
-    "/scalar",
-    "/st",  # SuperTokens auth endpoints
-    "/auth/cli/info",
-    "/auth/cli/refresh",
-    "/workspace/browser/user",
-    # The signed grant in the path IS the credential, and the handler verifies
-    # it. This URL is handed to a browser that has no Lemma session and never
-    # will -- requiring one 401s the only caller the route has.
-    "/workspace-ports/",
-    # The browser view websocket authenticates its own handshake (cookie,
-    # bearer, or the access_token query parameter a browser must use because it
-    # cannot set headers on an upgrade), because the global dependency cannot
-    # see an upgrade at all.
-    "/workspace/browser/view",
-    "/billing/payment",  # payment result pages (success/cancel) — no session needed post-redirect
-    "/billing/webhooks",  # payment-provider webhooks (Dodo) — handler verifies the HMAC signature itself; delivered server-to-server with no session
-    "/connectors/connect-requests/oauth/callback",  # OAuth callback - secured by state parameter
-    "/surfaces/teams/admin-consent/callback",  # surface consent callback
-    "/surfaces/webhooks",  # surface webhook endpoints
-    "/webhooks",
-    "/agent-runtime/runs/",  # run-scoped MCP routes validate their own token
-    # Retired: the conversation MCP mount protocol-2 hosts called. It answers
-    # only 410, so there is nothing to protect -- and a 401 here would read to
-    # the old bridge as retryable, which is the opposite of the point. Goes
-    # with `agent_host_legacy_controller`.
-    "/agent-runtime/conversations/",
-    # A paired computer has no user session and never will. Its one route is
-    # the link WebSocket, whose first frame is the credential: a one-time
-    # pairing code, or `hello` under the host secret, both checked by the
-    # session. Requiring a session here refuses the only caller the route has.
-    # The user-facing host routes are under `/me/runtime/...` and stay
-    # session-protected.
-    "/agent-host/",
-    # Outside MCP clients. The pod endpoint checks its own bearer token and
-    # answers 401 with the challenge that starts a client's sign-in; the rest is
-    # OAuth discovery and the endpoints a client calls before it has anything
-    # to authenticate with. Consent and connected clients, also under `/oauth`,
-    # need the person's session and are deliberately not listed.
-    "/mcp/",
-    "/.well-known/oauth-authorization-server",
-    "/.well-known/openid-configuration",
-    "/.well-known/oauth-protected-resource",
-    "/oauth/authorize",
-    "/oauth/token",
-    "/oauth/register",
-    "/oauth/revoke",
-)
-
-# Paths excluded by an EXACT match rather than a prefix, for the cases where the
-# prefix form would be far too greedy.
-#
-# `/s` is the short-link root. Its real prefix is `/s/`, and `/s` cannot join
-# the tuple above because `startswith("/s")` would also match `/schedules`,
-# `/surfaces`, `/st` and anything else beginning with an s. But
-# `TrailingSlashMiddleware` rewrites `/s/` to `/s` before routing, so without an
-# exact entry the bare root 401s when the honest answer is 404 — an
-# authentication error for a link that is merely missing its code.
-EXCLUDED_EXACT_PATHS = frozenset({"/s"})
-
-
-def _is_surface_webhook_path(path: str) -> bool:
-    parts = path.strip("/").split("/")
-    if len(parts) != 3 or parts[0] != "surfaces" or parts[2] != "webhook":
-        return False
-    try:
-        UUID(parts[1])
-    except ValueError:
-        return False
-    return True
-
-
-def _is_datastore_changes_ws_path(path: str) -> bool:
-    """Match ``/pods/{pod_id}/datastore/changes`` (the changes websocket).
-
-    The handler authenticates the session itself (cookie or bearer), so the
-    global HTTP auth dependency must let the handshake through.
-    """
-    parts = path.strip("/").split("/")
-    if len(parts) != 4 or parts[0] != "pods" or parts[2:4] != ["datastore", "changes"]:
-        return False
-    try:
-        UUID(parts[1])
-    except ValueError:
-        return False
-    return True
-
-
-def _is_public_desktop_auth_path(path: str, method: str) -> bool:
-    """Only request creation and verifier exchange are unauthenticated.
-
-    The similarly-named ``.../{request_id}/complete`` route deliberately does
-    not match: it must receive the authenticated browser session.
-    """
-    normalized_method = method.upper()
-    return normalized_method == "POST" and path in {
-        "/auth/desktop/requests",
-        "/auth/desktop/session",
-    }
-
-
-def _is_public_identity_auth_path(path: str, method: str) -> bool:
-    normalized_method = method.upper()
-    return (
-        normalized_method == "GET"
-        and path
-        in {
-            "/auth/altcha/config",
-            "/auth/altcha/challenge",
-            "/auth/telegram/config",
-            "/auth/telegram/start",
-            "/auth/telegram/callback",
-        }
-    ) or (
-        normalized_method == "POST"
-        and path
-        in {
-            "/auth/email/bounces",
-            "/auth/email/bounces/resend",
-            "/auth/email-code/browser",
-            "/auth/email-code/continue",
-            "/auth/email-code/start",
-            "/auth/email-code/resend",
-            "/auth/email-code/verify",
-        }
-    )
-
 
 def _is_public_path(connection: HTTPConnection) -> bool:
     """Whether this request is exempt from the global authentication gate.
 
-    Extracted from ``verify_auth`` rather than left inline: it is the whole of
-    that function's branching, and every new exemption made the one function
-    more complex without making it do anything more.
+    The exemptions are named groups -- public, self-authenticated, legacy
+    aliases, health and docs -- in `app.core.auth_exemptions`, which says what
+    belongs in each and why. Kept out of `verify_auth` so a new exemption is a
+    line in a list rather than another branch here.
     """
-    path = connection.url.path
     method = str(connection.scope.get("method", "GET"))
-    return (
-        path.startswith(EXCLUDED_PATHS)
-        or path in EXCLUDED_EXACT_PATHS
-        or _is_surface_webhook_path(path)
-        or _is_public_desktop_auth_path(path, method)
-        or _is_public_identity_auth_path(path, method)
-    )
+    return exemption_of(connection.url.path, method) is not None
 
 
 async def verify_auth(connection: HTTPConnection):
@@ -379,11 +234,16 @@ async def verify_auth(connection: HTTPConnection):
     if connection.scope["type"] != "http":
         # WebSockets: two of them carry their own authentication, and nothing
         # else on a non-HTTP scope is authenticated here at all.
-        if connection.url.path.startswith(
-            "/workspace/browser"
-        ) or _is_datastore_changes_ws_path(connection.url.path):
+        if is_self_authenticated_websocket(connection.url.path):
             return
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # A person-less function run's own token, which SuperTokens would only
+    # call malformed (``core/authorization/function_run``).
+    run_token = function_run_bearer(connection)
+    if run_token is not None:
+        await admit_function_run(connection, run_token)
+        return
 
     try:
         # Session verification

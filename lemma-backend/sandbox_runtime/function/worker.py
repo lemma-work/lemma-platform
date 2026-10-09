@@ -96,7 +96,8 @@ def _invocation_environment(request: WorkerRequest) -> Iterator[None]:
     values: dict[str, str | None] = {
         "LEMMA_TOKEN": request.lemma_token,
         "LEMMA_BASE_URL": request.lemma_base_url,
-        "LEMMA_USER_ID": str(identity.user_id),
+        "LEMMA_USER_ID": _optional(identity.user_id),
+        "LEMMA_CONTACT_ID": _optional(identity.contact_id),
         "LEMMA_POD_ID": str(identity.pod_id),
         "LEMMA_ORG_ID": (
             str(identity.organization_id)
@@ -121,6 +122,11 @@ def _invocation_environment(request: WorkerRequest) -> Iterator[None]:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = str(value)
+
+
+def _optional(value: object | None) -> str | None:
+    # ``str(None)`` would hand a function the id "None"; unset is honest.
+    return None if value is None else str(value)
 
 
 def _load_module(root: Path, source_path: str, revision_key: str) -> ModuleType:
@@ -162,6 +168,7 @@ async def execute_loaded(
             function_id=str(identity.function_id),
             user_id=identity.user_id,
             user_email=identity.user_email,
+            contact_id=identity.contact_id,
             config=config,
         )
         result = revision.function(context, data)

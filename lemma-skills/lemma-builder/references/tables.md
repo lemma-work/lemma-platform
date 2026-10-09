@@ -155,6 +155,13 @@ Two different needs, two mechanisms — don't conflate them (pod-model: server-s
 - **Do work when a row changes** (triage the new ticket, notify, enrich) → a server-side `DATASTORE` **schedule** that starts an agent or workflow (`schedules-and-triggers.md`). This is also how one workload reacts to what another wrote — *reactive choreography*.
 - **Keep an app's UI fresh when a row changes** → `datastore.watchChanges({ onChange })`, a client-side WebSocket the browser SDK exposes (`apps.md`). Never poll the table.
 
+## Tables people outside the pod use
+
+- **`contact_owned: true`** — rows the pod keeps about its contacts; adds `contact_id`, and a contact reads only their own rows. Not combinable with `enable_rls`.
+- **Opened to outside rows** — anyone, or confirmed contacts, may add rows with chosen columns (`PUT .../tables/{t}/public-rows`). This is what a form is; build one with the `lemma-form` skill. Only a shared table (`enable_rls: false`) can be opened.
+
+See `people-outside.md`.
+
 ## Design Guidance
 
 - Model the unit of work first; give it an ENUM status column — statuses drive workflows, app queues, and kanban views.

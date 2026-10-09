@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..openapi_client.api.functions import (
+    function_contacts_update,
     function_create,
     function_delete,
     function_get,
@@ -18,6 +19,10 @@ from ..openapi_client.api.functions import (
     function_update,
 )
 from ..openapi_client.models.create_function_request import CreateFunctionRequest
+from ..openapi_client.models.function_contact_access_request import (
+    FunctionContactAccessRequest,
+)
+from ..openapi_client.models.function_response import FunctionResponse
 from ..openapi_client.models.execute_function_request import ExecuteFunctionRequest
 from ..openapi_client.models.function_detail_response import FunctionDetailResponse
 from ..openapi_client.models.function_list_response import FunctionListResponse
@@ -112,6 +117,20 @@ class PodFunctions(BoundResource):
             self._pod_uuid(),
             name,
             body=request,
+        )
+
+    def set_contacts_invoke(self, name: str, enabled: bool) -> FunctionResponse:
+        """Let a contact's conversation call this function, or stop it.
+
+        It runs as its owner's runs do, held to its own grants, and is told the
+        asking contact as ``contact_id`` in its input.
+        """
+        return self._call(
+            function_contacts_update,
+            self._pod_uuid(),
+            name,
+            body={"contacts_invoke": enabled},
+            body_model=FunctionContactAccessRequest,
         )
 
     def revisions(

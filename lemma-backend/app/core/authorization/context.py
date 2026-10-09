@@ -20,6 +20,10 @@ class ActorType(str, Enum):
     DELEGATED_USER_WORKLOAD = "DELEGATED_USER_WORKLOAD"
     SYSTEM = "SYSTEM"
     ANONYMOUS = "ANONYMOUS"
+    #: Somebody outside the pod whom it knows by a vouched-for handle. Reads
+    #: what an anonymous visitor reads, and the pod database narrows contact-
+    #: owned tables to their own rows (``Context.contact_id``).
+    CONTACT = "CONTACT"
 
 
 class ResourceType(str, Enum):
@@ -353,6 +357,10 @@ class Context:
     #: saying yes. Carrying the fact here is what lets one check refuse every
     #: pod-scoped route without any of them paying a ``Pod`` read.
     pod_is_deleted: bool = False
+    #: The contact this context acts for, on a CONTACT context or a workload
+    #: run on a contact's behalf. The pod database names it to every session it
+    #: opens for this context, so contact-owned tables show only their rows.
+    contact_id: UUID | None = None
     _decision_cache: dict[
         tuple[str, ResourceType | None, UUID | None], AuthorizationDecision
     ] = field(default_factory=dict)
@@ -368,7 +376,12 @@ class Context:
 
     @property
     def is_authenticated(self) -> bool:
-        return self.actor_type != ActorType.ANONYMOUS
+        return not self.is_outsider
+
+    @property
+    def is_outsider(self) -> bool:
+        """Somebody outside the pod: an anonymous visitor or a contact."""
+        return self.actor_type in (ActorType.ANONYMOUS, ActorType.CONTACT)
 
     def has_permission(self, permission_id: str) -> bool:
         return bool(equivalent_permission_ids(permission_id) & self.permission_ids)

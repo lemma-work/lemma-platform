@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from uuid import uuid4
 
 import pytest
@@ -123,7 +123,7 @@ async def test_a_checked_answer_comes_back_metered_to_the_caller() -> None:
     )
 
     assert result.answers == GOOD
-    assert limiter.keys == [f"org:{ORG}"]
+    assert limiter.keys == [f"org:{ORG}:background"]
     context = metering.contexts[0]
     assert (context.user_id, context.organization_id, context.pod_id) == (
         CALLER.user_id,
@@ -204,7 +204,22 @@ async def test_a_person_without_an_organization_is_limited_on_their_own() -> Non
 
     await _service(_Provider(GOOD), limiter=limiter).decide(REQUEST, caller)
 
-    assert limiter.keys == [f"user:{caller.user_id}"]
+    assert limiter.keys == [f"user:{caller.user_id}:background"]
+
+
+async def test_live_calls_have_an_allowance_of_their_own() -> None:
+    """A schedule's backlog of background decisions must not use up the
+    minute's allowance for someone waiting on a call."""
+    limiter = _Limiter()
+    service = _service(_Provider(GOOD), limiter=limiter)
+
+    await service.decide(REQUEST, CALLER)
+    await service.decide(replace(REQUEST, priority="interactive"), CALLER)
+
+    assert limiter.keys == [
+        f"org:{CALLER.organization_id}:background",
+        f"org:{CALLER.organization_id}:interactive",
+    ]
 
 
 async def test_a_spent_budget_survives_a_failed_usage_checkpoint() -> None:

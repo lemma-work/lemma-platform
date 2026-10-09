@@ -78,6 +78,42 @@ EXPECTED = [
         "SURFACE_OUTSIDER_TURNS_PER_GROUP_PER_DAY",
         200,
     ),
+    (
+        "surface_contact_turns_per_person_per_10_minutes",
+        "SURFACE_CONTACT_TURNS_PER_PERSON_PER_10_MINUTES",
+        10,
+    ),
+    (
+        "surface_contact_turns_per_surface_per_day",
+        "SURFACE_CONTACT_TURNS_PER_SURFACE_PER_DAY",
+        1000,
+    ),
+    (
+        "surface_web_sessions_per_widget_per_day",
+        "SURFACE_WEB_SESSIONS_PER_WIDGET_PER_DAY",
+        2000,
+    ),
+    (
+        "surface_web_submissions_per_widget_per_day",
+        "SURFACE_WEB_SUBMISSIONS_PER_WIDGET_PER_DAY",
+        500,
+    ),
+    ("surface_web_stream_seconds", "SURFACE_WEB_STREAM_SECONDS", 300),
+    (
+        "surface_new_contacts_per_surface_per_day",
+        "SURFACE_NEW_CONTACTS_PER_SURFACE_PER_DAY",
+        200,
+    ),
+    (
+        "surface_contact_follow_ups_per_contact_per_day",
+        "SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY",
+        10,
+    ),
+    (
+        "surface_parked_mail_notes_per_surface_per_hour",
+        "SURFACE_PARKED_MAIL_NOTES_PER_SURFACE_PER_HOUR",
+        20,
+    ),
     ("enable_telegram_polling_mode", "ENABLE_TELEGRAM_POLLING_MODE", False),
     (
         "enable_telegram_manager_polling_mode",

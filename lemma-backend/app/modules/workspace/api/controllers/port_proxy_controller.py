@@ -74,7 +74,16 @@ def _ws_closed() -> type[Exception]:
     return websockets.exceptions.ConnectionClosed
 
 
-router = APIRouter(prefix="/workspace-ports", tags=["Workspace"])
+router = APIRouter(tags=["Workspace"])
+
+#: Where a grant's URL points. Under `/public/`, because the browser it is handed
+#: to has no Lemma session and never will: the signed grant in the path is the
+#: whole credential, and the handlers verify it.
+PORT_PROXY_PREFIX = "/public/workspace-ports"
+#: The old path, for grants minted before the move; see `LEGACY_ALIASES` in
+#: `app.core.auth_exemptions`. Every route is registered on both until it goes.
+_LEGACY_PORT_PROXY_PREFIX = "/workspace-ports"
+_PROXIED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
 def _has_body(request: Request) -> bool:
@@ -234,8 +243,10 @@ async def _resolve_target(token: str) -> SandboxEndpoint | None:
         return None
 
 
-@router.websocket("/{token}")
-@router.websocket("/{token}/{path:path}")
+@router.websocket(PORT_PROXY_PREFIX + "/{token}")
+@router.websocket(PORT_PROXY_PREFIX + "/{token}/{path:path}")
+@router.websocket(_LEGACY_PORT_PROXY_PREFIX + "/{token}")
+@router.websocket(_LEGACY_PORT_PROXY_PREFIX + "/{token}/{path:path}")
 async def proxy_sandbox_websocket(
     websocket: WebSocket, token: str, path: str = ""
 ) -> None:
@@ -287,13 +298,23 @@ async def proxy_sandbox_websocket(
 # slash and no path at all — `/{token}/{path:path}` does not match that, so the
 # very URL this proxy hands out 404'd while every deeper path worked.
 @router.api_route(
-    "/{token}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    PORT_PROXY_PREFIX + "/{token}",
+    methods=_PROXIED_METHODS,
     include_in_schema=False,
 )
 @router.api_route(
-    "/{token}/{path:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    PORT_PROXY_PREFIX + "/{token}/{path:path}",
+    methods=_PROXIED_METHODS,
+    include_in_schema=False,
+)
+@router.api_route(
+    _LEGACY_PORT_PROXY_PREFIX + "/{token}",
+    methods=_PROXIED_METHODS,
+    include_in_schema=False,
+)
+@router.api_route(
+    _LEGACY_PORT_PROXY_PREFIX + "/{token}/{path:path}",
+    methods=_PROXIED_METHODS,
     include_in_schema=False,
 )
 async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Response:

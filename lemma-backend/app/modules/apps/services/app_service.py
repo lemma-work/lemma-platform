@@ -34,6 +34,7 @@ from app.modules.apps.domain.entities import (
 )
 from app.modules.apps.domain.branding import AppBrandingEntitlementPort
 from app.modules.apps.domain.errors import (
+    AppAssetNotFoundError,
     AppConflictError,
     AppNotFoundError,
     AppValidationError,
@@ -43,6 +44,7 @@ from app.modules.apps.domain.ports import (
     AppStorageFactoryPort,
 )
 from app.modules.apps.services.app_asset_resolver import AppAssetResolver
+from app.modules.apps.services.app_cover import AppCoverSpec, render_app_cover
 from app.modules.apps.services.app_dist_bundle import (
     load_app_dist_bundle,
     single_index_html_zip,
@@ -93,7 +95,29 @@ class AppService:
 
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
         """Read assets without a DB connection."""
+        if inputs.cover is not None:
+            return await self._read_cover(inputs, inputs.cover)
         return await self._storage_phase.read_asset(inputs)
+
+    async def _read_cover(
+        self, inputs: _AssetReadInputs, cover: AppCoverSpec
+    ) -> AppAssetDocument:
+        """The build's own cover if it ships one, else one drawn from the app's name.
+
+        Served under the entrypoint's revalidating cache policy either way: the
+        address is fixed, and the picture behind it changes with every release
+        and every rename.
+        """
+        try:
+            document = await self._storage_phase.read_asset(inputs)
+        except AppAssetNotFoundError:
+            document = AppAssetDocument(
+                content=await run_blocking(render_app_cover, cover),
+                media_type="image/png",
+                etag=inputs.quoted_etag,
+                private=inputs.private,
+            )
+        return document.model_copy(update={"is_entrypoint": True})
 
     async def _require_pod_permission(
         self,

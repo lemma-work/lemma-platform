@@ -94,14 +94,18 @@ async def outside_answer_card(
         return None
     return outside_answer_card_for(
         group_title=notification.origin_group_title,
+        in_private=notification.asked_in_private,
         summary=str(args.get("summary") or ""),
     )
 
 
 def outside_answer_card_for(
-    *, group_title: str | None, summary: str
+    *, group_title: str | None, summary: str, in_private: bool = False
 ) -> OutsideAnswerCard:
-    where = f"“{group_title}”" if group_title else "the group"
+    if in_private:
+        where = "a private chat with the bot"
+    else:
+        where = f"“{group_title}”" if group_title else "the group"
     words = summary.strip() or "(nothing)"
     return OutsideAnswerCard(
         title=f"Send this answer to {where}?",

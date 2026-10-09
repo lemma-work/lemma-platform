@@ -18,15 +18,12 @@ from typing import Any
 from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
-from lemma_pod_bundle.apply_fields import SCHEDULE_APPLY_FIELDS
 from lemma_pod_bundle.layout import TABLE_DATA_FILE
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
-from app.modules.pod_bundle.infrastructure.account_binding import (
-    validate_account_binding,
-)
+from app.modules.pod_bundle.infrastructure.schedule_apply import apply_schedule
 from app.modules.pod_bundle.infrastructure.surface_apply import apply_surface
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
 from app.modules.pod_bundle.infrastructure.grants import (
@@ -403,43 +400,16 @@ class BundleApplier:
     # --- schedules -------------------------------------------------------
 
     async def _apply_schedule(self, step: PlanStep) -> None:
-        from app.modules.schedule.contracts import ScheduleCreateEntity, ScheduleType
-        from app.modules.schedule.contracts.provisioning import (
-            create_schedule,
-            get_schedule_by_name,
-        )
-
-        payload = self._load("schedules", step.name)
-        existing = await get_schedule_by_name(
-            self._uow, pod_id=self._pod_id, name=step.name, ctx=self._ctx
-        )
-        if existing is not None:
-            # Create-once by name. The plan says SKIP for this case, so reaching
-            # here means the pod grew the schedule between plan and apply.
-            return
-        # Build from the shared allow-list (also used by lemma-cli's direct
-        # import) so the two importers can't silently drift on which exported
-        # fields survive — this is what previously dropped account_id,
-        # connector_trigger_id, filter_instruction and filter_output_schema.
-        fields = {
-            key: value for key, value in payload.items() if key in SCHEDULE_APPLY_FIELDS
-        }
-        fields["name"] = step.name
-        fields["schedule_type"] = ScheduleType(str(payload.get("schedule_type")))
-        fields["config"] = payload.get("config") or {}
-        await validate_account_binding(
-            self._uow,
-            account_id=fields.get("account_id"),
-            expected_connector=payload.get("connector_id"),
-            expected_kind=payload.get("connector_kind") or payload.get("provider"),
-            resource_label=f"Schedule '{step.name}'",
-        )
-        entity = ScheduleCreateEntity(
-            user_id=self._user_id,
+        """The dispatch table's uniform shape over `schedule_apply.apply_schedule`."""
+        await apply_schedule(
+            step,
+            uow=self._uow,
+            ctx=self._ctx,
             pod_id=self._pod_id,
-            **fields,
+            user_id=self._user_id,
+            load=self._load,
+            warnings=self._warnings,
         )
-        await create_schedule(self._uow, entity, ctx=self._ctx)
 
     # --- workflows (best-effort) -----------------------------------------
 

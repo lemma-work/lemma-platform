@@ -1,6 +1,7 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { AddColumnRequest } from "../openapi_client/models/AddColumnRequest.js";
 import type { CreateTableRequest } from "../openapi_client/models/CreateTableRequest.js";
+import type { OpenTableRequest } from "../openapi_client/models/OpenTableRequest.js";
 import type { UpdateTableRequest } from "../openapi_client/models/UpdateTableRequest.js";
 import { TablesService } from "../openapi_client/services/TablesService.js";
 
@@ -54,5 +55,19 @@ export class TablesNamespace {
 
     remove: (tableName: string, columnName: string) =>
       this.client.request(() => TablesService.tableColumnRemove(this.podId(), tableName, columnName)),
+  };
+
+  /**
+   * Who outside the pod may add rows to a table. A form is any page that adds a
+   * row through a web widget's key; the table decides which columns it may write.
+   */
+  readonly publicRows = {
+    get: (tableName: string) =>
+      this.client.request(() => TablesService.tablePublicRowsGet(this.podId(), tableName)),
+    open: (tableName: string, payload: OpenTableRequest) =>
+      this.client.request(() => TablesService.tablePublicRowsOpen(this.podId(), tableName, payload)),
+    close: (tableName: string) =>
+      this.client.request(() => TablesService.tablePublicRowsClose(this.podId(), tableName)),
+    list: () => this.client.request(() => TablesService.tablePublicRowsList(this.podId())),
   };
 }

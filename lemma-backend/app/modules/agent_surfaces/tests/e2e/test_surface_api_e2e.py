@@ -302,9 +302,12 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "slack",
         "telegram",
         "groups",
+        "contacts",
     }
     # A new bot answers people outside the pod in its groups until switched off.
     assert config["groups"] == {"answers_outsiders": True}
+    # It answers nobody outside the pod privately until somebody says so.
+    assert config["contacts"] == {"answer": "off", "looked_after_by": None}
     # Identity values are normalized on write.
     assert config["identity"]["allowed_domains"] == ["lemma.test"]
     route = config["channels"][0]
@@ -337,6 +340,28 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     assert config["send_policy"]["allow_send"] is True
     assert config["channels"][0]["channel_id"] == "C-ROUTED"
 
+    # Turning contacts on makes whoever did it the one who looks after them.
+    opened = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/slack",
+        json={"config": {"contacts": {"answer": "anyone"}}},
+    )
+    assert opened.status_code == 200, opened.text
+    contacts = opened.json()["config"]["contacts"]
+    assert contacts["answer"] == "anyone"
+    assert contacts["looked_after_by"] is not None
+    assert opened.json()["config"]["groups"]["answers_outsiders"] is False
+
+    # Nobody outside the pod can be the one who looks after them.
+    stranger = await authenticated_client.patch(
+        f"/pods/{pod_id}/surfaces/slack",
+        json={
+            "config": {
+                "contacts": {"answer": "anyone", "looked_after_by": str(uuid4())}
+            }
+        },
+    )
+    assert stranger.status_code in (400, 422), stranger.text
+
     openapi = await authenticated_client.get("/openapi.json")
     schemas = openapi.json()["components"]["schemas"]
     assert set(schemas["SurfaceConfigResponse"]["properties"]) == {
@@ -346,6 +371,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "slack",
         "telegram",
         "groups",
+        "contacts",
     }
     assert set(schemas["SurfaceBehaviorConfigInput"]["properties"]) == {
         "identity",
@@ -355,6 +381,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "slack",
         "telegram",
         "groups",
+        "contacts",
     }
 
 

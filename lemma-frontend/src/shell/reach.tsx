@@ -422,7 +422,7 @@ function Account({
                 {/* A button, not a `noreferrer` link: the finished tab reports
                     back to its opener and closes, rather than loading the app
                     a second time inside itself. */}
-                <button className="btn btn--primary" onClick={() => openAuthorization(link.authorizeUrl)}>
+                <button className="btn btn--primary" onClick={() => openAuthorization(link.authorizeUrl, name)}>
                     Authorise {name} <ExternalIcon size={14} />
                 </button>
                 <p>{name} asks whether Lemma may act for you. This page notices when you are done.</p>

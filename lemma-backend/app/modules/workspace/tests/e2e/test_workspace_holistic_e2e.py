@@ -292,7 +292,7 @@ async def test_browser_process_and_signed_access_reach_the_sandbox(
     browser_payload = browser.json()
     assert browser_payload["app"] == "browser"
     assert browser_payload["url"].startswith("http")
-    assert "/workspace-ports/" in browser_payload["url"]
+    assert "/public/workspace-ports/" in browser_payload["url"]
     assert browser_payload["expires_at"]
 
 

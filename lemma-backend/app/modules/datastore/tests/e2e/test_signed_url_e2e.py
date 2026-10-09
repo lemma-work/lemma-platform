@@ -4,7 +4,7 @@ Covers both URL kinds end to end against the real app + Redis:
 
 - the authenticated frontend deep-link (``GET .../files/url`` → ``app_url``), and
 - the public, hit-capped short signed URL (``POST .../files/signed-url`` minted,
-  served at ``GET /s/{code}``) — exercising defaults, custom values, server-side
+  served at ``GET /public/s/{code}``) — exercising defaults, custom values, server-side
   clamping, exact-byte serving, the hit cap, expiry, and member authorization.
 """
 
@@ -182,7 +182,7 @@ class TestSignedUrlServing:
         body = await self._sign(pod_api, uploaded["path"], {"max_hits": 5})
 
         # No auth headers on async_client — the code is the only capability.
-        served = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        served = await async_client.get(f"/public/s/{_code_of(body['signed_url'])}")
         assert served.status_code == status.HTTP_200_OK, served.text
         assert served.content == content
         etag = f'"{uploaded["content_sha256"]}"'
@@ -194,7 +194,7 @@ class TestSignedUrlServing:
         assert served.headers["x-content-type-options"] == "nosniff"
 
         not_modified = await async_client.get(
-            f"/s/{_code_of(body['signed_url'])}",
+            f"/public/s/{_code_of(body['signed_url'])}",
             headers={"If-None-Match": etag},
         )
         assert not_modified.status_code == status.HTTP_304_NOT_MODIFIED
@@ -213,16 +213,16 @@ class TestSignedUrlServing:
 
         # Exactly max_hits successful fetches.
         for _ in range(2):
-            ok = await async_client.get(f"/s/{code}")
+            ok = await async_client.get(f"/public/s/{code}")
             assert ok.status_code == status.HTTP_200_OK, ok.text
             assert ok.content == content
 
         # One past the cap → 410 Gone (and the link is burned)…
-        gone = await async_client.get(f"/s/{code}")
+        gone = await async_client.get(f"/public/s/{code}")
         assert gone.status_code == status.HTTP_410_GONE
 
         # …then the burned code is simply unknown → 404.
-        after = await async_client.get(f"/s/{code}")
+        after = await async_client.get(f"/public/s/{code}")
         assert after.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.asyncio
@@ -239,12 +239,12 @@ class TestSignedUrlServing:
 
         # Let the 1s Redis TTL lapse, then the link is gone regardless of hits left.
         await asyncio.sleep(1.4)
-        expired = await async_client.get(f"/s/{code}")
+        expired = await async_client.get(f"/public/s/{code}")
         assert expired.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.asyncio
     async def test_unknown_code_is_404(self, async_client: AsyncClient):
-        resp = await async_client.get("/s/this-code-does-not-exist")
+        resp = await async_client.get("/public/s/this-code-does-not-exist")
         assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 
@@ -267,7 +267,9 @@ class TestSignedUrlAuthorization:
             json={"max_hits": 3},
         )
         assert resp.status_code == status.HTTP_201_CREATED, resp.text
-        served = await async_client.get(f"/s/{_code_of(resp.json()['signed_url'])}")
+        served = await async_client.get(
+            f"/public/s/{_code_of(resp.json()['signed_url'])}"
+        )
         assert served.status_code == status.HTTP_200_OK
         assert served.content == content
 
@@ -297,13 +299,17 @@ class TestSignedUrlBrowserBehaviour:
         body = await self._sign(pod_api, uploaded["path"], {})
         code = _code_of(body["signed_url"])
 
-        resp = await async_client.get(f"/s/{code}", headers={"Range": "bytes=4-7"})
+        resp = await async_client.get(
+            f"/public/s/{code}", headers={"Range": "bytes=4-7"}
+        )
         assert resp.status_code == status.HTTP_206_PARTIAL_CONTENT, resp.text
         assert resp.content == b"4567"
         assert resp.headers["content-range"] == f"bytes 4-7/{len(content)}"
         assert resp.headers["content-length"] == "4"
 
-        tail = await async_client.get(f"/s/{code}", headers={"Range": "bytes=-3"})
+        tail = await async_client.get(
+            f"/public/s/{code}", headers={"Range": "bytes=-3"}
+        )
         assert tail.status_code == status.HTTP_206_PARTIAL_CONTENT
         assert tail.content == b"def"
 
@@ -318,7 +324,7 @@ class TestSignedUrlBrowserBehaviour:
         body = await self._sign(pod_api, uploaded["path"], {})
 
         resp = await async_client.get(
-            f"/s/{_code_of(body['signed_url'])}", headers={"Range": "bytes=99-"}
+            f"/public/s/{_code_of(body['signed_url'])}", headers={"Range": "bytes=99-"}
         )
         assert resp.status_code == status.HTTP_416_RANGE_NOT_SATISFIABLE
         assert resp.headers["content-range"] == f"bytes */{len(content)}"
@@ -337,7 +343,7 @@ class TestSignedUrlBrowserBehaviour:
         )
         body = await self._sign(pod_api, uploaded["path"], {})
 
-        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        resp = await async_client.get(f"/public/s/{_code_of(body['signed_url'])}")
         assert resp.status_code == status.HTTP_200_OK, resp.text
         assert resp.headers["content-disposition"].startswith("attachment")
         assert resp.headers["x-content-type-options"] == "nosniff"
@@ -355,7 +361,7 @@ class TestSignedUrlBrowserBehaviour:
         )
         body = await self._sign(pod_api, uploaded["path"], {})
 
-        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        resp = await async_client.get(f"/public/s/{_code_of(body['signed_url'])}")
         assert resp.status_code == status.HTTP_200_OK, resp.text
         assert resp.headers["content-disposition"].startswith("inline")
         assert resp.headers["content-type"].startswith("application/pdf")
@@ -370,7 +376,7 @@ class TestSignedUrlBrowserBehaviour:
         )
         body = await self._sign(pod_api, uploaded["path"], {})
 
-        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        resp = await async_client.get(f"/public/s/{_code_of(body['signed_url'])}")
         assert resp.status_code == status.HTTP_200_OK, resp.text
         disposition = resp.headers["content-disposition"]
         assert "filename*=UTF-8''" in disposition
@@ -393,7 +399,7 @@ class TestSignedUrlBrowserBehaviour:
         )
         body = await self._sign(pod_api, uploaded["path"], {})
 
-        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        resp = await async_client.get(f"/public/s/{_code_of(body['signed_url'])}")
         assert resp.status_code == status.HTTP_200_OK, resp.text
         assert resp.headers["content-type"].startswith("audio/wav")
         assert resp.headers["content-disposition"].startswith("inline")
@@ -409,7 +415,7 @@ class TestSignedUrlBrowserBehaviour:
         )
         body = await self._sign(pod_api, uploaded["path"], {})
 
-        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        resp = await async_client.get(f"/public/s/{_code_of(body['signed_url'])}")
         assert resp.status_code == status.HTTP_200_OK, resp.text
         assert resp.headers["content-type"].startswith("application/octet-stream")
         assert resp.headers["content-disposition"].startswith("attachment")
@@ -419,14 +425,14 @@ class TestSignedUrlBrowserBehaviour:
         self, async_client: AsyncClient
     ):
         html = await async_client.get(
-            "/s/no-such-code", headers={"Accept": "text/html,*/*;q=0.8"}
+            "/public/s/no-such-code", headers={"Accept": "text/html,*/*;q=0.8"}
         )
         assert html.status_code == status.HTTP_404_NOT_FOUND
         assert html.headers["content-type"].startswith("text/html")
         assert "expired" in html.text.lower()
 
         api = await async_client.get(
-            "/s/no-such-code", headers={"Accept": "application/json"}
+            "/public/s/no-such-code", headers={"Accept": "application/json"}
         )
         assert api.status_code == status.HTTP_404_NOT_FOUND
         assert api.headers["content-type"].startswith("application/json")
@@ -435,14 +441,40 @@ class TestSignedUrlBrowserBehaviour:
     async def test_bare_root_is_not_found_rather_than_unauthorized(
         self, async_client: AsyncClient
     ):
-        """`/s` is a missing code, not an authentication problem.
+        """A root with no code is a missing link, not an authentication problem.
 
-        `TrailingSlashMiddleware` rewrites `/s/` to `/s`, which no longer
-        matches the `/s/` auth exclusion — so this used to answer 401.
+        `TrailingSlashMiddleware` rewrites `/s/` to `/s`, which the old `/s/`
+        auth exclusion did not match — so this used to answer 401. The legacy
+        root keeps its own 404 route; the `/public/s` root needs none.
         """
-        for path in ("/s", "/s/"):
+        for path in ("/public/s", "/public/s/", "/s", "/s/"):
             resp = await async_client.get(path)
             assert resp.status_code == status.HTTP_404_NOT_FOUND, path
+
+    @pytest.mark.asyncio
+    async def test_the_old_path_serves_the_same_link_on_the_same_budget(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """Links minted before the move to `/public/s` still open on `/s`.
+
+        One handler and one Redis counter behind both paths, so a hit on either
+        spends the same allowance: two paths must not mean twice the downloads.
+        """
+        uploaded = await _upload(
+            pod_api, "/me/alias", "a.txt", b"alias", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {"max_hits": 2})
+        assert "/public/s/" in body["signed_url"]
+        code = _code_of(body["signed_url"])
+
+        old = await async_client.get(f"/s/{code}")
+        assert old.status_code == status.HTTP_200_OK, old.text
+        assert old.content == b"alias"
+        new = await async_client.get(f"/public/s/{code}")
+        assert new.status_code == status.HTTP_200_OK, new.text
+
+        spent = await async_client.get(f"/s/{code}")
+        assert spent.status_code == status.HTTP_410_GONE, spent.text
 
 
 class TestSignedUrlBudget:
@@ -474,19 +506,19 @@ class TestSignedUrlBudget:
         etag = f'"{uploaded["content_sha256"]}"'
 
         for _ in range(5):
-            head = await async_client.head(f"/s/{code}")
+            head = await async_client.head(f"/public/s/{code}")
             assert head.status_code == status.HTTP_200_OK
             revalidated = await async_client.get(
-                f"/s/{code}", headers={"If-None-Match": etag}
+                f"/public/s/{code}", headers={"If-None-Match": etag}
             )
             assert revalidated.status_code == status.HTTP_304_NOT_MODIFIED
 
         # The one download the budget allows is still available.
-        served = await async_client.get(f"/s/{code}")
+        served = await async_client.get(f"/public/s/{code}")
         assert served.status_code == status.HTTP_200_OK
         assert served.content == content
 
-        spent = await async_client.get(f"/s/{code}")
+        spent = await async_client.get(f"/public/s/{code}")
         assert spent.status_code == status.HTTP_410_GONE
 
     @pytest.mark.asyncio
@@ -504,7 +536,7 @@ class TestSignedUrlBudget:
         # Twenty 5-byte reads is one file's worth of bytes, so all must succeed.
         for start in range(0, 100, 5):
             resp = await async_client.get(
-                f"/s/{code}", headers={"Range": f"bytes={start}-{start + 4}"}
+                f"/public/s/{code}", headers={"Range": f"bytes={start}-{start + 4}"}
             )
             assert resp.status_code == status.HTTP_206_PARTIAL_CONTENT, resp.text
             assert resp.content == content[start : start + 5]
@@ -523,7 +555,7 @@ class TestSignedUrlBudget:
 
         await pod_api.delete_file(uploaded["path"])
         for _ in range(5):
-            resp = await async_client.get(f"/s/{code}")
+            resp = await async_client.get(f"/public/s/{code}")
             assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 
@@ -568,7 +600,7 @@ class TestSignedUrlDurability:
         dropped = await redis.delete(store._key(code))
         assert dropped == 1
 
-        served = await async_client.get(f"/s/{code}")
+        served = await async_client.get(f"/public/s/{code}")
         assert served.status_code == status.HTTP_200_OK, served.text
         assert served.content == content
 
@@ -579,7 +611,7 @@ class TestSignedUrlDurability:
     async def test_an_unknown_code_still_404s_rather_than_hitting_the_record_twice(
         self, async_client: AsyncClient
     ):
-        resp = await async_client.get("/s/definitely-not-a-real-code")
+        resp = await async_client.get("/public/s/definitely-not-a-real-code")
         assert resp.status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.asyncio
@@ -592,7 +624,9 @@ class TestSignedUrlDurability:
         body = await self._sign(pod_api, uploaded["path"], {})
         code = _code_of(body["signed_url"])
 
-        assert (await async_client.get(f"/s/{code}")).status_code == status.HTTP_200_OK
+        assert (
+            await async_client.get(f"/public/s/{code}")
+        ).status_code == status.HTTP_200_OK
 
         revoked = await pod_api.request(
             "DELETE", FILES.format(pod_id=pod_api.pod_id) + f"/signed-urls/{code}"
@@ -602,10 +636,10 @@ class TestSignedUrlDurability:
 
         # Dead immediately, and the rehydrate path must not resurrect it.
         assert (
-            await async_client.get(f"/s/{code}")
+            await async_client.get(f"/public/s/{code}")
         ).status_code == status.HTTP_404_NOT_FOUND
         assert (
-            await async_client.get(f"/s/{code}")
+            await async_client.get(f"/public/s/{code}")
         ).status_code == status.HTTP_404_NOT_FOUND
 
         # Revoking again is reported, not an error.
@@ -702,9 +736,9 @@ class TestSignedUrlDurability:
             json={"max_hits": 1},
         )
         code = _code_of(minted.json()["signed_url"])
-        await async_client.get(f"/s/{code}")
+        await async_client.get(f"/public/s/{code}")
         assert (
-            await async_client.get(f"/s/{code}")
+            await async_client.get(f"/public/s/{code}")
         ).status_code == status.HTTP_410_GONE
 
         resp = await pod_api.request(
@@ -740,7 +774,7 @@ class TestSignedUrlDurability:
         redis = await store._get_redis()
         assert await redis.exists(store._key(code)) == 0
         assert (
-            await async_client.get(f"/s/{code}")
+            await async_client.get(f"/public/s/{code}")
         ).status_code == status.HTTP_404_NOT_FOUND
         assert await redis.exists(store._key(code)) == 0
 
@@ -792,7 +826,7 @@ class TestSignedUrlDurability:
         # Untouched: still cached, no tombstone, and still serving.
         assert await redis.exists(store._key(code)) == 1
         assert await redis.exists(store._tombstone_key(code)) == 0
-        served = await async_client.get(f"/s/{code}")
+        served = await async_client.get(f"/public/s/{code}")
         assert served.status_code == status.HTTP_200_OK, served.text
 
     @pytest.mark.asyncio
@@ -817,9 +851,13 @@ class TestSignedUrlDurability:
         code = _code_of(minted.json()["signed_url"])
 
         # 60 of 100 bytes spent; a further 60 would overshoot.
-        first = await async_client.get(f"/s/{code}", headers={"Range": "bytes=0-59"})
+        first = await async_client.get(
+            f"/public/s/{code}", headers={"Range": "bytes=0-59"}
+        )
         assert first.status_code == status.HTTP_206_PARTIAL_CONTENT, first.text
-        second = await async_client.get(f"/s/{code}", headers={"Range": "bytes=0-59"})
+        second = await async_client.get(
+            f"/public/s/{code}", headers={"Range": "bytes=0-59"}
+        )
         assert second.status_code == status.HTTP_410_GONE, second.text
 
     @pytest.mark.asyncio
@@ -844,7 +882,9 @@ class TestSignedUrlDurability:
             status.HTTP_404_NOT_FOUND,
         ), other.text
         # Still live for its own pod.
-        assert (await async_client.get(f"/s/{code}")).status_code == status.HTTP_200_OK
+        assert (
+            await async_client.get(f"/public/s/{code}")
+        ).status_code == status.HTTP_200_OK
 
 
 class TestSignedUrlLiveLimit:
@@ -940,9 +980,11 @@ class TestSignedUrlLiveLimit:
         code = _code_of(minted.json()["signed_url"])
 
         # Spend it: one download, then the next request exhausts it.
-        assert (await async_client.get(f"/s/{code}")).status_code == status.HTTP_200_OK
         assert (
-            await async_client.get(f"/s/{code}")
+            await async_client.get(f"/public/s/{code}")
+        ).status_code == status.HTTP_200_OK
+        assert (
+            await async_client.get(f"/public/s/{code}")
         ).status_code == status.HTTP_410_GONE
 
         after = await self._sign(pod_api, uploaded["path"])
@@ -1108,7 +1150,7 @@ class TestSignedUrlRecoveryAndPaging:
             await store.revoke(pod_api.pod_id, code, links=SignedLinkRepository(uow))
         assert await redis.exists(store._key(code)) == 0
         assert (
-            await async_client.get(f"/s/{code}")
+            await async_client.get(f"/public/s/{code}")
         ).status_code == status.HTTP_404_NOT_FOUND
 
     @pytest.mark.asyncio
@@ -1174,7 +1216,7 @@ class TestSignedUrlRecoveryAndPaging:
         assert minted.status_code == status.HTTP_201_CREATED, minted.text
         code = _code_of(minted.json()["signed_url"])
 
-        served = await async_client.get(f"/s/{code}")
+        served = await async_client.get(f"/public/s/{code}")
         assert served.status_code == status.HTTP_200_OK, served.text
         assert served.content == b"brief"
 
@@ -1201,7 +1243,7 @@ class TestSignedUrlRecoveryAndPaging:
         code = _code_of(minted.json()["signed_url"])
 
         # Exactly one download — no extra rejected request to do the work.
-        served = await async_client.get(f"/s/{code}")
+        served = await async_client.get(f"/public/s/{code}")
         assert served.status_code == status.HTTP_200_OK, served.text
 
         again = await self._sign(pod_api, uploaded["path"])
@@ -1210,7 +1252,7 @@ class TestSignedUrlRecoveryAndPaging:
         # The spent link still says *why* it is gone rather than pretending it
         # never existed.
         assert (
-            await async_client.get(f"/s/{code}")
+            await async_client.get(f"/public/s/{code}")
         ).status_code == status.HTTP_410_GONE
 
     @pytest.mark.asyncio

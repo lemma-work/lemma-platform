@@ -28,6 +28,7 @@ __all__ = [
     "McpPrincipal",
     "Scope",
     "bearer_challenge",
+    "grant_is_live",
     "is_mcp_access_token",
     "mcp_access_enabled",
     "request_retry_after",
@@ -45,6 +46,11 @@ def is_mcp_access_token(token: str) -> bool:
 
 async def verify_mcp_access_token(token: str, *, pod_id: UUID) -> McpPrincipal | None:
     return await access_token_verifier().verify(token, pod_id=pod_id)
+
+
+async def grant_is_live(grant_id: UUID) -> bool:
+    """Whether the connection ``grant_id`` names is still in force."""
+    return await access_token_verifier().grant_is_live(grant_id)
 
 
 def bearer_challenge(

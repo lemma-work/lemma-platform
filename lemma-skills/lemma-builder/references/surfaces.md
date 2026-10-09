@@ -295,6 +295,8 @@ lemma conversations messages <id> # the exchange is recorded
 
 ## See also
 
+- `people-outside.md` — `config.contacts.answer`: answering people who are not members privately, as contacts.
+
 - The model → `pod-model.md` · credentials/accounts → `connectors.md`
 - The agent behind the surface → `agents.md` · the paired operator UI → `apps.md`
 - How its interaction tools render per platform → `agent-tools.md`

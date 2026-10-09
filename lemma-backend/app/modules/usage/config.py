@@ -56,6 +56,19 @@ class UsageSettings(BaseSettings):
         default=None,
         description="Deployment-wide monthly system-spend limit per user, in USD.",
     )
+    usage_contacts_monthly_default_usd: float | None = Field(
+        default=50,
+        ge=0,
+        description=(
+            "What an organization's bots may spend a month answering contacts "
+            "and people outside the pod in groups, in USD, until an owner sets "
+            "a cap of their own. Contacts are never billed and anybody can "
+            "write to a bot that answers them, so an organization that never "
+            "looked at the setting still has a ceiling. None means no default "
+            "ceiling; an owner removing the cap is recorded as no limit and "
+            "is not overridden by this."
+        ),
+    )
     usage_unpriced_limit_policy: Literal["allow", "refuse"] = Field(
         default="allow",
         description=(

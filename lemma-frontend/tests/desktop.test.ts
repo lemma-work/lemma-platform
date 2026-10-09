@@ -268,23 +268,62 @@ test("a mail link goes to the mail handler, not a blank tab", () => {
     assert.deepEqual(state.assigned, ["mailto:someone@example.test"]);
 });
 
+/** A tab as the browser hands it back: a document to write into, and a
+ *  location to point somewhere. */
+function fakeTab() {
+    const body = { children: [] as { tag: string; textContent: string }[] };
+    const tab = {
+        closed: false,
+        opener: {} as unknown,
+        document: {
+            title: "",
+            createElement(tag: string) { return { tag, textContent: "" }; },
+            body: {
+                replaceChildren(...nodes: { tag: string; textContent: string }[]) { body.children = nodes; },
+            },
+        },
+        location: { replaced: "", replace(url: string) { this.replaced = url; } },
+    };
+    return { tab, body };
+}
+
 test("a later URL claims its tab in the click in a browser", async () => {
     const state = page();
-    const tab = { closed: false, opener: {} as unknown, location: { replaced: "", replace(url: string) { this.replaced = url; } } };
+    const { tab } = fakeTab();
     (globalThis as { window: { open: unknown } }).window.open = (url: string, _target?: string, features?: string) => {
         state.opened.push({ url, features });
         return tab;
     };
-    await openExternalWhenReady(Promise.resolve("https://grant.example/x"));
+    await openExternalWhenReady(Promise.resolve("https://grant.example/x"), "the browser");
     assert.deepEqual(state.opened, [{ url: "", features: undefined }]);
     assert.equal(tab.opener, null, "the reference is cut by hand");
+    assert.equal(tab.location.replaced, "https://grant.example/x");
+});
+
+test("the tab a later URL is coming to says so while it waits", async () => {
+    /* An empty tab for the seconds a grant takes reads as a click that did
+       nothing, and this one has to stay open for the flow to work at all. */
+    const state = page();
+    const { tab, body } = fakeTab();
+    (globalThis as { window: { open: unknown } }).window.open = (url: string, _target?: string, features?: string) => {
+        state.opened.push({ url, features });
+        return tab;
+    };
+    let arrive: (url: string) => void = () => undefined;
+    const url = new Promise<string>((resolve) => { arrive = resolve; });
+    const opening = openExternalWhenReady(url, "the browser");
+    assert.equal(tab.document.title, "Taking you to the browser\u2026");
+    assert.ok(body.children.some((one) => one.textContent === "Taking you to the browser\u2026"));
+    assert.equal(tab.location.replaced, "", "pointed nowhere until there is somewhere to point it");
+    arrive("https://grant.example/x");
+    await opening;
     assert.equal(tab.location.replaced, "https://grant.example/x");
 });
 
 test("in the desktop app a later URL is simply handed to the shell", async () => {
     /* The shell refuses a blank window, so pre-opening one would lose the URL. */
     const state = page({ shell: () => null, info: { mode: "hosted", platform: "macos" } });
-    await openExternalWhenReady(Promise.resolve("https://grant.example/x"));
+    await openExternalWhenReady(Promise.resolve("https://grant.example/x"), "the browser");
     assert.deepEqual(state.opened, [{ url: "https://grant.example/x", features: "noopener,noreferrer" }]);
 });
 

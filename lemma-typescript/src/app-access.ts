@@ -1,6 +1,7 @@
 /** The app host's sign-in page: trade the API session for this host's app cookie. */
-import { AuthManager, buildAuthUrl } from "./auth.js";
+import { AuthManager, buildAuthUrl, dropUpdateMarker, isHalfCleared } from "./auth.js";
 import { ApiError, HttpClient } from "./http.js";
+import { HostRefusedError, askHostForAppAccess, isEmbeddedInHost } from "./embedded.js";
 import Session from "supertokens-web-js/recipe/session/index.js";
 
 export interface AppAccessOptions {
@@ -28,6 +29,7 @@ const COPY: Record<PageState, { title: string; message: string }> = {
 };
 
 function failureKind(error: unknown): AccessFailure {
+  if (error instanceof HostRefusedError) return "denied";
   if (error instanceof ApiError && error.statusCode === 401) return "signed-out";
   if (error instanceof ApiError && [403, 404].includes(error.statusCode)) return "denied";
   return "unavailable";
@@ -42,6 +44,12 @@ function signInUrlForApp(authUrl: string, redirectUri: string): string {
 }
 
 async function refreshMainSession(): Promise<boolean> {
+  // A host that kept the update marker from an ended session answers "no"
+  // here without asking, though the person may have signed in since: opening
+  // a private app the next morning, its cookie and the API token both lapsed,
+  // sent a signed-in person to sign in. Only reached once the ticket request
+  // was refused, so a good token never pays for the question.
+  if (isHalfCleared()) dropUpdateMarker();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error("The session service did not answer")), 10_000);
@@ -67,9 +75,12 @@ async function requestTicket(options: AppAccessOptions): Promise<AppAccessTicket
   }
 }
 
-async function redeem(ticket: string): Promise<void> {
+async function redeem(ticket: string, embedded: boolean): Promise<void> {
+  // Framed in an AI tool, the server sets a cookie made for that frame: one a
+  // browser sends from inside another site's page, kept to that page.
+  const body = embedded ? { ticket, embedded: true } : { ticket };
   const response = await fetch("/_lemma/app-access/redeem", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(10_000),
   });
   // A refused ticket was issued seconds ago for this origin, so it is never
@@ -108,8 +119,11 @@ export async function startAppAccess(options: AppAccessOptions): Promise<void> {
   retry.onclick = () => { void startAppAccess(options); };
   show("checking");
   try {
-    const { ticket } = await requestTicket(options);
-    await redeem(ticket);
+    // Framed in an AI tool there is no Lemma session to read a ticket with;
+    // the Lemma view around the frame mints one from the tool's connection.
+    const embedded = isEmbeddedInHost();
+    const ticket = embedded ? await askHostForAppAccess() : (await requestTicket(options)).ticket;
+    await redeem(ticket, embedded);
     // HttpOnly cookies cannot be read by JavaScript. Ask the server before
     // reloading, so a browser that refuses the cookie cannot enter a loop.
     const verified = await fetch("/", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/octet-stream" }, signal: AbortSignal.timeout(10_000) });

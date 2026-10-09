@@ -36,6 +36,13 @@ def _table_actions_expr(ctx: Context):
     )
 
 
+def readable_by(ctx: Context):
+    """A WHERE clause keeping the tables ``ctx`` may read, decided in SQL."""
+    return allowed_actions_contains(
+        _table_actions_expr(ctx), Permissions.DATASTORE_TABLE_READ
+    )
+
+
 def _not_reserved():
     """Exclude system-managed ``reserved_*`` tables from user-facing listings.
 
@@ -201,6 +208,8 @@ class DatastoreTableRepository(DatastoreRepositoryBase, DatastoreTableRepository
             column_count=len(model.columns or []),
             enable_rls=model.enable_rls,
             visibility=model.visibility,
+            contact_owned=model.contact_owned,
+            contact_columns=list(model.contact_columns or []),
             allowed_actions=list(allowed),
             created_at=model.created_at,
             updated_at=model.updated_at,
