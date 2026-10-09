@@ -29,7 +29,6 @@ from sqlalchemy.orm import Session
 from app.core.domain.uow import IUnitOfWork
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
-from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER
 from app.modules.agent_surfaces.domain.notification import (
     NotificationDeliveryStatus,
     NotificationStatus,
@@ -351,17 +350,6 @@ class SurfaceConversationLinkRepository:
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
-
-    async def is_outsiders_thread(self, conversation_id: UUID) -> bool:
-        """Whether routing linked this conversation as the strangers' thread."""
-        link = AgentSurfaceConversationLinkModel
-        stmt = select(
-            select(link.id)
-            .where(link.conversation_id == conversation_id)
-            .where(link.external_user_id == OUTSIDERS_LINK_USER)
-            .exists()
-        )
-        return bool((await self.session.execute(stmt)).scalar())
 
     async def lock_thread(
         self,

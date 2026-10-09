@@ -9108,6 +9108,7 @@ var LemmaClient = (() => {
     composeInConversation: () => composeInConversation,
     getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
+    isEmbeddedInHost: () => isEmbeddedInHost,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
     setTestingToken: () => setTestingToken,
     startAppAccess: () => startAppAccess,
@@ -9347,6 +9348,102 @@ var LemmaClient = (() => {
       ]
     });
     initializedSignature = signature;
+  }
+
+  // src/embedded.ts
+  var EMBED_PARAM = "lemma_embed";
+  var EMBED_VALUE = "mcp";
+  var TOKEN_REQUEST = "lemma:token-request";
+  var TOKEN_MESSAGE = "lemma:token";
+  var ACCESS_REQUEST = "lemma:app-access-request";
+  var ACCESS_MESSAGE = "lemma:app-access";
+  var REMEMBERED_KEY = "lemma:embedded";
+  var ANSWER_TIMEOUT_MS = 2e4;
+  var RENEW_BEFORE_MS = 6e4;
+  function isEmbeddedInHost() {
+    if (typeof window === "undefined" || window.parent === window) return false;
+    let marked = false;
+    try {
+      marked = new URL(window.location.href).searchParams.get(EMBED_PARAM) === EMBED_VALUE;
+    } catch {
+      marked = false;
+    }
+    try {
+      if (marked) window.sessionStorage.setItem(REMEMBERED_KEY, "1");
+      else marked = window.sessionStorage.getItem(REMEMBERED_KEY) === "1";
+    } catch {
+    }
+    return marked;
+  }
+  var HostRefusedError = class extends Error {
+  };
+  var asked = 0;
+  function askHost(requestType, answerType) {
+    const id = `${requestType}:${Date.now().toString(36)}:${(asked++).toString(36)}`;
+    return new Promise((resolve2, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener("message", listen);
+        reject(new Error("The Lemma view did not answer"));
+      }, ANSWER_TIMEOUT_MS);
+      function listen(event) {
+        if (event.source !== window.parent) return;
+        const data = event.data;
+        if (!data || data.type !== answerType || data.id !== id) return;
+        clearTimeout(timer);
+        window.removeEventListener("message", listen);
+        if (typeof data.error === "string") reject(new HostRefusedError(data.error));
+        else resolve2(data);
+      }
+      window.addEventListener("message", listen);
+      window.parent.postMessage({ type: requestType, id }, "*");
+    });
+  }
+  var EmbeddedCredentials = class {
+    constructor() {
+      __publicField(this, "token", null);
+      __publicField(this, "expiresAt", Number.NaN);
+      __publicField(this, "renewing", null);
+      __publicField(this, "timer");
+    }
+    current() {
+      return this.token;
+    }
+    /** The token, asking the view for the first one. */
+    ready() {
+      return this.token ? Promise.resolve(this.token) : this.renew();
+    }
+    /** A fresh token. Callers asking at once share one question. */
+    renew() {
+      if (!this.renewing) {
+        this.renewing = askHost(TOKEN_REQUEST, TOKEN_MESSAGE).then((answer) => {
+          if (typeof answer.token !== "string" || !answer.token) {
+            throw new Error("The Lemma view sent no token");
+          }
+          this.token = answer.token;
+          this.expiresAt = typeof answer.expiresAt === "string" ? Date.parse(answer.expiresAt) : Number.NaN;
+          this.renewBeforeExpiry();
+          return answer.token;
+        }).finally(() => {
+          this.renewing = null;
+        });
+      }
+      return this.renewing;
+    }
+    renewBeforeExpiry() {
+      clearTimeout(this.timer);
+      if (!Number.isFinite(this.expiresAt)) return;
+      const wait = Math.max(0, this.expiresAt - Date.now() - RENEW_BEFORE_MS);
+      this.timer = setTimeout(() => {
+        this.renew().catch(() => void 0);
+      }, wait);
+    }
+  };
+  async function askHostForAppAccess() {
+    const answer = await askHost(ACCESS_REQUEST, ACCESS_MESSAGE);
+    if (typeof answer.ticket !== "string" || !answer.ticket) {
+      throw new Error("The Lemma view sent no ticket");
+    }
+    return answer.ticket;
   }
 
   // src/reachability.ts
@@ -9589,7 +9686,34 @@ var LemmaClient = (() => {
   function hasHeader(headers, name) {
     return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
   }
-  var ownOriginRecoveryTried = false;
+  var UPDATE_MARKER_COOKIE = "st-last-access-token-update";
+  var FRONT_TOKEN_COOKIE = "sFrontToken";
+  function hasCookie(name) {
+    return document.cookie.split(";").some((part) => part.trim().startsWith(`${name}=`));
+  }
+  function isHalfCleared() {
+    if (typeof document === "undefined") return false;
+    try {
+      return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
+    } catch {
+      return false;
+    }
+  }
+  function dropUpdateMarker() {
+    document.cookie = `${UPDATE_MARKER_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+  function cameFromThisSite(authUrl) {
+    try {
+      const here = window.location.origin;
+      const portal = new URL(authUrl, window.location.href).origin;
+      if (here === portal) return false;
+      const from = document.referrer ? new URL(document.referrer).origin : "";
+      return from === portal || from === here;
+    } catch {
+      return false;
+    }
+  }
+  var markerRecoveryTried = false;
   var AuthManager = class {
     /**
      * @param token A credential to present as `Authorization: Bearer`. Supplying
@@ -9602,6 +9726,8 @@ var LemmaClient = (() => {
       __publicField(this, "apiUrl");
       __publicField(this, "authUrl");
       __publicField(this, "injectedToken");
+      /** An app framed inside an AI tool, whose token comes from the Lemma view around it. */
+      __publicField(this, "embedded");
       __publicField(this, "state", { status: "loading", user: null });
       __publicField(this, "listeners", /* @__PURE__ */ new Set());
       __publicField(this, "authCheckPromise", null);
@@ -9610,17 +9736,39 @@ var LemmaClient = (() => {
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
       this.injectedToken = (token == null ? void 0 : token.trim()) || detectInjectedToken();
-      if (!this.injectedToken) {
+      this.embedded = !this.injectedToken && isEmbeddedInHost() ? new EmbeddedCredentials() : null;
+      if (!this.injectedToken && !this.embedded) {
         ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       }
     }
-    /** Whether requests will use an injected Bearer token (testing mode). */
+    /** Whether requests carry a Bearer token rather than the session cookie. */
     get isTokenMode() {
-      return this.injectedToken !== null;
+      return this.injectedToken !== null || this.embedded !== null;
     }
-    /** The current injected Bearer token, if token-mode auth is active. */
+    /** The Bearer token requests carry right now, if token-mode auth is active. */
     getBearerToken() {
-      return this.injectedToken;
+      var _a, _b, _c;
+      return (_c = (_b = this.injectedToken) != null ? _b : (_a = this.embedded) == null ? void 0 : _a.current()) != null ? _c : null;
+    }
+    /**
+     * Resolves once requests can carry credentials: at once, except in an app
+     * framed inside an AI tool, which waits for its first token from the view.
+     */
+    async ready() {
+      if (this.embedded) await this.embedded.ready();
+    }
+    /**
+     * In a framed app, a fresh token from the view after a 401 — the one it held
+     * may have outlived itself. False anywhere else, and when none came.
+     */
+    async renewEmbeddedToken() {
+      if (!this.embedded) return false;
+      try {
+        await this.embedded.renew();
+        return true;
+      } catch {
+        return false;
+      }
     }
     /** The current auth state. */
     getState() {
@@ -9735,7 +9883,7 @@ var LemmaClient = (() => {
      * Check whether a cookie-backed session is active without mutating auth state.
      */
     async isAuthenticatedViaCookie() {
-      if (this.injectedToken) {
+      if (this.isTokenMode) {
         return this.isAuthenticated();
       }
       try {
@@ -9757,6 +9905,9 @@ var LemmaClient = (() => {
       if (this.injectedToken) {
         return this.injectedToken;
       }
+      if (this.embedded) {
+        return this.embedded.ready();
+      }
       this.assertBrowserContext();
       ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       const token = await import_session2.default.getAccessToken();
@@ -9771,6 +9922,9 @@ var LemmaClient = (() => {
     async refreshAccessToken() {
       if (this.injectedToken) {
         return this.injectedToken;
+      }
+      if (this.embedded) {
+        return this.embedded.renew();
       }
       this.assertBrowserContext();
       ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
@@ -9798,12 +9952,13 @@ var LemmaClient = (() => {
       if (init.body !== void 0 && !isFormData2 && !hasHeader(headers, "Content-Type")) {
         setHeader(headers, "Content-Type", "application/json");
       }
-      if (this.injectedToken) {
-        setHeader(headers, "Authorization", `Bearer ${this.injectedToken}`);
+      const bearer = this.getBearerToken();
+      if (bearer) {
+        setHeader(headers, "Authorization", `Bearer ${bearer}`);
       }
       return {
         ...init,
-        credentials: this.injectedToken ? "omit" : "include",
+        credentials: this.isTokenMode ? "omit" : "include",
         headers
       };
     }
@@ -9822,30 +9977,34 @@ var LemmaClient = (() => {
       return checking;
     }
     /**
-     * One refresh for an app that calls the API through its own origin.
+     * One refresh for a pod app whose host remembers a session that ended.
      *
      * The session is shared between hosts by the HttpOnly cookies, but the
      * markers the browser SDK reads (`sFrontToken`, `st-last-access-token-update`)
      * are host-only on purpose, so a pod app keeps its own copy. If that copy is
      * half-cleared -- the update marker left behind with no front token, as a
      * failed refresh leaves it -- `doesSessionExist()` answers "no" without ever
-     * asking, and the app sends a signed-in person to sign in forever. Drop the
-     * stale marker on this host and ask once: the refresh carries the shared
-     * cookie and returns this origin's own front token. Once per page, so a
-     * genuinely signed-out app cannot storm the endpoint.
+     * asking. Signing in again renews the shared cookies but cannot reach this
+     * host's marker, so the auth portal, which sees the session, sends the person
+     * straight back to an app that does not: a redirect loop with no way out.
+     * Drop the stale marker on this host and ask once: the refresh carries the
+     * shared cookie and returns this host's own front token.
+     *
+     * Whether the API is on this origin or another one does not matter: the
+     * marker is always this host's, and the refresh cookie travels to the API
+     * either way. Once per page, so a genuinely signed-out app costs one refused
+     * refresh per load rather than a storm.
+     *
+     * The refresh is asked for directly, not through `doesSessionExist()`, which
+     * folds a network error or a 5xx into "no": an API mid-deploy would sign the
+     * person out instead of being waited out. A refresh that fails that way
+     * throws, and the caller reads it as unreachable.
      */
-    async recoverOwnOriginSession() {
-      if (ownOriginRecoveryTried || typeof document === "undefined") return false;
-      ownOriginRecoveryTried = true;
-      try {
-        if (new URL(this.apiUrl, window.location.href).origin !== window.location.origin) {
-          return false;
-        }
-      } catch {
-        return false;
-      }
-      document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
-      return import_session2.default.doesSessionExist();
+    async recoverHalfClearedSession() {
+      if (markerRecoveryTried || typeof document === "undefined") return false;
+      markerRecoveryTried = true;
+      dropUpdateMarker();
+      return import_session2.default.attemptRefreshingSession();
     }
     /**
      * Whether the API answers at all -- its liveness probe, not a session check.
@@ -9863,26 +10022,35 @@ var LemmaClient = (() => {
      * with no `front-token`, which the SDK throws on without saving anything.
      * One direct refresh tells them apart. It also is the retry the duplicate
      * answer needs: the server cleared the stray copy on that response, so this
-     * refresh carries one cookie and succeeds. Where the SDK already knows there
-     * is no session (the update marker without a front token) it answers
-     * without touching the network.
+     * refresh carries one cookie and succeeds.
+     *
+     * A half-cleared host takes the recovery instead of that refresh. There,
+     * `attemptRefreshingSession()` never reaches the network: it answers from
+     * the marker and fires `UNAUTHORISED` on the way out, which marks this
+     * manager signed out and so discards the result of the very check that is
+     * about to repair the session.
      */
     async localSession() {
+      const halfCleared = isHalfCleared();
       try {
         if (await import_session2.default.doesSessionExist()) return "exists";
       } catch (error) {
         return refreshFailureKind(error);
+      }
+      if (halfCleared) {
+        if (!cameFromThisSite(this.authUrl)) return "absent";
+        try {
+          return await this.recoverHalfClearedSession() ? "exists" : "absent";
+        } catch (error) {
+          return refreshFailureKind(error);
+        }
       }
       try {
         if (await import_session2.default.attemptRefreshingSession()) return "exists";
       } catch (error) {
         if (refreshFailureKind(error) === "unreachable") return "unreachable";
       }
-      try {
-        return await this.recoverOwnOriginSession() ? "exists" : "absent";
-      } catch (error) {
-        return refreshFailureKind(error);
-      }
+      return "absent";
     }
     async performAuthCheck(revision) {
       const unauthenticated = () => revision === this.authRevision ? this.applyUnauthenticatedState() : this.state;
@@ -9893,11 +10061,18 @@ var LemmaClient = (() => {
         return next;
       };
       this.setState({ status: "loading", user: null });
-      if (!this.injectedToken && typeof window !== "undefined") {
+      if (!this.isTokenMode && typeof window !== "undefined") {
         ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
         const local = await this.localSession();
         if (local === "unreachable") return unreachable();
         if (local === "absent") return unauthenticated();
+      }
+      if (this.embedded) {
+        try {
+          await this.embedded.ready();
+        } catch {
+          return unauthenticated();
+        }
       }
       if (revision !== this.authRevision) return this.state;
       try {
@@ -9944,6 +10119,10 @@ var LemmaClient = (() => {
         this.markUnauthenticated();
         return true;
       }
+      if (this.embedded) {
+        this.markUnauthenticated();
+        return true;
+      }
       this.assertBrowserContext();
       ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       try {
@@ -9986,7 +10165,15 @@ var LemmaClient = (() => {
         return;
       }
       const redirectUri = (_a = options.redirectUri) != null ? _a : window.location.href;
-      window.location.href = this.getAuthUrl({ ...options, redirectUri });
+      const url = this.getAuthUrl({ ...options, redirectUri });
+      if (window.top && window.top !== window.self) {
+        try {
+          window.top.location.href = url;
+          return;
+        } catch {
+        }
+      }
+      window.location.href = url;
     }
     /**
      * Optional full logout flow:
@@ -10318,10 +10505,17 @@ var LemmaClient = (() => {
     async request(method, path, options = {}) {
       var _a;
       const url = this.buildUrl(path, options.params);
-      const init = this.buildRequestInit(method, options);
+      await this.auth.ready();
+      let init = this.buildRequestInit(method, options);
+      let renewed = false;
       for (let attempt = 0; ; attempt++) {
         const response = await this.fetchWithTimeout(url, init, options.signal);
         if (response.status === 401) {
+          if (!renewed && await this.auth.renewEmbeddedToken()) {
+            renewed = true;
+            init = this.buildRequestInit(method, options);
+            continue;
+          }
           this.auth.markUnauthenticated();
         }
         const retryDelay = retryDelayForStatus(
@@ -10364,6 +10558,7 @@ var LemmaClient = (() => {
      */
     async streamResponse(path, options = {}) {
       var _a, _b, _c;
+      await this.auth.ready();
       let response;
       try {
         response = await fetch(
@@ -10412,6 +10607,7 @@ var LemmaClient = (() => {
      */
     async requestBytesResponse(method, path, options = {}) {
       const url = `${this.apiUrl}${path}`;
+      await this.auth.ready();
       const init = this.auth.getRequestInit({ method });
       if (options.headers) {
         init.headers = { ...init.headers, ...options.headers };
@@ -10611,13 +10807,20 @@ var LemmaClient = (() => {
     }
     async request(operation) {
       var _a;
+      await this.auth.ready();
       this.configure();
+      let renewed = false;
       for (let attempt = 0; ; attempt++) {
         try {
           return await this.runWithTimeout(operation);
         } catch (error) {
           if (error instanceof ApiError2) {
             if (error.status === 401) {
+              if (!renewed && await this.auth.renewEmbeddedToken()) {
+                renewed = true;
+                this.configure();
+                continue;
+              }
               this.auth.markUnauthenticated();
             }
             const retryDelay = retryDelayForStatus(
@@ -12997,6 +13200,30 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Open a Function to Contacts
+     * Let a contact's conversation call this function, or stop it. A contact holds no grant and the run acts for no member: it runs as the function itself, held to its own grants, and is told the asking contact as `contact_id`, which its input schema must declare. Takes pod settings permission and either owning the function or administering the pod.
+     * @param podId
+     * @param functionName
+     * @param requestBody
+     * @returns FunctionResponse Successful Response
+     * @throws ApiError
+     */
+    static functionContactsUpdate(podId, functionName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/functions/{function_name}/contacts",
+        path: {
+          "pod_id": podId,
+          "function_name": functionName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Function Resource Permissions
      * Get explicit resource grants assigned to a function.
      * @param podId
@@ -13270,6 +13497,14 @@ var LemmaClient = (() => {
     }
     delete(name) {
       return this.client.request(() => FunctionsService.functionDelete(this.podId(), name));
+    }
+    /** Let a contact's conversation call this function, or stop it. It runs as its
+     *  owner's runs do, held to its own grants, and is told the asking contact as
+     *  `contact_id` in its input. */
+    setContactsInvoke(name, enabled) {
+      return this.client.request(
+        () => FunctionsService.functionContactsUpdate(this.podId(), name, { contacts_invoke: enabled })
+      );
     }
     /** Run a function — convenience alias for `functions.runs.create`, matching the
      *  Python SDK's `functions.run(name, input)` and the unified `.run` verb. */
@@ -15835,6 +16070,113 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Widgets
+     * @param podId
+     * @returns WebWidgetListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/web-widgets",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Widget
+     * @param podId
+     * @param requestBody
+     * @returns WebWidgetCreatedResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/web-widgets",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete Widget
+     * @param podId
+     * @param widgetId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentWebWidgetDelete(podId, widgetId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Widget
+     * @param podId
+     * @param widgetId
+     * @param requestBody
+     * @returns WebWidgetResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetUpdate(podId, widgetId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Reissue Widget
+     * Mint a new signing secret. Tokens signed with the old one stop working.
+     *
+     * So do the sessions they started: a host session is the old secret's word
+     * for who somebody is, and a secret is reissued because that word is no
+     * longer trusted.
+     * @param podId
+     * @param widgetId
+     * @returns WebWidgetSecretResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetReissue(podId, widgetId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}/secret",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -16006,6 +16348,615 @@ var LemmaClient = (() => {
     update(podId, groupId, payload) {
       return this.client.request(
         () => AgentSurfacesService.agentGroupUpdate(podId, groupId, payload)
+      );
+    }
+  };
+
+  // src/openapi_client/services/ContactsService.ts
+  var ContactsService = class {
+    /**
+     * List Contacts
+     * The pod's contacts, newest first.
+     * @param podId
+     * @param limit
+     * @param before
+     * @returns ContactListResponse Successful Response
+     * @throws ApiError
+     */
+    static contactList(podId, limit = 50, before) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/contacts",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "limit": limit,
+          "before": before
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete Contact
+     * Forget a contact: their rows, handles, conversations and chat sessions.
+     *
+     * See ``services/forget`` for the order, which is what makes a failure safe
+     * to retry.
+     * @param podId
+     * @param contactId
+     * @returns void
+     * @throws ApiError
+     */
+    static contactDelete(podId, contactId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/contacts/{contact_id}",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Contact
+     * @param podId
+     * @param contactId
+     * @returns ContactResponse Successful Response
+     * @throws ApiError
+     */
+    static contactGet(podId, contactId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/contacts/{contact_id}",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Contact
+     * @param podId
+     * @param contactId
+     * @param requestBody
+     * @returns ContactResponse Successful Response
+     * @throws ApiError
+     */
+    static contactUpdate(podId, contactId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/contacts/{contact_id}",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Export Contact
+     * A contact's handles, what was said with them, and the rows that are theirs.
+     *
+     * Takes a pod admin, as forgetting does: both answer the person the data is
+     * about, not the member reading it.
+     * @param podId
+     * @param contactId
+     * @param cursor
+     * @returns ContactExportResponse Successful Response
+     * @throws ApiError
+     */
+    static contactExport(podId, contactId, cursor) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/contacts/{contact_id}/export",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        query: {
+          "cursor": cursor
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Follow Up Contact
+     * Write to a contact in their most recent conversation, where the channel allows.
+     *
+     * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
+     * has closed, or when they have never written to the pod; 429 past the day's
+     * follow-ups for this contact; 502 when the platform did not take it, which
+     * the conversation then shows as not sent.
+     * @param podId
+     * @param contactId
+     * @param requestBody
+     * @returns FollowUpResponse Successful Response
+     * @throws ApiError
+     */
+    static contactFollowUp(podId, contactId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/contacts/{contact_id}/messages",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/openapi_client/services/UsageService.ts
+  var UsageService = class {
+    /**
+     * My Events
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageListResponse Successful Response
+     * @throws ApiError
+     */
+    static usageMeEventsList(organizationId, start, end, days = 30, limit = 50, agentRunId, conversationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/me/events",
+        query: {
+          "organization_id": organizationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * My Limits
+     * @param organizationId
+     * @returns MyUsageLimitsResponse Successful Response
+     * @throws ApiError
+     */
+    static usageMeLimitsGet(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/me/limits",
+        query: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * My Stats
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageStatsResponse Successful Response
+     * @throws ApiError
+     */
+    static usageMeStatsGet(organizationId, start, end, days = 30, limit = 50, agentRunId, conversationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/me/stats",
+        query: {
+          "organization_id": organizationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * My Summary
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageSummaryResponse Successful Response
+     * @throws ApiError
+     */
+    static usageMeSummaryGet(organizationId, start, end, days = 30, limit = 50, agentRunId, conversationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/me/summary",
+        query: {
+          "organization_id": organizationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Contacts Cap
+     * The organization's cap on what answering contacts may cost a month.
+     * @param organizationId
+     * @returns ContactsCapResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationContactsCapGet(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/contacts-cap",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Contacts Cap
+     * Set the cap, or remove it for no limit. Organization owners only.
+     *
+     * Contacts are never billed, so this is the ceiling on what people outside
+     * the organization can cost it: past it, its bots stop answering them until
+     * the month turns, and hand their conversations to members. Billing is an
+     * owner's, and so is this.
+     * @param organizationId
+     * @param requestBody
+     * @returns ContactsCapResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationContactsCapUpdate(organizationId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/usage/organizations/{organization_id}/contacts-cap",
+        path: {
+          "organization_id": organizationId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Usage Events
+     * @param organizationId
+     * @param agentRunId
+     * @param conversationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param podId
+     * @param userId
+     * @param agentId
+     * @param profileId
+     * @param profileScope
+     * @param modelName
+     * @param usageKind
+     * @param sourceType
+     * @param status
+     * @returns UsageListResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationEventsList(organizationId, agentRunId, conversationId, start, end, days = 30, limit = 100, podId, userId, agentId, profileId, profileScope, modelName, usageKind, sourceType, status) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/events",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "pod_id": podId,
+          "user_id": userId,
+          "agent_id": agentId,
+          "profile_id": profileId,
+          "profile_scope": profileScope,
+          "model_name": modelName,
+          "usage_kind": usageKind,
+          "source_type": sourceType,
+          "status": status
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Usage Limits
+     * @param organizationId
+     * @returns UsageLimitsResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationLimitsGet(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/limits",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get My Usage
+     * @param organizationId
+     * @param agentRunId
+     * @param conversationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param podId
+     * @param userId
+     * @param agentId
+     * @param profileId
+     * @param profileScope
+     * @param modelName
+     * @param usageKind
+     * @param sourceType
+     * @param status
+     * @returns UsageSummaryResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationMeSummaryGet(organizationId, agentRunId, conversationId, start, end, days = 30, limit = 100, podId, userId, agentId, profileId, profileScope, modelName, usageKind, sourceType, status) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/me",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "pod_id": podId,
+          "user_id": userId,
+          "agent_id": agentId,
+          "profile_id": profileId,
+          "profile_scope": profileScope,
+          "model_name": modelName,
+          "usage_kind": usageKind,
+          "source_type": sourceType,
+          "status": status
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Usage Stats
+     * @param organizationId
+     * @param agentRunId
+     * @param conversationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param podId
+     * @param userId
+     * @param agentId
+     * @param profileId
+     * @param profileScope
+     * @param modelName
+     * @param usageKind
+     * @param sourceType
+     * @param status
+     * @param granularity
+     * @param groupBy
+     * @returns UsageStatsResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationStatsGet(organizationId, agentRunId, conversationId, start, end, days = 30, limit = 100, podId, userId, agentId, profileId, profileScope, modelName, usageKind, sourceType, status, granularity = "day", groupBy) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/stats",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "pod_id": podId,
+          "user_id": userId,
+          "agent_id": agentId,
+          "profile_id": profileId,
+          "profile_scope": profileScope,
+          "model_name": modelName,
+          "usage_kind": usageKind,
+          "source_type": sourceType,
+          "status": status,
+          "granularity": granularity,
+          "group_by": groupBy
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Organization Usage Summary
+     * @param organizationId
+     * @param agentRunId
+     * @param conversationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param podId
+     * @param userId
+     * @param agentId
+     * @param profileId
+     * @param profileScope
+     * @param modelName
+     * @param usageKind
+     * @param sourceType
+     * @param status
+     * @returns UsageSummaryResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationSummaryGet(organizationId, agentRunId, conversationId, start, end, days = 30, limit = 100, podId, userId, agentId, profileId, profileScope, modelName, usageKind, sourceType, status) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/summary",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "pod_id": podId,
+          "user_id": userId,
+          "agent_id": agentId,
+          "profile_id": profileId,
+          "profile_scope": profileScope,
+          "model_name": modelName,
+          "usage_kind": usageKind,
+          "source_type": sourceType,
+          "status": status
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/contacts.ts
+  var ContactsNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+      /**
+       * Web widgets: the pod's chat on other people's pages, and the key a form page adds rows with. The public key
+       * goes in the page and names the widget only; the signing secret, returned by
+       * `create` and `reissue` once, stays on the customer's server.
+       */
+      __publicField(this, "widgets", {
+        list: (podId) => this.client.request(() => AgentSurfacesService.agentWebWidgetList(podId)),
+        create: (podId, payload) => this.client.request(() => AgentSurfacesService.agentWebWidgetCreate(podId, payload)),
+        update: (podId, widgetId, payload) => this.client.request(
+          () => AgentSurfacesService.agentWebWidgetUpdate(podId, widgetId, payload)
+        ),
+        reissue: (podId, widgetId) => this.client.request(
+          () => AgentSurfacesService.agentWebWidgetReissue(podId, widgetId)
+        ),
+        remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId))
+      });
+    }
+    /** The pod's contacts, newest first. Pass the opaque `next_before` back as
+     *  `before` for the next page. */
+    list(podId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ContactsService.contactList(podId, (_a = options.limit) != null ? _a : 50, options.before);
+        }
+      );
+    }
+    /** One contact, with the handles they are known by. */
+    get(podId, contactId) {
+      return this.client.request(() => ContactsService.contactGet(podId, contactId));
+    }
+    /** Change the name a contact is addressed by. */
+    rename(podId, contactId, displayName) {
+      return this.client.request(
+        () => ContactsService.contactUpdate(podId, contactId, { display_name: displayName })
+      );
+    }
+    /** Write to a contact in their latest conversation, where the channel allows:
+     *  never where they unsubscribed, on WhatsApp only within 24 hours of their
+     *  last message, and a few times a day at most. Takes `contact.message`. */
+    followUp(podId, contactId, message) {
+      return this.client.request(
+        () => ContactsService.contactFollowUp(podId, contactId, { message })
+      );
+    }
+    /** One page of everything the pod holds about a contact: handles,
+     *  conversations, then rows. Pass `next_cursor` back as `cursor` until absent. */
+    export(podId, contactId, options = {}) {
+      return this.client.request(
+        () => ContactsService.contactExport(podId, contactId, options.cursor)
+      );
+    }
+    /** Forget a contact: their rows, handles, conversations and chat sessions. */
+    remove(podId, contactId) {
+      return this.client.request(() => ContactsService.contactDelete(podId, contactId));
+    }
+    /** The organization's monthly cap on answering contacts, and this month's spend. */
+    cap(organizationId) {
+      return this.client.request(
+        () => UsageService.usageOrganizationContactsCapGet(organizationId)
+      );
+    }
+    /** Set the cap in USD, or `null` for no limit. Takes an organization owner. */
+    setCap(organizationId, monthlyLimitUsd) {
+      return this.client.request(
+        () => UsageService.usageOrganizationContactsCapUpdate(organizationId, {
+          monthly_limit_usd: monthlyLimitUsd
+        })
       );
     }
   };
@@ -16989,10 +17940,12 @@ var LemmaClient = (() => {
      * @param podId
      * @param scheduleId
      * @param limit
+     * @param status Only runs that report this status -- the target's outcome once there is one.
+     * @param skipped true: only events the schedule's filter skipped. false: leave them out, which is what a busy webhook schedule's history usually needs. Omitted: both.
      * @returns ScheduleRunListResponse Successful Response
      * @throws ApiError
      */
-    static scheduleRunList(podId, scheduleId, limit = 100) {
+    static scheduleRunList(podId, scheduleId, limit = 100, status, skipped) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/schedules/{schedule_id}/runs",
@@ -17001,7 +17954,9 @@ var LemmaClient = (() => {
           "schedule_id": scheduleId
         },
         query: {
-          "limit": limit
+          "limit": limit,
+          "status": status,
+          "skipped": skipped
         },
         errors: {
           422: `Validation Error`
@@ -17067,10 +18022,54 @@ var LemmaClient = (() => {
     delete(scheduleId) {
       return this.client.request(() => SchedulesService.scheduleDelete(this.podId(), scheduleId));
     }
+    /**
+     * A schedule's runs, newest first. `status` keeps runs reporting that status
+     * (a target's outcome once it has one); `skipped: true` keeps only events the
+     * schedule's filter skipped and `skipped: false` leaves them out.
+     */
+    runs(scheduleId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b;
+          return SchedulesService.scheduleRunList(
+            this.podId(),
+            scheduleId,
+            (_a = options.limit) != null ? _a : 100,
+            (_b = options.status) != null ? _b : void 0,
+            options.skipped
+          );
+        }
+      );
+    }
+    /** Run a failed or dead-lettered run again with the same event; answers the new run. */
+    retryRun(scheduleId, runId) {
+      return this.client.request(
+        () => SchedulesService.scheduleRunRetry(this.podId(), scheduleId, runId)
+      );
+    }
   };
 
   // src/openapi_client/services/TablesService.ts
   var TablesService = class {
+    /**
+     * Tables Open To People Outside
+     * The open tables of the pod that the caller can read.
+     * @param podId
+     * @returns OpenTablesResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/public-rows",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
     /**
      * List Tables
      * List tables in a datastore.
@@ -17231,6 +18230,70 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Stop People Outside Adding Rows
+     * @param podId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    static tablePublicRowsClose(podId, tableName) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Who Outside May Add Rows
+     * @param podId
+     * @param tableName
+     * @returns TableOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsGet(podId, tableName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Let People Outside Add Rows
+     * Open the table to rows from people outside the pod -- confirmed contacts, or anyone -- for the chosen columns only. Rows are added as the member opening it, who must be able to change the table.
+     * @param podId
+     * @param tableName
+     * @param requestBody
+     * @returns TableOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsOpen(podId, tableName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/tables.ts
@@ -17254,6 +18317,16 @@ var LemmaClient = (() => {
           return this.client.request(() => TablesService.tableColumnAdd(this.podId(), tableName, payload));
         },
         remove: (tableName, columnName) => this.client.request(() => TablesService.tableColumnRemove(this.podId(), tableName, columnName))
+      });
+      /**
+       * Who outside the pod may add rows to a table. A form is any page that adds a
+       * row through a web widget's key; the table decides which columns it may write.
+       */
+      __publicField(this, "publicRows", {
+        get: (tableName) => this.client.request(() => TablesService.tablePublicRowsGet(this.podId(), tableName)),
+        open: (tableName, payload) => this.client.request(() => TablesService.tablePublicRowsOpen(this.podId(), tableName, payload)),
+        close: (tableName) => this.client.request(() => TablesService.tablePublicRowsClose(this.podId(), tableName)),
+        list: () => this.client.request(() => TablesService.tablePublicRowsList(this.podId()))
       });
     }
     list(options = {}) {
@@ -18358,6 +19431,7 @@ var LemmaClient = (() => {
       __publicField(this, "podSurfaces");
       /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
       __publicField(this, "podGroups");
+      __publicField(this, "contacts");
       /** The caller's own surfaces across all pods (grouped by platform). */
       __publicField(this, "notifications");
       __publicField(this, "userSurfaces");
@@ -18420,6 +19494,7 @@ var LemmaClient = (() => {
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
       this.podGroups = new PodGroupsNamespace(this._generated);
+      this.contacts = new ContactsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }
     /** Change the active pod ID for subsequent calls. */
@@ -18480,6 +19555,7 @@ var LemmaClient = (() => {
     blocked: { title: "Your browser blocked app access", message: "Allow cookies for this site, then try again." }
   };
   function failureKind(error) {
+    if (error instanceof HostRefusedError) return "denied";
     if (error instanceof ApiError && error.statusCode === 401) return "signed-out";
     if (error instanceof ApiError && [403, 404].includes(error.statusCode)) return "denied";
     return "unavailable";
@@ -18490,6 +19566,7 @@ var LemmaClient = (() => {
     return buildAuthUrl(url.href, { redirectUri });
   }
   async function refreshMainSession() {
+    if (isHalfCleared()) dropUpdateMarker();
     let timer;
     const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error("The session service did not answer")), 1e4);
@@ -18510,11 +19587,12 @@ var LemmaClient = (() => {
       return await send();
     }
   }
-  async function redeem(ticket) {
+  async function redeem(ticket, embedded) {
+    const body = embedded ? { ticket, embedded: true } : { ticket };
     const response = await fetch("/_lemma/app-access/redeem", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ticket }),
+      body: JSON.stringify(body),
       credentials: "same-origin",
       cache: "no-store",
       signal: AbortSignal.timeout(1e4)
@@ -18551,8 +19629,9 @@ var LemmaClient = (() => {
     };
     show("checking");
     try {
-      const { ticket } = await requestTicket(options);
-      await redeem(ticket);
+      const embedded = isEmbeddedInHost();
+      const ticket = embedded ? await askHostForAppAccess() : (await requestTicket(options)).ticket;
+      await redeem(ticket, embedded);
       const verified = await fetch("/", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/octet-stream" }, signal: AbortSignal.timeout(1e4) });
       if (verified.status === 401) {
         show("blocked");
@@ -18680,7 +19759,8 @@ var LemmaClient = (() => {
       LEMMA_COMPOSE_MESSAGE_TYPE,
       LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
       canComposeInConversation,
-      composeInConversation
+      composeInConversation,
+      isEmbeddedInHost
     };
     if (!scope.LemmaClient) {
       scope.LemmaClient = surface;

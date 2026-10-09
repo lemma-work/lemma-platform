@@ -5,7 +5,7 @@ Scoping the share listing to that id alone therefore answered the wrong
 question: it returned the person's links, including ones pointing at files the
 agent itself holds no grant for — and each row carries the `code`, which is the
 entire capability. An agent refused `pod_get_file_url` on an ungranted file
-could list the person's existing share for it and fetch the bytes from `/s/`.
+could list the person's existing share for it and fetch the bytes from `/public/s/`.
 
 The rule being restored is PS-ACCESS-020: a workload gets the person's access
 intersected with its own grants, never the union. Revocation is authorized the
@@ -148,5 +148,5 @@ async def test_a_narrow_agent_cannot_list_or_revoke_its_principals_other_shares(
         assert revoked.json()["revoked"] is False
 
     # The person's own link is untouched and still works.
-    still_live = await async_client.get(f"/s/{codes[ungranted_file['path']]}")
+    still_live = await async_client.get(f"/public/s/{codes[ungranted_file['path']]}")
     assert still_live.status_code == status.HTTP_200_OK, still_live.text

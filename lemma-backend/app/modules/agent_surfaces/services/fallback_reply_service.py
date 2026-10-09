@@ -218,6 +218,34 @@ def nonmember_context(
     )
 
 
+def contact_refusal_message(agent_display_name: str) -> str:
+    return (
+        f"Sorry, {agent_display_name} only answers people it already knows here. "
+        "If you are a customer, write from the number or address we have for you."
+    )
+
+
+def contact_refusal_context(
+    *,
+    surface: AgentSurfaceEntity,
+    parsed: ParsedInboundSurfaceEvent,
+    agent_display_name: str,
+) -> SurfaceReplyContext:
+    """The one short answer a stranger gets from a bot set to known contacts only.
+
+    Silence read as a broken bot; this says what is going on and where to
+    write from instead, and says nothing about the pod.
+    """
+    return _reply_context(
+        platform=surface.surface_type,
+        surface=surface,
+        parsed=to_sender_alone(parsed),
+        agent_display_name=agent_display_name,
+        reply=(contact_refusal_message(agent_display_name), {}),
+        reply_kind="contact_refusal",
+    )
+
+
 def surface_setup_context(
     *,
     surface: AgentSurfaceEntity,

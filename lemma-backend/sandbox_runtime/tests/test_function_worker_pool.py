@@ -300,6 +300,85 @@ async def test_reused_worker_preserves_legacy_function_environment(
     }
 
 
+def _contact_artifact(root: Path) -> tuple[Path, FunctionArtifactManifest]:
+    artifact = root / ("c" * 64)
+    artifact.mkdir()
+    manifest = FunctionArtifactManifest(
+        runtime_abi="lemma-function-python-3.14-linux-x86_64-1",
+        builder_digest="test",
+        source_path="function.py",
+        input_model="Input",
+        output_model="Output",
+        entrypoint="execute",
+    )
+    (artifact / "manifest.json").write_text(
+        manifest.model_dump_json(), encoding="utf-8"
+    )
+    (artifact / "function.py").write_text(
+        """
+import os
+from pydantic import BaseModel
+
+class Input(BaseModel):
+    value: int
+
+class Output(BaseModel):
+    user_id: str | None
+    contact_id: str | None
+    env_user_id: str | None
+    env_contact_id: str | None
+
+def execute(ctx, data):
+    return Output(
+        user_id=str(ctx.user_id) if ctx.user_id else None,
+        contact_id=str(ctx.contact_id) if ctx.contact_id else None,
+        env_user_id=os.environ.get("LEMMA_USER_ID"),
+        env_contact_id=os.environ.get("LEMMA_CONTACT_ID"),
+    )
+""".strip(),
+        encoding="utf-8",
+    )
+    return artifact, manifest
+
+
+@pytest.mark.asyncio
+async def test_a_contacts_run_has_no_user_and_names_its_contact(
+    tmp_path: Path,
+) -> None:
+    artifact, manifest = _contact_artifact(tmp_path)
+    registry = RevisionWorkerRegistry(max_workers=1)
+    function_id = uuid4()
+    contact_id = uuid4()
+    request = _request(artifact, manifest, function_id=function_id, value=1)
+    request = request.model_copy(
+        update={
+            "identity": request.identity.model_copy(
+                update={"user_id": None, "contact_id": contact_id}
+            )
+        }
+    )
+    try:
+        result = await registry.execute(
+            function_id=function_id,
+            revision_hash=f"sha256:{'c' * 64}",
+            artifact_root=artifact,
+            run_id=request.run_id,
+            request=request,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=10),
+        )
+    finally:
+        await registry.close()
+
+    # Unset rather than the string "None": a function testing for a member
+    # must not find one.
+    assert result.output_data == {
+        "user_id": None,
+        "contact_id": str(contact_id),
+        "env_user_id": None,
+        "env_contact_id": str(contact_id),
+    }
+
+
 @pytest.mark.asyncio
 async def test_idle_revision_caches_are_evicted_by_lru(tmp_path: Path) -> None:
     artifact, manifest = _artifact(tmp_path)

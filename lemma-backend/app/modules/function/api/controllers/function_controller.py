@@ -13,7 +13,10 @@ from app.core.authorization.grants import (
     replace_grantee_resource_grants,
     validate_pod_resource_grant_permissions,
 )
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import (
+    PodContextDep,
+    reject_delegated_workload_pod,
+)
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import normalize_resource_name
 
@@ -21,6 +24,7 @@ from app.modules.identity.contracts import AuthenticatedUser as UserEntity
 from app.modules.function.api.schemas.function_schemas import (
     CreateFunctionRequest,
     ExecuteFunctionRequest,
+    FunctionContactAccessRequest,
     FunctionActionResponse,
     FunctionDetailResponse,
     FunctionListResponse,
@@ -34,6 +38,11 @@ from app.modules.function.api.schemas.function_schemas import (
     FunctionRunResponse,
     FunctionRunSummaryResponse,
     UpdateFunctionRequest,
+)
+from app.modules.function.infrastructure.contact_access import set_contacts_invoke
+from app.modules.function.services.contact_access import (
+    require_contact_input,
+    require_contacts_opener,
 )
 from app.modules.function.domain.entities import (
     FunctionEntity,
@@ -318,6 +327,54 @@ async def replace_function_permissions(
         )
     )
     return await function_permissions_response(uow, pod_id=pod_id, function=function)
+
+
+@router.put(
+    "/{function_name}/contacts",
+    response_model=FunctionResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="function.contacts.update",
+    summary="Open a Function to Contacts",
+    description=(
+        "Let a contact's conversation call this function, or stop it. A contact "
+        "holds no grant and the run acts for no member: it runs as the function "
+        "itself, held to its own grants, and is told the asking contact as "
+        "`contact_id`, which its input schema must declare. Takes pod settings "
+        "permission and either owning the function or administering the pod."
+    ),
+    dependencies=[reject_delegated_workload_pod("open a function to contacts")],
+)
+async def update_function_contact_access(
+    request: Request,
+    pod_id: UUID,
+    function_name: str,
+    data: FunctionContactAccessRequest,
+    function_service: FunctionServiceDep,
+    uow: UoWDep,
+    ctx: PodContextDep,
+) -> FunctionResponse:
+    user: UserEntity = request.state.user
+    function = await function_service.get_function_by_name(
+        pod_id,
+        function_name,
+        user.id,
+        raise_not_found=True,
+        include_code=False,
+        ctx=ctx,
+    )
+    assert function is not None and function.id is not None
+    await require_contacts_opener(ctx, function)
+    if data.contacts_invoke:
+        require_contact_input(function)
+    await set_contacts_invoke(
+        uow,
+        function=function,
+        contacts_invoke=data.contacts_invoke,
+        changed_by=user.id,
+    )
+    return FunctionResponse.model_validate(
+        function.model_copy(update={"contacts_invoke": data.contacts_invoke})
+    )
 
 
 @router.patch(

@@ -5483,11 +5483,13 @@ a.reach { text-decoration: none; }
 .apps-pane p { color: var(--ink-2); line-height: 1.55; }
 .apps-pane__header p { margin: 6px 0 0; font-size: 14px; }
 .apps-pane__header > .btn { gap: 8px; flex-shrink: 0; min-height: 44px; }
-.apps-pane__existing { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 24px 0 32px; }
-.apps-pane__app { display: flex; align-items: center; gap: 12px; min-height: 68px; padding: 12px 14px; text-align: left; border: 1px solid var(--line-2); border-radius: 10px; background: var(--paper); color: var(--ink); cursor: pointer; }
-.apps-pane__app > span:nth-child(2) { flex: 1; overflow-wrap: anywhere; }
+.apps-pane__existing { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; margin: 24px 0 32px; }
+.apps-pane__app { display: flex; flex-direction: column; min-width: 0; padding: 0; overflow: hidden; text-align: left; border: 1px solid var(--line-2); border-radius: 12px; background: var(--paper); color: var(--ink); cursor: pointer; }
 .apps-pane__app:hover { border-color: var(--ink-3); }
-.apps-pane__icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: var(--canvas); color: var(--ink-2); }
+/* The cover is the link-unfurl picture (1200x630), so it keeps that shape. */
+.apps-pane__cover { display: grid; place-items: center; aspect-ratio: 1200 / 630; overflow: hidden; background: var(--canvas); color: var(--ink-3); border-bottom: 1px solid var(--line-2); }
+.apps-pane__name { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.apps-pane__name > span { flex: 1; overflow-wrap: anywhere; }
 .app-catalog { margin-top: 28px; container-type: inline-size; }
 .app-catalog__header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .app-catalog h2 { margin: 0; font-size: 18px; font-weight: 500; }

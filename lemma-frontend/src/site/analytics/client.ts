@@ -206,6 +206,29 @@ export function captureEvent(
     ph?.capture(name, { ...properties, deployment: config.DEPLOYMENT });
 }
 
+/** Named so the error-tracking issue it becomes says what happened. */
+class SignInLoopError extends Error {
+    override name = "SignInLoopError";
+}
+
+/**
+ * A pod app that would not take a sign-in the portal could see.
+ *
+ * Sent as an exception rather than a catalogued event, because what the team
+ * watches is error tracking: every request in such a loop succeeds, so nothing
+ * else would ever raise it. Fixed text and no properties of its own. The app it
+ * came from is in `$referrer`, which `scrubUrls` reduces to an origin, as it
+ * does for every other event.
+ */
+export function captureSignInLoop(): void {
+    void startAnalytics().then(() => {
+        ph?.captureException(
+            new SignInLoopError("A pod app kept sending a signed-in person back to sign in"),
+            { deployment: config.DEPLOYMENT },
+        );
+    });
+}
+
 export function capturePageview(pathname: string): void {
     if (!ph) {
         if (analyticsAllowed()) pendingPathname = pathname;
@@ -275,4 +298,4 @@ function forcedFeatures(): Set<string> {
 }
 
 /** Every flag the client reads, by its PostHog key. */
-export type FeatureFlag = "groups";
+export type FeatureFlag = "groups" | "contacts";

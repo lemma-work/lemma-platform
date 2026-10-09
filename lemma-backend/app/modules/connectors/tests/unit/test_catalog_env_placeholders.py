@@ -107,6 +107,15 @@ def test_the_noisy_events_default_to_one_action():
     assert defaults["release"] == ["published"]
     assert defaults["workflow_run"] == ["completed"]
     assert defaults["check_suite"] == ["completed"]
+    # One delivery when each CI job starts and another when it ends.
+    assert defaults["check_run"] == ["completed"]
     # The rest are single user actions, where every one is worth firing on.
-    for event in ("push", "pull_request", "issues", "issue_comment"):
+    for event in (
+        "push",
+        "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "issues",
+        "issue_comment",
+    ):
         assert defaults[event] is None, event

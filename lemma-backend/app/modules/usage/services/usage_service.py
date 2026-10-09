@@ -78,7 +78,7 @@ class UsageService(UsagePricing, UsageReporting):
             organization_id=organization_id,
             user_id=user_id,
         )
-        if not self._has_applicable_limit(limit_values, organization_id):
+        if not limit_values.has_applicable_limit(organization_id):
             return None
         now = now or datetime.now(timezone.utc)
         amount = self.DEFAULT_RESERVATION_USD
@@ -333,14 +333,21 @@ class UsageService(UsagePricing, UsageReporting):
         )
 
     async def require_remote_budget_support(
-        self, *, organization_id: UUID | None, user_id: UUID, profile_scope: str
+        self,
+        *,
+        organization_id: UUID | None,
+        user_id: UUID,
+        profile_scope: str,
+        outside_audience: bool = False,
     ) -> None:
         if not self._is_system_scope(profile_scope):
             return
         values = await self.resolve_usage_limit_values(
             organization_id=organization_id, user_id=user_id
         )
-        if self._has_applicable_limit(values, organization_id):
+        if values.has_applicable_limit(
+            organization_id, outside_audience=outside_audience
+        ):
             raise UsageLimitExceededError(
                 "This runtime cannot enforce a budget before each provider dispatch. Use a managed runtime or your own provider credentials.",
                 reason="configuration",
@@ -458,17 +465,6 @@ class UsageService(UsagePricing, UsageReporting):
                 organization_id=organization_id,
                 user_id=user_id,
             )
-        )
-
-    @staticmethod
-    def _has_applicable_limit(
-        values: UsageLimitValues,
-        organization_id: UUID | None,
-    ) -> bool:
-        return bool(
-            (organization_id is not None and values.org_monthly_limit_usd is not None)
-            or values.user_weekly_limit_usd is not None
-            or values.user_monthly_limit_usd is not None
         )
 
     def _limit_scope(

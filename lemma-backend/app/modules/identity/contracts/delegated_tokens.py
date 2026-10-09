@@ -29,7 +29,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from app.core.config import settings
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
+    create_delegated_session,
     get_user_token,
     get_user_token_with_expiry,
 )
@@ -137,8 +139,55 @@ async def mint_delegated_token_with_expiry(
     return DelegatedToken(value=issued.value, expires_at=issued.expires_at)
 
 
+@dataclass(frozen=True, slots=True)
+class DelegatedSession:
+    """A token for the pod's own agent acting for a person, its real expiry,
+    and the handle of the session behind it."""
+
+    value: str
+    expires_at: datetime
+    session_handle: str
+
+
+async def mint_pod_agent_session(
+    *, user_id: UUID, pod_id: UUID, session_id: str
+) -> DelegatedSession:
+    """A token with which the pod's own agent acts as this person, in this pod.
+
+    The standing a pod's MCP tools already run with: the person's roles and
+    row-level security, refused for any other pod and for organization-level
+    actions, destructive actions gated. The actor name stays unset on purpose --
+    any name but the assistant's demotes the token to a named workload with only
+    its own grants -- so who minted it rides on ``session_id``.
+
+    Refuses rather than degrading when delegated tokens are switched off: the
+    fallback there is a plain impersonation token, which no caller of this
+    should ever hand out.
+    """
+    claims = _delegation_claims(
+        user_id=user_id,
+        workload_type="AGENT",
+        workload_id=pod_id,
+        pod_id=pod_id,
+        session_id=session_id,
+        workload_name=None,
+        scope=None,
+        delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+    )
+    if claims is None:
+        raise RuntimeError("Delegated tokens are disabled on this deployment")
+    issued = await create_delegated_session(user_id, claims)
+    return DelegatedSession(
+        value=issued.value,
+        expires_at=issued.expires_at,
+        session_handle=issued.session_handle,
+    )
+
+
 __all__ = [
+    "DelegatedSession",
     "DelegatedToken",
     "mint_delegated_token",
     "mint_delegated_token_with_expiry",
+    "mint_pod_agent_session",
 ]

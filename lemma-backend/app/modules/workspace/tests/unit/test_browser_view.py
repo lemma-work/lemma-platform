@@ -310,9 +310,9 @@ def test_the_close_codes_are_distinct() -> None:
 def test_the_allowlisted_path_matches_the_route() -> None:
     """The security layer lets this handshake through by path, so a rename that
     misses one of the two leaves the socket either unreachable or unguarded."""
-    from app.core.security import EXCLUDED_PATHS
+    from app.core.auth_exemptions import SELF_AUTHENTICATED_WEBSOCKETS
 
-    assert view.BROWSER_VIEW_WS_PATH in EXCLUDED_PATHS
+    assert view.BROWSER_VIEW_WS_PATH in SELF_AUTHENTICATED_WEBSOCKETS
     routes = {getattr(r, "path", "") for r in view.router.routes}
     assert "/workspace/browser/view" in routes
 

@@ -197,7 +197,7 @@ export function OwnBot({
                                 className="btn btn--primary"
                                 /* With an opener, so the finished tab reports
                                    back and closes instead of reloading the app. */
-                                onClick={() => openAuthorization(authorizeUrl)}
+                                onClick={() => openAuthorization(authorizeUrl, entry.title)}
                             >
                                 Authorise <ExternalIcon size={13} />
                             </button>

@@ -86,4 +86,4 @@ def test_legacy_dev_secret_token_rejected():
 
 def test_serve_path_format():
     conv = uuid4()
-    assert widget_serve_path(conv, "tc_9") == f"/widgets/serve/{conv}/tc_9"
+    assert widget_serve_path(conv, "tc_9") == f"/public/widgets/serve/{conv}/tc_9"

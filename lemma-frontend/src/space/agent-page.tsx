@@ -43,7 +43,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
     onBack: () => void;
     onOpenConversation: (id: string) => void;
     /** Start a conversation in the Chat tab, with this bot when it is named. */
-    onAsk: (text: string, createWith?: Record<string, unknown>) => void;
+    onAsk: (text: string, createWith?: Record<string, unknown>, files?: File[]) => void;
     onOpenSchedules: () => void;
     onOpenWorkflows: () => void;
 }) {
@@ -153,7 +153,7 @@ export function AgentPage({ pod, name, live, onBack, onOpenConversation, onAsk, 
 
 /** The box. Sending starts a conversation with this bot — made with its
  *  `agent_name`, so it is this bot answering — in the Chat tab. */
-function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, createWith?: Record<string, unknown>) => void }) {
+function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, createWith?: Record<string, unknown>, files?: File[]) => void }) {
     if (detail.takesInput) {
         return (
             <p className="agentpage__card agentpage__called">
@@ -167,7 +167,7 @@ function Ask({ detail, onAsk }: { detail: AgentDetail; onAsk: (text: string, cre
     return (
         <div className="agentpage__ask">
             <AskBox placeholder={"Message " + detail.label + "…"}
-                onAsk={(text) => onAsk(text, detail.front ? undefined : { agent_name: detail.name })} />
+                onAsk={(text, files) => onAsk(text, detail.front ? undefined : { agent_name: detail.name }, files)} />
         </div>
     );
 }

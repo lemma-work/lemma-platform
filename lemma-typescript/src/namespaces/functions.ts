@@ -26,6 +26,15 @@ export class FunctionsNamespace {
     return this.client.request(() => FunctionsService.functionDelete(this.podId(), name));
   }
 
+  /** Let a contact's conversation call this function, or stop it. It runs as its
+   *  owner's runs do, held to its own grants, and is told the asking contact as
+   *  `contact_id` in its input. */
+  setContactsInvoke(name: string, enabled: boolean) {
+    return this.client.request(() =>
+      FunctionsService.functionContactsUpdate(this.podId(), name, { contacts_invoke: enabled }),
+    );
+  }
+
   /** Run a function — convenience alias for `functions.runs.create`, matching the
    *  Python SDK's `functions.run(name, input)` and the unified `.run` verb. */
   run(name: string, options: RunFunctionOptions = {}) {

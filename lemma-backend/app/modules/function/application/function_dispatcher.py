@@ -26,6 +26,7 @@ from app.modules.function.application.dispatch_failures import (
     execution_error,
     runtime_failure_message,
 )
+from app.modules.function.application.function_run_token import function_run_token
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
     FunctionSessionTokenCache,
@@ -47,6 +48,7 @@ from app.modules.function.contracts.runtime import (
     RuntimeIdentity,
     RuntimeInvocationRequest,
     RuntimeTerminalRequest,
+    invocation_payload,
 )
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
@@ -379,6 +381,7 @@ class FunctionDispatcher:
             identity=RuntimeIdentity(
                 user_id=context.user_id,
                 user_email=context.user_email,
+                contact_id=context.contact_id,
                 pod_id=context.pod_id,
                 function_id=context.function_id,
                 function_name=context.function_name,
@@ -392,7 +395,7 @@ class FunctionDispatcher:
             response = await runtime.post(
                 url,
                 headers=headers,
-                json=body.model_dump(mode="json"),
+                json=invocation_payload(body),
                 timeout=httpx.Timeout(
                     max(0.1, min(10.0, remaining)),
                     read=max(0.1, remaining),
@@ -532,6 +535,8 @@ class FunctionDispatcher:
         required_until = dispatch.deadline_at
         if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
             required_until += timedelta(seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS)
+        if dispatch.user_id is None:
+            return function_run_token(dispatch, required_until=required_until)
         return await self._token_cache.get(
             FunctionSessionTokenKey(
                 user_id=dispatch.user_id,

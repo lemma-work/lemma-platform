@@ -7,6 +7,7 @@ from opentelemetry import metrics
 from fastapi.openapi.utils import get_openapi
 from scalar_fastapi import get_scalar_api_reference
 from starlette.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp
 from supertokens_python import get_all_cors_headers
 from supertokens_python.framework.fastapi import get_middleware
 
@@ -55,6 +56,7 @@ from app.sandbox_health import record_sandbox_probe
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
+from app.modules.agent_surfaces.api.public_cors import PublicWebCORSMiddleware
 from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
@@ -345,6 +347,42 @@ async def lifespan(app: FastAPI):
 #: signals that matter.
 
 
+def _app_cors(app: ASGIApp) -> ASGIApp:
+    """The CORS policy for Lemma's own frontends: every path but `/public/web`."""
+    return CORSMiddleware(
+        app,
+        allow_origins=get_allowed_cors_origins(),
+        allow_origin_regex=get_allowed_cors_origin_regex(),
+        allow_credentials=True,
+        allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
+        # X-Lemma-Client is sent by the browser SDK on every request; it must be
+        # allowed or the browser blocks the (preflighted) call as a CORS error.
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Lemma-Client",
+            "X-Lemma-App",
+            "x-altcha-payload",
+            "x-lemma-invitation",
+        ]
+        + get_all_cors_headers(),
+        # Let browser SDK clients read the correlation id off the response.
+        # SuperTokens sets `front-token`/`anti-csrf` (and the `st-*` token pair in
+        # header-based auth mode) as expose headers per-response, but this outer
+        # CORSMiddleware wraps everything (including the /st mount) and Starlette's
+        # `headers.update` REPLACES Access-Control-Expose-Headers — so we must list
+        # them here or the front-token gets clobbered and the SDK can't read it.
+        expose_headers=[
+            "X-Request-Id",
+            "Retry-After",
+            "front-token",
+            "anti-csrf",
+            "st-access-token",
+            "st-refresh-token",
+        ],
+    )
+
+
 def create_app(modules=OSS_MODULES) -> FastAPI:
     """Factory function to create a new FastAPI app instance.
 
@@ -430,37 +468,13 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         max_bytes=settings.max_request_body_bytes,
     )
 
+    # `/public/web/*` is called from widgets' customers' sites, which this list
+    # cannot name, and never with credentials: `PublicWebCORSMiddleware`
+    # answers those paths from each widget's own origins and hands every other
+    # path to the app-wide policy below, unchanged and in the same place.
     app.add_middleware(
-        CORSMiddleware,
-        allow_origins=get_allowed_cors_origins(),
-        allow_origin_regex=get_allowed_cors_origin_regex(),
-        allow_credentials=True,
-        allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
-        # X-Lemma-Client is sent by the browser SDK on every request; it must be
-        # allowed or the browser blocks the (preflighted) call as a CORS error.
-        allow_headers=[
-            "Content-Type",
-            "Authorization",
-            "X-Lemma-Client",
-            "X-Lemma-App",
-            "x-altcha-payload",
-            "x-lemma-invitation",
-        ]
-        + get_all_cors_headers(),
-        # Let browser SDK clients read the correlation id off the response.
-        # SuperTokens sets `front-token`/`anti-csrf` (and the `st-*` token pair in
-        # header-based auth mode) as expose headers per-response, but this outer
-        # CORSMiddleware wraps everything (including the /st mount) and Starlette's
-        # `headers.update` REPLACES Access-Control-Expose-Headers — so we must list
-        # them here or the front-token gets clobbered and the SDK can't read it.
-        expose_headers=[
-            "X-Request-Id",
-            "Retry-After",
-            "front-token",
-            "anti-csrf",
-            "st-access-token",
-            "st-refresh-token",
-        ],
+        PublicWebCORSMiddleware,
+        everything_else=_app_cors,
     )
 
     # Sits outside the auth routes so it sees their Set-Cookie headers. No-op

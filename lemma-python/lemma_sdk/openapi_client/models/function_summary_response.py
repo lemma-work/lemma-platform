@@ -43,6 +43,7 @@ class FunctionSummaryResponse:
             allowed_actions (list[str] | Unset):
             code_path (None | str | Unset):
             config (JsonObject | None | Unset):
+            contacts_invoke (bool | Unset): Callable from a contact's conversation. Default: False.
             description (None | str | Unset):
             grants (list[FunctionResourcePermissionResponse] | None | Unset):
             icon_url (None | str | Unset):
@@ -61,6 +62,7 @@ class FunctionSummaryResponse:
     allowed_actions: list[str] | Unset = UNSET
     code_path: None | str | Unset = UNSET
     config: JsonObject | None | Unset = UNSET
+    contacts_invoke: bool | Unset = False
     description: None | str | Unset = UNSET
     grants: list[FunctionResourcePermissionResponse] | None | Unset = UNSET
     icon_url: None | str | Unset = UNSET
@@ -112,6 +114,8 @@ class FunctionSummaryResponse:
             config = self.config.to_dict()
         else:
             config = self.config
+
+        contacts_invoke = self.contacts_invoke
 
         description: None | str | Unset
         if isinstance(self.description, Unset):
@@ -165,6 +169,8 @@ class FunctionSummaryResponse:
             field_dict["code_path"] = code_path
         if config is not UNSET:
             field_dict["config"] = config
+        if contacts_invoke is not UNSET:
+            field_dict["contacts_invoke"] = contacts_invoke
         if description is not UNSET:
             field_dict["description"] = description
         if grants is not UNSET:
@@ -257,6 +263,8 @@ class FunctionSummaryResponse:
 
         config = _parse_config(d.pop("config", UNSET))
 
+        contacts_invoke = d.pop("contacts_invoke", UNSET)
+
         def _parse_description(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -324,6 +332,7 @@ class FunctionSummaryResponse:
             allowed_actions=allowed_actions,
             code_path=code_path,
             config=config,
+            contacts_invoke=contacts_invoke,
             description=description,
             grants=grants,
             icon_url=icon_url,

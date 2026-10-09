@@ -102,6 +102,7 @@ export function readAddress(pathname: string): Address {
         case "files":
         case "workflows":
         case "groups":
+        case "contacts":
         case "settings":
         case "about":
             return rest.length > 1 ? here(null) : here("space:" + rest[0]);

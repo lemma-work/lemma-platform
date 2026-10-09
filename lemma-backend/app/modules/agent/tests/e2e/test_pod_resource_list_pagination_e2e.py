@@ -259,6 +259,9 @@ async def test_run_lists_are_latest_first_page_to_older_and_return_summaries(
         "id",
         "function_id",
         "user_id",
+        # Who the run acted for: a member, or a contact when it had no user.
+        "contact_id",
+        "actor",
         "status",
         "started_at",
         "completed_at",

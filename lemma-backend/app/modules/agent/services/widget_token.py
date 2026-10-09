@@ -27,7 +27,7 @@ class InvalidWidgetToken(Exception):
 
 def widget_serve_path(conversation_id: UUID | str, tool_call_id: str) -> str:
     """Canonical token-less serve path (frontend embed target + tool-result URL)."""
-    return f"/widgets/serve/{conversation_id}/{tool_call_id}"
+    return f"/public/widgets/serve/{conversation_id}/{tool_call_id}"
 
 
 def _b64e(raw: bytes) -> str:

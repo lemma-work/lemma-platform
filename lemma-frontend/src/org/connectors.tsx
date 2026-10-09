@@ -89,7 +89,7 @@ function AccountRow({
                 if ("done" in step) { setInstallNote("Installation found."); onGone(); }
                 else if ("choices" in step) setChoices(step.choices);
                 else if (!step.url) setInstallNote("GitHub offered no install page.");
-                else if (openAuthorization(step.url)) setInstallNote("Finish in the GitHub tab…");
+                else if (openAuthorization(step.url, connector.title)) setInstallNote("Finish in the GitHub tab…");
                 else window.location.assign(step.url);
             },
             onError: (problem) => setInstallNote(connectorProblem(problem, "The installation could not be started.")),
@@ -322,7 +322,7 @@ function ConnectorCard({
                    for the same intent, and it opened with `noreferrer` — so the
                    finished tab could not report back and the app reloaded
                    inside it. */
-                setLink({ authorizeUrl: started.authorizeUrl, opened: openAuthorization(started.authorizeUrl) });
+                setLink({ authorizeUrl: started.authorizeUrl, opened: openAuthorization(started.authorizeUrl, connector.title) });
             }
             /* An install may have been made on the way. */
             onChanged();
@@ -384,7 +384,7 @@ function ConnectorCard({
                             </span>
                         ) : (
                             <button className="btn btn--primary"
-                                onClick={() => setLink({ ...link, opened: openAuthorization(link.authorizeUrl) })}>
+                                onClick={() => setLink({ ...link, opened: openAuthorization(link.authorizeUrl, connector.title) })}>
                                 Authorise <ExternalIcon size={13} />
                             </button>
                         )}

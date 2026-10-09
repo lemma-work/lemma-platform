@@ -1381,3 +1381,114 @@ async def test_resaving_identical_code_does_not_mint_a_second_revision(
         f"/pods/{pod_id}/functions/{func_name}/revisions"
     )
     assert [item["revision_number"] for item in list_res.json()["items"]] == [1]
+
+
+def _contact_booking_code(function_name: str, table_name: str) -> str:
+    return f"""#input_type_name: BookInput
+#output_type_name: BookResult
+#function_name: {function_name}
+
+from typing import Optional
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext, Pod
+from lemma_sdk.errors import LemmaAPIError
+
+class BookInput(BaseModel):
+    title: str
+    contact_id: Optional[str] = None
+
+class BookResult(BaseModel):
+    contact_id: Optional[str] = None
+    context_contact_id: Optional[str] = None
+    user_id: Optional[str] = None
+    record_id: Optional[str] = None
+    error_code: Optional[str] = None
+
+async def {function_name}(ctx: FunctionContext, data: BookInput) -> BookResult:
+    result = BookResult(
+        contact_id=data.contact_id,
+        context_contact_id=str(ctx.contact_id) if ctx.contact_id else None,
+        user_id=str(ctx.user_id) if ctx.user_id else None,
+    )
+    try:
+        record = Pod.from_env().table("{table_name}").create(
+            {{"title": data.title, "note": data.contact_id}}
+        )
+    except LemmaAPIError as exc:
+        result.error_code = exc.code
+        return result
+    result.record_id = str(record["id"])
+    return result"""
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("configure_workspace_api_url")
+async def test_a_contacts_call_runs_in_the_sandbox_as_the_function_itself(
+    authenticated_client, test_pod, worker, db_manager
+):
+    """The whole person-less path through a real runtime: queued by the
+    worker, the code fetched and the end reported with the run's own token,
+    and the function's API calls made with it on the function's grants."""
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.contacts.infrastructure.models import ContactModel
+    from app.modules.function.contracts.contact_functions import (
+        run_function_for_contact,
+    )
+
+    pod_id = test_pod["id"]
+    suffix = uuid4().hex[:8]
+    function_name = f"contact_booker_{suffix}"
+    table_name = f"bookings_{suffix}"
+    await create_table(authenticated_client, pod_id, table_name, enable_rls=False)
+    await create_function(
+        authenticated_client,
+        pod_id,
+        {
+            "name": function_name,
+            "description": "Books a slot for a contact",
+            "code": _contact_booking_code(function_name, table_name),
+        },
+    )
+    await replace_function_resource_grants(
+        authenticated_client,
+        pod_id,
+        function_name,
+        [
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table_name,
+                "permission_ids": [
+                    "datastore.table.read",
+                    "datastore.record.read",
+                    "datastore.record.write",
+                ],
+            }
+        ],
+    )
+    opened = await authenticated_client.put(
+        f"/pods/{pod_id}/functions/{function_name}/contacts",
+        json={"contacts_invoke": True},
+    )
+    assert opened.status_code == status.HTTP_200_OK, opened.text
+    contact = ContactModel(id=uuid4(), pod_id=UUID(pod_id), display_name="Dana")
+    async with db_manager.session_factory() as session:
+        session.add(contact)
+        await session.commit()
+
+    outcome = await run_function_for_contact(
+        SessionUnitOfWorkFactory(db_manager.session_factory),
+        pod_id=UUID(pod_id),
+        name=function_name,
+        contact_id=contact.id,
+        input_data={"title": "Tuesday 10:00", "contact_id": str(uuid4())},
+    )
+
+    assert outcome.completed, outcome
+    assert outcome.output == {
+        "contact_id": str(contact.id),
+        "context_contact_id": str(contact.id),
+        "user_id": None,
+        "record_id": outcome.output["record_id"],
+        "error_code": None,
+    }
+    assert outcome.output["record_id"]
