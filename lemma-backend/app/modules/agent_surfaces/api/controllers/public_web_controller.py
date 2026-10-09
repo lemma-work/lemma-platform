@@ -77,6 +77,14 @@ class SessionResponse(BaseModel):
 
 class MessageRequest(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
+    client_nonce: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "The page's own name for this message, echoed on it in history, so"
+            " the page can tell its copy from the server's without comparing text."
+        ),
+    )
 
 
 class Accepted(BaseModel):
@@ -87,6 +95,7 @@ class HistoryMessage(BaseModel):
     role: str
     text: str
     sequence: int
+    client_nonce: str | None = None
 
 
 class HistoryResponse(BaseModel):
@@ -191,7 +200,9 @@ async def web_send_message(
     visitor: PublicVisitorDep,
     chat: WebChat = Depends(web_chat),
 ) -> Accepted:
-    await chat.send_visitor_message(widget, visitor, text=body.text)
+    await chat.send_visitor_message(
+        widget, visitor, text=body.text, client_nonce=body.client_nonce
+    )
     return Accepted()
 
 
@@ -262,7 +273,12 @@ async def web_read_history(
     messages = await chat.visitor_history(visitor, after=after)
     return HistoryResponse(
         messages=[
-            HistoryMessage(role=m.role, text=m.text, sequence=m.sequence)
+            HistoryMessage(
+                role=m.role,
+                text=m.text,
+                sequence=m.sequence,
+                client_nonce=m.client_nonce,
+            )
             for m in messages
         ]
     )

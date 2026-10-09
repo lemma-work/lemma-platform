@@ -120,10 +120,14 @@ async def _say(
     owner: UUID,
     pod_id: str,
     script: list,
+    client_nonce: str | None = None,
 ) -> UUID:
+    body: dict[str, str] = {"text": text}
+    if client_nonce is not None:
+        body["client_nonce"] = client_nonce
     with suppress_agent_run_enqueue():
         sent = await client.post(
-            f"/public/web/{key}/messages", json={"text": text}, headers=_as(visitor)
+            f"/public/web/{key}/messages", json=body, headers=_as(visitor)
         )
     assert sent.status_code == 202, sent.text
     conversation_id = await _conversation_of(db_session, visitor)
@@ -556,6 +560,59 @@ async def test_a_message_too_long_is_refused_not_cut(
     )
 
     assert refused.status_code == 422
+
+
+async def test_a_page_knows_its_own_message_by_the_name_it_gave_it(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    pod_id = test_pod["id"]
+    widget = await _widget(authenticated_client, pod_id, name="Nonce")
+    key, secret = widget["public_key"], widget["signing_secret"]
+    visitor = await _session(
+        authenticated_client,
+        key,
+        host_token=_host_token(secret, key, subject="cust-nonce"),
+    )
+
+    too_long = await authenticated_client.post(
+        f"/public/web/{key}/messages",
+        json={"text": "Hi", "client_nonce": "n" * 65},
+        headers=_as(visitor),
+    )
+    assert too_long.status_code == 422
+
+    conversation_id = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Where is my order?",
+        owner=UUID(fixed_test_user["id"]),
+        pod_id=pod_id,
+        script=[script_text("Let me check.")],
+        client_nonce="n-1",
+    )
+
+    # The page's name comes back on the visitor's message, and on nothing else.
+    history = await authenticated_client.get(
+        f"/public/web/{key}/history", headers=_as(visitor)
+    )
+    assert history.status_code == 200, history.text
+    assert [(m["role"], m["client_nonce"]) for m in history.json()["messages"]] == [
+        ("user", "n-1"),
+        ("assistant", None),
+    ]
+
+    # It is the page's bookkeeping, not what was said: an export leaves it out.
+    contact_id = (await _metadata(db_session, conversation_id))[CONTACT_KEY]
+    exported = await authenticated_client.get(
+        f"/pods/{pod_id}/contacts/{contact_id}/export"
+    )
+    assert exported.status_code == 200, exported.text
+    assert "client_nonce" not in json.dumps(exported.json())
 
 
 async def test_a_new_widget_answers_nobody_and_names_only_real_origins(

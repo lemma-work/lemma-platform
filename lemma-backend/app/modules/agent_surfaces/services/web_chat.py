@@ -23,7 +23,8 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.agents import agent_name_for_id
 from app.modules.agent.contracts.contact_conversations import (
-    ExportedMessage,
+    CLIENT_NONCE_KEY,
+    VisibleMessage,
     visible_messages,
 )
 from app.modules.agent_surfaces.domain.web_widgets import (
@@ -89,7 +90,12 @@ class WebChat:
     # -- conversation -------------------------------------------------------
 
     async def send_visitor_message(
-        self, widget: WebWidget, visitor: Visitor, *, text: str
+        self,
+        widget: WebWidget,
+        visitor: Visitor,
+        *,
+        text: str,
+        client_nonce: str | None = None,
     ) -> None:
         message = text.strip()
         if not message:
@@ -110,7 +116,12 @@ class WebChat:
                 raise refused("Nobody is answering this chat", 503, "unattended")
             session = await self._visitor_session(uow, visitor)
             await self._start_visitor_turn(
-                uow, widget, session, owner=owner, text=message
+                uow,
+                widget,
+                session,
+                owner=owner,
+                text=message,
+                client_nonce=client_nonce,
             )
             await touch_visitor_session(uow, session.id)
             await uow.commit()
@@ -123,9 +134,18 @@ class WebChat:
         *,
         owner: UUID,
         text: str,
+        client_nonce: str | None,
     ) -> None:
         agent_name = await agent_name_for_id(uow.session, widget.agent_id)
         name = await self._display_name(uow, session)
+        metadata: dict[str, object] = {
+            "source": "web_widget",
+            "sender_display_name": name or "Visitor",
+        }
+        # The page's own name for its copy of this message, handed back on it
+        # in history so the page draws the message once.
+        if client_nonce:
+            metadata[CLIENT_NONCE_KEY] = client_nonce
         auth_ctx = await create_authorization_data_service(uow).build_user_context(
             user_id=owner, pod_id=widget.pod_id
         )
@@ -144,10 +164,7 @@ class WebChat:
                 pod_id=widget.pod_id,
                 content=text,
                 agent_name=agent_name,
-                message_metadata={
-                    "source": "web_widget",
-                    "sender_display_name": name or "Visitor",
-                },
+                message_metadata=metadata,
             )
         finally:
             reset_current_context(context_token)
@@ -194,7 +211,7 @@ class WebChat:
 
     async def visitor_history(
         self, visitor: Visitor, *, after: int
-    ) -> tuple[ExportedMessage, ...]:
+    ) -> tuple[VisibleMessage, ...]:
         async with self.uow_factory() as uow:
             session = await self._visitor_session(uow, visitor)
             if session.conversation_id is None:
