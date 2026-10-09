@@ -208,7 +208,7 @@ async def export_contact_rows(
     pod_id: UUID,
     contact_id: UUID,
     after: ContactRowsCursor | None = None,
-    limit: int = MAX_CONTACT_ROWS,
+    limit: int | None = None,
 ) -> ContactRowsPage:
     """A page of this contact's rows across the pod's contact-owned tables.
 
@@ -216,7 +216,7 @@ async def export_contact_rows(
     so the row policy holds the read to them.
     """
     schema = get_schema_manager()
-    budget = max(1, min(limit, MAX_CONTACT_ROWS))
+    budget = max(1, min(limit or MAX_CONTACT_ROWS, MAX_CONTACT_ROWS))
     page: list[ContactRow] = []
     last: ContactRowsCursor | None = None
     for table_name, key in await _owned_tables(uow_factory, pod_id):
