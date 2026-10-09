@@ -328,7 +328,11 @@ def assert_pod_membership(ctx: Context, action_label: str = "browse this pod") -
     request-scoped ``PodContextDep`` that would pin a pooled connection for the
     whole StreamingResponse (see ``app.core.authorization.scope``).
     """
-    if ctx.actor_type != ActorType.USER or ctx.is_superuser:
+    if ctx.is_superuser:
+        return
+    # Somebody outside the pod is never a member of it, whatever it made
+    # Public: reaching *through* the pod is exactly what membership gates.
+    if not ctx.is_outsider and ctx.actor_type != ActorType.USER:
         return
     if any(ref.type == "POD_MEMBER" for ref in ctx.principal_refs):
         return

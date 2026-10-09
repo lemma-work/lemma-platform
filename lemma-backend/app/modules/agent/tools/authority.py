@@ -34,7 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.core.authorization.anonymous import build_anonymous_context
+from app.core.authorization.anonymous import build_outsider_context
 from app.core.authorization.context import Context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.authorization.factory import create_authorization_data_service
@@ -47,14 +47,15 @@ async def tool_authorization_context(
 ) -> Context:
     """The authorization context one agent tool call runs under."""
     if deps.answers_outsider:
-        return build_anonymous_context(
+        # A contact is named in the audit trail and narrows contact-owned
+        # tables to their rows; a group's outsiders are one conversation.
+        return build_outsider_context(
             session=uow.session,
             pod_id=deps.pod_id,
             organization_id=deps.org_id,
-            # A contact is named in the audit trail; a group's outsiders are
-            # one conversation and named by it.
+            contact_id=deps.contact_id,
             actor_id=(
-                f"contact:{deps.contact_id}"
+                None
                 if deps.contact_id is not None
                 else f"outsider:{deps.conversation_id}"
             ),
