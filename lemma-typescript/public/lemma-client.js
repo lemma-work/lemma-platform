@@ -12998,7 +12998,7 @@ var LemmaClient = (() => {
     }
     /**
      * Open a Function to Contacts
-     * Let a contact's conversation call this function, or stop it. A contact holds no grant: the function runs as its owner's runs do, held to its own grants, and is told the asking contact as `contact_id`.
+     * Let a contact's conversation call this function, or stop it. A contact holds no grant and the run acts for no member: it runs as the function itself, held to its own grants, and is told the asking contact as `contact_id`, which its input schema must declare. Takes pod settings permission and either owning the function or administering the pod.
      * @param podId
      * @param functionName
      * @param requestBody
@@ -15951,6 +15951,10 @@ var LemmaClient = (() => {
     /**
      * Reissue Widget
      * Mint a new signing secret. Tokens signed with the old one stop working.
+     *
+     * So do the sessions they started: a host session is the old secret's word
+     * for who somebody is, and a secret is reissued because that word is no
+     * longer trusted.
      * @param podId
      * @param widgetId
      * @returns WebWidgetSecretResponse Successful Response
@@ -16174,9 +16178,10 @@ var LemmaClient = (() => {
     }
     /**
      * Delete Contact
-     * Forget a contact: their handles and their conversations go with them.
+     * Forget a contact: their rows, handles, conversations and chat sessions.
      *
-     * One transaction, so a contact is never half forgotten.
+     * See ``services/forget`` for the order, which is what makes a failure safe
+     * to retry.
      * @param podId
      * @param contactId
      * @returns void
@@ -16240,22 +16245,26 @@ var LemmaClient = (() => {
     }
     /**
      * Export Contact
-     * A contact's handles and what was said with them, for a request to see it.
+     * A contact's handles, what was said with them, and the rows that are theirs.
      *
      * Takes a pod admin, as forgetting does: both answer the person the data is
      * about, not the member reading it.
      * @param podId
      * @param contactId
+     * @param cursor
      * @returns ContactExportResponse Successful Response
      * @throws ApiError
      */
-    static contactExport(podId, contactId) {
+    static contactExport(podId, contactId, cursor) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/contacts/{contact_id}/export",
         path: {
           "pod_id": podId,
           "contact_id": contactId
+        },
+        query: {
+          "cursor": cursor
         },
         errors: {
           422: `Validation Error`
@@ -16267,7 +16276,9 @@ var LemmaClient = (() => {
      * Write to a contact in their most recent conversation, where the channel allows.
      *
      * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-     * has closed, or when they have never written to the pod.
+     * has closed, or when they have never written to the pod; 429 past the day's
+     * follow-ups for this contact; 502 when the platform did not take it, which
+     * the conversation then shows as not sent.
      * @param podId
      * @param contactId
      * @param requestBody
@@ -16422,11 +16433,12 @@ var LemmaClient = (() => {
     }
     /**
      * Update Contacts Cap
-     * Set or remove the cap. Organization owners and editors only.
+     * Set the cap, or remove it for no limit. Organization owners only.
      *
      * Contacts are never billed, so this is the ceiling on what people outside
-     * the organization can cost it. Past it, its bots stop answering them until
-     * the month turns.
+     * the organization can cost it: past it, its bots stop answering them until
+     * the month turns, and hand their conversations to members. Billing is an
+     * owner's, and so is this.
      * @param organizationId
      * @param requestBody
      * @returns ContactsCapResponse Successful Response
@@ -16691,7 +16703,8 @@ var LemmaClient = (() => {
         remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId))
       });
     }
-    /** The pod's contacts, newest first. Page with `next_before`. */
+    /** The pod's contacts, newest first. Pass the opaque `next_before` back as
+     *  `before` for the next page. */
     list(podId, options = {}) {
       return this.client.request(
         () => {
@@ -16711,18 +16724,21 @@ var LemmaClient = (() => {
       );
     }
     /** Write to a contact in their latest conversation, where the channel allows:
-     *  never where they unsubscribed, and on WhatsApp only within 24 hours of
-     *  their last message. */
+     *  never where they unsubscribed, on WhatsApp only within 24 hours of their
+     *  last message, and a few times a day at most. Takes `contact.message`. */
     followUp(podId, contactId, message) {
       return this.client.request(
         () => ContactsService.contactFollowUp(podId, contactId, { message })
       );
     }
-    /** Everything the pod holds about a contact: handles and conversations. */
-    export(podId, contactId) {
-      return this.client.request(() => ContactsService.contactExport(podId, contactId));
+    /** One page of everything the pod holds about a contact: handles,
+     *  conversations, then rows. Pass `next_cursor` back as `cursor` until absent. */
+    export(podId, contactId, options = {}) {
+      return this.client.request(
+        () => ContactsService.contactExport(podId, contactId, options.cursor)
+      );
     }
-    /** Forget a contact, their handles and their conversations. */
+    /** Forget a contact: their rows, handles, conversations and chat sessions. */
     remove(podId, contactId) {
       return this.client.request(() => ContactsService.contactDelete(podId, contactId));
     }
@@ -16732,7 +16748,7 @@ var LemmaClient = (() => {
         () => UsageService.usageOrganizationContactsCapGet(organizationId)
       );
     }
-    /** Set the cap in USD, or clear it with `null`. */
+    /** Set the cap in USD, or `null` for no limit. Takes an organization owner. */
     setCap(organizationId, monthlyLimitUsd) {
       return this.client.request(
         () => UsageService.usageOrganizationContactsCapUpdate(organizationId, {
@@ -17805,6 +17821,7 @@ var LemmaClient = (() => {
   var TablesService = class {
     /**
      * Tables Open To People Outside
+     * The open tables of the pod that the caller can read.
      * @param podId
      * @returns OpenTablesResponse Successful Response
      * @throws ApiError

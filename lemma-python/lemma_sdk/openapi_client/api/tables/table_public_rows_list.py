@@ -63,6 +63,8 @@ def sync_detailed(
 ) -> Response[ErrorResponse | OpenTablesResponse]:
     """Tables Open To People Outside
 
+     The open tables of the pod that the caller can read.
+
     Args:
         pod_id (UUID):
 
@@ -92,6 +94,8 @@ def sync(
 ) -> ErrorResponse | OpenTablesResponse | None:
     """Tables Open To People Outside
 
+     The open tables of the pod that the caller can read.
+
     Args:
         pod_id (UUID):
 
@@ -115,6 +119,8 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
 ) -> Response[ErrorResponse | OpenTablesResponse]:
     """Tables Open To People Outside
+
+     The open tables of the pod that the caller can read.
 
     Args:
         pod_id (UUID):
@@ -142,6 +148,8 @@ async def asyncio(
     client: AuthenticatedClient | Client,
 ) -> ErrorResponse | OpenTablesResponse | None:
     """Tables Open To People Outside
+
+     The open tables of the pod that the caller can read.
 
     Args:
         pod_id (UUID):

@@ -7,18 +7,28 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...types import Response
+from ...models.history_response import HistoryResponse
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     public_key: str,
+    *,
+    after: int | Unset = -1,
 ) -> dict[str, Any]:
 
+    params: dict[str, Any] = {}
+
+    params["after"] = after
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
+
     _kwargs: dict[str, Any] = {
-        "method": "post",
+        "method": "get",
         "url": "/public/web/{public_key}/history".format(
             public_key=quote(str(public_key), safe=""),
         ),
+        "params": params,
     }
 
     return _kwargs
@@ -26,9 +36,10 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | ErrorResponse | None:
+) -> ErrorResponse | HistoryResponse | None:
     if response.status_code == 200:
-        response_200 = response.json()
+        response_200 = HistoryResponse.from_dict(response.json())
+
         return response_200
 
     if response.status_code == 422:
@@ -44,7 +55,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | ErrorResponse]:
+) -> Response[ErrorResponse | HistoryResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -57,22 +68,25 @@ def sync_detailed(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+    after: int | Unset = -1,
+) -> Response[ErrorResponse | HistoryResponse]:
     """Web Read History
 
     Args:
         public_key (str):
+        after (int | Unset):  Default: -1.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[ErrorResponse | HistoryResponse]
     """
 
     kwargs = _get_kwargs(
         public_key=public_key,
+        after=after,
     )
 
     response = client.get_httpx_client().request(
@@ -86,23 +100,26 @@ def sync(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+    after: int | Unset = -1,
+) -> ErrorResponse | HistoryResponse | None:
     """Web Read History
 
     Args:
         public_key (str):
+        after (int | Unset):  Default: -1.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        ErrorResponse | HistoryResponse
     """
 
     return sync_detailed(
         public_key=public_key,
         client=client,
+        after=after,
     ).parsed
 
 
@@ -110,22 +127,25 @@ async def asyncio_detailed(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+    after: int | Unset = -1,
+) -> Response[ErrorResponse | HistoryResponse]:
     """Web Read History
 
     Args:
         public_key (str):
+        after (int | Unset):  Default: -1.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[ErrorResponse | HistoryResponse]
     """
 
     kwargs = _get_kwargs(
         public_key=public_key,
+        after=after,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -137,23 +157,26 @@ async def asyncio(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+    after: int | Unset = -1,
+) -> ErrorResponse | HistoryResponse | None:
     """Web Read History
 
     Args:
         public_key (str):
+        after (int | Unset):  Default: -1.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        ErrorResponse | HistoryResponse
     """
 
     return (
         await asyncio_detailed(
             public_key=public_key,
             client=client,
+            after=after,
         )
     ).parsed

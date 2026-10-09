@@ -4,6 +4,10 @@
 /* eslint-disable */
 export type PublicColumnResponse = {
     description: (string | null);
+    /**
+     * The form control to ask with.
+     */
+    input: string;
     name: string;
     options: Array<string>;
     /**

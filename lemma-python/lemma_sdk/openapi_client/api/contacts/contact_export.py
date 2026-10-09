@@ -9,13 +9,26 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.contact_export_response import ContactExportResponse
 from ...models.error_response import ErrorResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     pod_id: UUID,
     contact_id: UUID,
+    *,
+    cursor: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
+
+    params: dict[str, Any] = {}
+
+    json_cursor: None | str | Unset
+    if isinstance(cursor, Unset):
+        json_cursor = UNSET
+    else:
+        json_cursor = cursor
+    params["cursor"] = json_cursor
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "get",
@@ -23,6 +36,7 @@ def _get_kwargs(
             pod_id=quote(str(pod_id), safe=""),
             contact_id=quote(str(contact_id), safe=""),
         ),
+        "params": params,
     }
 
     return _kwargs
@@ -63,10 +77,11 @@ def sync_detailed(
     contact_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    cursor: None | str | Unset = UNSET,
 ) -> Response[ContactExportResponse | ErrorResponse]:
     """Export Contact
 
-     A contact's handles and what was said with them, for a request to see it.
+     A contact's handles, what was said with them, and the rows that are theirs.
 
     Takes a pod admin, as forgetting does: both answer the person the data is
     about, not the member reading it.
@@ -74,6 +89,7 @@ def sync_detailed(
     Args:
         pod_id (UUID):
         contact_id (UUID):
+        cursor (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -86,6 +102,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         contact_id=contact_id,
+        cursor=cursor,
     )
 
     response = client.get_httpx_client().request(
@@ -100,10 +117,11 @@ def sync(
     contact_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    cursor: None | str | Unset = UNSET,
 ) -> ContactExportResponse | ErrorResponse | None:
     """Export Contact
 
-     A contact's handles and what was said with them, for a request to see it.
+     A contact's handles, what was said with them, and the rows that are theirs.
 
     Takes a pod admin, as forgetting does: both answer the person the data is
     about, not the member reading it.
@@ -111,6 +129,7 @@ def sync(
     Args:
         pod_id (UUID):
         contact_id (UUID):
+        cursor (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -124,6 +143,7 @@ def sync(
         pod_id=pod_id,
         contact_id=contact_id,
         client=client,
+        cursor=cursor,
     ).parsed
 
 
@@ -132,10 +152,11 @@ async def asyncio_detailed(
     contact_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    cursor: None | str | Unset = UNSET,
 ) -> Response[ContactExportResponse | ErrorResponse]:
     """Export Contact
 
-     A contact's handles and what was said with them, for a request to see it.
+     A contact's handles, what was said with them, and the rows that are theirs.
 
     Takes a pod admin, as forgetting does: both answer the person the data is
     about, not the member reading it.
@@ -143,6 +164,7 @@ async def asyncio_detailed(
     Args:
         pod_id (UUID):
         contact_id (UUID):
+        cursor (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -155,6 +177,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         contact_id=contact_id,
+        cursor=cursor,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -167,10 +190,11 @@ async def asyncio(
     contact_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    cursor: None | str | Unset = UNSET,
 ) -> ContactExportResponse | ErrorResponse | None:
     """Export Contact
 
-     A contact's handles and what was said with them, for a request to see it.
+     A contact's handles, what was said with them, and the rows that are theirs.
 
     Takes a pod admin, as forgetting does: both answer the person the data is
     about, not the member reading it.
@@ -178,6 +202,7 @@ async def asyncio(
     Args:
         pod_id (UUID):
         contact_id (UUID):
+        cursor (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -192,5 +217,6 @@ async def asyncio(
             pod_id=pod_id,
             contact_id=contact_id,
             client=client,
+            cursor=cursor,
         )
     ).parsed

@@ -64,9 +64,10 @@ def sync_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Delete Contact
 
-     Forget a contact: their handles and their conversations go with them.
+     Forget a contact: their rows, handles, conversations and chat sessions.
 
-    One transaction, so a contact is never half forgotten.
+    See ``services/forget`` for the order, which is what makes a failure safe
+    to retry.
 
     Args:
         pod_id (UUID):
@@ -100,9 +101,10 @@ def sync(
 ) -> Any | ErrorResponse | None:
     """Delete Contact
 
-     Forget a contact: their handles and their conversations go with them.
+     Forget a contact: their rows, handles, conversations and chat sessions.
 
-    One transaction, so a contact is never half forgotten.
+    See ``services/forget`` for the order, which is what makes a failure safe
+    to retry.
 
     Args:
         pod_id (UUID):
@@ -131,9 +133,10 @@ async def asyncio_detailed(
 ) -> Response[Any | ErrorResponse]:
     """Delete Contact
 
-     Forget a contact: their handles and their conversations go with them.
+     Forget a contact: their rows, handles, conversations and chat sessions.
 
-    One transaction, so a contact is never half forgotten.
+    See ``services/forget`` for the order, which is what makes a failure safe
+    to retry.
 
     Args:
         pod_id (UUID):
@@ -165,9 +168,10 @@ async def asyncio(
 ) -> Any | ErrorResponse | None:
     """Delete Contact
 
-     Forget a contact: their handles and their conversations go with them.
+     Forget a contact: their rows, handles, conversations and chat sessions.
 
-    One transaction, so a contact is never half forgotten.
+    See ``services/forget`` for the order, which is what makes a failure safe
+    to retry.
 
     Args:
         pod_id (UUID):

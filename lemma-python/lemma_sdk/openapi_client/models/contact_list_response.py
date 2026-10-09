@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import datetime
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
-from dateutil.parser import isoparse
 
 from ..types import UNSET, Unset
 
@@ -22,11 +20,11 @@ class ContactListResponse:
     """
     Attributes:
         items (list[ContactResponse]):
-        next_before (datetime.datetime | None | Unset): Pass as `before` for the next page; absent on the last.
+        next_before (None | str | Unset): Pass as `before` for the next page; absent on the last.
     """
 
     items: list[ContactResponse]
-    next_before: datetime.datetime | None | Unset = UNSET
+    next_before: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -38,8 +36,6 @@ class ContactListResponse:
         next_before: None | str | Unset
         if isinstance(self.next_before, Unset):
             next_before = UNSET
-        elif isinstance(self.next_before, datetime.datetime):
-            next_before = self.next_before.isoformat()
         else:
             next_before = self.next_before
 
@@ -67,20 +63,12 @@ class ContactListResponse:
 
             items.append(items_item)
 
-        def _parse_next_before(data: object) -> datetime.datetime | None | Unset:
+        def _parse_next_before(data: object) -> None | str | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                next_before_type_0 = isoparse(data)
-
-                return next_before_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(datetime.datetime | None | Unset, data)
+            return cast(None | str | Unset, data)
 
         next_before = _parse_next_before(d.pop("next_before", UNSET))
 

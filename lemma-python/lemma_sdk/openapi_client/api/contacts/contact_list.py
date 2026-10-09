@@ -1,4 +1,3 @@
-import datetime
 from http import HTTPStatus
 from typing import Any
 from urllib.parse import quote
@@ -17,7 +16,7 @@ def _get_kwargs(
     pod_id: UUID,
     *,
     limit: int | Unset = 50,
-    before: datetime.datetime | None | Unset = UNSET,
+    before: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -27,8 +26,6 @@ def _get_kwargs(
     json_before: None | str | Unset
     if isinstance(before, Unset):
         json_before = UNSET
-    elif isinstance(before, datetime.datetime):
-        json_before = before.isoformat()
     else:
         json_before = before
     params["before"] = json_before
@@ -81,7 +78,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    before: datetime.datetime | None | Unset = UNSET,
+    before: None | str | Unset = UNSET,
 ) -> Response[ContactListResponse | ErrorResponse]:
     """List Contacts
 
@@ -90,7 +87,7 @@ def sync_detailed(
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        before (datetime.datetime | None | Unset):
+        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -118,7 +115,7 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    before: datetime.datetime | None | Unset = UNSET,
+    before: None | str | Unset = UNSET,
 ) -> ContactListResponse | ErrorResponse | None:
     """List Contacts
 
@@ -127,7 +124,7 @@ def sync(
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        before (datetime.datetime | None | Unset):
+        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -150,7 +147,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    before: datetime.datetime | None | Unset = UNSET,
+    before: None | str | Unset = UNSET,
 ) -> Response[ContactListResponse | ErrorResponse]:
     """List Contacts
 
@@ -159,7 +156,7 @@ async def asyncio_detailed(
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        before (datetime.datetime | None | Unset):
+        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -185,7 +182,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    before: datetime.datetime | None | Unset = UNSET,
+    before: None | str | Unset = UNSET,
 ) -> ContactListResponse | ErrorResponse | None:
     """List Contacts
 
@@ -194,7 +191,7 @@ async def asyncio(
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        before (datetime.datetime | None | Unset):
+        before (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

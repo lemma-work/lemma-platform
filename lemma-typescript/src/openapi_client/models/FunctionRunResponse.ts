@@ -8,7 +8,12 @@ import type { JsonObject } from './JsonObject.js';
  * Function run response.
  */
 export type FunctionRunResponse = {
+    /**
+     * Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call (which runs as the function itself, with no member), or `anonymous`.
+     */
+    actor: string;
     completed_at: (string | null);
+    contact_id?: (string | null);
     created_at: (string | null);
     error?: (string | null);
     function_id: string;
@@ -21,5 +26,5 @@ export type FunctionRunResponse = {
     started_at: (string | null);
     status: FunctionRunStatus;
     user_email?: (string | null);
-    user_id: string;
+    user_id?: (string | null);
 };

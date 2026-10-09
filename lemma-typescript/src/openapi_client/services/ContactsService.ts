@@ -43,9 +43,10 @@ export class ContactsService {
     }
     /**
      * Delete Contact
-     * Forget a contact: their handles and their conversations go with them.
+     * Forget a contact: their rows, handles, conversations and chat sessions.
      *
-     * One transaction, so a contact is never half forgotten.
+     * See ``services/forget`` for the order, which is what makes a failure safe
+     * to retry.
      * @param podId
      * @param contactId
      * @returns void
@@ -119,18 +120,20 @@ export class ContactsService {
     }
     /**
      * Export Contact
-     * A contact's handles and what was said with them, for a request to see it.
+     * A contact's handles, what was said with them, and the rows that are theirs.
      *
      * Takes a pod admin, as forgetting does: both answer the person the data is
      * about, not the member reading it.
      * @param podId
      * @param contactId
+     * @param cursor
      * @returns ContactExportResponse Successful Response
      * @throws ApiError
      */
     public static contactExport(
         podId: string,
         contactId: string,
+        cursor?: (string | null),
     ): CancelablePromise<ContactExportResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -138,6 +141,9 @@ export class ContactsService {
             path: {
                 'pod_id': podId,
                 'contact_id': contactId,
+            },
+            query: {
+                'cursor': cursor,
             },
             errors: {
                 422: `Validation Error`,
@@ -149,7 +155,9 @@ export class ContactsService {
      * Write to a contact in their most recent conversation, where the channel allows.
      *
      * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-     * has closed, or when they have never written to the pod.
+     * has closed, or when they have never written to the pod; 429 past the day's
+     * follow-ups for this contact; 502 when the platform did not take it, which
+     * the conversation then shows as not sent.
      * @param podId
      * @param contactId
      * @param requestBody

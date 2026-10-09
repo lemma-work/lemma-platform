@@ -157,7 +157,7 @@ export class FunctionsService {
     }
     /**
      * Open a Function to Contacts
-     * Let a contact's conversation call this function, or stop it. A contact holds no grant: the function runs as its owner's runs do, held to its own grants, and is told the asking contact as `contact_id`.
+     * Let a contact's conversation call this function, or stop it. A contact holds no grant and the run acts for no member: it runs as the function itself, held to its own grants, and is told the asking contact as `contact_id`, which its input schema must declare. Takes pod settings permission and either owning the function or administering the pod.
      * @param podId
      * @param functionName
      * @param requestBody

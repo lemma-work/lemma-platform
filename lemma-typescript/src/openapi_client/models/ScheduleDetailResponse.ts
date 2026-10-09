@@ -19,6 +19,7 @@ export type ScheduleDetailResponse = {
     filter_instruction: (string | null);
     filter_output_schema: (Record<string, any> | null);
     id: string;
+    include_outside_rows?: boolean;
     instruction?: (string | null);
     is_active: boolean;
     is_internal: boolean;

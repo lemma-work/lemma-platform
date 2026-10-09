@@ -44,14 +44,15 @@ The table below is generated from the committed OpenAPI specification by `script
 | `notification.respond` | POST | `/pods/{pod_id}/notifications/{notification_id}/respond` | Respond To A Notification |
 | `notification.send` | POST | `/pods/{pod_id}/notifications` | Notify A Pod Member |
 | `notification.unread_count` | GET | `/pods/{pod_id}/notifications/unread-count` | Count My Unread Notifications |
+| `public.web.challenge.read` | GET | `/public/web/{public_key}/challenge` | Web Challenge |
 | `public.web.code.send` | POST | `/public/web/{public_key}/code` | Web Send Code |
 | `public.web.code.verify` | POST | `/public/web/{public_key}/code/verify` | Web Verify Code |
-| `public.web.history.read` | POST | `/public/web/{public_key}/history` | Web Read History |
+| `public.web.history.read` | GET | `/public/web/{public_key}/history` | Web Read History |
 | `public.web.message.send` | POST | `/public/web/{public_key}/messages` | Web Send Message |
 | `public.web.row.add` | POST | `/public/web/{public_key}/rows` | Web Add Row |
 | `public.web.session.start` | POST | `/public/web/{public_key}/session` | Web Start Session |
-| `public.web.stream.read` | POST | `/public/web/{public_key}/stream` | Web Stream Answers |
-| `public.web.table.read` | POST | `/public/web/{public_key}/table` | Web Read Table |
+| `public.web.stream.read` | GET | `/public/web/{public_key}/stream` | Web Stream Answers |
+| `public.web.table.read` | GET | `/public/web/{public_key}/table` | Web Read Table |
 | `surface.webhook.handle_platform` | POST | `/surfaces/webhooks/{platform}` | Handle platform-level surface webhook |
 | `surface.webhook.handle_surface` | POST | `/surfaces/{surface_id}/webhook` | Handle surface-level webhook |
 | `surface.webhook.handle_telegram_manager` | POST | `/surfaces/webhooks/telegram-manager` | Handle Telegram manager-bot webhook |

@@ -31,6 +31,7 @@ class TableSummaryResponse:
             updated_at (datetime.datetime):
             allowed_actions (list[str] | Unset):
             column_count (int | Unset):  Default: 0.
+            contact_columns (list[str] | Unset):
             contact_owned (bool | Unset):  Default: False.
             visibility (str | Unset):  Default: 'POD'.
     """
@@ -44,6 +45,7 @@ class TableSummaryResponse:
     updated_at: datetime.datetime
     allowed_actions: list[str] | Unset = UNSET
     column_count: int | Unset = 0
+    contact_columns: list[str] | Unset = UNSET
     contact_owned: bool | Unset = False
     visibility: str | Unset = "POD"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -69,6 +71,10 @@ class TableSummaryResponse:
 
         column_count = self.column_count
 
+        contact_columns: list[str] | Unset = UNSET
+        if not isinstance(self.contact_columns, Unset):
+            contact_columns = self.contact_columns
+
         contact_owned = self.contact_owned
 
         visibility = self.visibility
@@ -90,6 +96,8 @@ class TableSummaryResponse:
             field_dict["allowed_actions"] = allowed_actions
         if column_count is not UNSET:
             field_dict["column_count"] = column_count
+        if contact_columns is not UNSET:
+            field_dict["contact_columns"] = contact_columns
         if contact_owned is not UNSET:
             field_dict["contact_owned"] = contact_owned
         if visibility is not UNSET:
@@ -118,6 +126,8 @@ class TableSummaryResponse:
 
         column_count = d.pop("column_count", UNSET)
 
+        contact_columns = cast(list[str], d.pop("contact_columns", UNSET))
+
         contact_owned = d.pop("contact_owned", UNSET)
 
         visibility = d.pop("visibility", UNSET)
@@ -132,6 +142,7 @@ class TableSummaryResponse:
             updated_at=updated_at,
             allowed_actions=allowed_actions,
             column_count=column_count,
+            contact_columns=contact_columns,
             contact_owned=contact_owned,
             visibility=visibility,
         )

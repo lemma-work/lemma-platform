@@ -63,6 +63,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | `agent.surface.setup` | Get Surface Setup |
 | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
 | GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
+| GET | `/public/web/{public_key}/challenge` | `public.web.challenge.read` | Web Challenge |
+| GET | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
+| GET | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
+| GET | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
@@ -86,12 +90,9 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | `agent.web_widget.reissue` | Reissue Widget |
 | POST | `/public/web/{public_key}/code` | `public.web.code.send` | Web Send Code |
 | POST | `/public/web/{public_key}/code/verify` | `public.web.code.verify` | Web Verify Code |
-| POST | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
 | POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
-| POST | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
-| POST | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |

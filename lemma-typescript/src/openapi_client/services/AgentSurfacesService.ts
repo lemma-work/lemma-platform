@@ -624,6 +624,10 @@ export class AgentSurfacesService {
     /**
      * Reissue Widget
      * Mint a new signing secret. Tokens signed with the old one stop working.
+     *
+     * So do the sessions they started: a host session is the old secret's word
+     * for who somebody is, and a secret is reissued because that word is no
+     * longer trusted.
      * @param podId
      * @param widgetId
      * @returns WebWidgetSecretResponse Successful Response

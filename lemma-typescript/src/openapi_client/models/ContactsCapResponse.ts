@@ -7,7 +7,11 @@
  */
 export type ContactsCapResponse = {
     /**
-     * No cap of the organization's own when absent.
+     * Nobody in the organization set a cap, so the deployment's default applies.
+     */
+    is_default?: boolean;
+    /**
+     * The cap that applies this month. Absent when an owner removed it: no limit.
      */
     monthly_limit_usd?: (number | null);
     organization_id: string;

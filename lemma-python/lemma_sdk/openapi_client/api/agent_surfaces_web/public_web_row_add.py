@@ -6,13 +6,18 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.accepted import Accepted
 from ...models.error_response import ErrorResponse
+from ...models.row_request import RowRequest
 from ...types import Response
 
 
 def _get_kwargs(
     public_key: str,
+    *,
+    body: RowRequest,
 ) -> dict[str, Any]:
+    headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
         "method": "post",
@@ -21,15 +26,21 @@ def _get_kwargs(
         ),
     }
 
+    _kwargs["json"] = body.to_dict()
+
+    headers["Content-Type"] = "application/json"
+
+    _kwargs["headers"] = headers
     return _kwargs
 
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | ErrorResponse | None:
-    if response.status_code == 200:
-        response_200 = response.json()
-        return response_200
+) -> Accepted | ErrorResponse | None:
+    if response.status_code == 201:
+        response_201 = Accepted.from_dict(response.json())
+
+        return response_201
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
@@ -44,7 +55,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | ErrorResponse]:
+) -> Response[Accepted | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -57,24 +68,27 @@ def sync_detailed(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+    body: RowRequest,
+) -> Response[Accepted | ErrorResponse]:
     """Web Add Row
 
      Add one row to a table the pod opened to visitors. Nothing is read back.
 
     Args:
         public_key (str):
+        body (RowRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[Accepted | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
         public_key=public_key,
+        body=body,
     )
 
     response = client.get_httpx_client().request(
@@ -88,25 +102,28 @@ def sync(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+    body: RowRequest,
+) -> Accepted | ErrorResponse | None:
     """Web Add Row
 
      Add one row to a table the pod opened to visitors. Nothing is read back.
 
     Args:
         public_key (str):
+        body (RowRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        Accepted | ErrorResponse
     """
 
     return sync_detailed(
         public_key=public_key,
         client=client,
+        body=body,
     ).parsed
 
 
@@ -114,24 +131,27 @@ async def asyncio_detailed(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+    body: RowRequest,
+) -> Response[Accepted | ErrorResponse]:
     """Web Add Row
 
      Add one row to a table the pod opened to visitors. Nothing is read back.
 
     Args:
         public_key (str):
+        body (RowRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[Accepted | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
         public_key=public_key,
+        body=body,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -143,25 +163,28 @@ async def asyncio(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+    body: RowRequest,
+) -> Accepted | ErrorResponse | None:
     """Web Add Row
 
      Add one row to a table the pod opened to visitors. Nothing is read back.
 
     Args:
         public_key (str):
+        body (RowRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        Accepted | ErrorResponse
     """
 
     return (
         await asyncio_detailed(
             public_key=public_key,
             client=client,
+            body=body,
         )
     ).parsed

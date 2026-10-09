@@ -15,7 +15,7 @@ def _get_kwargs(
 ) -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
-        "method": "post",
+        "method": "get",
         "url": "/public/web/{public_key}/stream".format(
             public_key=quote(str(public_key), safe=""),
         ),
@@ -58,13 +58,14 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
-    """Web Stream Answers
+    r"""Web Stream Answers
 
      The bot's answer as it is written, one JSON object per line.
 
-    Read with ``fetch`` rather than ``EventSource`` so the session stays in the
-    body and the request stays simple. Only what a visitor may see is sent:
+    The first line is ``{\"type\": \"open\"}``, a handshake that says the stream is
+    up, not a frame of the conversation. Only what a visitor may see follows:
     see ``agent.contracts.visitor_stream``. The page reconnects when it closes.
+    A session holds at most two streams at once.
 
     Args:
         public_key (str):
@@ -93,13 +94,14 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
-    """Web Stream Answers
+    r"""Web Stream Answers
 
      The bot's answer as it is written, one JSON object per line.
 
-    Read with ``fetch`` rather than ``EventSource`` so the session stays in the
-    body and the request stays simple. Only what a visitor may see is sent:
+    The first line is ``{\"type\": \"open\"}``, a handshake that says the stream is
+    up, not a frame of the conversation. Only what a visitor may see follows:
     see ``agent.contracts.visitor_stream``. The page reconnects when it closes.
+    A session holds at most two streams at once.
 
     Args:
         public_key (str):
@@ -123,13 +125,14 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
-    """Web Stream Answers
+    r"""Web Stream Answers
 
      The bot's answer as it is written, one JSON object per line.
 
-    Read with ``fetch`` rather than ``EventSource`` so the session stays in the
-    body and the request stays simple. Only what a visitor may see is sent:
+    The first line is ``{\"type\": \"open\"}``, a handshake that says the stream is
+    up, not a frame of the conversation. Only what a visitor may see follows:
     see ``agent.contracts.visitor_stream``. The page reconnects when it closes.
+    A session holds at most two streams at once.
 
     Args:
         public_key (str):
@@ -156,13 +159,14 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
-    """Web Stream Answers
+    r"""Web Stream Answers
 
      The bot's answer as it is written, one JSON object per line.
 
-    Read with ``fetch`` rather than ``EventSource`` so the session stays in the
-    body and the request stays simple. Only what a visitor may see is sent:
+    The first line is ``{\"type\": \"open\"}``, a handshake that says the stream is
+    up, not a frame of the conversation. Only what a visitor may see follows:
     see ``agent.contracts.visitor_stream``. The page reconnects when it closes.
+    A session holds at most two streams at once.
 
     Args:
         public_key (str):

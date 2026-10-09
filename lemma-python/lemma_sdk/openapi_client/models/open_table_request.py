@@ -16,7 +16,8 @@ class OpenTableRequest:
     """
     Attributes:
         audience (PublicAudience): Who outside the pod may add rows.
-        columns (list[str]):
+        columns (list[str]): The columns people outside may fill, in the order to ask them. Checked against the table
+            when it is opened.
     """
 
     audience: PublicAudience

@@ -14,6 +14,7 @@ class PublicColumnResponse:
     """
     Attributes:
         description (None | str):
+        input_ (str): The form control to ask with.
         name (str):
         options (list[str]):
         required (bool): The table needs it, so it must be open.
@@ -21,6 +22,7 @@ class PublicColumnResponse:
     """
 
     description: None | str
+    input_: str
     name: str
     options: list[str]
     required: bool
@@ -30,6 +32,8 @@ class PublicColumnResponse:
     def to_dict(self) -> dict[str, Any]:
         description: None | str
         description = self.description
+
+        input_ = self.input_
 
         name = self.name
 
@@ -44,6 +48,7 @@ class PublicColumnResponse:
         field_dict.update(
             {
                 "description": description,
+                "input": input_,
                 "name": name,
                 "options": options,
                 "required": required,
@@ -64,6 +69,8 @@ class PublicColumnResponse:
 
         description = _parse_description(d.pop("description"))
 
+        input_ = d.pop("input")
+
         name = d.pop("name")
 
         options = cast(list[str], d.pop("options"))
@@ -74,6 +81,7 @@ class PublicColumnResponse:
 
         public_column_response = cls(
             description=description,
+            input_=input_,
             name=name,
             options=options,
             required=required,

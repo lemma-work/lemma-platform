@@ -20,11 +20,15 @@ class ContactsCapResponse:
         organization_id (UUID):
         spent_this_month_usd (float): Spent this calendar month (UTC) answering contacts and people outside the pod in
             groups, on models Lemma provides.
-        monthly_limit_usd (float | None | Unset): No cap of the organization's own when absent.
+        is_default (bool | Unset): Nobody in the organization set a cap, so the deployment's default applies. Default:
+            False.
+        monthly_limit_usd (float | None | Unset): The cap that applies this month. Absent when an owner removed it: no
+            limit.
     """
 
     organization_id: UUID
     spent_this_month_usd: float
+    is_default: bool | Unset = False
     monthly_limit_usd: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -32,6 +36,8 @@ class ContactsCapResponse:
         organization_id = str(self.organization_id)
 
         spent_this_month_usd = self.spent_this_month_usd
+
+        is_default = self.is_default
 
         monthly_limit_usd: float | None | Unset
         if isinstance(self.monthly_limit_usd, Unset):
@@ -47,6 +53,8 @@ class ContactsCapResponse:
                 "spent_this_month_usd": spent_this_month_usd,
             }
         )
+        if is_default is not UNSET:
+            field_dict["is_default"] = is_default
         if monthly_limit_usd is not UNSET:
             field_dict["monthly_limit_usd"] = monthly_limit_usd
 
@@ -58,6 +66,8 @@ class ContactsCapResponse:
         organization_id = UUID(d.pop("organization_id"))
 
         spent_this_month_usd = d.pop("spent_this_month_usd")
+
+        is_default = d.pop("is_default", UNSET)
 
         def _parse_monthly_limit_usd(data: object) -> float | None | Unset:
             if data is None:
@@ -71,6 +81,7 @@ class ContactsCapResponse:
         contacts_cap_response = cls(
             organization_id=organization_id,
             spent_this_month_usd=spent_this_month_usd,
+            is_default=is_default,
             monthly_limit_usd=monthly_limit_usd,
         )
 

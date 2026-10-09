@@ -9,6 +9,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 _NAME_TO_MODULE = {
+    'Accepted': 'accepted',
     'AccountCreateSchema': 'account_create_schema',
     'AccountCreateSchemaCredentials': 'account_create_schema_credentials',
     'AccountCreateSchemaPreferencesType0': 'account_create_schema_preferences_type_0',
@@ -109,6 +110,7 @@ _NAME_TO_MODULE = {
     'BulkUpdateRecordsRequest': 'bulk_update_records_request',
     'BulkUpdateRecordsRequestRecordsItem': 'bulk_update_records_request_records_item',
     'BundleSourceKind': 'bundle_source_kind',
+    'CodeRequest': 'code_request',
     'ColumnSchema': 'column_schema',
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
     'ConnectRequestInitiateSchema': 'connect_request_initiate_schema',
@@ -134,6 +136,8 @@ _NAME_TO_MODULE = {
     'ContactIdentityResponse': 'contact_identity_response',
     'ContactListResponse': 'contact_list_response',
     'ContactResponse': 'contact_response',
+    'ContactRow': 'contact_row',
+    'ContactRowValues': 'contact_row_values',
     'ContactUpdateRequest': 'contact_update_request',
     'ContactsCapResponse': 'contacts_cap_response',
     'ContactsCapUpdate': 'contacts_cap_update',
@@ -287,6 +291,8 @@ _NAME_TO_MODULE = {
     'GroupUpdateRequest': 'group_update_request',
     'GroupWaitingResponse': 'group_waiting_response',
     'HarnessKind': 'harness_kind',
+    'HistoryMessage': 'history_message',
+    'HistoryResponse': 'history_response',
     'HomeAgentResponse': 'home_agent_response',
     'HomeAppResponse': 'home_app_response',
     'HomePodResponse': 'home_pod_response',
@@ -318,6 +324,7 @@ _NAME_TO_MODULE = {
     'McpEndpointResponse': 'mcp_endpoint_response',
     'MessageKind': 'message_kind',
     'MessageListResponse': 'message_list_response',
+    'MessageRequest': 'message_request',
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
@@ -403,6 +410,7 @@ _NAME_TO_MODULE = {
     'PublicAudience': 'public_audience',
     'PublicColumnResponse': 'public_column_response',
     'PublicFileResponse': 'public_file_response',
+    'PublicWebChallengeReadResponsePublicWebChallengeRead': 'public_web_challenge_read_response_public_web_challenge_read',
     'PublishMode': 'publish_mode',
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
@@ -423,6 +431,8 @@ _NAME_TO_MODULE = {
     'ResourcePreviewResponse': 'resource_preview_response',
     'ResourceType': 'resource_type',
     'ResourceVisibility': 'resource_visibility',
+    'RowRequest': 'row_request',
+    'RowRequestValues': 'row_request_values',
     'RuntimeModelCapability': 'runtime_model_capability',
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
@@ -455,6 +465,8 @@ _NAME_TO_MODULE = {
     'SearchVertical': 'search_vertical',
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
+    'SessionRequest': 'session_request',
+    'SessionResponse': 'session_response',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
     'SetOrganizationDefaultRuntimeRequest': 'set_organization_default_runtime_request',
     'SignInOutcomeResponse': 'sign_in_outcome_response',
@@ -501,10 +513,12 @@ _NAME_TO_MODULE = {
     'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
     'SurfaceUnavailableReason': 'surface_unavailable_reason',
     'SurfaceUpdateRequest': 'surface_update_request',
+    'TableColumn': 'table_column',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
     'TableListResponse': 'table_list_response',
     'TableOpeningResponse': 'table_opening_response',
+    'TableResponse': 'table_response',
     'TableSummaryResponse': 'table_summary_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
@@ -554,6 +568,7 @@ _NAME_TO_MODULE = {
     'UserSurfacePlatformGroup': 'user_surface_platform_group',
     'UserSurfacesResponse': 'user_surfaces_response',
     'VariableSpecResponse': 'variable_spec_response',
+    'VerifyRequest': 'verify_request',
     'VerifyTokenResponse': 'verify_token_response',
     'WaitUntilNode': 'wait_until_node',
     'WaitUntilNodeConfig': 'wait_until_node_config',
@@ -604,6 +619,7 @@ _NAME_TO_MODULE = {
 }
 
 if TYPE_CHECKING:
+    from .accepted import Accepted
     from .account_create_schema import AccountCreateSchema
     from .account_create_schema_credentials import AccountCreateSchemaCredentials
     from .account_create_schema_preferences_type_0 import AccountCreateSchemaPreferencesType0
@@ -704,6 +720,7 @@ if TYPE_CHECKING:
     from .bulk_update_records_request import BulkUpdateRecordsRequest
     from .bulk_update_records_request_records_item import BulkUpdateRecordsRequestRecordsItem
     from .bundle_source_kind import BundleSourceKind
+    from .code_request import CodeRequest
     from .column_schema import ColumnSchema
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
     from .connect_request_initiate_schema import ConnectRequestInitiateSchema
@@ -729,6 +746,8 @@ if TYPE_CHECKING:
     from .contact_identity_response import ContactIdentityResponse
     from .contact_list_response import ContactListResponse
     from .contact_response import ContactResponse
+    from .contact_row import ContactRow
+    from .contact_row_values import ContactRowValues
     from .contact_update_request import ContactUpdateRequest
     from .contacts_cap_response import ContactsCapResponse
     from .contacts_cap_update import ContactsCapUpdate
@@ -882,6 +901,8 @@ if TYPE_CHECKING:
     from .group_update_request import GroupUpdateRequest
     from .group_waiting_response import GroupWaitingResponse
     from .harness_kind import HarnessKind
+    from .history_message import HistoryMessage
+    from .history_response import HistoryResponse
     from .home_agent_response import HomeAgentResponse
     from .home_app_response import HomeAppResponse
     from .home_pod_response import HomePodResponse
@@ -913,6 +934,7 @@ if TYPE_CHECKING:
     from .mcp_endpoint_response import McpEndpointResponse
     from .message_kind import MessageKind
     from .message_list_response import MessageListResponse
+    from .message_request import MessageRequest
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
@@ -998,6 +1020,7 @@ if TYPE_CHECKING:
     from .public_audience import PublicAudience
     from .public_column_response import PublicColumnResponse
     from .public_file_response import PublicFileResponse
+    from .public_web_challenge_read_response_public_web_challenge_read import PublicWebChallengeReadResponsePublicWebChallengeRead
     from .publish_mode import PublishMode
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
@@ -1018,6 +1041,8 @@ if TYPE_CHECKING:
     from .resource_preview_response import ResourcePreviewResponse
     from .resource_type import ResourceType
     from .resource_visibility import ResourceVisibility
+    from .row_request import RowRequest
+    from .row_request_values import RowRequestValues
     from .runtime_model_capability import RuntimeModelCapability
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
@@ -1050,6 +1075,8 @@ if TYPE_CHECKING:
     from .search_vertical import SearchVertical
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
+    from .session_request import SessionRequest
+    from .session_response import SessionResponse
     from .set_default_surface_request import SetDefaultSurfaceRequest
     from .set_organization_default_runtime_request import SetOrganizationDefaultRuntimeRequest
     from .sign_in_outcome_response import SignInOutcomeResponse
@@ -1096,10 +1123,12 @@ if TYPE_CHECKING:
     from .surface_telegram_config_input import SurfaceTelegramConfigInput
     from .surface_unavailable_reason import SurfaceUnavailableReason
     from .surface_update_request import SurfaceUpdateRequest
+    from .table_column import TableColumn
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
     from .table_list_response import TableListResponse
     from .table_opening_response import TableOpeningResponse
+    from .table_response import TableResponse
     from .table_summary_response import TableSummaryResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
@@ -1149,6 +1178,7 @@ if TYPE_CHECKING:
     from .user_surface_platform_group import UserSurfacePlatformGroup
     from .user_surfaces_response import UserSurfacesResponse
     from .variable_spec_response import VariableSpecResponse
+    from .verify_request import VerifyRequest
     from .verify_token_response import VerifyTokenResponse
     from .wait_until_node import WaitUntilNode
     from .wait_until_node_config import WaitUntilNodeConfig
@@ -1212,6 +1242,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    'Accepted',
     'AccountCreateSchema',
     'AccountCreateSchemaCredentials',
     'AccountCreateSchemaPreferencesType0',
@@ -1312,6 +1343,7 @@ __all__ = [
     'BulkUpdateRecordsRequest',
     'BulkUpdateRecordsRequestRecordsItem',
     'BundleSourceKind',
+    'CodeRequest',
     'ColumnSchema',
     'ColumnSchemaTypeParamsType0',
     'ConnectRequestInitiateSchema',
@@ -1337,6 +1369,8 @@ __all__ = [
     'ContactIdentityResponse',
     'ContactListResponse',
     'ContactResponse',
+    'ContactRow',
+    'ContactRowValues',
     'ContactUpdateRequest',
     'ContactsCapResponse',
     'ContactsCapUpdate',
@@ -1490,6 +1524,8 @@ __all__ = [
     'GroupUpdateRequest',
     'GroupWaitingResponse',
     'HarnessKind',
+    'HistoryMessage',
+    'HistoryResponse',
     'HomeAgentResponse',
     'HomeAppResponse',
     'HomePodResponse',
@@ -1521,6 +1557,7 @@ __all__ = [
     'McpEndpointResponse',
     'MessageKind',
     'MessageListResponse',
+    'MessageRequest',
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
@@ -1606,6 +1643,7 @@ __all__ = [
     'PublicAudience',
     'PublicColumnResponse',
     'PublicFileResponse',
+    'PublicWebChallengeReadResponsePublicWebChallengeRead',
     'PublishMode',
     'PublishStartRequest',
     'PublishStatus',
@@ -1626,6 +1664,8 @@ __all__ = [
     'ResourcePreviewResponse',
     'ResourceType',
     'ResourceVisibility',
+    'RowRequest',
+    'RowRequestValues',
     'RuntimeModelCapability',
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',
@@ -1658,6 +1698,8 @@ __all__ = [
     'SearchVertical',
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
+    'SessionRequest',
+    'SessionResponse',
     'SetDefaultSurfaceRequest',
     'SetOrganizationDefaultRuntimeRequest',
     'SignInOutcomeResponse',
@@ -1704,10 +1746,12 @@ __all__ = [
     'SurfaceTelegramConfigInput',
     'SurfaceUnavailableReason',
     'SurfaceUpdateRequest',
+    'TableColumn',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',
     'TableListResponse',
     'TableOpeningResponse',
+    'TableResponse',
     'TableSummaryResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
@@ -1757,6 +1801,7 @@ __all__ = [
     'UserSurfacePlatformGroup',
     'UserSurfacesResponse',
     'VariableSpecResponse',
+    'VerifyRequest',
     'VerifyTokenResponse',
     'WaitUntilNode',
     'WaitUntilNodeConfig',

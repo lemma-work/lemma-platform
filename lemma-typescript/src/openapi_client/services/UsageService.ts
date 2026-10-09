@@ -170,11 +170,12 @@ export class UsageService {
     }
     /**
      * Update Contacts Cap
-     * Set or remove the cap. Organization owners and editors only.
+     * Set the cap, or remove it for no limit. Organization owners only.
      *
      * Contacts are never billed, so this is the ceiling on what people outside
-     * the organization can cost it. Past it, its bots stop answering them until
-     * the month turns.
+     * the organization can cost it: past it, its bots stop answering them until
+     * the month turns, and hand their conversations to members. Billing is an
+     * owner's, and so is this.
      * @param organizationId
      * @param requestBody
      * @returns ContactsCapResponse Successful Response

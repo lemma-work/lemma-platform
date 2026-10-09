@@ -1,6 +1,17 @@
 {
   "components": {
     "schemas": {
+      "Accepted": {
+        "properties": {
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "title": "Accepted",
+        "type": "object"
+      },
       "AccountCreateSchema": {
         "description": "Schema for directly connecting a credential-managed native account.",
         "properties": {
@@ -1788,6 +1799,17 @@
               }
             ]
           },
+          "contacts_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contacts Warning"
+          },
           "credential_mode": {
             "$ref": "#/components/schemas/SurfaceCredentialMode",
             "default": "SYSTEM"
@@ -3103,6 +3125,32 @@
         "title": "BundleSourceKind",
         "type": "string"
       },
+      "CodeRequest": {
+        "properties": {
+          "altcha": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Altcha"
+          },
+          "email": {
+            "maxLength": 320,
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "CodeRequest",
+        "type": "object"
+      },
       "ColumnSchema": {
         "description": "Schema for a datastore table column.",
         "properties": {
@@ -3874,7 +3922,7 @@
         "type": "string"
       },
       "ContactExportResponse": {
-        "description": "Everything the pod holds about one contact, for a request to see it.",
+        "description": "Everything the pod holds about one contact, a page at a time.\n\nTheir conversations come first, then their rows in the pod's\ncontact-owned tables. Follow `next_cursor` until it is absent.",
         "properties": {
           "contact": {
             "$ref": "#/components/schemas/ContactResponse"
@@ -3884,6 +3932,25 @@
               "$ref": "#/components/schemas/ExportedConversation"
             },
             "title": "Conversations",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `cursor` for the next page; absent on the last.",
+            "title": "Next Cursor"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ContactRow"
+            },
+            "title": "Rows",
             "type": "array"
           }
         },
@@ -3933,7 +4000,6 @@
           "next_before": {
             "anyOf": [
               {
-                "format": "date-time",
                 "type": "string"
               },
               {
@@ -3988,6 +4054,28 @@
         "title": "ContactResponse",
         "type": "object"
       },
+      "ContactRow": {
+        "description": "One row the pod keeps about a contact, for a request to see their data.",
+        "properties": {
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "table",
+          "values"
+        ],
+        "title": "ContactRow",
+        "type": "object"
+      },
       "ContactUpdateRequest": {
         "properties": {
           "display_name": {
@@ -4009,6 +4097,12 @@
       "ContactsCapResponse": {
         "description": "What the organization lets its bots spend answering contacts, a month.",
         "properties": {
+          "is_default": {
+            "default": false,
+            "description": "Nobody in the organization set a cap, so the deployment's default applies.",
+            "title": "Is Default",
+            "type": "boolean"
+          },
           "monthly_limit_usd": {
             "anyOf": [
               {
@@ -4018,7 +4112,7 @@
                 "type": "null"
               }
             ],
-            "description": "No cap of the organization's own when absent.",
+            "description": "The cap that applies this month. Absent when an owner removed it: no limit.",
             "title": "Monthly Limit Usd"
           },
           "organization_id": {
@@ -4051,7 +4145,7 @@
                 "type": "null"
               }
             ],
-            "description": "Null removes the cap. Zero stops bots answering contacts.",
+            "description": "Null removes the cap: no limit, kept as the owner's choice. Zero stops bots answering contacts.",
             "title": "Monthly Limit Usd"
           }
         },
@@ -5107,6 +5201,12 @@
             "description": "Optional schema for the schedule-level filter output. Filters belong to the schedule, not the workflow start.",
             "title": "Filter Output Schema"
           },
+          "include_outside_rows": {
+            "default": false,
+            "description": "DATASTORE schedules only: also fire on rows people outside the pod added to an open table. Off by default. When it fires, the run is told the row's content came from outside and is untrusted.",
+            "title": "Include Outside Rows",
+            "type": "boolean"
+          },
           "instruction": {
             "anyOf": [
               {
@@ -5191,9 +5291,24 @@
             "description": "Optional table metadata/configuration. This updates table config metadata and does not directly alter physical columns.",
             "title": "Config"
           },
+          "contact_columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Of a contact-owned table, the columns a contact may read of their own rows -- an explicit choice, so a column added later stays members-only until it is chosen too.",
+            "title": "Contact Columns"
+          },
           "contact_owned": {
             "default": false,
-            "description": "Rows the pod keeps about its contacts. Adds a `contact_id` column; every member sees every row, and a contact's run reads only rows naming that contact. Not combinable with `enable_rls`.",
+            "description": "Rows the pod keeps about its contacts. Adds a `contact_id` column; every member sees every row, and a contact's run reads only rows naming that contact. Not combinable with `enable_rls`, and never Public. Requires `contact_columns`.",
             "title": "Contact Owned",
             "type": "boolean"
           },
@@ -7592,7 +7707,7 @@
         "description": "Open a function to contacts, or close it.",
         "properties": {
           "contacts_invoke": {
-            "description": "Let a contact's conversation call this function. It runs as the function owner's runs do, held to the function's own grants, and the platform puts the asking contact's `contact_id` in its input.",
+            "description": "Let a contact's conversation call this function. It runs as the function itself, with no member behind it: its own grants, its own pod, and only the asking contact's rows of contact-owned tables. The platform puts the contact's `contact_id` in its input, so the input schema must declare `contact_id`.",
             "title": "Contacts Invoke",
             "type": "boolean"
           }
@@ -8429,6 +8544,11 @@
       "FunctionRunResponse": {
         "description": "Function run response.",
         "properties": {
+          "actor": {
+            "description": "Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call (which runs as the function itself, with no member), or `anonymous`.",
+            "title": "Actor",
+            "type": "string"
+          },
           "completed_at": {
             "anyOf": [
               {
@@ -8440,6 +8560,18 @@
               }
             ],
             "title": "Completed At"
+          },
+          "contact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Id"
           },
           "created_at": {
             "anyOf": [
@@ -8554,15 +8686,22 @@
             "title": "User Email"
           },
           "user_id": {
-            "format": "uuid",
-            "title": "User Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
           }
         },
         "required": [
           "id",
           "function_id",
-          "user_id",
+          "actor",
           "status",
           "started_at",
           "completed_at",
@@ -8586,6 +8725,11 @@
       "FunctionRunSummaryResponse": {
         "description": "Function run summary for list responses.",
         "properties": {
+          "actor": {
+            "description": "Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call (which runs as the function itself, with no member), or `anonymous`.",
+            "title": "Actor",
+            "type": "string"
+          },
           "completed_at": {
             "anyOf": [
               {
@@ -8597,6 +8741,18 @@
               }
             ],
             "title": "Completed At"
+          },
+          "contact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Id"
           },
           "created_at": {
             "anyOf": [
@@ -8636,15 +8792,22 @@
             "$ref": "#/components/schemas/FunctionRunStatus"
           },
           "user_id": {
-            "format": "uuid",
-            "title": "User Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
           }
         },
         "required": [
           "id",
           "function_id",
-          "user_id",
+          "actor",
           "status",
           "started_at",
           "completed_at",
@@ -9482,6 +9645,56 @@
         ],
         "title": "HarnessKind",
         "type": "string"
+      },
+      "HistoryMessage": {
+        "properties": {
+          "client_nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Nonce"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "text",
+          "sequence"
+        ],
+        "title": "HistoryMessage",
+        "type": "object"
+      },
+      "HistoryResponse": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "HistoryResponse",
+        "type": "object"
       },
       "HomeAgentResponse": {
         "properties": {
@@ -10415,6 +10628,34 @@
         "title": "MessageListResponse",
         "type": "object"
       },
+      "MessageRequest": {
+        "properties": {
+          "client_nonce": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The page's own name for this message, echoed on it in history, so the page can tell its copy from the server's without comparing text.",
+            "title": "Client Nonce"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "MessageRequest",
+        "type": "object"
+      },
       "MessageResponse": {
         "properties": {
           "agent_run_id": {
@@ -11193,11 +11434,10 @@
             "$ref": "#/components/schemas/PublicAudience"
           },
           "columns": {
+            "description": "The columns people outside may fill, in the order to ask them. Checked against the table when it is opened.",
             "items": {
               "type": "string"
             },
-            "maxItems": 30,
-            "minItems": 1,
             "title": "Columns",
             "type": "array"
           }
@@ -13368,6 +13608,11 @@
             ],
             "title": "Description"
           },
+          "input": {
+            "description": "The form control to ask with.",
+            "title": "Input",
+            "type": "string"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -13394,7 +13639,8 @@
           "type",
           "required",
           "options",
-          "description"
+          "description",
+          "input"
         ],
         "title": "PublicColumnResponse",
         "type": "object"
@@ -14016,6 +14262,25 @@
         "title": "ResourceVisibility",
         "type": "string"
       },
+      "RowRequest": {
+        "properties": {
+          "table": {
+            "maxLength": 255,
+            "title": "Table",
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "table"
+        ],
+        "title": "RowRequest",
+        "type": "object"
+      },
       "RuntimeModelCapability": {
         "enum": [
           "TEXT",
@@ -14212,6 +14477,11 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "include_outside_rows": {
+            "default": false,
+            "title": "Include Outside Rows",
+            "type": "boolean"
           },
           "instruction": {
             "anyOf": [
@@ -14864,6 +15134,112 @@
           "content"
         ],
         "title": "SendMessageRequest",
+        "type": "object"
+      },
+      "SessionRequest": {
+        "properties": {
+          "altcha": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The solved challenge, when starting an anonymous session.",
+            "title": "Altcha"
+          },
+          "host_token": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A token the page's own server signed with the widget's secret.",
+            "title": "Host Token"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The secret a previous answer returned, to come back to that session.",
+            "title": "Secret"
+          }
+        },
+        "title": "SessionRequest",
+        "type": "object"
+      },
+      "SessionResponse": {
+        "properties": {
+          "access_token": {
+            "description": "Send as `Authorization: Bearer` on every other call. Never store it.",
+            "title": "Access Token",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "expires_in": {
+            "description": "Seconds until the access token expires.",
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "is_contact": {
+            "title": "Is Contact",
+            "type": "boolean"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only when new: keep it to come back. Null means keep the one you have.",
+            "title": "Secret"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "access_token",
+          "secret",
+          "is_contact",
+          "display_name",
+          "expires_in"
+        ],
+        "title": "SessionResponse",
         "type": "object"
       },
       "SetDefaultSurfaceRequest": {
@@ -16189,6 +16565,54 @@
         "title": "SurfaceUpdateRequest",
         "type": "object"
       },
+      "TableColumn": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "input": {
+            "title": "Input",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "required",
+          "options",
+          "description",
+          "input"
+        ],
+        "title": "TableColumn",
+        "type": "object"
+      },
       "TableDetailResponse": {
         "description": "Schema for table detail response.",
         "properties": {
@@ -16217,6 +16641,13 @@
               }
             ],
             "title": "Config"
+          },
+          "contact_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Contact Columns",
+            "type": "array"
           },
           "contact_owned": {
             "default": false,
@@ -16374,6 +16805,32 @@
         "title": "TableOpeningResponse",
         "type": "object"
       },
+      "TableResponse": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TableColumn"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "contacts_only": {
+            "title": "Contacts Only",
+            "type": "boolean"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "contacts_only",
+          "columns"
+        ],
+        "title": "TableResponse",
+        "type": "object"
+      },
       "TableSummaryResponse": {
         "description": "Lean table shape for list responses.\n\nOmits the full `columns` definitions and `config` \u2014 fetch those from\n`table.get`. Exposes a cheap `column_count` for list views.",
         "properties": {
@@ -16388,6 +16845,13 @@
             "default": 0,
             "title": "Column Count",
             "type": "integer"
+          },
+          "contact_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Contact Columns",
+            "type": "array"
           },
           "contact_owned": {
             "default": false,
@@ -17250,6 +17714,18 @@
             ],
             "title": "Filter Output Schema"
           },
+          "include_outside_rows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "DATASTORE schedules only: also fire on rows people outside the pod added to an open table. Off by default. When it fires, the run is told the row's content came from outside and is untrusted.",
+            "title": "Include Outside Rows"
+          },
           "instruction": {
             "anyOf": [
               {
@@ -17328,6 +17804,21 @@
             "description": "Replacement metadata/config payload for the table.",
             "title": "Config"
           },
+          "contact_columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Of a contact-owned table, the columns a contact may read of their own rows -- an explicit choice, so a column added later stays members-only until it is chosen too. Omit to leave them unchanged.",
+            "title": "Contact Columns"
+          },
           "contact_owned": {
             "anyOf": [
               {
@@ -17337,7 +17828,7 @@
                 "type": "null"
               }
             ],
-            "description": "Make the table contact-owned, or stop it being. Enabling adds a `contact_id` column if there is none; rows without one are seen by members only. Omit to leave it unchanged.",
+            "description": "Make the table contact-owned, or stop it being. Enabling adds a `contact_id` column if there is none (rows without one are seen by members only) and requires `contact_columns`. Omit to leave it unchanged.",
             "title": "Contact Owned"
           },
           "enable_rls": {
@@ -18462,6 +18953,26 @@
         "title": "VariableSpecResponse",
         "type": "object"
       },
+      "VerifyRequest": {
+        "properties": {
+          "code": {
+            "maxLength": 12,
+            "title": "Code",
+            "type": "string"
+          },
+          "email": {
+            "maxLength": 320,
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "code"
+        ],
+        "title": "VerifyRequest",
+        "type": "object"
+      },
       "VerifyTokenResponse": {
         "properties": {
           "email": {
@@ -18857,7 +19368,8 @@
           },
           "answer": {
             "$ref": "#/components/schemas/WidgetAnswer",
-            "default": "anyone"
+            "default": "off",
+            "description": "Whom it answers. Off until a member chooses."
           },
           "looked_after_by": {
             "anyOf": [
@@ -27296,7 +27808,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "format": "date-time",
+                  "maxLength": 100,
                   "type": "string"
                 },
                 {
@@ -27344,7 +27856,7 @@
     },
     "/pods/{pod_id}/contacts/{contact_id}": {
       "delete": {
-        "description": "Forget a contact: their handles and their conversations go with them.\n\nOne transaction, so a contact is never half forgotten.",
+        "description": "Forget a contact: their rows, handles, conversations and chat sessions.\n\nSee ``services/forget`` for the order, which is what makes a failure safe\nto retry.",
         "operationId": "contact.delete",
         "parameters": [
           {
@@ -27530,7 +28042,7 @@
     },
     "/pods/{pod_id}/contacts/{contact_id}/export": {
       "get": {
-        "description": "A contact's handles and what was said with them, for a request to see it.\n\nTakes a pod admin, as forgetting does: both answer the person the data is\nabout, not the member reading it.",
+        "description": "A contact's handles, what was said with them, and the rows that are theirs.\n\nTakes a pod admin, as forgetting does: both answer the person the data is\nabout, not the member reading it.",
         "operationId": "contact.export",
         "parameters": [
           {
@@ -27551,6 +28063,23 @@
               "format": "uuid",
               "title": "Contact Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],
@@ -27582,7 +28111,7 @@
         ],
         "x-lemma": {
           "kind": "query",
-          "paginates": false,
+          "paginates": true,
           "resource": "contact",
           "result": "entity",
           "verb": "export"
@@ -27591,7 +28120,7 @@
     },
     "/pods/{pod_id}/contacts/{contact_id}/messages": {
       "post": {
-        "description": "Write to a contact in their most recent conversation, where the channel allows.\n\nRefused (409) when they unsubscribed there, when WhatsApp's 24-hour window\nhas closed, or when they have never written to the pod.",
+        "description": "Write to a contact in their most recent conversation, where the channel allows.\n\nRefused (409) when they unsubscribed there, when WhatsApp's 24-hour window\nhas closed, or when they have never written to the pod; 429 past the day's\nfollow-ups for this contact; 502 when the platform did not take it, which\nthe conversation then shows as not sent.",
         "operationId": "contact.follow_up",
         "parameters": [
           {
@@ -30054,6 +30583,7 @@
     },
     "/pods/{pod_id}/datastore/public-rows": {
       "get": {
+        "description": "The open tables of the pod that the caller can read.",
         "operationId": "table.public_rows.list",
         "parameters": [
           {
@@ -32039,7 +32569,7 @@
     },
     "/pods/{pod_id}/functions/{function_name}/contacts": {
       "put": {
-        "description": "Let a contact's conversation call this function, or stop it. A contact holds no grant: the function runs as its owner's runs do, held to its own grants, and is told the asking contact as `contact_id`.",
+        "description": "Let a contact's conversation call this function, or stop it. A contact holds no grant and the run acts for no member: it runs as the function itself, held to its own grants, and is told the asking contact as `contact_id`, which its input schema must declare. Takes pod settings permission and either owning the function or administering the pod.",
         "operationId": "function.contacts.update",
         "parameters": [
           {
@@ -36665,7 +37195,7 @@
     },
     "/pods/{pod_id}/web-widgets/{widget_id}/secret": {
       "post": {
-        "description": "Mint a new signing secret. Tokens signed with the old one stop working.",
+        "description": "Mint a new signing secret. Tokens signed with the old one stop working.\n\nSo do the sessions they started: a host session is the old secret's word\nfor who somebody is, and a secret is reissued because that word is no\nlonger trusted.",
         "operationId": "agent.web_widget.reissue",
         "parameters": [
           {
@@ -37961,6 +38491,69 @@
         }
       }
     },
+    "/public/web/{public_key}/challenge": {
+      "get": {
+        "description": "A proof-of-work to solve before starting a session or asking for a code.\n\n``{\"enabled\": false}`` when the deployment has bot protection off.",
+        "operationId": "public.web.challenge.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "purpose",
+            "required": false,
+            "schema": {
+              "default": "session",
+              "pattern": "^(session|code)$",
+              "title": "Purpose",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Public.Web.Challenge.Read",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Challenge",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "public.web.challenge",
+          "result": "entity",
+          "verb": "read"
+        }
+      }
+    },
     "/public/web/{public_key}/code": {
       "post": {
         "operationId": "public.web.code.send",
@@ -37975,11 +38568,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
               }
             },
             "description": "Successful Response"
@@ -38013,6 +38618,7 @@
     },
     "/public/web/{public_key}/code/verify": {
       "post": {
+        "description": "Confirm an email address: the session becomes a contact's, under a new\nsecret and a new access token, which replace the old ones.",
         "operationId": "public.web.code.verify",
         "parameters": [
           {
@@ -38025,11 +38631,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -38062,7 +38680,7 @@
       }
     },
     "/public/web/{public_key}/history": {
-      "post": {
+      "get": {
         "operationId": "public.web.history.read",
         "parameters": [
           {
@@ -38073,13 +38691,26 @@
               "title": "Public Key",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": -1,
+              "minimum": -1,
+              "title": "After",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -38100,11 +38731,8 @@
           "Agent Surfaces (Web)"
         ],
         "x-lemma": {
-          "invalidates": [
-            "public.web.history"
-          ],
-          "kind": "mutation",
-          "paginates": false,
+          "kind": "query",
+          "paginates": true,
           "resource": "public.web.history",
           "result": "entity",
           "verb": "read"
@@ -38125,11 +38753,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
               }
             },
             "description": "Successful Response"
@@ -38176,11 +38816,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RowRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
               }
             },
             "description": "Successful Response"
@@ -38214,6 +38866,7 @@
     },
     "/public/web/{public_key}/session": {
       "post": {
+        "description": "Start a session, or come back to one: either way, a new access token.",
         "operationId": "public.web.session.start",
         "parameters": [
           {
@@ -38226,11 +38879,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -38263,8 +38928,8 @@
       }
     },
     "/public/web/{public_key}/stream": {
-      "post": {
-        "description": "The bot's answer as it is written, one JSON object per line.\n\nRead with ``fetch`` rather than ``EventSource`` so the session stays in the\nbody and the request stays simple. Only what a visitor may see is sent:\nsee ``agent.contracts.visitor_stream``. The page reconnects when it closes.",
+      "get": {
+        "description": "The bot's answer as it is written, one JSON object per line.\n\nThe first line is ``{\"type\": \"open\"}``, a handshake that says the stream is\nup, not a frame of the conversation. Only what a visitor may see follows:\nsee ``agent.contracts.visitor_stream``. The page reconnects when it closes.\nA session holds at most two streams at once.",
         "operationId": "public.web.stream.read",
         "parameters": [
           {
@@ -38302,10 +38967,7 @@
           "Agent Surfaces (Web)"
         ],
         "x-lemma": {
-          "invalidates": [
-            "public.web.stream"
-          ],
-          "kind": "mutation",
+          "kind": "query",
           "paginates": false,
           "resource": "public.web.stream",
           "result": "entity",
@@ -38314,7 +38976,7 @@
       }
     },
     "/public/web/{public_key}/table": {
-      "post": {
+      "get": {
         "description": "What a page may ask for on a table the pod opened to visitors.\n\nThe open columns only, in order: enough to draw a form, and nothing else\nabout the table or its rows.",
         "operationId": "public.web.table.read",
         "parameters": [
@@ -38326,13 +38988,25 @@
               "title": "Public Key",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "title": "Table",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TableResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -38353,10 +39027,7 @@
           "Agent Surfaces (Web)"
         ],
         "x-lemma": {
-          "invalidates": [
-            "public.web.table"
-          ],
-          "kind": "mutation",
+          "kind": "query",
           "paginates": false,
           "resource": "public.web.table",
           "result": "entity",
@@ -39606,7 +40277,7 @@
         }
       },
       "put": {
-        "description": "Set or remove the cap. Organization owners and editors only.\n\nContacts are never billed, so this is the ceiling on what people outside\nthe organization can cost it. Past it, its bots stop answering them until\nthe month turns.",
+        "description": "Set the cap, or remove it for no limit. Organization owners only.\n\nContacts are never billed, so this is the ceiling on what people outside\nthe organization can cost it: past it, its bots stop answering them until\nthe month turns, and hand their conversations to members. Billing is an\nowner's, and so is this.",
         "operationId": "usage.organization.contacts_cap.update",
         "parameters": [
           {

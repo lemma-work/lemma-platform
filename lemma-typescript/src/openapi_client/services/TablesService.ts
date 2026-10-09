@@ -16,6 +16,7 @@ import { request as __request } from '../core/request.js';
 export class TablesService {
     /**
      * Tables Open To People Outside
+     * The open tables of the pod that the caller can read.
      * @param podId
      * @returns OpenTablesResponse Successful Response
      * @throws ApiError

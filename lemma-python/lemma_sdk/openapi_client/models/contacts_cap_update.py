@@ -15,7 +15,8 @@ T = TypeVar("T", bound="ContactsCapUpdate")
 class ContactsCapUpdate:
     """
     Attributes:
-        monthly_limit_usd (float | None | Unset): Null removes the cap. Zero stops bots answering contacts.
+        monthly_limit_usd (float | None | Unset): Null removes the cap: no limit, kept as the owner's choice. Zero stops
+            bots answering contacts.
     """
 
     monthly_limit_usd: float | None | Unset = UNSET

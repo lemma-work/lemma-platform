@@ -9,6 +9,9 @@ export type WebWidgetCreateRequest = {
      */
     agent_name?: (string | null);
     allowed_origins?: Array<string>;
+    /**
+     * Whom it answers. Off until a member chooses.
+     */
     answer?: WidgetAnswer;
     looked_after_by?: (string | null);
     name: string;

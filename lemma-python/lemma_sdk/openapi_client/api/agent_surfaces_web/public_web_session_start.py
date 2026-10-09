@@ -7,12 +7,17 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
+from ...models.session_request import SessionRequest
+from ...models.session_response import SessionResponse
 from ...types import Response
 
 
 def _get_kwargs(
     public_key: str,
+    *,
+    body: SessionRequest,
 ) -> dict[str, Any]:
+    headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
         "method": "post",
@@ -21,14 +26,20 @@ def _get_kwargs(
         ),
     }
 
+    _kwargs["json"] = body.to_dict()
+
+    headers["Content-Type"] = "application/json"
+
+    _kwargs["headers"] = headers
     return _kwargs
 
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | ErrorResponse | None:
+) -> ErrorResponse | SessionResponse | None:
     if response.status_code == 200:
-        response_200 = response.json()
+        response_200 = SessionResponse.from_dict(response.json())
+
         return response_200
 
     if response.status_code == 422:
@@ -44,7 +55,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | ErrorResponse]:
+) -> Response[ErrorResponse | SessionResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -57,22 +68,27 @@ def sync_detailed(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+    body: SessionRequest,
+) -> Response[ErrorResponse | SessionResponse]:
     """Web Start Session
+
+     Start a session, or come back to one: either way, a new access token.
 
     Args:
         public_key (str):
+        body (SessionRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[ErrorResponse | SessionResponse]
     """
 
     kwargs = _get_kwargs(
         public_key=public_key,
+        body=body,
     )
 
     response = client.get_httpx_client().request(
@@ -86,23 +102,28 @@ def sync(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+    body: SessionRequest,
+) -> ErrorResponse | SessionResponse | None:
     """Web Start Session
+
+     Start a session, or come back to one: either way, a new access token.
 
     Args:
         public_key (str):
+        body (SessionRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        ErrorResponse | SessionResponse
     """
 
     return sync_detailed(
         public_key=public_key,
         client=client,
+        body=body,
     ).parsed
 
 
@@ -110,22 +131,27 @@ async def asyncio_detailed(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+    body: SessionRequest,
+) -> Response[ErrorResponse | SessionResponse]:
     """Web Start Session
+
+     Start a session, or come back to one: either way, a new access token.
 
     Args:
         public_key (str):
+        body (SessionRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[ErrorResponse | SessionResponse]
     """
 
     kwargs = _get_kwargs(
         public_key=public_key,
+        body=body,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -137,23 +163,28 @@ async def asyncio(
     public_key: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+    body: SessionRequest,
+) -> ErrorResponse | SessionResponse | None:
     """Web Start Session
+
+     Start a session, or come back to one: either way, a new access token.
 
     Args:
         public_key (str):
+        body (SessionRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        ErrorResponse | SessionResponse
     """
 
     return (
         await asyncio_detailed(
             public_key=public_key,
             client=client,
+            body=body,
         )
     ).parsed

@@ -79,7 +79,9 @@ def sync_detailed(
      Write to a contact in their most recent conversation, where the channel allows.
 
     Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-    has closed, or when they have never written to the pod.
+    has closed, or when they have never written to the pod; 429 past the day's
+    follow-ups for this contact; 502 when the platform did not take it, which
+    the conversation then shows as not sent.
 
     Args:
         pod_id (UUID):
@@ -119,7 +121,9 @@ def sync(
      Write to a contact in their most recent conversation, where the channel allows.
 
     Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-    has closed, or when they have never written to the pod.
+    has closed, or when they have never written to the pod; 429 past the day's
+    follow-ups for this contact; 502 when the platform did not take it, which
+    the conversation then shows as not sent.
 
     Args:
         pod_id (UUID):
@@ -154,7 +158,9 @@ async def asyncio_detailed(
      Write to a contact in their most recent conversation, where the channel allows.
 
     Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-    has closed, or when they have never written to the pod.
+    has closed, or when they have never written to the pod; 429 past the day's
+    follow-ups for this contact; 502 when the platform did not take it, which
+    the conversation then shows as not sent.
 
     Args:
         pod_id (UUID):
@@ -192,7 +198,9 @@ async def asyncio(
      Write to a contact in their most recent conversation, where the channel allows.
 
     Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-    has closed, or when they have never written to the pod.
+    has closed, or when they have never written to the pod; 429 past the day's
+    follow-ups for this contact; 502 when the platform did not take it, which
+    the conversation then shows as not sent.
 
     Args:
         pod_id (UUID):

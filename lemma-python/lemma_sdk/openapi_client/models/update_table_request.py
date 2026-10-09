@@ -23,8 +23,12 @@ class UpdateTableRequest:
 
     Attributes:
         config (None | Unset | UpdateTableRequestConfigType0): Replacement metadata/config payload for the table.
+        contact_columns (list[str] | None | Unset): Of a contact-owned table, the columns a contact may read of their
+            own rows -- an explicit choice, so a column added later stays members-only until it is chosen too. Omit to leave
+            them unchanged.
         contact_owned (bool | None | Unset): Make the table contact-owned, or stop it being. Enabling adds a
-            `contact_id` column if there is none; rows without one are seen by members only. Omit to leave it unchanged.
+            `contact_id` column if there is none (rows without one are seen by members only) and requires `contact_columns`.
+            Omit to leave it unchanged.
         enable_rls (bool | None | Unset): Toggle per-user row-level security. Only allowed on an empty table: enabling
             adds the user_id ownership column and isolation policy, disabling removes the policy. Omit to leave RLS
             unchanged.
@@ -32,6 +36,7 @@ class UpdateTableRequest:
     """
 
     config: None | Unset | UpdateTableRequestConfigType0 = UNSET
+    contact_columns: list[str] | None | Unset = UNSET
     contact_owned: bool | None | Unset = UNSET
     enable_rls: bool | None | Unset = UNSET
     visibility: None | str | Unset = UNSET
@@ -49,6 +54,15 @@ class UpdateTableRequest:
             config = self.config.to_dict()
         else:
             config = self.config
+
+        contact_columns: list[str] | None | Unset
+        if isinstance(self.contact_columns, Unset):
+            contact_columns = UNSET
+        elif isinstance(self.contact_columns, list):
+            contact_columns = self.contact_columns
+
+        else:
+            contact_columns = self.contact_columns
 
         contact_owned: bool | None | Unset
         if isinstance(self.contact_owned, Unset):
@@ -73,6 +87,8 @@ class UpdateTableRequest:
         field_dict.update({})
         if config is not UNSET:
             field_dict["config"] = config
+        if contact_columns is not UNSET:
+            field_dict["contact_columns"] = contact_columns
         if contact_owned is not UNSET:
             field_dict["contact_owned"] = contact_owned
         if enable_rls is not UNSET:
@@ -107,6 +123,23 @@ class UpdateTableRequest:
 
         config = _parse_config(d.pop("config", UNSET))
 
+        def _parse_contact_columns(data: object) -> list[str] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                contact_columns_type_0 = cast(list[str], data)
+
+                return contact_columns_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(list[str] | None | Unset, data)
+
+        contact_columns = _parse_contact_columns(d.pop("contact_columns", UNSET))
+
         def _parse_contact_owned(data: object) -> bool | None | Unset:
             if data is None:
                 return data
@@ -136,6 +169,7 @@ class UpdateTableRequest:
 
         update_table_request = cls(
             config=config,
+            contact_columns=contact_columns,
             contact_owned=contact_owned,
             enable_rls=enable_rls,
             visibility=visibility,
