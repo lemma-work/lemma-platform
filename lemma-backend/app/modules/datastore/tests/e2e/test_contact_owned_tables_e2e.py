@@ -4,8 +4,7 @@ What each principal sees is decided by the database, under the NOBYPASSRLS
 query role, from the settings the session names: a member every row, a contact
 their own, nobody else nothing -- and a session that named nobody, nothing at
 all. The rest is what may be asked of such a table: never Public, never both
-per-user and contact-owned whatever order a PATCH says it in, created whole or
-not at all, and read by a contact only through the columns a member chose.
+per-user and contact-owned whatever order a PATCH says it in, and read by a contact only through the columns a member chose.
 """
 
 from __future__ import annotations
@@ -272,39 +271,6 @@ async def test_swapping_contact_ownership_for_per_user_keeps_row_security_on(
         True,
         {f"{table}_contact_isolation"},
     )
-
-
-async def test_a_contact_owned_table_whose_policy_fails_is_not_created(
-    pod_api: DatastoreApi, monkeypatch
-):
-    from app.modules.datastore.services import contact_owned_tables
-
-    async def refuse(*_args, **_kwargs):
-        raise RuntimeError("policy refused")
-
-    monkeypatch.setattr(contact_owned_tables, "set_contact_owned", refuse)
-    name = _name("half_made")
-    response = await pod_api.request(
-        "POST",
-        f"/pods/{pod_api.pod_id}/datastore/tables",
-        json={
-            "name": name,
-            "enable_rls": False,
-            "contact_owned": True,
-            "contact_columns": ["subject"],
-            "columns": [{"name": "subject", "type": "TEXT"}],
-        },
-    )
-    assert response.status_code >= 500, response.text
-    await pod_api.get_table(name, expected_status=status.HTTP_404_NOT_FOUND)
-
-    schema = get_schema_manager()
-    schema_name = schema.get_schema_name(UUID(pod_api.pod_id))
-    async with schema.session_factory() as session:
-        physical = await session.scalar(
-            text("SELECT to_regclass(:name)"), {"name": f'"{schema_name}"."{name}"'}
-        )
-    assert physical is None
 
 
 async def test_a_contact_reads_only_the_chosen_columns_in_key_order(

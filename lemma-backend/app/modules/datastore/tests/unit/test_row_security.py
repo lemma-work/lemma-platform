@@ -117,16 +117,20 @@ def test_the_columns_a_contact_reads_are_chosen_not_defaulted():
 
 
 @pytest.mark.parametrize("write", [False, True])
-async def test_an_outsiders_record_tools_never_reach_a_contact_owned_table(
-    write, monkeypatch
-):
-    from app.modules.datastore.services import authorization as module
+async def test_an_outsiders_record_tools_never_reach_a_contact_owned_table(write):
+    from app.core.authorization.current import (
+        reset_current_context,
+        set_current_context,
+    )
 
-    monkeypatch.setattr(module, "get_current_context", lambda: _outsider(CONTACT))
     gateway = DatastoreAuthorization(SimpleNamespace())
     table = SimpleNamespace(
         pod_id=POD, table_id=uuid4(), table_name="orders", contact_owned=True
     )
     check = gateway.require_record_write if write else gateway.require_record_read
-    with pytest.raises(DatastoreAccessDeniedError):
-        await check(user_id=None, ctx=table)
+    token = set_current_context(_outsider(CONTACT))
+    try:
+        with pytest.raises(DatastoreAccessDeniedError):
+            await check(user_id=None, ctx=table)
+    finally:
+        reset_current_context(token)

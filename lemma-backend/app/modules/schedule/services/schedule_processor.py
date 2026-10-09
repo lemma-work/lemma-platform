@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -78,7 +79,7 @@ class ScheduleProcessor:
         return True
 
 
-def _filter_instruction(instruction: str, metadata: Dict[str, Any] | None) -> str:
+def _filter_instruction(instruction: str, metadata: Mapping[str, object] | None) -> str:
     """The filter's instruction, told first when the row came from outside.
 
     The filter reads the row before anything else does, and a stranger wrote
