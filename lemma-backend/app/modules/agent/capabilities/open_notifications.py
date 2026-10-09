@@ -85,7 +85,10 @@ def _outside_question_lines(item: Mapping[str, object]) -> list[str]:
     acts with all of this person's access.
     """
     group = _one_line(item.get("origin_group_title"))
-    where = f"in “{group}”" if group else "in a group"
+    if item.get("asked_in_private"):
+        where = "in a private chat with the bot"
+    else:
+        where = f"in “{group}”" if group else "in a group"
     who = _one_line(item.get("asked_by_name")) or "someone"
     return [
         f"### A question from outside the pod, asked {where}",

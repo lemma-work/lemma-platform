@@ -1,4 +1,4 @@
-from app.core.security import EXCLUDED_PATHS
+from app.core.auth_exemptions import exemption_of
 
 
 def test_all_function_runtime_backend_routes_use_global_auth() -> None:
@@ -10,4 +10,5 @@ def test_all_function_runtime_backend_routes_use_global_auth() -> None:
         ),
         "/internal/function-runtime/runs/019ba7e8-5115-7000-8000-000000000001:terminal",
     )
-    assert all(not path.startswith(EXCLUDED_PATHS) for path in paths)
+    assert all(exemption_of(path, "POST") is None for path in paths)
+    assert all(exemption_of(path, "GET") is None for path in paths)

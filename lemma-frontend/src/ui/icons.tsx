@@ -33,6 +33,8 @@ export {
     House as HomeIcon, PresentationChart as SlidesIcon, Play as PlayIcon,
     // A space's group chats.
     ChatsCircle as GroupsIcon,
+    // The people a space's bots answer who are not in it.
+    AddressBook as ContactsIcon,
     // An empty Files list's way in, and the help menu's three doors: the
     // tour, the documentation and what changed.
     UploadSimple as UploadIcon, Compass as TourIcon, BookOpenText as DocsIcon,

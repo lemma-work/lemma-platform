@@ -19,6 +19,7 @@ from app.modules.test_support.fakes import FakeUnitOfWork
 from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.domain.entities import UsageReservation
+from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.services.usage_service import (
     ModelPricing,
     UsageService,
@@ -166,6 +167,47 @@ async def test_injected_limit_uses_legacy_default_reservation_amount():
 
     assert reservation is not None
     assert reservation.amount_usd == UsageService.DEFAULT_RESERVATION_USD
+
+
+def test_an_outside_run_is_never_under_the_members_own_limits():
+    member_only = UsageLimitValues(user_weekly_limit_usd=10.0)
+    org = uuid4()
+
+    assert member_only.has_applicable_limit(org)
+    assert not member_only.has_applicable_limit(org, outside_audience=True)
+    capped = UsageLimitValues(contacts_monthly_limit_usd=50.0)
+    assert capped.has_applicable_limit(org, outside_audience=True)
+    assert not capped.has_applicable_limit(None, outside_audience=True)
+    assert not capped.has_applicable_limit(org)
+
+
+async def test_a_runtime_that_cannot_hold_an_outside_run_to_its_cap_is_refused():
+    class _CappedPort:
+        async def resolve_limits(self, *, organization_id, user_id):
+            del organization_id, user_id
+            return UsageLimitValues(
+                user_weekly_limit_usd=10.0, contacts_monthly_limit_usd=50.0
+            )
+
+    member_limited = _limited_service(AsyncMock())
+    capped = UsageService(usage_repository=AsyncMock(), usage_limit_port=_CappedPort())
+    org = uuid4()
+
+    # The member's own limit is not this run's to be held to...
+    await member_limited.require_remote_budget_support(
+        organization_id=org,
+        user_id=uuid4(),
+        profile_scope=SYSTEM,
+        outside_audience=True,
+    )
+    # ...but the contacts cap is, and this runtime cannot enforce it.
+    with pytest.raises(UsageLimitExceededError):
+        await capped.require_remote_budget_support(
+            organization_id=org,
+            user_id=uuid4(),
+            profile_scope=SYSTEM,
+            outside_audience=True,
+        )
 
 
 async def test_unlimited_default_skips_admission_for_unpriced_custom_model():

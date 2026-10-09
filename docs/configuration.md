@@ -387,7 +387,9 @@ FUNCTION_RUNTIME_GATEWAY_URL=http://backend:8000
 ```
 
 `WORKSPACE_PORT_ACCESS_URL` publishes a port a workspace opened, for previewing
-something running inside it.
+something running inside it. It is a base URL (default `API_URL`); the signed
+URL is `<base>/public/workspace-ports/<grant>/`, unauthenticated by design,
+since the grant in the path is the credential.
 
 ## Function execution
 
@@ -511,6 +513,34 @@ MCP_ACCESS_AUTHORIZE_REQUESTS_PER_MINUTE=60  # sign-in requests, per source IP
 MCP_ACCESS_REGISTRATIONS_PER_HOUR=300        # dynamic registrations, per source IP
 MCP_ACCESS_TOKEN_REQUESTS_PER_MINUTE=600     # token + revoke, per client per source IP
 MCP_ACCESS_TOKEN_REQUESTS_PER_ADDRESS_PER_MINUTE=6000  # token + revoke, per source IP, any client
+```
+
+## Web chat and forms for people outside a pod
+
+A pod's web widgets put its chat, and forms for tables it opens to visitors, on
+other people's sites, reached by a public key anybody can copy off the page.
+They are off until an operator turns them on; while off, every `/public/web`
+endpoint and hosted page answers 404 and no widget can be set to answer anybody.
+
+```dotenv
+PUBLIC_WEB_ENABLED=true
+# Optional: an origin of its own for Lemma's hosted chat and form pages, routed
+# to the API but sharing no cookies with it. Unset, they are served on API_URL.
+PUBLIC_PAGES_URL=https://pages.example.com
+```
+
+With `PUBLIC_PAGES_URL` set, hosted pages answer only on that host, and that
+origin -- not `API_URL`'s -- is the one every widget allows.
+
+Bot protection is on by default: a visitor's browser solves an Altcha
+proof-of-work before an anonymous chat starts and before an email code is sent.
+It needs nothing configured and is independent of sign-in's
+`AUTH_ALTCHA_ENABLED`; without `AUTH_ALTCHA_HMAC_KEY`, challenges are signed
+with a key derived from `SECRET_ENCRYPTION_KEY`. Turn it off only behind
+protection of your own:
+
+```dotenv
+PUBLIC_WEB_ALTCHA_ENABLED=false
 ```
 
 ## Authentication and email
@@ -768,6 +798,16 @@ USAGE_ORG_LIMIT_OVERRIDES_JSON=
 An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
 `{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
 organizations at once. Slugs are organization handles, not display names.
+
+Answering people outside an organization -- contacts, and strangers in groups --
+has a ceiling of its own, which an organization owner sets in Usage. Until one
+does, this default applies; an owner who removes the cap chose no limit, and
+the default does not apply to them.
+
+```dotenv
+# USD a month. Unset (empty) means no default ceiling.
+USAGE_CONTACTS_MONTHLY_DEFAULT_USD=50
+```
 
 ### When the cost of the work cannot be established
 

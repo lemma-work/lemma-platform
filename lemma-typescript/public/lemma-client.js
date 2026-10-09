@@ -13152,6 +13152,30 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Open a Function to Contacts
+     * Let a contact's conversation call this function, or stop it. A contact holds no grant and the run acts for no member: it runs as the function itself, held to its own grants, and is told the asking contact as `contact_id`, which its input schema must declare. Takes pod settings permission and either owning the function or administering the pod.
+     * @param podId
+     * @param functionName
+     * @param requestBody
+     * @returns FunctionResponse Successful Response
+     * @throws ApiError
+     */
+    static functionContactsUpdate(podId, functionName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/functions/{function_name}/contacts",
+        path: {
+          "pod_id": podId,
+          "function_name": functionName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Function Resource Permissions
      * Get explicit resource grants assigned to a function.
      * @param podId
@@ -13425,6 +13449,14 @@ var LemmaClient = (() => {
     }
     delete(name) {
       return this.client.request(() => FunctionsService.functionDelete(this.podId(), name));
+    }
+    /** Let a contact's conversation call this function, or stop it. It runs as its
+     *  owner's runs do, held to its own grants, and is told the asking contact as
+     *  `contact_id` in its input. */
+    setContactsInvoke(name, enabled) {
+      return this.client.request(
+        () => FunctionsService.functionContactsUpdate(this.podId(), name, { contacts_invoke: enabled })
+      );
     }
     /** Run a function — convenience alias for `functions.runs.create`, matching the
      *  Python SDK's `functions.run(name, input)` and the unified `.run` verb. */
@@ -15990,6 +16022,113 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Widgets
+     * @param podId
+     * @returns WebWidgetListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/web-widgets",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Widget
+     * @param podId
+     * @param requestBody
+     * @returns WebWidgetCreatedResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/web-widgets",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete Widget
+     * @param podId
+     * @param widgetId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentWebWidgetDelete(podId, widgetId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Widget
+     * @param podId
+     * @param widgetId
+     * @param requestBody
+     * @returns WebWidgetResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetUpdate(podId, widgetId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Reissue Widget
+     * Mint a new signing secret. Tokens signed with the old one stop working.
+     *
+     * So do the sessions they started: a host session is the old secret's word
+     * for who somebody is, and a secret is reissued because that word is no
+     * longer trusted.
+     * @param podId
+     * @param widgetId
+     * @returns WebWidgetSecretResponse Successful Response
+     * @throws ApiError
+     */
+    static agentWebWidgetReissue(podId, widgetId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/web-widgets/{widget_id}/secret",
+        path: {
+          "pod_id": podId,
+          "widget_id": widgetId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -16161,6 +16300,615 @@ var LemmaClient = (() => {
     update(podId, groupId, payload) {
       return this.client.request(
         () => AgentSurfacesService.agentGroupUpdate(podId, groupId, payload)
+      );
+    }
+  };
+
+  // src/openapi_client/services/ContactsService.ts
+  var ContactsService = class {
+    /**
+     * List Contacts
+     * The pod's contacts, newest first.
+     * @param podId
+     * @param limit
+     * @param before
+     * @returns ContactListResponse Successful Response
+     * @throws ApiError
+     */
+    static contactList(podId, limit = 50, before) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/contacts",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "limit": limit,
+          "before": before
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete Contact
+     * Forget a contact: their rows, handles, conversations and chat sessions.
+     *
+     * See ``services/forget`` for the order, which is what makes a failure safe
+     * to retry.
+     * @param podId
+     * @param contactId
+     * @returns void
+     * @throws ApiError
+     */
+    static contactDelete(podId, contactId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/contacts/{contact_id}",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Contact
+     * @param podId
+     * @param contactId
+     * @returns ContactResponse Successful Response
+     * @throws ApiError
+     */
+    static contactGet(podId, contactId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/contacts/{contact_id}",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Contact
+     * @param podId
+     * @param contactId
+     * @param requestBody
+     * @returns ContactResponse Successful Response
+     * @throws ApiError
+     */
+    static contactUpdate(podId, contactId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/contacts/{contact_id}",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Export Contact
+     * A contact's handles, what was said with them, and the rows that are theirs.
+     *
+     * Takes a pod admin, as forgetting does: both answer the person the data is
+     * about, not the member reading it.
+     * @param podId
+     * @param contactId
+     * @param cursor
+     * @returns ContactExportResponse Successful Response
+     * @throws ApiError
+     */
+    static contactExport(podId, contactId, cursor) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/contacts/{contact_id}/export",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        query: {
+          "cursor": cursor
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Follow Up Contact
+     * Write to a contact in their most recent conversation, where the channel allows.
+     *
+     * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
+     * has closed, or when they have never written to the pod; 429 past the day's
+     * follow-ups for this contact; 502 when the platform did not take it, which
+     * the conversation then shows as not sent.
+     * @param podId
+     * @param contactId
+     * @param requestBody
+     * @returns FollowUpResponse Successful Response
+     * @throws ApiError
+     */
+    static contactFollowUp(podId, contactId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/contacts/{contact_id}/messages",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/openapi_client/services/UsageService.ts
+  var UsageService = class {
+    /**
+     * My Events
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageListResponse Successful Response
+     * @throws ApiError
+     */
+    static usageMeEventsList(organizationId, start, end, days = 30, limit = 50, agentRunId, conversationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/me/events",
+        query: {
+          "organization_id": organizationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * My Limits
+     * @param organizationId
+     * @returns MyUsageLimitsResponse Successful Response
+     * @throws ApiError
+     */
+    static usageMeLimitsGet(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/me/limits",
+        query: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * My Stats
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageStatsResponse Successful Response
+     * @throws ApiError
+     */
+    static usageMeStatsGet(organizationId, start, end, days = 30, limit = 50, agentRunId, conversationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/me/stats",
+        query: {
+          "organization_id": organizationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * My Summary
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageSummaryResponse Successful Response
+     * @throws ApiError
+     */
+    static usageMeSummaryGet(organizationId, start, end, days = 30, limit = 50, agentRunId, conversationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/me/summary",
+        query: {
+          "organization_id": organizationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Contacts Cap
+     * The organization's cap on what answering contacts may cost a month.
+     * @param organizationId
+     * @returns ContactsCapResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationContactsCapGet(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/contacts-cap",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Contacts Cap
+     * Set the cap, or remove it for no limit. Organization owners only.
+     *
+     * Contacts are never billed, so this is the ceiling on what people outside
+     * the organization can cost it: past it, its bots stop answering them until
+     * the month turns, and hand their conversations to members. Billing is an
+     * owner's, and so is this.
+     * @param organizationId
+     * @param requestBody
+     * @returns ContactsCapResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationContactsCapUpdate(organizationId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/usage/organizations/{organization_id}/contacts-cap",
+        path: {
+          "organization_id": organizationId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Usage Events
+     * @param organizationId
+     * @param agentRunId
+     * @param conversationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param podId
+     * @param userId
+     * @param agentId
+     * @param profileId
+     * @param profileScope
+     * @param modelName
+     * @param usageKind
+     * @param sourceType
+     * @param status
+     * @returns UsageListResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationEventsList(organizationId, agentRunId, conversationId, start, end, days = 30, limit = 100, podId, userId, agentId, profileId, profileScope, modelName, usageKind, sourceType, status) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/events",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "pod_id": podId,
+          "user_id": userId,
+          "agent_id": agentId,
+          "profile_id": profileId,
+          "profile_scope": profileScope,
+          "model_name": modelName,
+          "usage_kind": usageKind,
+          "source_type": sourceType,
+          "status": status
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Usage Limits
+     * @param organizationId
+     * @returns UsageLimitsResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationLimitsGet(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/limits",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get My Usage
+     * @param organizationId
+     * @param agentRunId
+     * @param conversationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param podId
+     * @param userId
+     * @param agentId
+     * @param profileId
+     * @param profileScope
+     * @param modelName
+     * @param usageKind
+     * @param sourceType
+     * @param status
+     * @returns UsageSummaryResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationMeSummaryGet(organizationId, agentRunId, conversationId, start, end, days = 30, limit = 100, podId, userId, agentId, profileId, profileScope, modelName, usageKind, sourceType, status) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/me",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "pod_id": podId,
+          "user_id": userId,
+          "agent_id": agentId,
+          "profile_id": profileId,
+          "profile_scope": profileScope,
+          "model_name": modelName,
+          "usage_kind": usageKind,
+          "source_type": sourceType,
+          "status": status
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Usage Stats
+     * @param organizationId
+     * @param agentRunId
+     * @param conversationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param podId
+     * @param userId
+     * @param agentId
+     * @param profileId
+     * @param profileScope
+     * @param modelName
+     * @param usageKind
+     * @param sourceType
+     * @param status
+     * @param granularity
+     * @param groupBy
+     * @returns UsageStatsResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationStatsGet(organizationId, agentRunId, conversationId, start, end, days = 30, limit = 100, podId, userId, agentId, profileId, profileScope, modelName, usageKind, sourceType, status, granularity = "day", groupBy) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/stats",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "pod_id": podId,
+          "user_id": userId,
+          "agent_id": agentId,
+          "profile_id": profileId,
+          "profile_scope": profileScope,
+          "model_name": modelName,
+          "usage_kind": usageKind,
+          "source_type": sourceType,
+          "status": status,
+          "granularity": granularity,
+          "group_by": groupBy
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Organization Usage Summary
+     * @param organizationId
+     * @param agentRunId
+     * @param conversationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param podId
+     * @param userId
+     * @param agentId
+     * @param profileId
+     * @param profileScope
+     * @param modelName
+     * @param usageKind
+     * @param sourceType
+     * @param status
+     * @returns UsageSummaryResponse Successful Response
+     * @throws ApiError
+     */
+    static usageOrganizationSummaryGet(organizationId, agentRunId, conversationId, start, end, days = 30, limit = 100, podId, userId, agentId, profileId, profileScope, modelName, usageKind, sourceType, status) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/usage/organizations/{organization_id}/summary",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "agent_run_id": agentRunId,
+          "conversation_id": conversationId,
+          "start": start,
+          "end": end,
+          "days": days,
+          "limit": limit,
+          "pod_id": podId,
+          "user_id": userId,
+          "agent_id": agentId,
+          "profile_id": profileId,
+          "profile_scope": profileScope,
+          "model_name": modelName,
+          "usage_kind": usageKind,
+          "source_type": sourceType,
+          "status": status
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/contacts.ts
+  var ContactsNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+      /**
+       * Web widgets: the pod's chat on other people's pages, and the key a form page adds rows with. The public key
+       * goes in the page and names the widget only; the signing secret, returned by
+       * `create` and `reissue` once, stays on the customer's server.
+       */
+      __publicField(this, "widgets", {
+        list: (podId) => this.client.request(() => AgentSurfacesService.agentWebWidgetList(podId)),
+        create: (podId, payload) => this.client.request(() => AgentSurfacesService.agentWebWidgetCreate(podId, payload)),
+        update: (podId, widgetId, payload) => this.client.request(
+          () => AgentSurfacesService.agentWebWidgetUpdate(podId, widgetId, payload)
+        ),
+        reissue: (podId, widgetId) => this.client.request(
+          () => AgentSurfacesService.agentWebWidgetReissue(podId, widgetId)
+        ),
+        remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId))
+      });
+    }
+    /** The pod's contacts, newest first. Pass the opaque `next_before` back as
+     *  `before` for the next page. */
+    list(podId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ContactsService.contactList(podId, (_a = options.limit) != null ? _a : 50, options.before);
+        }
+      );
+    }
+    /** One contact, with the handles they are known by. */
+    get(podId, contactId) {
+      return this.client.request(() => ContactsService.contactGet(podId, contactId));
+    }
+    /** Change the name a contact is addressed by. */
+    rename(podId, contactId, displayName) {
+      return this.client.request(
+        () => ContactsService.contactUpdate(podId, contactId, { display_name: displayName })
+      );
+    }
+    /** Write to a contact in their latest conversation, where the channel allows:
+     *  never where they unsubscribed, on WhatsApp only within 24 hours of their
+     *  last message, and a few times a day at most. Takes `contact.message`. */
+    followUp(podId, contactId, message) {
+      return this.client.request(
+        () => ContactsService.contactFollowUp(podId, contactId, { message })
+      );
+    }
+    /** One page of everything the pod holds about a contact: handles,
+     *  conversations, then rows. Pass `next_cursor` back as `cursor` until absent. */
+    export(podId, contactId, options = {}) {
+      return this.client.request(
+        () => ContactsService.contactExport(podId, contactId, options.cursor)
+      );
+    }
+    /** Forget a contact: their rows, handles, conversations and chat sessions. */
+    remove(podId, contactId) {
+      return this.client.request(() => ContactsService.contactDelete(podId, contactId));
+    }
+    /** The organization's monthly cap on answering contacts, and this month's spend. */
+    cap(organizationId) {
+      return this.client.request(
+        () => UsageService.usageOrganizationContactsCapGet(organizationId)
+      );
+    }
+    /** Set the cap in USD, or `null` for no limit. Takes an organization owner. */
+    setCap(organizationId, monthlyLimitUsd) {
+      return this.client.request(
+        () => UsageService.usageOrganizationContactsCapUpdate(organizationId, {
+          monthly_limit_usd: monthlyLimitUsd
+        })
       );
     }
   };
@@ -17227,6 +17975,25 @@ var LemmaClient = (() => {
   // src/openapi_client/services/TablesService.ts
   var TablesService = class {
     /**
+     * Tables Open To People Outside
+     * The open tables of the pod that the caller can read.
+     * @param podId
+     * @returns OpenTablesResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/public-rows",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Tables
      * List tables in a datastore.
      * @param podId
@@ -17386,6 +18153,70 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Stop People Outside Adding Rows
+     * @param podId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    static tablePublicRowsClose(podId, tableName) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Who Outside May Add Rows
+     * @param podId
+     * @param tableName
+     * @returns TableOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsGet(podId, tableName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Let People Outside Add Rows
+     * Open the table to rows from people outside the pod -- confirmed contacts, or anyone -- for the chosen columns only. Rows are added as the member opening it, who must be able to change the table.
+     * @param podId
+     * @param tableName
+     * @param requestBody
+     * @returns TableOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    static tablePublicRowsOpen(podId, tableName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/datastore/tables/{table_name}/public-rows",
+        path: {
+          "pod_id": podId,
+          "table_name": tableName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/tables.ts
@@ -17409,6 +18240,16 @@ var LemmaClient = (() => {
           return this.client.request(() => TablesService.tableColumnAdd(this.podId(), tableName, payload));
         },
         remove: (tableName, columnName) => this.client.request(() => TablesService.tableColumnRemove(this.podId(), tableName, columnName))
+      });
+      /**
+       * Who outside the pod may add rows to a table. A form is any page that adds a
+       * row through a web widget's key; the table decides which columns it may write.
+       */
+      __publicField(this, "publicRows", {
+        get: (tableName) => this.client.request(() => TablesService.tablePublicRowsGet(this.podId(), tableName)),
+        open: (tableName, payload) => this.client.request(() => TablesService.tablePublicRowsOpen(this.podId(), tableName, payload)),
+        close: (tableName) => this.client.request(() => TablesService.tablePublicRowsClose(this.podId(), tableName)),
+        list: () => this.client.request(() => TablesService.tablePublicRowsList(this.podId()))
       });
     }
     list(options = {}) {
@@ -18513,6 +19354,7 @@ var LemmaClient = (() => {
       __publicField(this, "podSurfaces");
       /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
       __publicField(this, "podGroups");
+      __publicField(this, "contacts");
       /** The caller's own surfaces across all pods (grouped by platform). */
       __publicField(this, "notifications");
       __publicField(this, "userSurfaces");
@@ -18575,6 +19417,7 @@ var LemmaClient = (() => {
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
       this.podGroups = new PodGroupsNamespace(this._generated);
+      this.contacts = new ContactsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }
     /** Change the active pod ID for subsequent calls. */

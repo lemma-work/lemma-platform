@@ -17,6 +17,10 @@ export type FunctionSummaryResponse = {
     allowed_actions?: Array<string>;
     code_path?: (string | null);
     config?: (JsonObject | null);
+    /**
+     * Callable from a contact's conversation.
+     */
+    contacts_invoke?: boolean;
     created_at: (string | null);
     description?: (string | null);
     grants?: (Array<FunctionResourcePermissionResponse> | null);

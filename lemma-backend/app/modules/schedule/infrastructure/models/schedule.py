@@ -88,6 +88,10 @@ class Schedule(UUIDAuditBase):
     instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     filter_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     filter_output_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # DATASTORE only: fire on rows people outside the pod added, too.
+    include_outside_rows: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
     # Active status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)

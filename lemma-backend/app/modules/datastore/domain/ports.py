@@ -28,6 +28,7 @@ from app.modules.datastore.domain.document_processing import (
     IndexingMetrics,
 )
 from app.modules.datastore.domain.file_projections import DispatchableFileRef
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
@@ -282,13 +283,7 @@ class DatastoreSchemaPort(Protocol):
         self, pod_id: UUID, table_name: str, enable: bool
     ) -> None: ...
 
-    async def set_rls_context(
-        self,
-        session,
-        user_id: UUID,
-        *,
-        is_pod_admin: bool = False,
-    ) -> None: ...
+    async def set_rls_context(self, session, principal: RowPrincipal) -> None: ...
 
 
 class RecordEventFactory(Protocol):
@@ -347,12 +342,7 @@ class DatastoreRecordRepositoryPort(Protocol):
     ): ...
 
     async def execute_readonly_query(
-        self,
-        pod_id: UUID,
-        query: str,
-        user_id: UUID,
-        enable_rls: bool = True,
-        is_pod_admin: bool = False,
+        self, pod_id: UUID, query: str, principal: RowPrincipal
     ) -> Tuple[list[dict], int, bool]: ...
 
     async def list_records(

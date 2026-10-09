@@ -50,6 +50,7 @@ class ScheduleDetailResponse:
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
         consecutive_failures (int | Unset):  Default: 0.
+        include_outside_rows (bool | Unset):  Default: False.
         instruction (None | str | Unset):
         last_error (None | str | Unset):
         last_fire_status (None | ScheduleFireStatus | Unset):
@@ -79,6 +80,7 @@ class ScheduleDetailResponse:
     agent_name: None | str | Unset = UNSET
     allowed_actions: list[str] | Unset = UNSET
     consecutive_failures: int | Unset = 0
+    include_outside_rows: bool | Unset = False
     instruction: None | str | Unset = UNSET
     last_error: None | str | Unset = UNSET
     last_fire_status: None | ScheduleFireStatus | Unset = UNSET
@@ -165,6 +167,8 @@ class ScheduleDetailResponse:
 
         consecutive_failures = self.consecutive_failures
 
+        include_outside_rows = self.include_outside_rows
+
         instruction: None | str | Unset
         if isinstance(self.instruction, Unset):
             instruction = UNSET
@@ -235,6 +239,8 @@ class ScheduleDetailResponse:
             field_dict["allowed_actions"] = allowed_actions
         if consecutive_failures is not UNSET:
             field_dict["consecutive_failures"] = consecutive_failures
+        if include_outside_rows is not UNSET:
+            field_dict["include_outside_rows"] = include_outside_rows
         if instruction is not UNSET:
             field_dict["instruction"] = instruction
         if last_error is not UNSET:
@@ -398,6 +404,8 @@ class ScheduleDetailResponse:
 
         consecutive_failures = d.pop("consecutive_failures", UNSET)
 
+        include_outside_rows = d.pop("include_outside_rows", UNSET)
+
         def _parse_instruction(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -490,6 +498,7 @@ class ScheduleDetailResponse:
             agent_name=agent_name,
             allowed_actions=allowed_actions,
             consecutive_failures=consecutive_failures,
+            include_outside_rows=include_outside_rows,
             instruction=instruction,
             last_error=last_error,
             last_fire_status=last_fire_status,

@@ -4,6 +4,8 @@ import { useState } from "react";
 import { isForbidden } from "@/session/auth-state";
 import { live, useOrgStats, useOrgSummary } from "@/usage/queries";
 import { breakdown, formatCost } from "@/usage/allowance";
+import { useFeature } from "@/site/analytics/flags";
+import { ContactsCapBlock } from "./contacts-cap";
 
 /** What the whole organization has spent.
  *
@@ -16,6 +18,7 @@ const RANGES = [7, 30, 90];
 
 export function OrgUsageSection({ orgId }: { orgId: string }) {
     const [days, setDays] = useState(30);
+    const contactsOn = useFeature("contacts");
     const summary = useOrgSummary(orgId, { days });
     const stats = useOrgStats(orgId, { days });
 
@@ -80,6 +83,8 @@ export function OrgUsageSection({ orgId }: { orgId: string }) {
                     {summary.data.total_tokens === 0 && <p className="usage-quiet">Nothing recorded in this window.</p>}
                 </>}
             </section>
+
+            {contactsOn && <ContactsCapBlock orgId={orgId} />}
 
             {byModel.length > 0 && (
                 <section className="usage-block">
