@@ -173,7 +173,18 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
                 .map((item) => item.webkitGetAsEntry?.() ?? null)
                 .filter((entry): entry is FileSystemEntry => entry !== null);
             const files = Array.from(event.dataTransfer.files);
-            void (async () => { await writes.drop(entries, files); settle(); })();
+            /* drop() reports its own failures. Caught here as well so that one
+               cannot take settle() with it: a drop that stops half-way still
+               has to refresh what is on screen. */
+            void (async () => {
+                try {
+                    await writes.drop(entries, files);
+                } catch {
+                    /* Said by drop, next to the file it was about. */
+                } finally {
+                    settle();
+                }
+            })();
         },
     };
 

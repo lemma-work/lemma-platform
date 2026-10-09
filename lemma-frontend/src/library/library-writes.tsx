@@ -15,7 +15,7 @@ import {
     type Pages,
 } from "./library-cache";
 import { readingProblem, withItemStatus } from "./file-status";
-import { readDropped } from "./drop-entries";
+import { readDropped, type DroppedTree } from "./drop-entries";
 import { rememberMade } from "@/data/made";
 
 /** Making, renaming and removing things in the library.
@@ -89,11 +89,22 @@ export function useLibraryWrites(podId: string, directory: string) {
 
     /** A drop, which carries folders as readily as files. The tree is read
      *  first — a folder dropped from the desktop hands over the folder, not
-     *  what is inside it — and then made and written. */
+     *  what is inside it — and then made and written.
+     *
+     *  Reading can fail on its own: a file moved since the drag started, a
+     *  directory the browser will not open. Nothing has been written at that
+     *  point, so the drop stops and says so rather than leaving the person
+     *  with a drag that did nothing. */
     async function drop(entries: readonly FileSystemEntry[], files: File[]) {
         if (entries.length === 0) { await upload(files); return; }
         setProblem(null);
-        const tree = await readDropped(entries, directory);
+        let tree: DroppedTree;
+        try {
+            tree = await readDropped(entries, directory);
+        } catch {
+            setProblem("That drop could not be read. Try dragging it in again.");
+            return;
+        }
         for (const folder of tree.folders) {
             /* The sample has no server to make a parent on the way to a file,
                so every folder is made there; live, only the folders an upload
