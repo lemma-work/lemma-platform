@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -259,6 +259,34 @@ class WorkflowNotificationPort(Protocol):
 
     async def cancel_for_run(self, *, run_id: UUID) -> None:
         """Withdraw every notification this run raised, when it is cancelled."""
+
+
+#: Where the job asking a decision is: still going to ask it (queued, waiting
+#: out a retry, or running), never queued at all, or ended without an answer.
+DecisionJobState = Literal["alive", "missing", "ended"]
+
+
+class DecisionPort(Protocol):
+    """Hands a run's pending decision to whoever asks it.
+
+    Called by the decision executor as the run suspends. The question is asked
+    by a job, outside the run's transaction and after it commits: asking inside
+    it would hold the run-row lock and a pooled connection for as long as a
+    model takes to answer, and a job started before the commit could look for
+    a wait that is not stored yet.
+    """
+
+    def ask_once_committed(self, external_ref: str, *, requeue: int = 0) -> None:
+        """Ask the decision waited on under `external_ref`, once it is stored.
+
+        `requeue` counts the sweep's queueings of a job that was lost.
+        """
+
+    async def job_state(
+        self, external_ref: str, *, requeue: int = 0
+    ) -> DecisionJobState | None:
+        """Where the job asking this decision is; None when the queue cannot
+        say."""
 
 
 class SchedulePort(ABC):

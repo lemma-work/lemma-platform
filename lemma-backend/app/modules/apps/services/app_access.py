@@ -48,6 +48,9 @@ class AppAccessClaims:
     origin: str
     session_handle: str
     expires_at: int
+    grant_id: UUID | None = None
+    """The MCP connection an app framed inside an AI tool was opened through.
+    Set only there; that access ends when the connection does."""
 
 
 def _b64e(raw: bytes) -> str:
@@ -59,16 +62,16 @@ def _b64d(value: str) -> bytes:
 
 
 def mint_app_access_token(purpose: AppAccessPurpose, claims: AppAccessClaims) -> str:
-    payload = json.dumps(
-        {
-            "u": str(claims.user_id),
-            "a": str(claims.app_id),
-            "o": claims.origin,
-            "h": claims.session_handle,
-            "e": claims.expires_at,
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
+    fields: dict[str, str | int] = {
+        "u": str(claims.user_id),
+        "a": str(claims.app_id),
+        "o": claims.origin,
+        "h": claims.session_handle,
+        "e": claims.expires_at,
+    }
+    if claims.grant_id is not None:
+        fields["g"] = str(claims.grant_id)
+    payload = json.dumps(fields, separators=(",", ":")).encode("utf-8")
     # signer.sign returns "<kid>.<sig>"; the token is "<payload>.<kid>.<sig>".
     return f"{_b64e(payload)}.{get_secret_signer().sign(purpose.value, payload)}"
 
@@ -97,6 +100,7 @@ def verify_app_access_token(
             origin=str(data["o"]),
             session_handle=str(data["h"]),
             expires_at=int(data["e"]),
+            grant_id=UUID(str(data["g"])) if data.get("g") else None,
         )
     # A malformed token is the caller's problem, and the ways this body can be
     # malformed are few: the split, base64, JSON, `UUID(...)` and `int(...)`

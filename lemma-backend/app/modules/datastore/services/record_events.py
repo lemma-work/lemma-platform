@@ -68,6 +68,7 @@ class RecordEventCoordinator:
             owner_user_id=event_owner,
             payload_truncated=payload_truncated,
             previous_truncated=previous_truncated,
+            outside_actor=ctx.outside_actor,
         )
 
     def required_for_record(

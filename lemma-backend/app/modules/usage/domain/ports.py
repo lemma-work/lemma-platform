@@ -92,6 +92,31 @@ class UsageLimitValues:
     excluded_organization_ids: tuple[UUID, ...] = ()
     plan_type: Literal["PERSONAL", "TEAM"] | None = None
     plan_name: str | None = None
+    #: What the organization lets its bots spend answering contacts and group
+    #: outsiders, a month -- the cap an organization admin sets.
+    contacts_monthly_limit_usd: float | None = None
+
+    def has_applicable_limit(
+        self, organization_id: UUID | None, *, outside_audience: bool = False
+    ) -> bool:
+        """Whether a run is under any monetary limit at all.
+
+        A run answering somebody outside the organization is under the
+        organization's limit and its contacts cap -- never the personal limits
+        of the member who looks after the conversation, whose ``user_id`` the
+        run carries only because somebody has to own it.
+        """
+        if organization_id is not None and self.org_monthly_limit_usd is not None:
+            return True
+        if outside_audience:
+            return (
+                organization_id is not None
+                and self.contacts_monthly_limit_usd is not None
+            )
+        return (
+            self.user_weekly_limit_usd is not None
+            or self.user_monthly_limit_usd is not None
+        )
 
 
 class UsageLimitPort(Protocol):

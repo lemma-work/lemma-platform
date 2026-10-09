@@ -141,3 +141,46 @@ def validate_time_schedule_config(
     if run_date <= (now or datetime.now(timezone.utc)):
         raise ScheduleValidationError("scheduled_at must be in the future.")
     return run_date
+
+
+_TIME_FILTER_REFUSAL = (
+    "A time schedule fires on the clock, so there is no event for a filter to "
+    "judge. Leave filter_instruction and filter_output_schema empty, or use a "
+    "webhook or table-change trigger."
+)
+
+
+def refuse_time_schedule_filter(
+    filter_instruction: str | None,
+    filter_output_schema: Mapping[str, object] | None,
+) -> None:
+    """A new TIME schedule may not carry a filter: nothing would ever ask it.
+
+    It was accepted before and silently never evaluated, which is worse than
+    being told.
+    """
+    if (filter_instruction or "").strip() or filter_output_schema:
+        raise ScheduleValidationError(_TIME_FILTER_REFUSAL)
+
+
+def refuse_new_time_schedule_filter(
+    stored_instruction: str | None,
+    stored_schema: Mapping[str, object] | None,
+    update_data: Mapping[str, object],
+) -> None:
+    """An update may clear a TIME schedule's filter or resend the one it has.
+
+    Schedules saved before the filter was refused here still carry one, and a
+    client that edits the cron and sends the whole form back sends it too.
+    Refusing that would make those schedules uneditable; only a filter that is
+    new is refused.
+    """
+    instruction = update_data.get("filter_instruction", stored_instruction)
+    schema = update_data.get("filter_output_schema", stored_schema)
+    cleared = not (isinstance(instruction, str) and instruction.strip())
+    unchanged = instruction == stored_instruction and schema == stored_schema
+    # A schema with no instruction is never asked, so clearing the instruction
+    # alone is enough to clear the filter.
+    if cleared or unchanged:
+        return
+    raise ScheduleValidationError(_TIME_FILTER_REFUSAL)

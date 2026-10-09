@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
     attachmentKey,
     canSend,
+    offered,
     contentFor,
     describeSize,
     markAttachment,
@@ -90,6 +91,21 @@ test("a file too large to send is refused before the upload, not after it", () =
     assert.equal(tooLarge(file("small.pdf", 1024)), false);
     assert.equal(tooLarge(file("huge.bin", MAX_BYTES + 1)), true);
     assert.equal(tooLarge(file("exact.bin", MAX_BYTES)), false);
+});
+
+test("what a drop hands over is split by the ceiling, in one sentence", () => {
+    // The composer and the box on Home are the same act on two surfaces, so
+    // they refuse the same file with the same words — a second copy of this
+    // rule is a second ceiling, and the one that drifts is the one people hit.
+    const small = file("small.pdf", 1024);
+    const huge = file("huge.bin", MAX_BYTES + 1);
+    const alsoHuge = file("dump.zip", MAX_BYTES * 2);
+
+    assert.deepEqual(offered([small]), { take: [small], refused: null });
+    assert.deepEqual(offered([huge]), { take: [], refused: "huge.bin is too large to attach (100 MB)." });
+    assert.deepEqual(offered([small, huge]), { take: [small], refused: "huge.bin is too large to attach (100 MB)." });
+    assert.deepEqual(offered([huge, alsoHuge]), { take: [], refused: "2 files are too large to attach." });
+    assert.deepEqual(offered([]), { take: [], refused: null });
 });
 
 test("sizes read the way a person would say them", () => {

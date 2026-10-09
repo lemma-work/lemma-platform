@@ -47,7 +47,7 @@ _GLYPH_EXTENT = 0.44
 ICON_SIZES = (32, 180, 192, 512)
 
 
-def _initial(name: str, slug: str) -> str:
+def icon_letter(name: str, slug: str) -> str:
     """One uppercase ASCII letter or digit for the plate.
 
     ASCII only, and the slug is the fallback rather than the name's own first
@@ -62,7 +62,7 @@ def _initial(name: str, slug: str) -> str:
     return "L"
 
 
-def _ink(slug: str) -> tuple[int, int, int]:
+def icon_ink(slug: str) -> tuple[int, int, int]:
     """The slug's step on the ring, as RGB."""
     digest = 0
     for character in slug or "":
@@ -104,4 +104,4 @@ def _render(letter: str, ink: tuple[int, int, int], size: int) -> bytes:
 
 def render_app_icon(*, name: str, slug: str, size: int) -> bytes:
     """Return the app's icon as a square PNG of ``size`` pixels."""
-    return _render(_initial(name, slug), _ink(slug), size)
+    return _render(icon_letter(name, slug), icon_ink(slug), size)

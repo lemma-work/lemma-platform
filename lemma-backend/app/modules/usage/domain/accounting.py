@@ -38,6 +38,15 @@ class MeteringIdentity(BaseModel):
     provider_model_name: str
 
 
+#: Runs that answer people outside the organization: a contact in a private
+#: chat, or a group's people from outside the pod. They spend the
+#: organization's budget, never the personal allowance of the member who looks
+#: after the conversation, and count towards the organization's contacts cap.
+CONTACT_RUN = "contact_run"
+OUTSIDER_RUN = "outsider_run"
+OUTSIDE_AUDIENCE_SOURCES: tuple[str, ...] = (CONTACT_RUN, OUTSIDER_RUN)
+
+
 class TokenCounts(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -63,6 +72,10 @@ class BudgetWindow(BaseModel):
     end: datetime
     limit: Decimal | None = Field(default=None, ge=0)
     excluded_organization_ids: tuple[UUID, ...] = ()
+    #: Counts only usage recorded under these sources; empty counts all of it.
+    source_types: tuple[str, ...] = ()
+    #: Leaves out usage recorded under these sources.
+    excluded_source_types: tuple[str, ...] = ()
 
 
 class RequestReceipt(BaseModel):

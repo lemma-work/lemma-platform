@@ -21,7 +21,7 @@ from pydantic_ai.usage import RunUsage
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import Audience, run_audience
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.outsider_tools import outsider_may_call
@@ -182,7 +182,10 @@ class AgentToolDispatcher:
                     tool=tool,
                     run_ctx=run_ctx,
                 )
-        if getattr(ctx, "answers_outsider", False) or answers_outsiders(conversation):
+        if (
+            run_audience(ctx).answers_outsiders
+            or Audience.of(conversation).answers_outsiders
+        ):
             # The same last word the in-process harness gets from
             # `OutsiderToolGateCapability`, for the MCP bridge and the approval
             # executor -- whichever toolsets the caller passed in.

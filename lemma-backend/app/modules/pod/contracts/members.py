@@ -26,10 +26,12 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.pod.domain.pod_entities import PodMemberEntity
 from app.modules.pod.domain.roles import PodRole
 from app.modules.pod.infrastructure.models.pod_models import Pod
+from app.modules.pod.infrastructure.pod_administration_queries import members_who_can
 from app.modules.pod.infrastructure.pod_repositories import PodMemberRepository
 
 
@@ -42,6 +44,33 @@ async def pod_member_id(uow, pod_id: UUID, user_id: UUID) -> UUID | None:
     """
     member = await PodMemberRepository(uow).get_by_pod_and_user_id(pod_id, user_id)
     return member.id if member is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class PodAdministrator:
+    user_id: UUID
+    pod_member_id: UUID
+
+
+#: The most administrators one notice to a pod's administrators reaches.
+MAX_ADMINISTRATORS_TOLD = 50
+
+
+async def pod_administrators(uow, pod_id: UUID) -> list[PodAdministrator]:
+    """The members who administer the pod: whoever holds ``pod.member.manage``.
+
+    By permission, as the last-administrator rule counts them, so a custom role
+    that manages members is as much an administrator as ``POD_ADMIN``.
+    """
+    return [
+        PodAdministrator(user_id=user_id, pod_member_id=member_id)
+        for member_id, user_id in await members_who_can(
+            uow.session,
+            pod_id=pod_id,
+            permission_id=Permissions.POD_MEMBER_MANAGE,
+            limit=MAX_ADMINISTRATORS_TOLD,
+        )
+    ]
 
 
 async def pod_name(session, pod_id: UUID) -> str | None:

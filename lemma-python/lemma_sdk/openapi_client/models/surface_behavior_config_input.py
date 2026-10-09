@@ -9,6 +9,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.surface_channel_route_input import SurfaceChannelRouteInput
+    from ..models.surface_contacts_config import SurfaceContactsConfig
     from ..models.surface_groups_config import SurfaceGroupsConfig
     from ..models.surface_identity_config_input import SurfaceIdentityConfigInput
     from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
@@ -24,6 +25,8 @@ class SurfaceBehaviorConfigInput:
     """
     Attributes:
         channels (list[SurfaceChannelRouteInput] | Unset):
+        contacts (SurfaceContactsConfig | Unset): Whom the bot answers in private chats beyond the pod's members.
+            Mirrored.
         dm_conversation_reset_after_hours (int | None | Unset): Ignored. The DM reset window is a deployment-wide
             setting (SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so existing pod bundles and clients keep
             working.
@@ -35,6 +38,7 @@ class SurfaceBehaviorConfigInput:
     """
 
     channels: list[SurfaceChannelRouteInput] | Unset = UNSET
+    contacts: SurfaceContactsConfig | Unset = UNSET
     dm_conversation_reset_after_hours: int | None | Unset = UNSET
     groups: SurfaceGroupsConfig | Unset = UNSET
     identity: SurfaceIdentityConfigInput | Unset = UNSET
@@ -49,6 +53,10 @@ class SurfaceBehaviorConfigInput:
             for channels_item_data in self.channels:
                 channels_item = channels_item_data.to_dict()
                 channels.append(channels_item)
+
+        contacts: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.contacts, Unset):
+            contacts = self.contacts.to_dict()
 
         dm_conversation_reset_after_hours: int | None | Unset
         if isinstance(self.dm_conversation_reset_after_hours, Unset):
@@ -81,6 +89,8 @@ class SurfaceBehaviorConfigInput:
         field_dict.update({})
         if channels is not UNSET:
             field_dict["channels"] = channels
+        if contacts is not UNSET:
+            field_dict["contacts"] = contacts
         if dm_conversation_reset_after_hours is not UNSET:
             field_dict["dm_conversation_reset_after_hours"] = (
                 dm_conversation_reset_after_hours
@@ -101,6 +111,7 @@ class SurfaceBehaviorConfigInput:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.surface_channel_route_input import SurfaceChannelRouteInput
+        from ..models.surface_contacts_config import SurfaceContactsConfig
         from ..models.surface_groups_config import SurfaceGroupsConfig
         from ..models.surface_identity_config_input import SurfaceIdentityConfigInput
         from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
@@ -116,6 +127,13 @@ class SurfaceBehaviorConfigInput:
                 channels_item = SurfaceChannelRouteInput.from_dict(channels_item_data)
 
                 channels.append(channels_item)
+
+        _contacts = d.pop("contacts", UNSET)
+        contacts: SurfaceContactsConfig | Unset
+        if isinstance(_contacts, Unset):
+            contacts = UNSET
+        else:
+            contacts = SurfaceContactsConfig.from_dict(_contacts)
 
         def _parse_dm_conversation_reset_after_hours(
             data: object,
@@ -167,6 +185,7 @@ class SurfaceBehaviorConfigInput:
 
         surface_behavior_config_input = cls(
             channels=channels,
+            contacts=contacts,
             dm_conversation_reset_after_hours=dm_conversation_reset_after_hours,
             groups=groups,
             identity=identity,

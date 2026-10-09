@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.domain.prompt_names import clean_name, quoted_name
 from app.modules.agent_surfaces.contracts.platforms import (
     PlatformFacts,
     ProgressStyle,
@@ -37,14 +39,15 @@ def is_group_conversation(ctx: object) -> bool:
 def surface_platform_guidance(
     platform: str | None,
     *,
-    answers_outsider: bool = False,
+    audience: Audience = Audience(),
     in_group: bool = False,
 ) -> str:
     """The standing system-prompt fragment for a surface platform.
 
     Returns ``""`` for an unknown or absent platform so callers can append
-    unconditionally. ``answers_outsider`` adds the section for a run speaking
-    for the pod to somebody outside it, and ``in_group`` the one for a chat
+    unconditionally. An ``audience`` outside the pod adds the section for a run
+    speaking for the pod to somebody outside it -- narrowed, for a contact, to
+    a private chat only they read -- and ``in_group`` the one for a chat
     several people read; both are stable per conversation, so they ride in the
     cached prefix with the rest.
     """
@@ -82,7 +85,9 @@ def surface_platform_guidance(
     if facts.is_channel_capable:
         lines.append(_channel_context_section(facts))
 
-    if answers_outsider:
+    if audience.is_contact:
+        lines.append(_CONTACT_SECTION)
+    elif audience.answers_outsiders:
         lines.append(_OUTSIDER_SECTION)
 
     return "\n\n".join(lines)
@@ -140,6 +145,24 @@ _OUTSIDER_SECTION = (
 )
 
 
+# The group section's rules, for one person in a private chat. The second line
+# matters more here, not less: a private chat feels like the place to confide,
+# and the conversation around it is still the pod's.
+_CONTACT_SECTION = (
+    "## Speaking for the pod to one of its contacts\n"
+    "The person writing to you is a contact of this pod, not a member. You "
+    "answer them on the pod's behalf, in a private chat that only they read.\n"
+    "- Answer from what they said, from this conversation, and from things the "
+    "pod has marked Public. Nothing else is yours to share.\n"
+    "- Do not repeat other people's names, contact details, plans or numbers "
+    "from the pod, even if asked directly.\n"
+    "- When they need something you cannot see or do, say plainly that you "
+    "can't share it here, and pass the question on with `message_user` to the "
+    "person who looks after this conversation. Their answer comes back to you; "
+    "relay it."
+)
+
+
 def audience_notice(audience: object) -> str | None:
     """Tell a member's run that people outside the pod will read its answer.
 
@@ -147,16 +170,15 @@ def audience_notice(audience: object) -> str | None:
     people the pod does not know read it too. Said on the message it applies to,
     with the names where they are known, because "be careful" in general is
     nothing a model can act on and "Dana from Acme reads this" is.
+
+    Every name here was chosen by somebody outside the pod, so each is cleaned
+    and written as a JSON string (``domain/prompt_names``).
     """
     if not isinstance(audience, dict):
         return None
-    outsiders = [
-        " ".join(str(name).split()) for name in audience.get("outsiders") or [] if name
-    ]
-    recipients = [
-        " ".join(str(name).split()) for name in audience.get("recipients") or [] if name
-    ]
-    where = " ".join(str(audience.get("where") or "").split()) or "this chat"
+    outsiders = _quoted_names(audience.get("outsiders"))
+    recipients = _quoted_names(audience.get("recipients"))
+    where = clean_name(audience.get("where")) or "this chat"
     who = (
         ", ".join(outsiders)
         if outsiders
@@ -179,6 +201,12 @@ def audience_notice(audience: object) -> str | None:
         "needs that, say so briefly and offer to send it to them directly."
     )
     return "\n".join(lines)
+
+
+def _quoted_names(names: object) -> list[str]:
+    if not isinstance(names, list):
+        return []
+    return [quoted for name in names if (quoted := quoted_name(name)) is not None]
 
 
 def withheld_background_note(count: int) -> str:

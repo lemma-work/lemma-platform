@@ -364,7 +364,7 @@ For an approved `request_approval`, the wrapped tool runs as the user during res
 
 ```http
 POST /pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token
-        # operation widget.embed_token → { "url": "https://api…/widgets/serve/…?token=…" }
+        # operation widget.embed_token → { "url": "https://api…/public/widgets/serve/…?token=…" }
 ```
 
 ---

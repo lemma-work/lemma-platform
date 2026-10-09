@@ -10,6 +10,7 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `function.contacts.update` | PUT | `/pods/{pod_id}/functions/{function_name}/contacts` | Open a Function to Contacts |
 | `function.create` | POST | `/pods/{pod_id}/functions` | Create Function |
 | `function.delete` | DELETE | `/pods/{pod_id}/functions/{function_name}` | Delete Function |
 | `function.get` | GET | `/pods/{pod_id}/functions/{function_name}` | Get Function |

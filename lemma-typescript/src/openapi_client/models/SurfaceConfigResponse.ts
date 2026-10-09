@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { SurfaceChannelRouteResponse } from './SurfaceChannelRouteResponse.js';
+import type { SurfaceContactsConfig } from './SurfaceContactsConfig.js';
 import type { SurfaceGroupsConfig } from './SurfaceGroupsConfig.js';
 import type { SurfaceIdentityConfigResponse } from './SurfaceIdentityConfigResponse.js';
 import type { SurfaceSendPolicyConfig } from './SurfaceSendPolicyConfig.js';
@@ -13,6 +14,7 @@ import type { SurfaceTelegramConfigInput } from './SurfaceTelegramConfigInput.js
  */
 export type SurfaceConfigResponse = {
     channels?: Array<SurfaceChannelRouteResponse>;
+    contacts?: SurfaceContactsConfig;
     groups?: SurfaceGroupsConfig;
     identity?: SurfaceIdentityConfigResponse;
     send_policy?: SurfaceSendPolicyConfig;

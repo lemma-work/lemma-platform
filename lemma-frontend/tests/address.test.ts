@@ -32,6 +32,7 @@ const PLACES: [Address, string][] = [
     [at("run:run_42"), "/t/" + POD + "/run/run_42"],
     [at("workflow:budget-sign-off"), "/t/" + POD + "/workflow/budget-sign-off"],
     [at("space:groups"), "/t/" + POD + "/groups"],
+    [at("space:contacts"), "/t/" + POD + "/contacts"],
     [at("group:7f3c9a2e-4b1d-4e8a"), "/t/" + POD + "/group/7f3c9a2e-4b1d-4e8a"],
     [at("space:settings"), "/t/" + POD + "/settings"],
     [at("space:about"), "/t/" + POD + "/about"],

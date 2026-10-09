@@ -128,7 +128,9 @@ async def test_a_signed_link_is_issued(pod):
     link = await alice.signed_link_to(uploaded["path"], in_pod=the_pod)
 
     assert link, link
-    assert any(str(v).startswith("http") or "/s/" in str(v) for v in link.values()), link
+    assert any(
+        str(v).startswith("http") or "/public/s/" in str(v) for v in link.values()
+    ), link
 
 
 @scenario("Someone outside the pod cannot read its files")

@@ -118,6 +118,26 @@ class FunctionSettings(BaseSettings):
         default=None,
         description="Backend URL reachable from function sandboxes",
     )
+    function_contact_calls_per_day: int = Field(
+        default=50,
+        ge=0,
+        le=10_000,
+        description=(
+            "How many times one contact may run one function opened to "
+            "contacts in a day. A contact's conversation can ask for a call "
+            "on every turn, and each one spends the pod's sandbox time on "
+            "somebody who is not a member. Zero refuses every call."
+        ),
+    )
+    function_contact_call_wait_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        le=600,
+        description=(
+            "How long a contact's conversation waits on one function call "
+            "before cancelling it and telling the contact it is still in hand."
+        ),
+    )
 
 
 class FunctionRevisionSettings(BaseSettings):

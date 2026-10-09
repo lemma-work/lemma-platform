@@ -70,3 +70,17 @@ def test_resolution_is_shared_by_every_name_addressed_call() -> None:
         transport.calls.clear()
         call("nightly")
         assert transport.calls[0]["name"] == "nightly"
+
+
+def test_runs_can_ask_for_one_status_or_leave_out_the_skips() -> None:
+    from lemma_sdk.openapi_client.models.schedule_run_status import ScheduleRunStatus
+
+    transport = RecordingTransport([])
+    schedule_id = uuid4()
+    schedules = PodSchedules(transport, pod_id=POD)
+
+    schedules.runs(str(schedule_id), status="dead_lettered")
+    schedules.runs(str(schedule_id), skipped=False)
+
+    assert transport.calls[0]["status"] == ScheduleRunStatus.DEAD_LETTERED
+    assert transport.calls[1]["skipped"] is False

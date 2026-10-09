@@ -19,7 +19,8 @@ from app.modules.datastore.tests.e2e.fake_document_processors import (
     FakeDocumentProcessorServer,
 )
 from app.modules.test_support.e2e.prerequisites import require_module
-from app.modules.test_support.e2e.waiters import wait_for_status
+from app.modules.test_support.e2e.waiters import eventually, wait_for_status
+from app.modules.test_support.e2e.worker_process import ProductionWorkerProcess
 
 pytestmark = [pytest.mark.e2e, pytest.mark.worker]
 
@@ -287,13 +288,33 @@ async def test_kreuzberg_extractor_behaviour_matrix(
         assert fake_document_processor_server.requests["kreuzberg:chunk"] == 1
 
 
+#: How long an upload may take to reach its worker by the event path: well
+#: past what it takes, and short of the minute after which the pending-file
+#: dispatch cron would pick the file up instead. A miss then fails here, with
+#: the worker's log, instead of passing a minute late with nothing to show why.
+_EVENT_PATH_SECONDS = 25.0
+
+
+async def _within_the_event_path(worker: ProductionWorkerProcess, waiting):
+    try:
+        return await waiting
+    except pytest.fail.Exception as exc:
+        pytest.fail(
+            f"{exc}\n\nThe upload did not reach the worker by its event; the "
+            "worker said:\n" + worker.read_log_tail(max_characters=20_000)
+        )
+
+
 @pytest.mark.asyncio
 async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
     pod_api: DatastoreApi,
     db_manager,
     document_worker,
+    fake_document_processor_server: FakeDocumentProcessorServer,
 ):
-    async with document_worker("kreuzberg"):
+    asked_key = "kreuzberg:provider-error.pdf"
+    asked_before = fake_document_processor_server.requests[asked_key]
+    async with document_worker("kreuzberg") as worker:
         malformed = await pod_api.upload_file(
             "malformed.pdf",
             build_pdf_bytes("Malformed processor response"),
@@ -309,7 +330,15 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
         # A response we cannot make sense of is a DOCUMENT-level failure: the
         # extractor answered, we just can't use the answer. It spends an attempt
         # and goes terminal so a poison file can't loop forever.
-        failed = await _wait_for_status(pod_api, malformed["path"], {"FAILED"})
+        failed = await _within_the_event_path(
+            worker,
+            _wait_for_status(
+                pod_api,
+                malformed["path"],
+                {"FAILED"},
+                timeout_seconds=_EVENT_PATH_SECONDS,
+            ),
+        )
         assert failed["last_processing_error"].endswith("document processing failed")
         assert "CANARY_DATASTORE_PROVIDER_SECRET" not in str(failed)
         assert (await pod_api.list_children(malformed["path"]))["items"] == []
@@ -318,6 +347,25 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
         # document. It must go back to PENDING with its attempt refunded, or an
         # extractor outage would burn the 3-attempt budget and permanently fail
         # perfectly good user documents.
+        #
+        # A file is PENDING before it is processed, too, so PENDING alone
+        # proves nothing: this used to pass before the extractor was ever
+        # asked, and tear the worker down mid-job. Once the extractor has been
+        # asked, the file was claimed (PROCESSING), so PENDING again can only
+        # be the release.
+        async def times_asked() -> int:
+            return fake_document_processor_server.requests[asked_key]
+
+        await _within_the_event_path(
+            worker,
+            eventually(
+                label="the extractor to be asked about provider-error.pdf",
+                probe=times_asked,
+                done=lambda asked: asked > asked_before,
+                timeout_seconds=_EVENT_PATH_SECONDS,
+                interval_seconds=0.1,
+            ),
+        )
         released = await _wait_for_status(pod_api, provider_error["path"], {"PENDING"})
         assert released["processing_attempts"] == 0, (
             "a 5xx from the extractor must not spend the file's retry budget"

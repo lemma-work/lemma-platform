@@ -179,7 +179,19 @@ async def test_a_real_worker_holds_the_budget_and_stops_cleanly(worker_process, 
         timeout_seconds=30.0,
         interval_seconds=0.5,
     )
-    assert '"event": "redis.stream.unread_trimmed"' in logs()
+
+    # Waited for, not read once: `record_gap` writes the gap key and only then
+    # logs the loss, so the key can be seen before the line reaches the log.
+    async def log_text() -> str:
+        return logs()
+
+    await eventually(
+        label="the unread trim to be reported",
+        probe=log_text,
+        done=lambda text: '"event": "redis.stream.unread_trimmed"' in text,
+        timeout_seconds=10.0,
+        interval_seconds=0.2,
+    )
 
     proc.terminate()
     assert proc.wait(timeout=60) == 0, logs()[-4000:]

@@ -129,6 +129,31 @@ def test_service_worker_answers_navigations_and_nothing_else():
     assert "addAll" not in body
 
 
+def test_service_worker_lets_the_browser_send_the_navigation():
+    """A re-fetched navigation reaches the server as `Sec-Fetch-Dest: empty`.
+
+    A private app's host answers that with a bare 401 instead of its sign-in
+    page, so a lapsed cookie could never be renewed. The preload is the
+    browser's own request, with the navigation's metadata intact.
+    """
+    body = render(make_app(), ".lemma/sw.js").content.decode("utf-8")
+
+    assert "navigationPreload.enable()" in body
+    assert "event.preloadResponse" in body
+
+
+def test_the_workers_tag_changes_with_the_worker(monkeypatch):
+    """An installed worker revalidated against an unchanged tag is kept forever."""
+    app = make_app()
+    manifest = assets.reserved_asset_etag(app, "manifest.webmanifest")
+    worker = assets.reserved_asset_etag(app, "sw.js")
+
+    monkeypatch.setattr(assets, "_SERVICE_WORKER", "// the next worker")
+
+    assert assets.reserved_asset_etag(app, "sw.js") != worker
+    assert assets.reserved_asset_etag(app, "manifest.webmanifest") == manifest
+
+
 @pytest.mark.parametrize("size", ICON_SIZES)
 def test_icon_is_a_square_png_at_the_size_the_head_asked_for(size):
     body, media_type, _ = render(make_app(), f".lemma/icon-{size}.png")

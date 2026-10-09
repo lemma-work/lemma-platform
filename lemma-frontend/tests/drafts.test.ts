@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readDraft, writeDraft } from "../src/thread/drafts.ts";
+import { draftKeyFor, readDraft, writeDraft } from "../src/thread/drafts.ts";
 import { key, type KeyValueStore } from "../src/session/storage.ts";
 
 /** Unsent words, kept per conversation across switching away and back. */
@@ -47,6 +47,23 @@ test("drafts abandoned for good are dropped, oldest first", () => {
     assert.equal(readDraft(browser, "pod:c0"), "");
     assert.equal(readDraft(browser, "pod:c44"), "draft 44");
     assert.equal(Object.keys(JSON.parse(browser.data.get(key("drafts")) ?? "{}")).length, 40);
+});
+
+test("two conversations with one teammate are two drafts, not one", () => {
+    assert.equal(draftKeyFor("pod", "c1"), "pod:c1");
+    assert.notEqual(draftKeyFor("pod", "c1"), draftKeyFor("pod", "c2"));
+});
+
+test("a pane with no conversation yet keeps a draft of its own", () => {
+    /* The chat beside a doc, before anything is sent: named for the doc, so
+       the words wait for it instead of following somebody to the next one. */
+    assert.equal(draftKeyFor("pod", null, "file:notes.md"), "pod:new:file:notes.md");
+    assert.notEqual(draftKeyFor("pod", null, "file:notes.md"), draftKeyFor("pod", null, "file:plan.md"));
+    /* The main pane, which is about nothing in particular, keeps the one
+       "new" draft it always had. */
+    assert.equal(draftKeyFor("pod", null), "pod:new");
+    /* And once the conversation exists, what it is about stops mattering. */
+    assert.equal(draftKeyFor("pod", "c1", "file:notes.md"), "pod:c1");
 });
 
 test("storage that is broken or refuses writes costs the draft, not the page", () => {

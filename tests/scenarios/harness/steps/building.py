@@ -145,6 +145,7 @@ class BuildingSteps:
         agent: str | None = None,
         workflow: str | None = None,
         instruction: str | None = None,
+        filter_instruction: str | None = None,
     ) -> JSON:
         body: JSON = {
             "name": named or a_name_for("schedule"),
@@ -157,6 +158,8 @@ class BuildingSteps:
             body["workflow_name"] = workflow
         if instruction:
             body["instruction"] = instruction
+        if filter_instruction:
+            body["filter_instruction"] = filter_instruction
         return await self.api.post(
             f"/pods/{in_pod['id']}/schedules",
             what=f"{self.label} creating a {kind} schedule",
@@ -172,9 +175,15 @@ class BuildingSteps:
     async def deletes_schedule(self, schedule: JSON, *, in_pod: JSON) -> None:
         await self.api.delete(f"/pods/{in_pod['id']}/schedules/{schedule['id']}")
 
-    async def runs_of_schedule(self, schedule: JSON, *, in_pod: JSON) -> list[JSON]:
+    async def runs_of_schedule(
+        self, schedule: JSON, *, in_pod: JSON, skipped: bool | None = None
+    ) -> list[JSON]:
+        params = {} if skipped is None else {"skipped": str(skipped).lower()}
         return items_of(
-            await self.api.get(f"/pods/{in_pod['id']}/schedules/{schedule['id']}/runs")
+            await self.api.get(
+                f"/pods/{in_pod['id']}/schedules/{schedule['id']}/runs",
+                params=params,
+            )
         )
 
     async def is_refused_creating_a_schedule(
@@ -185,6 +194,7 @@ class BuildingSteps:
         config: JSON | None = None,
         agent: str | None = None,
         instruction: str | None = None,
+        filter_instruction: str | None = None,
     ) -> int:
         body: JSON = {
             "name": f"bad_{uuid4().hex[:8]}",
@@ -195,6 +205,8 @@ class BuildingSteps:
             body["agent_name"] = agent
         if instruction:
             body["instruction"] = instruction
+        if filter_instruction:
+            body["filter_instruction"] = filter_instruction
         response = await self.api.call(
             "POST",
             f"/pods/{in_pod['id']}/schedules",

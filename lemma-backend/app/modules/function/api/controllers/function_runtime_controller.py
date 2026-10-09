@@ -14,6 +14,7 @@ from app.modules.function.application.function_runtime_gateway import (
     RuntimeStateRejected,
 )
 from app.core.authorization.delegation import WorkloadPrincipalType
+from app.core.authorization.function_run import FunctionRunClaims
 from app.modules.function.domain.entities import FunctionSessionPrincipal
 from app.modules.function.contracts.runtime import (
     RuntimeEventResponse,
@@ -29,6 +30,14 @@ router = APIRouter(
 
 
 def _principal(request: Request) -> FunctionSessionPrincipal:
+    run_claims = getattr(request.state, "function_run_claims", None)
+    if isinstance(run_claims, FunctionRunClaims):
+        return FunctionSessionPrincipal(
+            pod_id=run_claims.pod_id,
+            function_id=run_claims.function_id,
+            run_id=run_claims.run_id,
+            revision_hash=run_claims.revision_hash,
+        )
     user = getattr(request.state, "user", None)
     claims = getattr(request.state, "delegation_claims", None)
     if (

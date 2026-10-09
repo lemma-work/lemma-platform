@@ -12,7 +12,7 @@ or surfaces; target modules decide how to execute the fire.
 | --- | --- |
 | API routers | Pod schedule CRUD and public webhook ingress/verification |
 | Redis consumers | Schedule commands, datastore events, pod deletion, scheduler notifications |
-| streaq task | Evaluate LLM filters off-request |
+| streaq task | Judge webhook events against a schedule's filter, as a decision, off-request |
 | Worker poller | Claims due TIME schedules with `FOR UPDATE SKIP LOCKED` and advances their cursor |
 | Published stream | `schedule_events` |
 
@@ -120,9 +120,12 @@ flowchart LR
     T["Cron / once (in the schedule's zone)"] --> N["Normalized schedule event"]
     H["Webhook"] --> M["Match source + metadata"] --> N
     D["Datastore event"] --> Q["Match table + operation"] --> N
-    N --> F{"LLM filter?"}
+    N --> F{"Filter?"}
     F -- no --> E["schedule.fired stream"]
-    F -- yes --> J["streaq filter task"] --> E
+    F -- yes --> J["decision: should_proceed?"]
+    J -- yes --> E
+    J -- no or can't tell --> K["FILTERED run, with the answers"]
+    J -- provider down --> R["retry, then DEAD_LETTERED"]
     E --> A["agent target"]
     E --> W["workflow target"]
     E --> S["surface target"]
@@ -138,6 +141,43 @@ including the poller's own retirements, so no schedule goes inactive silently.
 A schedule whose target was deleted keeps its row (`workflow_id` and `agent_id`
 are `SET NULL`) and records each firing as failed saying the target is missing.
 Publishers use the shared transactional outbox/core Redis Streams bus.
+
+### Filters
+
+A `filter_instruction` is asked through `decisions.contracts.decide` as a closed
+question -- `should_proceed`, a yes or no -- together with any closed questions
+the schedule's `filter_output_schema` declares (free-text and open-ended fields
+are left out and logged). The answers become the fire's `llm_output`, with a
+`_decision` block naming the provider, the model, whether it could not tell, and
+each answer's confidence. Every filter is judged in the `handle_llm_filter_task`
+streaq task, whichever way its event arrived: a webhook event straight from the
+webhook handler, a table change from the datastore consumer once its `when`
+conditions match, carrying the changed row's owner so the fire runs as them.
+No event stream waits on a model, and both paths get the outcomes below.
+
+The provider is the deployment's (`DECISION_PROVIDER`); with no Typesafe key
+it is the deployment's own model, so filters need nothing beyond a configured
+model.
+
+| Outcome | Recorded as |
+| --- | --- |
+| Yes | `schedule.fired`, then the usual run |
+| No, or could not tell | a `FILTERED` run carrying the answers; `last_fire_status` `FILTERED` |
+| Provider unavailable or rate-limited | retried with backoff (up to six tries), then `DEAD_LETTERED` as `ScheduleFilterUnavailable` -- never `FAILED`, which run recovery would send past the filter |
+| Spend limit, event too large, no provider, invalid questions | `DEAD_LETTERED` at once (`ScheduleFilterQuotaExhausted`, `ScheduleFilterEventTooLarge`, `ScheduleFilterNotConfigured`, `ScheduleFilterInvalid`) |
+
+A redelivered event that already has a run is not judged again. (Two
+deliveries racing each other can both be judged, and billed, within the length
+of one decision; only one run is kept.) The failure breaker passes over
+`FILTERED` runs and over `ScheduleFilterUnavailable` and
+`ScheduleFilterNotConfigured` dead letters: a skip is not a failure, and a
+provider outage or a deployment with no provider is the operator's to fix, not
+the schedule's -- counting either would switch off every filtered schedule at
+once. A spent budget, an event too large to judge and an invalid filter are the
+pod's or the schedule's, and are counted. The run list takes `status` and `skipped` filters; partial indexes
+on `status <> 'FILTERED'` keep the breaker's streak and a history without skips
+from walking past them. A `TIME` schedule refuses a new filter -- no event ever
+reaches it -- while one saved before stays editable and can be cleared.
 
 ## Authorization and security
 

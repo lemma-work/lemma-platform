@@ -23,7 +23,12 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceTelegramConfig,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+from app.modules.agent_surfaces.domain.surface_config import (
+    ContactAnswer,
+    SurfaceContactPolicy,
+)
 from app.modules.apps.contracts import get_ready_pod_app_by_name
+from app.modules.pod.contracts.members import pod_member_id
 from app.modules.connectors.contracts import AccountNotFoundError
 
 # Asserts that this person owns this account, raising ``AccountNotFoundError``
@@ -218,6 +223,38 @@ async def resolve_slack_config(
     return SurfaceSlackConfig(app_name=app.name)
 
 
+async def resolve_contact_policy(
+    *,
+    uow,
+    pod_id: UUID,
+    requested: SurfaceContactPolicy,
+    current: SurfaceContactPolicy | None,
+    ctx,
+) -> SurfaceContactPolicy:
+    """The contact policy to store: who answers, and who looks after them.
+
+    Turning contacts on with nobody named makes the person turning them on the
+    one their conversations belong to -- the way bringing a bot into a group
+    makes that member answer for it. Whoever is named must be in the pod: a
+    conversation belongs to somebody, and questions passed on must reach
+    somebody who can act on them.
+    """
+    looked_after_by = requested.looked_after_by or (
+        current.looked_after_by if current is not None else None
+    )
+    if requested.answer is not ContactAnswer.OFF and looked_after_by is None:
+        looked_after_by = getattr(ctx, "user_id", None)
+    if looked_after_by is not None and (
+        await pod_member_id(uow, pod_id, looked_after_by) is None
+    ):
+        raise AgentSurfaceValidationError(
+            "Contacts must be looked after by a member of this pod"
+        )
+    return SurfaceContactPolicy(
+        answer=requested.answer, looked_after_by=looked_after_by
+    )
+
+
 async def resolve_surface_config(
     *,
     uow,
@@ -240,6 +277,13 @@ async def resolve_surface_config(
         pod_id=pod_id,
         platform=platform,
         app_name=config_input.slack.app_name,
+        ctx=ctx,
+    )
+    config.contacts = await resolve_contact_policy(
+        uow=uow,
+        pod_id=pod_id,
+        requested=config.contacts,
+        current=None,
         ctx=ctx,
     )
     return config
@@ -285,5 +329,16 @@ async def merge_surface_config(
     if "groups" in config_input.model_fields_set:
         updates["groups"] = SurfaceGroupPolicy(
             answers_outsiders=config_input.groups.answers_outsiders
+        )
+    if "contacts" in config_input.model_fields_set:
+        updates["contacts"] = await resolve_contact_policy(
+            uow=uow,
+            pod_id=pod_id,
+            requested=SurfaceContactPolicy(
+                answer=config_input.contacts.answer,
+                looked_after_by=config_input.contacts.looked_after_by,
+            ),
+            current=existing.contacts,
+            ctx=ctx,
         )
     return existing.model_copy(update=updates)
