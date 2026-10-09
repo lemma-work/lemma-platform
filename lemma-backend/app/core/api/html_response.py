@@ -29,6 +29,11 @@ def build_asset_response(
 
     - Entrypoints (``index.html``) carry injected pod context, so they are
       ``no-cache`` (always revalidate; the ETag still enables 304).
+    - Any other HTML page revalidates too. A bundler hashes the names of the
+      scripts and styles it emits, never of a page: ``report.html`` keeps its
+      name across releases, so an immutable copy served last year's page to
+      everyone who had opened it, and kept every request -- with the host's
+      repairs on it -- from reaching the server at all.
     - Other assets are content-hashed by the bundler, so they are immutable.
     - A ``private`` asset is one only some people may read. It is kept out of
       shared caches and revalidated on every use, so each read reaches the
@@ -36,7 +41,7 @@ def build_asset_response(
     """
     if private:
         cache_control = "private, no-cache"
-    elif is_entrypoint:
+    elif is_entrypoint or media_type.startswith("text/html"):
         cache_control = "public, no-cache"
     else:
         cache_control = "public, max-age=31536000, immutable"
