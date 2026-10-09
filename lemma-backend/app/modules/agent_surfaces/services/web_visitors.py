@@ -29,6 +29,7 @@ from uuid import UUID
 
 import jwt
 
+from app.core.public_web import public_web_altcha_enabled
 from app.core.crypto.factory import get_secret_signer
 from app.core.email.email_sender import EmailNotConfiguredError, EmailSender
 from app.core.email.transactional import render_transactional_email
@@ -191,7 +192,10 @@ class WebVisitors:
         """What a page solves before it starts an anonymous session, or before
         it asks for a code: ``{"enabled": false}`` when protection is off."""
         try:
-            return await issue_challenge(CODE_PROOF if for_code else SESSION_PROOF)
+            return await issue_challenge(
+                CODE_PROOF if for_code else SESSION_PROOF,
+                enabled=public_web_altcha_enabled(),
+            )
         except RuntimeError as exc:
             raise refused(
                 "The security check is unavailable. Try again shortly.",
@@ -202,7 +206,9 @@ class WebVisitors:
     @staticmethod
     async def _prove_human(payload: str | None, *, purpose: str) -> None:
         try:
-            await verify_proof(payload, purpose=purpose)
+            await verify_proof(
+                payload, purpose=purpose, enabled=public_web_altcha_enabled()
+            )
         except AltchaRejected as exc:
             raise refused(
                 "The security check didn't pass. Try again.", 400, "altcha_failed"

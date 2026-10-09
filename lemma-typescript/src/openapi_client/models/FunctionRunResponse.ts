@@ -11,7 +11,7 @@ export type FunctionRunResponse = {
     /**
      * Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call (which runs as the function itself, with no member), or `anonymous`.
      */
-    actor: string;
+    actor?: (string | null);
     completed_at: (string | null);
     contact_id?: (string | null);
     created_at: (string | null);

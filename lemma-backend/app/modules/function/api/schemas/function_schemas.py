@@ -265,12 +265,15 @@ class FunctionRunResponse(BaseModel):
     revision_hash: str | None = None
     user_id: UUID | None = None
     contact_id: UUID | None = None
-    actor: str = Field(
+    # Optional in the schema, though the server always sends it: an SDK built
+    # from this spec must still read runs from a server that predates it.
+    actor: str | None = Field(
+        default=None,
         description=(
             "Who the run acted for: `user:{id}` for a member, `contact:{id}` "
             "for a contact's call (which runs as the function itself, with no "
             "member), or `anonymous`."
-        )
+        ),
     )
     input_data: JsonObject | None = None
     output_data: JsonObject | None = None
@@ -293,12 +296,15 @@ class FunctionRunSummaryResponse(BaseModel):
     function_id: UUID
     user_id: UUID | None = None
     contact_id: UUID | None = None
-    actor: str = Field(
+    # Optional in the schema, though the server always sends it: an SDK built
+    # from this spec must still read runs from a server that predates it.
+    actor: str | None = Field(
+        default=None,
         description=(
             "Who the run acted for: `user:{id}` for a member, `contact:{id}` "
             "for a contact's call (which runs as the function itself, with no "
             "member), or `anonymous`."
-        )
+        ),
     )
     status: FunctionRunStatus
     started_at: datetime | None

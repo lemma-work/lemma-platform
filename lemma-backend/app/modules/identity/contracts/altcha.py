@@ -1,9 +1,9 @@
 """The proof-of-work sign-in asks for, for other doors strangers knock on.
 
-The same Altcha challenge, the same ``AUTH_ALTCHA_ENABLED`` switch, and the same
-one-use store as the auth endpoints, so a deployment that turned bot protection
-on gets it everywhere a stranger can make the platform do work. ``purpose``
-keeps a proof solved for one door from opening another.
+The same Altcha challenge and one-use store as the auth endpoints. Each door
+says whether it asks for one (``enabled``; sign-in's ``AUTH_ALTCHA_ENABLED``
+when it does not say), and ``purpose`` keeps a proof solved for one door from
+opening another.
 """
 
 from __future__ import annotations
@@ -18,18 +18,24 @@ from app.modules.identity.services.auth_abuse import (
 __all__ = ["AltchaRejected", "issue_challenge", "verify_proof"]
 
 
-async def issue_challenge(purpose: str) -> Mapping[str, object]:
+async def issue_challenge(
+    purpose: str, *, enabled: bool | None = None
+) -> Mapping[str, object]:
     """A challenge for the browser to solve, or ``{"enabled": false}``.
 
     The Altcha wire object, passed to the page as is. ``RuntimeError`` when
     protection is on and cannot issue one (no key, no store).
     """
-    return await get_auth_abuse_store().issue_altcha(purpose)
+    return await get_auth_abuse_store().issue_altcha(purpose, enabled=enabled)
 
 
-async def verify_proof(payload: str | None, *, purpose: str) -> None:
+async def verify_proof(
+    payload: str | None, *, purpose: str, enabled: bool | None = None
+) -> None:
     """Accept a solved challenge once, or raise ``AltchaRejected``.
 
     Does nothing while protection is off.
     """
-    await get_auth_abuse_store().verify_altcha(payload, purpose=purpose)
+    await get_auth_abuse_store().verify_altcha(
+        payload, purpose=purpose, enabled=enabled
+    )

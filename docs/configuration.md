@@ -530,9 +530,18 @@ PUBLIC_PAGES_URL=https://pages.example.com
 ```
 
 With `PUBLIC_PAGES_URL` set, hosted pages answer only on that host, and that
-origin -- not `API_URL`'s -- is the one every widget allows. `AUTH_ALTCHA_ENABLED`
-also puts a proof-of-work in front of starting an anonymous chat and sending an
-email code.
+origin -- not `API_URL`'s -- is the one every widget allows.
+
+Bot protection is on by default: a visitor's browser solves an Altcha
+proof-of-work before an anonymous chat starts and before an email code is sent.
+It needs nothing configured and is independent of sign-in's
+`AUTH_ALTCHA_ENABLED`; without `AUTH_ALTCHA_HMAC_KEY`, challenges are signed
+with a key derived from `SECRET_ENCRYPTION_KEY`. Turn it off only behind
+protection of your own:
+
+```dotenv
+PUBLIC_WEB_ALTCHA_ENABLED=false
+```
 
 ## Authentication and email
 

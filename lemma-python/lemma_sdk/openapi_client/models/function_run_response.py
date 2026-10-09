@@ -24,14 +24,14 @@ class FunctionRunResponse:
     """Function run response.
 
     Attributes:
-        actor (str): Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call (which runs as
-            the function itself, with no member), or `anonymous`.
         completed_at (datetime.datetime | None):
         created_at (datetime.datetime | None):
         function_id (UUID):
         id (UUID):
         started_at (datetime.datetime | None):
         status (FunctionRunStatus): Status of a function run.
+        actor (None | str | Unset): Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call
+            (which runs as the function itself, with no member), or `anonymous`.
         contact_id (None | Unset | UUID):
         error (None | str | Unset):
         input_data (JsonObject | None | Unset):
@@ -43,13 +43,13 @@ class FunctionRunResponse:
         user_id (None | Unset | UUID):
     """
 
-    actor: str
     completed_at: datetime.datetime | None
     created_at: datetime.datetime | None
     function_id: UUID
     id: UUID
     started_at: datetime.datetime | None
     status: FunctionRunStatus
+    actor: None | str | Unset = UNSET
     contact_id: None | Unset | UUID = UNSET
     error: None | str | Unset = UNSET
     input_data: JsonObject | None | Unset = UNSET
@@ -63,8 +63,6 @@ class FunctionRunResponse:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.json_object import JsonObject
-
-        actor = self.actor
 
         completed_at: None | str
         if isinstance(self.completed_at, datetime.datetime):
@@ -89,6 +87,12 @@ class FunctionRunResponse:
             started_at = self.started_at
 
         status = self.status.value
+
+        actor: None | str | Unset
+        if isinstance(self.actor, Unset):
+            actor = UNSET
+        else:
+            actor = self.actor
 
         contact_id: None | str | Unset
         if isinstance(self.contact_id, Unset):
@@ -156,7 +160,6 @@ class FunctionRunResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "actor": actor,
                 "completed_at": completed_at,
                 "created_at": created_at,
                 "function_id": function_id,
@@ -165,6 +168,8 @@ class FunctionRunResponse:
                 "status": status,
             }
         )
+        if actor is not UNSET:
+            field_dict["actor"] = actor
         if contact_id is not UNSET:
             field_dict["contact_id"] = contact_id
         if error is not UNSET:
@@ -191,7 +196,6 @@ class FunctionRunResponse:
         from ..models.json_object import JsonObject
 
         d = dict(src_dict)
-        actor = d.pop("actor")
 
         def _parse_completed_at(data: object) -> datetime.datetime | None:
             if data is None:
@@ -243,6 +247,15 @@ class FunctionRunResponse:
         started_at = _parse_started_at(d.pop("started_at"))
 
         status = FunctionRunStatus(d.pop("status"))
+
+        def _parse_actor(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        actor = _parse_actor(d.pop("actor", UNSET))
 
         def _parse_contact_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -358,13 +371,13 @@ class FunctionRunResponse:
         user_id = _parse_user_id(d.pop("user_id", UNSET))
 
         function_run_response = cls(
-            actor=actor,
             completed_at=completed_at,
             created_at=created_at,
             function_id=function_id,
             id=id,
             started_at=started_at,
             status=status,
+            actor=actor,
             contact_id=contact_id,
             error=error,
             input_data=input_data,

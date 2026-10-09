@@ -8545,9 +8545,16 @@
         "description": "Function run response.",
         "properties": {
           "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call (which runs as the function itself, with no member), or `anonymous`.",
-            "title": "Actor",
-            "type": "string"
+            "title": "Actor"
           },
           "completed_at": {
             "anyOf": [
@@ -8701,7 +8708,6 @@
         "required": [
           "id",
           "function_id",
-          "actor",
           "status",
           "started_at",
           "completed_at",
@@ -8726,9 +8732,16 @@
         "description": "Function run summary for list responses.",
         "properties": {
           "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "Who the run acted for: `user:{id}` for a member, `contact:{id}` for a contact's call (which runs as the function itself, with no member), or `anonymous`.",
-            "title": "Actor",
-            "type": "string"
+            "title": "Actor"
           },
           "completed_at": {
             "anyOf": [
@@ -8807,7 +8820,6 @@
         "required": [
           "id",
           "function_id",
-          "actor",
           "status",
           "started_at",
           "completed_at",

@@ -38,6 +38,16 @@ class PublicWebSettings(BaseSettings):
             "anybody, and tables opened to visitors."
         ),
     )
+    public_web_altcha_enabled: bool = Field(
+        default=True,
+        description=(
+            "Ask a visitor's browser to solve an Altcha proof-of-work before a "
+            "new web chat starts and before an email code is sent. On by "
+            "default, independent of sign-in's AUTH_ALTCHA_ENABLED, and needs "
+            "no key of its own: without AUTH_ALTCHA_HMAC_KEY the challenges "
+            "are signed with a key derived from the platform's signing key."
+        ),
+    )
     public_pages_url: str | None = Field(
         default=None,
         description=(
@@ -53,6 +63,10 @@ public_web_settings = PublicWebSettings()
 
 def public_web_enabled() -> bool:
     return public_web_settings.public_web_enabled
+
+
+def public_web_altcha_enabled() -> bool:
+    return public_web_settings.public_web_altcha_enabled
 
 
 def hosted_pages_base() -> str:

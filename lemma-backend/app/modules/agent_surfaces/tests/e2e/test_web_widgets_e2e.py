@@ -902,12 +902,14 @@ def _solved(challenge: dict) -> str:
 async def test_with_bot_protection_on_a_new_chat_takes_a_proof_of_work(
     authenticated_client: AsyncClient, test_pod, monkeypatch
 ):
-    from pydantic import SecretStr
-
+    """On by default, with nothing to configure: sign-in's switch stays off and
+    no HMAC key is set, as on a fresh self-hosted deployment."""
     from app.modules.identity.config import identity_settings
 
-    monkeypatch.setattr(settings, "auth_altcha_enabled", True)
-    monkeypatch.setattr(identity_settings, "auth_altcha_hmac_key", SecretStr("k" * 32))
+    assert public_web_settings.model_fields["public_web_altcha_enabled"].default
+    monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", True)
+    monkeypatch.setattr(settings, "auth_altcha_enabled", False)
+    monkeypatch.setattr(identity_settings, "auth_altcha_hmac_key", None)
     monkeypatch.setattr(identity_settings, "auth_altcha_max_number", 10_000)
     widget = await _widget(authenticated_client, test_pod["id"], name="Guarded")
     key = widget["public_key"]

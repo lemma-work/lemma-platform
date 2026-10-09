@@ -380,6 +380,8 @@ one:
   `/public/web` endpoint and hosted page answers 404, and no widget, open table
   or bot can be set to answer people outside until an operator turns it on.
   `PUBLIC_PAGES_URL` serves the hosted pages on their own cookieless origin.
+  New chats and code requests take an Altcha proof-of-work by default
+  (`PUBLIC_WEB_ALTCHA_ENABLED`), with no key to provision.
 - **Every public endpoint is under `/public/`.** The rule, its exceptions and
   the gate that holds it are in CONTRIBUTING.md.
 
