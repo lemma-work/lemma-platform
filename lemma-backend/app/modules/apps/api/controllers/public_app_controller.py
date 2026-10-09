@@ -48,6 +48,9 @@ router = APIRouter(
 )
 
 _SLUG_HEADER = "X-App-Public-Slug"
+# Host-only cookies the SuperTokens browser SDK keeps on each app host.
+_SESSION_MARKER = "st-last-access-token-update"
+_FRONT_TOKEN = "sFrontToken"
 
 
 def _loads_a_page(request: Request) -> bool:
@@ -155,6 +158,30 @@ async def _viewer_app_id(
     return claims.app_id if allowed else None
 
 
+def _expire_stale_session_marker(request: Request, response: Response) -> None:
+    """Drop the session marker a failed refresh left behind on this app host.
+
+    SuperTokens' browser SDK keeps ``sFrontToken`` and
+    ``st-last-access-token-update`` on each app host. A failed refresh expires
+    the first and keeps the second, which never expires, and from then on
+    ``doesSessionExist()`` on that host answers "no" from the marker without
+    asking. Signing in again renews the shared HttpOnly cookies but cannot
+    reach a marker on the app's host, so the app sent a signed-in person to
+    the portal, which saw the session and sent them straight back.
+
+    Without the marker the SDK asks the server once: a live session comes back
+    with a new front token, and an ended one is refused as before. It is done
+    here, on the page load, because each app bundles the SDK it was built
+    with; a fix in the SDK reaches a bundled app only when it is rebuilt.
+    """
+    cookies = request.cookies
+    if _SESSION_MARKER not in cookies or _FRONT_TOKEN in cookies:
+        return
+    response.delete_cookie(_SESSION_MARKER, path="/")
+    # A response that sets a cookie is this browser's alone.
+    response.headers["Cache-Control"] = "private, no-cache"
+
+
 async def _serve_host_asset(
     request: Request, use_cases: AppUseCasesDep, asset_path: str | None
 ) -> Response:
@@ -169,7 +196,10 @@ async def _serve_host_asset(
         viewer_app_id=viewer if isinstance(viewer, UUID) else None,
     )
     if asset is not None:
-        return app_asset_response(asset)
+        response = app_asset_response(asset)
+        if asset.is_entrypoint and _is_navigation(request):
+            _expire_stale_session_marker(request, response)
+        return response
     if host is None:
         # Not a hosted HTTPS app address (the desktop, or the API host with a
         # slug header): only published apps exist here, as they always have.

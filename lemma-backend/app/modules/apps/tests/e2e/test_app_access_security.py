@@ -261,6 +261,40 @@ async def test_a_navigation_through_the_install_worker_can_sign_in(
     assert opened.status_code == 200 and CONTENT in opened.text
 
 
+async def test_a_page_load_drops_the_session_marker_a_failed_refresh_left(
+    browser, hosted_app, authenticated_client
+):
+    """The marker alone made the app's SDK say "signed out" without asking.
+
+    The portal saw the live session and sent the person straight back, so
+    every sign-in ended where it started. Only a page load with the marker and
+    no front token is answered with the marker expired.
+    """
+    await establish(browser, authenticated_client, hosted_app.origin)
+    host = hosted_app.origin.removeprefix("https://")
+    marker = "st-last-access-token-update"
+    page = {"Accept": "text/html", "Sec-Fetch-Mode": "navigate"}
+    browser.cookies.set(marker, "1791545000000", domain=host)
+    browser.cookies.set("sFrontToken", "front", domain=host)
+
+    signed_in = await browser.get(hosted_app.origin + "/", headers=page)
+    assert signed_in.status_code == 200 and CONTENT in signed_in.text
+    assert marker not in signed_in.headers.get("set-cookie", "")
+
+    browser.cookies.delete("sFrontToken", domain=host)
+    script = await browser.get(
+        hosted_app.origin + "/", headers={"Accept": "*/*", "Sec-Fetch-Dest": "script"}
+    )
+    assert script.status_code == 200
+    assert marker not in script.headers.get("set-cookie", "")
+
+    stale = await browser.get(hosted_app.origin + "/", headers=page)
+    assert stale.status_code == 200 and CONTENT in stale.text
+    expired = [c for c in stale.headers.get_list("set-cookie") if c.startswith(marker)]
+    assert len(expired) == 1 and "Max-Age=0" in expired[0] and "Path=/" in expired[0]
+    assert stale.headers["cache-control"] == "private, no-cache"
+
+
 async def test_private_missing_document_navigation_offers_workspace_recovery(
     browser, hosted_app, authenticated_client
 ):
