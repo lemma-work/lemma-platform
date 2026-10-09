@@ -29,6 +29,9 @@ from app.modules.contacts.contracts.visitor_sessions import (
 )
 
 
+#: The most outside links one conversation is read for.
+_MOST_OUTSIDE_LINKS = 8
+
 #: How a web widget's conversations are named where a platform would be.
 WEB_PLATFORM = "WEB"
 
@@ -88,6 +91,9 @@ async def outside_link(
                     ),
                 )
             )
+            # A conversation has a link or two; more than this many outside
+            # links is already a conversation naming nobody (see below).
+            .limit(_MOST_OUTSIDE_LINKS)
         )
     ).all()
     on_the_web, web_contact = await visitor_conversation_contact(
