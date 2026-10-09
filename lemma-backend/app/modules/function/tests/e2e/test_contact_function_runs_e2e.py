@@ -37,6 +37,7 @@ from app.modules.agent.tools.contact_tools import (
     ContactFunctionRequest,
     build_contact_toolset,
 )
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.contacts.infrastructure.models import ContactModel
 from app.modules.function.config import function_settings
 from app.modules.function.contracts.contact_functions import (
@@ -137,7 +138,9 @@ async def test_a_contacts_call_runs_for_nobody_and_is_told_its_contact(
     )
     ctx = SimpleNamespace(
         deps=SimpleNamespace(
-            contact_id=contact_id, pod_id=UUID(pod_id), conversation_id=uuid4()
+            audience=Audience.contact(contact_id),
+            pod_id=UUID(pod_id),
+            conversation_id=uuid4(),
         ),
         tool_call_id="call-1",
     )
