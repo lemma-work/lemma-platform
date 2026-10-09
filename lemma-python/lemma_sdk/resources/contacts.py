@@ -30,7 +30,9 @@ class PodContacts(BoundResource):
     the handles they are known by.
     """
 
-    def list(self, *, limit: int = 50, before: str | None = None) -> ContactListResponse:
+    def list(
+        self, *, limit: int = 50, before: str | None = None
+    ) -> ContactListResponse:
         """The pod's contacts, newest first.
 
         Page by passing the last page's ``next_before`` as ``before``; it is
