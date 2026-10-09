@@ -7,7 +7,7 @@ import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
-import { readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
+import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
 import { readOpening } from "./public-rows";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
@@ -646,7 +646,7 @@ export const liveSource: PodSource = {
         await lemma(podId).notifications.respond(notificationId, { summary: answer });
     },
     async listContacts(podId) {
-        return readContacts(await lemma(podId).contacts.list(podId, { limit: 200 })).items;
+        return everyPage(async (before) => readContacts(await lemma(podId).contacts.list(podId, { limit: 200, before })));
     },
     async renameContact(podId, contactId, name) {
         return readContact(await lemma(podId).contacts.rename(podId, contactId, name));
@@ -695,15 +695,24 @@ export const liveSource: PodSource = {
     },
     async contactReach(podId) {
         const client = lemma(podId);
-        const [tables, functions] = await Promise.all([client.tables.list({ limit: 100 }), client.functions.list({ limit: 100 })]);
+        const [tables, functions] = await Promise.all([
+            everyPage(async (pageToken) => {
+                const page = await client.tables.list({ limit: 100, pageToken });
+                return { items: page.items ?? [], next: page.next_page_token };
+            }),
+            everyPage(async (pageToken) => {
+                const page = await client.functions.list({ limit: 100, pageToken });
+                return { items: page.items ?? [], next: page.next_page_token };
+            }),
+        ]);
         return {
-            tables: (tables.items ?? []).map((table) => ({
+            tables: tables.map((table) => ({
                 name: table.name,
                 contactOwned: Boolean(table.contact_owned),
                 perPerson: Boolean(table.enable_rls),
                 contactColumns: (table as { contact_columns?: string[] }).contact_columns ?? [],
             })),
-            functions: (functions.items ?? []).map((fn) => ({
+            functions: functions.map((fn) => ({
                 name: fn.name,
                 description: fn.description ?? null,
                 contactsInvoke: Boolean(fn.contacts_invoke),

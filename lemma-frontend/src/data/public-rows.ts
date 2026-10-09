@@ -6,6 +6,7 @@
  * they may write; the page only asks. Pure: wire mappers and sentences. */
 
 import type { TableOpeningResponse } from "lemma-sdk";
+import type { WebWidget, WidgetAnswer } from "./contacts";
 
 export type Audience = "anyone" | "contacts";
 
@@ -16,6 +17,9 @@ export interface OfferedColumn {
     required: boolean;
     options: string[];
     description: string | null;
+    /** The form control that asks for it (`email`, `select`, `textarea`, …),
+     *  decided by the table so every page draws the same one. */
+    input: string;
 }
 
 export interface TableOpening {
@@ -40,10 +44,18 @@ export function readOpening(wire: TableOpeningResponse): TableOpening {
             required: Boolean(column.required),
             options: column.options ?? [],
             description: column.description ?? null,
+            input: wireInput(column),
         })),
         audience: wire.audience === "anyone" || wire.audience === "contacts" ? wire.audience : null,
         columns: wire.columns ?? [],
     };
+}
+
+/** The column's form control. Read loosely: a server older than the field
+ *  sends none, and a plain text box asks for anything. */
+function wireInput(column: TableOpeningResponse["offered"][number]): string {
+    const input = (column as { input?: unknown }).input;
+    return typeof input === "string" && input ? input : "text";
 }
 
 /** What a column asks, as people outside will read it: its description, or
@@ -76,6 +88,21 @@ export function audienceChoices(): { value: Audience | "off"; label: string; not
     ];
 }
 
+/** What a web chat must answer for a table's form to reach the people the
+ *  table takes rows from: a chat for known people only turns strangers away. */
+export function widgetAnswerFor(audience: Audience): WidgetAnswer {
+    return audience === "contacts" ? "known" : "anyone";
+}
+
+/** The web chat a table's form goes through: one switched on, answering the
+ *  table's people. Null when there is none, and making one is the member's
+ *  choice — it is a key on the open web, never made behind their back. */
+export function doorFor(widgets: WebWidget[], audience: Audience): WebWidget | null {
+    const on = widgets.filter((widget) => widget.answer !== "off");
+    if (audience === "anyone") return on.find((widget) => widget.answer === "anyone") ?? null;
+    return on.find((widget) => widget.answer === "known") ?? on[0] ?? null;
+}
+
 /** The hosted form for a table, on the space's web chat. */
 export function formLink(pageUrl: string, table: string): string {
     return pageUrl + "?table=" + encodeURIComponent(table);
@@ -83,7 +110,7 @@ export function formLink(pageUrl: string, table: string): string {
 
 /** The script tag that draws the table's form where it is pasted. */
 export function formEmbed(embed: string, table: string): string {
-    return embed.replace(/\s+async><\/script>$/, ` data-lemma-table="${table}" async></script>`);
+    return embed.replace(/\s+async><\/script>$/, ` data-lemma-table="${escapeHtml(table)}" async></script>`);
 }
 
 /** Text as it may sit in HTML, inside an element or a quoted attribute. An
@@ -101,12 +128,12 @@ export function htmlFormSnippet(embed: string, table: string, columns: OfferedCo
     const fields = columns.map((column) => {
         const required = column.required ? " required" : "";
         const name = escapeHtml(column.name);
-        if (column.options.length) {
+        if (column.input === "select") {
             const options = column.options.map((option) => `<option>${escapeHtml(option)}</option>`).join("");
             return `  <select name="${name}"${required}>${options}</select>`;
         }
-        const type = column.type === "INTEGER" || column.type === "FLOAT" ? "number" : column.type === "BOOLEAN" ? "checkbox" : column.type === "DATE" ? "date" : "text";
-        return `  <input name="${name}" type="${type}"${required}>`;
+        if (column.input === "textarea") return `  <textarea name="${name}"${required}></textarea>`;
+        return `  <input name="${name}" type="${escapeHtml(column.input)}"${required}>`;
     });
     return [
         `<form method="post" data-lemma-table="${escapeHtml(table)}">`,

@@ -20,7 +20,6 @@ import {
 } from "@/data/contacts";
 import { isForbidden } from "@/session/auth-state";
 import { Modal } from "@/shell/modal";
-import { CopyButton } from "@/thread/copy-button";
 import {
     useContacts,
     useCreateWidget,
@@ -34,7 +33,7 @@ import {
     useWidgetChange,
     useWidgets,
 } from "./contact-queries";
-import { WidgetPlaces } from "./widget-places";
+import { SecretSheet, WidgetPlaces } from "./widget-places";
 
 /** A space's contacts: the people its bots answer who are not in it.
  *
@@ -205,16 +204,31 @@ function Widgets({ pod }: { pod: Pod }) {
     const remove = useRemoveWidget(pod.id);
     const [making, setMaking] = useState(false);
     const [revealed, setRevealed] = useState<{ widget: WebWidget; secret: string } | null>(null);
+    const [asking, setAsking] = useState<{ widget: WebWidget; to: "remove" | "rotate" } | null>(null);
+    const [rotating, setRotating] = useState(false);
     const [problem, setProblem] = useState<string | null>(null);
     const choices = useMemo(() => answerChoices(pod.name), [pod.name]);
 
     const rotate = async (widget: WebWidget) => {
         setProblem(null);
+        setRotating(true);
         try {
-            setRevealed({ widget, secret: await source.reissueWidget(pod.id, widget.id) });
+            const secret = await source.reissueWidget(pod.id, widget.id);
+            setAsking(null);
+            setRevealed({ widget, secret });
         } catch {
+            setAsking(null);
             setProblem("Couldn’t make a new secret. Try again.");
+        } finally {
+            setRotating(false);
         }
+    };
+    const removeIt = (widget: WebWidget) => {
+        setProblem(null);
+        remove.mutate(widget.id, {
+            onSuccess: () => setAsking(null),
+            onError: () => { setAsking(null); setProblem("Couldn’t remove it. Try again."); },
+        });
     };
 
     return (
@@ -252,8 +266,8 @@ function Widgets({ pod }: { pod: Pod }) {
                             </p>
                             <WidgetPlaces link={widget.pageUrl} embed={widget.embed} />
                             <div className="cwidget__actions">
-                                <button type="button" className="linkish" onClick={() => void rotate(widget)}>New signing secret</button>
-                                <button type="button" className="linkish" disabled={remove.isPending} onClick={() => remove.mutate(widget.id)}>Remove</button>
+                                <button type="button" className="linkish" onClick={() => setAsking({ widget, to: "rotate" })}>New signing secret</button>
+                                <button type="button" className="linkish" disabled={remove.isPending} onClick={() => setAsking({ widget, to: "remove" })}>Remove</button>
                             </div>
                         </li>
                     ))}
@@ -267,8 +281,50 @@ function Widgets({ pod }: { pod: Pod }) {
                     onMade={(made) => { setMaking(false); setRevealed({ widget: made, secret: made.signingSecret }); }}
                 />
             )}
+            {asking?.to === "remove" && (
+                <ConfirmSheet
+                    title={"Remove " + asking.widget.name + "?"}
+                    says="Pages with its code or link stop showing the chat, and anyone talking to it now is cut off. A new chat gets a new key."
+                    act="Remove it"
+                    busy={remove.isPending}
+                    onCancel={() => setAsking(null)}
+                    onConfirm={() => removeIt(asking.widget)}
+                />
+            )}
+            {asking?.to === "rotate" && (
+                <ConfirmSheet
+                    title={"A new secret for " + asking.widget.name + "?"}
+                    says="The old one stops working at once: your site’s server has to sign with the new one, and customers it signed in with the old one start over."
+                    act="Make a new secret"
+                    busy={rotating}
+                    onCancel={() => setAsking(null)}
+                    onConfirm={() => void rotate(asking.widget)}
+                />
+            )}
             {revealed && <SecretSheet widget={revealed.widget} secret={revealed.secret} onClose={() => setRevealed(null)} />}
         </section>
+    );
+}
+
+/** Asks before something a site depends on changes under it, and says what breaks. */
+function ConfirmSheet({ title, says, act, busy, onCancel, onConfirm }: {
+    title: string;
+    says: string;
+    act: string;
+    busy: boolean;
+    onCancel: () => void;
+    onConfirm: () => void;
+}) {
+    return (
+        <Modal title={title} narrow onClose={() => { if (!busy) onCancel(); }}>
+            <div className="csheet">
+                <p>{says}</p>
+                <div className="csheet__actions">
+                    <button type="button" className="pill-button" disabled={busy} onClick={onConfirm}>{busy ? "Working…" : act}</button>
+                    <button type="button" className="ghost-pill" disabled={busy} onClick={onCancel}>Keep it</button>
+                </div>
+            </div>
+        </Modal>
     );
 }
 
@@ -314,30 +370,6 @@ function WidgetSheet({ pod, onClose, onMade }: { pod: Pod; onClose: () => void; 
                     <button type="button" className="ghost-pill" onClick={onClose}>Cancel</button>
                 </div>
             </form>
-        </Modal>
-    );
-}
-
-function SecretSheet({ widget, secret, onClose }: { widget: WebWidget; secret: string; onClose: () => void }) {
-    return (
-        <Modal title={widget.name} subtitle="Copy the signing secret now" onClose={onClose}>
-            <div className="csheet">
-                <p>
-                    Your site’s server uses this to sign in its own customers, so they are answered as contacts. It is shown only now; keep it off web pages.
-                </p>
-                <div className="cwidget__embed">
-                    <code>{secret}</code>
-                    <CopyButton text={secret} label="Copy the secret" />
-                </div>
-                <p>Then put this on the page:</p>
-                <div className="cwidget__embed">
-                    <code>{widget.embed}</code>
-                    <CopyButton text={widget.embed} label="Copy the code" />
-                </div>
-                <div className="csheet__actions">
-                    <button type="button" className="pill-button" onClick={onClose}>Done</button>
-                </div>
-            </div>
         </Modal>
     );
 }

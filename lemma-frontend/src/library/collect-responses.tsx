@@ -3,24 +3,26 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
-import { EMPTY_WIDGET_DRAFT } from "@/data/contacts";
+import { EMPTY_WIDGET_DRAFT, type NewWebWidget } from "@/data/contacts";
 import {
     audienceChoices,
     columnQuestion,
     customFormAsk,
+    doorFor,
     formEmbed,
     formLink,
     htmlFormSnippet,
     openingProblem,
     startingColumns,
+    widgetAnswerFor,
     type Audience,
     type TableOpening,
 } from "@/data/public-rows";
 import { isForbidden } from "@/session/auth-state";
 import { Modal } from "@/shell/modal";
 import { CopyButton } from "@/thread/copy-button";
-import { useWidgets, widgetsKey } from "@/space/contact-queries";
-import { WidgetPlaces } from "@/space/widget-places";
+import { useCreateWidget, useWidgets } from "@/space/contact-queries";
+import { SecretSheet, WidgetPlaces } from "@/space/widget-places";
 
 const openingKey = (podId: string, table: string) => ["table-opening", podId, table] as const;
 
@@ -41,10 +43,10 @@ export function CollectResponses({ podId, table, teammate, onAsk, onClose }: {
     const cache = useQueryClient();
     const opening = useQuery({ queryKey: openingKey(podId, table), queryFn: () => source.tableOpening(podId, table) });
     const widgets = useWidgets(podId);
-    const door = widgets.data?.[0] ?? null;
     const [audience, setAudience] = useState<Audience | "off">("anyone");
     const [columns, setColumns] = useState<string[] | null>(null);
     const [problem, setProblem] = useState<string | null>(null);
+    const [made, setMade] = useState<NewWebWidget | null>(null);
 
     useEffect(() => {
         if (!opening.data || columns !== null) return;
@@ -58,25 +60,27 @@ export function CollectResponses({ podId, table, teammate, onAsk, onClose }: {
                 await source.closeTable(podId, table);
                 return null;
             }
-            if (!door) await source.createWidget(podId, { ...EMPTY_WIDGET_DRAFT, name: "Website" });
             return source.openTable(podId, table, to, chosen);
         },
-        onSuccess: () => {
-            void cache.invalidateQueries({ queryKey: openingKey(podId, table) });
-            void cache.invalidateQueries({ queryKey: widgetsKey(podId) });
-        },
+        onSuccess: () => void cache.invalidateQueries({ queryKey: openingKey(podId, table) }),
         onError: (error) => setProblem(isForbidden(error) ? "Only someone who can change this table can open it." : error instanceof Error && error.message ? error.message : "Couldn’t save it. Try again."),
     });
+    const create = useCreateWidget(podId);
 
     const data = opening.data;
-    const open = Boolean(data?.audience) && Boolean(door);
+    const open = Boolean(data?.audience);
+    // Read only once the widgets have loaded: a guess made while they load
+    // would offer to make a chat the space already has.
+    const door = data?.audience && widgets.data ? doorFor(widgets.data, data.audience) : null;
 
     return (
         <Modal title="Collect responses" subtitle={"People outside " + teammate + "’s space add rows to " + table} onClose={onClose}>
-            {opening.isPending ? (
+            {opening.isPending || widgets.isPending ? (
                 <p className="all__empty" role="status">Loading…</p>
             ) : !data ? (
                 <p role="alert">Couldn’t read this table. <button type="button" className="linkish" onClick={() => void opening.refetch()}>Try again</button></p>
+            ) : !widgets.data ? (
+                <p role="alert">Couldn’t read the space’s web chats. <button type="button" className="linkish" onClick={() => void widgets.refetch()}>Try again</button></p>
             ) : data.perUser ? (
                 <p className="contacts__quiet">Each member sees only their own rows in this table, so it can’t take rows from outside. Make a shared table for responses.</p>
             ) : (
@@ -110,6 +114,28 @@ export function CollectResponses({ podId, table, teammate, onAsk, onClose }: {
                         </button>
                         <button type="button" className="ghost-pill" onClick={onClose}>Close</button>
                     </div>
+                    {data.audience && !door && (
+                        <section className="collect__share" aria-label="Where people answer">
+                            <p className="contacts__quiet">
+                                People reach a form through {teammate}’s web chat, and none of its chats answers {data.audience === "contacts" ? "people who confirm their email" : "anyone"} yet.
+                                {widgets.data.length ? " Switch one on in Contacts, or make one for this form." : " Make one for this form."}
+                            </p>
+                            {create.isError && <p role="alert">Couldn’t make the chat. Try again.</p>}
+                            <div className="csheet__actions">
+                                <button
+                                    type="button"
+                                    className="pill-button"
+                                    disabled={create.isPending}
+                                    onClick={() => create.mutate(
+                                        { ...EMPTY_WIDGET_DRAFT, name: "Website", answer: widgetAnswerFor(data.audience ?? "anyone") },
+                                        { onSuccess: setMade },
+                                    )}
+                                >
+                                    {create.isPending ? "Making…" : "Make a web chat for it"}
+                                </button>
+                            </div>
+                        </section>
+                    )}
                     {open && door && data.audience && (
                         <section className="collect__share" aria-label="Where people answer">
                             <WidgetPlaces link={formLink(door.pageUrl, table)} embed={formEmbed(door.embed, table)} linkLabel="Share the form" />
@@ -130,6 +156,7 @@ export function CollectResponses({ podId, table, teammate, onAsk, onClose }: {
                     )}
                 </div>
             )}
+            {made && <SecretSheet widget={made} secret={made.signingSecret} onClose={() => setMade(null)} />}
         </Modal>
     );
 }
