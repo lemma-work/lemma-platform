@@ -7,6 +7,7 @@ import type { ScheduleDetailResponse } from '../models/ScheduleDetailResponse.js
 import type { ScheduleListResponse } from '../models/ScheduleListResponse.js';
 import type { ScheduleRunListResponse } from '../models/ScheduleRunListResponse.js';
 import type { ScheduleRunResponse } from '../models/ScheduleRunResponse.js';
+import type { ScheduleRunStatus } from '../models/ScheduleRunStatus.js';
 import type { ScheduleType } from '../models/ScheduleType.js';
 import type { UpdateScheduleRequest } from '../models/UpdateScheduleRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
@@ -163,6 +164,8 @@ export class SchedulesService {
      * @param podId
      * @param scheduleId
      * @param limit
+     * @param status Only runs that report this status -- the target's outcome once there is one.
+     * @param skipped true: only events the schedule's filter skipped. false: leave them out, which is what a busy webhook schedule's history usually needs. Omitted: both.
      * @returns ScheduleRunListResponse Successful Response
      * @throws ApiError
      */
@@ -170,6 +173,8 @@ export class SchedulesService {
         podId: string,
         scheduleId: string,
         limit: number = 100,
+        status?: (ScheduleRunStatus | null),
+        skipped?: (boolean | null),
     ): CancelablePromise<ScheduleRunListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -180,6 +185,8 @@ export class SchedulesService {
             },
             query: {
                 'limit': limit,
+                'status': status,
+                'skipped': skipped,
             },
             errors: {
                 422: `Validation Error`,

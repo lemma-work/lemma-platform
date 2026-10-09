@@ -14,7 +14,7 @@ from sqlalchemy.engine import Row
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.usage.domain.accounting import money
+from app.modules.usage.domain.accounting import OUTSIDE_AUDIENCE_SOURCES, money
 from app.modules.usage.domain.entities import (
     UsageLimitCounterScope,
     UsageRecord,
@@ -285,6 +285,12 @@ class UsageRepository(UsageRepositoryPort):
             user_id=user_id,
             system_cost_only=True,
         )
+        if user_id is not None:
+            # As in `system_cost_by_window`: a member's spend leaves out what
+            # answering people outside the organization cost.
+            stmt = stmt.where(
+                UsageRecordModel.source_type.notin_(OUTSIDE_AUDIENCE_SOURCES)
+            )
         if exclude_organization_ids:
             stmt = stmt.where(
                 or_(

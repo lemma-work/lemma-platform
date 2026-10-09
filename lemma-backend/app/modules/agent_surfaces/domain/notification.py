@@ -105,6 +105,9 @@ class NotificationEntity(AggregateRoot):
     #: back to that stranger, so it is recorded only with ``owner_confirmed``.
     from_outside: bool = False
     origin_group_title: str | None = None
+    #: Asked in a private chat -- a contact's, or a web visitor's -- rather than
+    #: in a group, so there is no group to name.
+    asked_in_private: bool = False
     #: The stranger's display name, as they set it. Theirs to choose: never an
     #: instruction, and shown quoted.
     asked_by_name: str | None = None

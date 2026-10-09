@@ -48,6 +48,8 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceNotFoundError
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
+from app.modules.agent_surfaces.services.contact_keepers import contacts_warnings
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 
 def surface_response(
@@ -56,6 +58,7 @@ def surface_response(
     agent_name: str | None = None,
     reach: SurfaceReach | None = None,
     connection: SurfaceConnection | None = None,
+    contacts_warning: str | None = None,
 ) -> AgentSurfaceResponse:
     """One surface as this module serializes it, for its API and for export."""
     return AgentSurfaceResponse(
@@ -78,6 +81,26 @@ def surface_response(
         reach=reach,
         config=SurfaceConfigResponse.from_domain(surface.config),
         status=surface.status,
+        contacts_warning=contacts_warning,
+    )
+
+
+async def warned_surface_response(
+    uow: SqlAlchemyUnitOfWork,
+    surface: AgentSurfaceEntity,
+    *,
+    agent_name: str | None = None,
+    reach: SurfaceReach | None = None,
+    connection: SurfaceConnection | None = None,
+) -> AgentSurfaceResponse:
+    """``surface_response``, saying so when nobody looks after its contacts."""
+    warnings = await contacts_warnings(uow, surface.pod_id, surface)
+    return surface_response(
+        surface,
+        agent_name=agent_name,
+        reach=reach,
+        connection=connection,
+        contacts_warning=warnings.get(surface.id),
     )
 
 

@@ -20,45 +20,50 @@ from uuid import UUID
 from app.core.domain.uow import IUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
-    OUTSIDERS,
-    answers_outsiders,
-)
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent_surfaces.contracts.conversations import (
-    conversation_answers_outsiders,
+    OutsideLink,
+    conversation_outside_link,
 )
 
 logger = get_logger(__name__)
 
 
-#: Whether routing's link names a conversation as the strangers' thread.
-LinkedToOutsiders = Callable[[IUnitOfWork, UUID], Awaitable[bool]]
+#: Whom routing's link says a conversation answers, if anybody outside the pod.
+LinkedAudience = Callable[[IUnitOfWork, UUID], Awaitable[OutsideLink | None]]
 
 
 async def with_effective_audience(
     uow: IUnitOfWork,
     conversation: Conversation,
     *,
-    linked_to_outsiders: LinkedToOutsiders = conversation_answers_outsiders,
+    linked_audience: LinkedAudience = conversation_outside_link,
 ) -> Conversation:
     """``conversation``, marked as answering outsiders when either record says so.
 
     Only ever adds the mark, in memory: a conversation the link names as the
-    strangers' thread is treated as theirs whatever its metadata says. The row
-    is not repaired here -- the next stranger's message rebinds the link to a
-    flagged conversation (``ConversationBinder``).
+    strangers' thread is treated as theirs whatever its metadata says, and one
+    the link names as a contact's chat as that contact's -- it keeps their own
+    rows and their name, rather than becoming a group's anonymous strangers.
+    The row is not repaired here -- the next stranger's message rebinds the
+    link to a flagged conversation (``ConversationBinder``).
     """
-    if answers_outsiders(conversation):
+    if Audience.of(conversation).answers_outsiders:
         return conversation
-    if not await linked_to_outsiders(uow, conversation.id):
+    link = await linked_audience(uow, conversation.id)
+    if link is None:
         return conversation
     logger.error(
         "agent.outsiders.unflagged_link.error",
         conversation_id=str(conversation.id),
     )
+    audience = (
+        Audience.contact(link.contact_id)
+        if link.contact_id is not None
+        else Audience.outsiders()
+    )
     metadata = (
         dict(conversation.metadata) if isinstance(conversation.metadata, dict) else {}
     )
-    metadata[AUDIENCE_KEY] = OUTSIDERS
+    metadata.update(audience.to_metadata())
     return conversation.model_copy(update={"metadata": metadata})

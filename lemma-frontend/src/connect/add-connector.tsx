@@ -226,7 +226,7 @@ function AddOne({ orgId, kind, entry, onBack, onClose, onDone }: {
                     )}
                     <div className="record-form__actions">
                         {signIn && (
-                            <button className="btn btn--primary" onClick={() => { openAuthorization(signIn); onDone(); }}>
+                            <button className="btn btn--primary" onClick={() => { openAuthorization(signIn, entry.title); onDone(); }}>
                                 Sign in <ExternalIcon size={13} />
                             </button>
                         )}

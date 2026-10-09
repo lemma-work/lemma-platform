@@ -7,6 +7,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.modules.usage.domain.accounting import OUTSIDE_AUDIENCE_SOURCES
+
 
 @dataclass(slots=True)
 class UsageExecutionContext:
@@ -21,6 +23,24 @@ class UsageExecutionContext:
     source_id: str | None = None
     workload_type: str | None = None
     workload_id: UUID | None = None
+    #: The outside-audience source (``CONTACT_RUN`` or ``OUTSIDER_RUN``) of an
+    #: execution answering somebody outside the organization, else ``None``.
+    #: Apart from ``source_type`` because work done for such a run -- a vision
+    #: delegate, history compaction, a title -- names its own source, and that
+    #: must not turn the spend back into the allowance of the member who looks
+    #: after the conversation. See ``MeteringScope.recorded_source``.
+    outside_audience: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.outside_audience is None and self.source_type in (
+            OUTSIDE_AUDIENCE_SOURCES
+        ):
+            self.outside_audience = self.source_type
+        if (
+            self.outside_audience is not None
+            and self.outside_audience not in OUTSIDE_AUDIENCE_SOURCES
+        ):
+            raise ValueError(f"Not an outside audience: {self.outside_audience!r}")
 
 
 _current_usage_context: ContextVar[UsageExecutionContext | None] = ContextVar(

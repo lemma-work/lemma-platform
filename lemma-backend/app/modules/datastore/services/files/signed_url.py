@@ -21,7 +21,7 @@ what makes revocation possible at all: you cannot kill a link that exists only
 as a key nobody has listed.
 
 **Redis owns the spend counter**, and caches the claims so the common fetch
-touches no database. The counter deliberately stays lossy. ``/s/`` is
+touches no database. The counter deliberately stays lossy. ``/public/s/`` is
 unauthenticated and unrate-limited, so a database write per byte-serving fetch
 would be an anonymous write lever and would serialize every reader of a popular
 link on one row — worse since Range landed, because a video player issues dozens
@@ -40,9 +40,9 @@ move is a windowed budget (per hour, say, checkpointed durably), which bounds a
 failover's loss to one window instead of the whole link and still keeps the hot
 path in Redis.
 
-The code *is* the capability: anyone holding ``{api_url}/s/{code}`` can fetch the
+The code *is* the capability: anyone holding ``{api_url}/public/s/{code}`` can fetch the
 bytes (until the link expires or its budget is spent). Bytes are streamed
-**through the backend** (``GET /s/{code}``) rather than redirecting to a real
+**through the backend** (``GET /public/s/{code}``) rather than redirecting to a real
 object-store signed URL — that is the only way the cap actually bounds egress.
 
 The cap is a **byte budget**, not a request count: ``max_hits`` whole copies of
@@ -318,7 +318,7 @@ class SignedUrlStore:
                     pod_id=str(file.pod_id),
                     error_type=type(exc).__name__,
                 )
-            signed_url = f"{settings.api_url.rstrip('/')}/s/{code}"
+            signed_url = f"{settings.api_url.rstrip('/')}/public/s/{code}"
         return code, signed_url, expires_at, max_hits
 
     async def _cache(self, link: DatastoreSignedLinkEntity) -> None:

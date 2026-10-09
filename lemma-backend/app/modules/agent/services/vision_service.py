@@ -239,6 +239,9 @@ async def describe_images(
     agent = PydanticAIAgent(model, instructions=_SYSTEM_PROMPT)
     try:
         current = current_usage_context()
+        # A copy of the run's context keeps its outside audience, so a
+        # contact's image is recorded as the contact's spend, not "vision" on
+        # the allowance of the member looking after the conversation.
         usage_context = (
             replace(current, source_type="vision")
             if current

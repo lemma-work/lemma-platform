@@ -109,6 +109,41 @@ async def get_user_token_with_expiry(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class IssuedDelegatedSession:
+    value: str
+    expires_at: datetime
+    """The access token's own ``exp``, not the session's."""
+    session_handle: str
+
+
+async def create_delegated_session(
+    user_id: UUID, delegation_claims: dict[str, object]
+) -> IssuedDelegatedSession:
+    """A new session carrying ``delegation_claims``, with what a holder of it
+    needs: the access token, when that token stops working, and the session's
+    handle, which other credentials can be bound to so they die with it."""
+    await _assert_local_user_can_authenticate(user_id)
+    user = await supertokens_get_user(str(user_id))
+    if user is None:
+        raise ValueError(f"User {user_id} not found")
+    payload: dict[str, object] = {"isImpersonation": True}
+    payload.update(validate_delegation_claims_payload(delegation_claims))
+    payload.setdefault(CLAIM_DELEGATION_VERSION, DELEGATION_VERSION)
+    session = await create_new_session_without_request_response(
+        "public",
+        user.login_methods[0].recipe_user_id,
+        payload,
+    )
+    return IssuedDelegatedSession(
+        value=session.access_token,
+        expires_at=datetime.fromtimestamp(
+            _access_token_expires_at_ms(session) / 1000, tz=timezone.utc
+        ),
+        session_handle=session.get_handle(),
+    )
+
+
 async def create_cli_session_tokens(
     user_id: UUID,
     *,

@@ -174,6 +174,15 @@ that enforces it, and whether it is a hard failure or a ratchet — is in
 - Never hold a DB session across external I/O or a streaming body.
 - Classify errors at process boundaries. Preserve cancellation, redact secrets,
   and never return or log raw provider exceptions.
+- An endpoint a browser or an app reaches with no Lemma session goes under
+  `/public/`. Load balancers apply their untrusted-traffic rules to
+  `/public/*`, so an anonymous endpoint anywhere else escapes them. Sign-in,
+  OAuth, webhooks and machine-credential endpoints are not public: they are
+  listed in `SELF_AUTHENTICATED` in `lemma-backend/app/core/auth_exemptions.py`,
+  each with the reason it needs no session. A route moved under `/public/`
+  keeps its old path as a dated `LEGACY_ALIASES` entry.
+  `app/core/tests/unit/test_route_auth_classes.py` fails on an exempt route in
+  no class, an entry with no route, and an alias past its date.
 - Add an Alembic upgrade and downgrade test for schema changes.
 - Do not annotate with `Any`, or with a bare `dict`, `list` or `tuple`. Both
   say "this boundary is not checked", and the checker then cannot help at

@@ -25,6 +25,7 @@ from app.core.authorization.models import (
     RoleModel,
     RolePermissionModel,
 )
+from app.modules.identity.contracts.orm import OrganizationMember
 from app.modules.pod.infrastructure.models import PodMember
 
 
@@ -103,3 +104,37 @@ async def count_members_who_can(
         .with_for_update(of=PodMember)
     )
     return len(set((await session.execute(stmt)).scalars().all()))
+
+
+async def members_who_can(
+    session: AsyncSession, *, pod_id: UUID, permission_id: str, limit: int
+) -> list[tuple[UUID, UUID]]:
+    """``(pod member id, user id)`` of members holding ``permission_id``, ``limit`` at most.
+
+    A read for telling them something, not a guard: no lock, unlike
+    ``count_members_who_can``, and so free to be distinct in SQL.
+    """
+    stmt = (
+        select(PodMember.id, OrganizationMember.user_id)
+        .join(
+            OrganizationMember,
+            OrganizationMember.id == PodMember.organization_member_id,
+        )
+        .join(
+            RoleAssignmentModel,
+            sa_and(
+                RoleAssignmentModel.principal_type == "POD_MEMBER",
+                RoleAssignmentModel.principal_id == PodMember.id,
+            ),
+        )
+        .join(RoleModel, RoleModel.id == RoleAssignmentModel.role_id)
+        .join(RolePermissionModel, RolePermissionModel.role_id == RoleModel.id)
+        .where(
+            PodMember.pod_id == pod_id,
+            RolePermissionModel.permission_id == permission_id,
+        )
+        .distinct()
+        .order_by(PodMember.id)
+        .limit(limit)
+    )
+    return [(member, user) for member, user in (await session.execute(stmt)).all()]

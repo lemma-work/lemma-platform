@@ -28,7 +28,7 @@
  *  that is one step short is worse than one with an ugly row in it.
  */
 
-import { isRecord, sayFor, str } from "./runs";
+import { isRecord, sayAnswer, sayFor, str } from "./runs";
 
 /* ── the kinds, as the backend spells them ─────────────────────────── */
 
@@ -206,7 +206,7 @@ export function readFlowStep(raw: unknown, at: number): FlowStep {
         case "FORM": return { ...base, says: "Asks a person", ...sayForm(config) };
         case "AGENT": return { ...base, says: sayTarget("Hands it to", config?.agent_name, "an agent"), ...sayInputs(config) };
         case "FUNCTION": return { ...base, says: sayTarget("Runs", config?.function_name, "a function"), ...sayInputs(config) };
-        case "DECISION": return { ...base, says: "Branches", ...sayDecision(config) };
+        case "DECISION": return { ...base, ...sayDecision(config) };
         case "LOOP": return { ...base, says: "Repeats for each item", ...sayLoop(config) };
         case "WAIT_UNTIL": return { ...base, says: "Waits", detail: sayTimeout(config), branches: [] };
         case "END": return { ...base, says: "Ends the run", detail: [], branches: [] };
@@ -288,7 +288,8 @@ function sayInputs(config: Record<string, unknown> | null): { detail: string[]; 
  *  truthy rule wins and the outgoing edge is the fall-through
  *  (`domain/nodes/decision.py:26`), so the order is kept exactly.
  */
-function sayDecision(config: Record<string, unknown> | null): { detail: string[]; branches: string[]; rules: FlowRule[] } {
+function sayDecision(config: Record<string, unknown> | null): { says: string; detail: string[]; branches: string[]; rules: FlowRule[] } {
+    if (isRecord(config?.question)) return sayQuestion(config.question);
     const raw = Array.isArray(config?.rules) ? config.rules : [];
     const detail: string[] = [];
     const branches: string[] = [];
@@ -303,7 +304,42 @@ function sayDecision(config: Record<string, unknown> | null): { detail: string[]
         rules.push({ when: str(rule.condition) ?? "a condition the payload did not carry", to: target ?? "" });
     }
     if (raw.length === 0) detail.push("No branches — it falls straight through.");
-    return { detail, branches, rules };
+    return { says: "Branches", detail, branches, rules };
+}
+
+/** A decision that asks one closed question about some evidence and branches
+ *  on the answer (`DecisionQuestion`, `domain/nodes/decision.py`).
+ *
+ *  The question is the `description` of its `answer` schema, which is what a
+ *  person would ask in the step's place, so it is what the row says. Each
+ *  answer with a route, then the unsure route, comes back as a rule -- the
+ *  same order the run tries them in -- so the outline draws them as arms like
+ *  any decision's, with the fall-through as its "otherwise". What no arm can
+ *  show is the one detail line: a question that cannot be answered at all
+ *  stops the run rather than taking a branch.
+ */
+function sayQuestion(question: Record<string, unknown>): { says: string; detail: string[]; branches: string[]; rules: FlowRule[] } {
+    const answer = isRecord(question.answer) ? question.answer : null;
+    const asked = str(answer?.description);
+    const branches: string[] = [];
+    const rules: FlowRule[] = [];
+    const routes = isRecord(question.routes) ? question.routes : {};
+    for (const [key, target] of Object.entries(routes)) {
+        const next = str(target);
+        if (next) branches.push(next);
+        rules.push({ when: sayAnswer(key), to: next ?? "" });
+    }
+    const unsure = str(question.unsure_next_node_id);
+    if (unsure) {
+        branches.push(unsure);
+        rules.push({ when: "it cannot tell", to: unsure });
+    }
+    return {
+        says: asked ? "Asks: " + asked : "Branches on a judgement",
+        detail: ["If it cannot be answered at all, the run stops."],
+        branches,
+        rules,
+    };
 }
 
 /** The body is not a detail line either: the outline draws it inside the

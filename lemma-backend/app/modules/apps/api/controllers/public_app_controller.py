@@ -12,12 +12,14 @@ a slug that does not exist -- gets the same sign-in page. See
 """
 
 from pathlib import PurePosixPath
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from supertokens_python.exceptions import SuperTokensError
 
+from app.core.config import settings
 from app.modules.apps.api.app_access import (
     ACCESS_COOKIE,
     PRIVATE_NO_STORE,
@@ -48,6 +50,26 @@ router = APIRouter(
 )
 
 _SLUG_HEADER = "X-App-Public-Slug"
+# Host-only cookies the SuperTokens browser SDK keeps on each app host.
+_SESSION_MARKER = "st-last-access-token-update"
+_FRONT_TOKEN = "sFrontToken"
+_FROM_THIS_SITE = {"same-site", "same-origin"}
+
+
+def _loads_a_page(request: Request) -> bool:
+    """Whether fetch metadata says this request is a page load.
+
+    The mode is the half that survives a service worker. Every hosted app runs
+    the install worker, which forwards each navigation with
+    ``fetch(event.request)``, and that resets the destination to ``empty``
+    (w3c/ServiceWorker#1803) but keeps ``Sec-Fetch-Mode: navigate`` -- a mode
+    page script cannot ask for. Reading the destination alone sent a lapsed
+    cookie the bare 401 a script gets instead of the sign-in page that renews
+    it, and nothing short of clearing the site's data got the person back in.
+    """
+    return request.headers.get("sec-fetch-mode") == "navigate" or (
+        request.headers.get("sec-fetch-dest") in {"document", "iframe", "frame"}
+    )
 
 
 def _is_navigation(request: Request) -> bool:
@@ -56,18 +78,21 @@ def _is_navigation(request: Request) -> bool:
     Fetch metadata distinguishes documents from scripts even when a caller
     sends an HTML Accept header. Older clients fall back to Accept.
     """
-    destination = request.headers.get("sec-fetch-dest")
     return "text/html" in request.headers.get("accept", "") and (
-        destination is None or destination in {"document", "iframe", "frame"}
+        request.headers.get("sec-fetch-dest") is None or _loads_a_page(request)
     )
 
 
 def _can_show_access_page(request: Request, asset_path: str | None) -> bool:
     if not _is_navigation(request):
         return False
-    if request.headers.get("sec-fetch-dest") in {"document", "iframe", "frame"}:
+    if _loads_a_page(request):
         return True
-    return PurePosixPath(asset_path or "").suffix.lower() in {"", ".html", ".htm"}
+    return _suffix(asset_path) in {"", ".html", ".htm"}
+
+
+def _suffix(asset_path: str | None) -> str:
+    return PurePosixPath(asset_path or "").suffix.lower()
 
 
 def _asset_not_found_response(
@@ -140,6 +165,70 @@ async def _viewer_app_id(
     return claims.app_id if allowed else None
 
 
+def _expire_stale_session_marker(request: Request, response: Response) -> None:
+    """Drop the session marker a failed refresh left behind on this app host.
+
+    SuperTokens' browser SDK keeps ``sFrontToken`` and
+    ``st-last-access-token-update`` on each app host. A failed refresh expires
+    the first and keeps the second, which never expires, and from then on
+    ``doesSessionExist()`` on that host answers "no" from the marker without
+    asking. Signing in again renews the shared HttpOnly cookies but cannot
+    reach a marker on the app's host, so the app sent a signed-in person to
+    the portal, which saw the session and sent them straight back.
+
+    Without the marker the SDK asks the server once: a live session comes back
+    with a new front token, and an ended one is refused as before. It is done
+    here, on the page load, because each app bundles the SDK it was built
+    with; a fix in the SDK reaches a bundled app only when it is rebuilt.
+
+    Only for a page reached the loop's way (see ``_came_the_loops_way``). A
+    visitor who typed the address or came from a search pays no refused
+    refresh for it; a signed-in one on a half-cleared host is shown the app's
+    sign-in once, and the trip back from the portal repairs it.
+    """
+    cookies = request.cookies
+    if _SESSION_MARKER not in cookies or _FRONT_TOKEN in cookies:
+        return
+    if not _came_the_loops_way(request):
+        return
+    # SameSite=None, so a frame on another site takes the deletion too; Secure
+    # is what None requires, and what an HTTPS app host already is.
+    secure = settings.api_url.startswith("https://")
+    response.delete_cookie(
+        _SESSION_MARKER,
+        path="/",
+        secure=secure,
+        samesite="none" if secure else "lax",
+    )
+    # A response that sets a cookie is this browser's alone.
+    response.headers["Cache-Control"] = "private, no-cache"
+
+
+def _came_the_loops_way(request: Request) -> bool:
+    """Back from the portal, framed by the workspace, or from the app itself.
+
+    The app itself covers its own links, its access page's reload, and a
+    navigation its install worker forwarded. Fetch metadata says so when the
+    app shares a registrable domain with the workspace, which hosted Lemma
+    does. Self-hosting may give apps a registrable domain of their own
+    (``docs/self-hosting.md``), and then the trip back from the portal and the
+    workspace's frame are both cross-site; their Referer still names the
+    portal. A browser that predates fetch metadata keeps the repair.
+    """
+    if request.headers.get("sec-fetch-site", "same-site") in _FROM_THIS_SITE:
+        return True
+    portal = {_origin(settings.frontend_url), _origin(settings.auth_frontend_url)}
+    referrer = _origin(request.headers.get("referer"))
+    return referrer is not None and referrer in portal
+
+
+def _origin(url: str | None) -> str | None:
+    parts = urlsplit(url or "")
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
 async def _serve_host_asset(
     request: Request, use_cases: AppUseCasesDep, asset_path: str | None
 ) -> Response:
@@ -154,7 +243,12 @@ async def _serve_host_asset(
         viewer_app_id=viewer if isinstance(viewer, UUID) else None,
     )
     if asset is not None:
-        return app_asset_response(asset)
+        response = app_asset_response(asset)
+        if _is_navigation(request) and (
+            asset.is_entrypoint or _suffix(asset_path) in {".html", ".htm"}
+        ):
+            _expire_stale_session_marker(request, response)
+        return response
     if host is None:
         # Not a hosted HTTPS app address (the desktop, or the API host with a
         # slug header): only published apps exist here, as they always have.

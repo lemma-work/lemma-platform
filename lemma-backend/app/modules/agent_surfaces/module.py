@@ -30,6 +30,19 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.webhook_controller import (
         router as surface_public,
     )
+    from app.modules.agent_surfaces.api.controllers.web_widget_controller import (
+        router as web_widgets,
+    )
+    from app.modules.agent_surfaces.api.controllers.public_page_controller import (
+        router as public_page,
+    )
+    from app.modules.agent_surfaces.api.controllers.public_web_controller import (
+        router as public_web,
+    )
+    from app.modules.agent_surfaces.api.controllers.contact_follow_up_controller import (
+        public_router as public_contacts,
+        router as contact_follow_ups,
+    )
 
     return [
         surface,
@@ -41,6 +54,11 @@ def _routers():
         user_surfaces,
         notifications,
         surface_public,
+        web_widgets,
+        public_page,
+        public_web,
+        contact_follow_ups,
+        public_contacts,
     ]
 
 
@@ -142,10 +160,15 @@ async def _surface_event_receiver(context):
         await _close_dedup_store()
 
 
+def _register_streaq() -> None:
+    import app.modules.agent_surfaces.events.visitor_retention  # noqa: F401
+
+
 module = LemmaModule(
     name="agent_surfaces",
     routers=_routers,
     event_routers=_event_routers,
+    register_streaq=_register_streaq,
     api_lifespans=(
         _dedup_store_lifespan,
         _telegram_manager_webhook_lifespan,

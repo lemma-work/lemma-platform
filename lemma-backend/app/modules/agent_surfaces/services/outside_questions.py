@@ -32,6 +32,9 @@ from app.modules.agent_surfaces.domain.notification import NotificationEntity
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
     SurfaceConversationLinkRepository,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.outside_links import (
+    links_to_people_outside,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
 )
@@ -48,6 +51,8 @@ class OutsideOrigin:
 
     group_title: str | None
     asked_by_name: str | None
+    #: A contact's private chat, or a web visitor's: there is no group.
+    in_private: bool = False
 
 
 #: How a notification learns where its asking conversation sits: the origin of
@@ -66,14 +71,22 @@ async def outside_origin(
     """
     if conversation_id is None:
         return None
-    links = SurfaceConversationLinkRepository(uow)
-    if not await links.is_outsiders_thread(conversation_id):
+    if not await links_to_people_outside(uow.session, conversation_id):
         return None
+    links = SurfaceConversationLinkRepository(uow)
     link = await links.get_by_conversation_id(conversation_id)
     if link is None or link.external_user_id != OUTSIDERS_LINK_USER:
-        # Outsiders' all the same: the run answers strangers, so its question
-        # is one -- just one whose group cannot be named.
-        return OutsideOrigin(group_title=None, asked_by_name=None)
+        # Not a group's strangers' thread, so a private one: a contact's chat
+        # (``~contact:`` link) or a web visitor's (no link at all). Said so,
+        # rather than "in a group" the member would look for and not find.
+        asked_by = (link.last_event or {}).get("sender_display_name") if link else None
+        return OutsideOrigin(
+            group_title=None,
+            asked_by_name=_one_line(
+                asked_by if isinstance(asked_by, str) else None, 255
+            ),
+            in_private=True,
+        )
     group = (
         await SurfaceGroupRepository(uow.session).get(
             surface_id=link.surface_id,
@@ -105,11 +118,12 @@ def outside_question_message(
 ) -> str:
     """What the member reads: who asked, where, their words quoted, what happens next."""
     bot = _one_line(agent_name, _MAX_NAME_CHARS) or "The bot"
-    where = (
-        f"in “{notification.origin_group_title}”"
-        if notification.origin_group_title
-        else "in a group"
-    )
+    if notification.asked_in_private:
+        where = "in a private chat"
+    elif notification.origin_group_title:
+        where = f"in “{notification.origin_group_title}”"
+    else:
+        where = "in a group"
     who = (
         f"{_one_line(notification.asked_by_name, _MAX_NAME_CHARS)}, who is outside the pod"
         if notification.asked_by_name

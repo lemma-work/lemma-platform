@@ -212,6 +212,7 @@ class NotificationService:
                 origin_conversation_id=origin_conversation_id,
                 from_outside=outside is not None,
                 origin_group_title=outside.group_title if outside else None,
+                asked_in_private=outside.in_private if outside else False,
                 asked_by_name=outside.asked_by_name if outside else None,
                 title=title,
                 body=body,

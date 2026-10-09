@@ -27,6 +27,12 @@ from app.core.domain.errors import DomainError
 from app.core.observability.telemetry import record_exception_on_current_span
 from app.core.redaction import redact_text, redact_value
 
+#: Where a CORS layer *inside* the app puts the headers this request's response
+#: carries, for the one response built outside every middleware: the 500 below,
+#: which Starlette sends from its outermost layer. Without them the page that
+#: made the request cannot read the error at all.
+ERROR_CORS_HEADERS = "lemma_error_cors_headers"
+
 
 def _sanitize_validation_payload(value: object) -> object:
     """Convert non-JSON-safe validation payload values into serializable forms."""
@@ -113,6 +119,11 @@ def _record_request_failure(
     state["lemma_error_type"] = error_type
     if exception is not None:
         state["lemma_exception"] = exception
+
+
+def _error_cors_headers(request: Request) -> dict[str, str] | None:
+    headers = request.scope.get("state", {}).get(ERROR_CORS_HEADERS)
+    return dict(headers) if isinstance(headers, Mapping) else None
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -206,4 +217,5 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=500,
             content=_error_body(request, "Internal server error", "INTERNAL_ERROR"),
+            headers=_error_cors_headers(request),
         )

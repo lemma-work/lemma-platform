@@ -17,6 +17,8 @@ function fakeAuth(): { auth: AuthManager; markUnauthenticated: ReturnType<typeof
       headers: { ...(init.headers as Record<string, string>), Authorization: "Bearer test" },
     }),
     markUnauthenticated,
+    ready: async () => undefined,
+    renewEmbeddedToken: async () => false,
   } as unknown as AuthManager;
   return { auth, markUnauthenticated };
 }

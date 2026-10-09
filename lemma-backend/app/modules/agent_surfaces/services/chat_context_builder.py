@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -26,15 +27,16 @@ def build_chat_context(
     route: ResolvedSurfaceRoute,
     conversation_id: UUID,
     created_conversation_title: str | None,
-    answers_outsider: bool = False,
+    audience: Audience = Audience(),
 ) -> SurfaceChatContext:
     """The run to start for a bound conversation, as the worker will read it.
 
-    ``answers_outsider``: ``user_id`` is the member who answers for a group and
-    ``resolved_user`` the stranger who asked -- see ``services/outsiders``.
+    For an ``audience`` outside the pod, ``user_id`` is the member who answers
+    for them and ``resolved_user`` the stranger or contact who asked -- see
+    ``services/outsiders`` and ``services/contacts``.
     """
     return SurfaceChatContext(
-        answers_outsider=answers_outsider,
+        audience=audience,
         created_conversation_title=created_conversation_title,
         platform=surface.surface_type,
         pod_id=surface.pod_id,

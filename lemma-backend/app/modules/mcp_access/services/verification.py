@@ -45,6 +45,17 @@ class AccessTokenVerifier:
         self._pod_is_live = pod_is_live
         self._now = clock
 
+    async def grant_is_live(self, grant_id: UUID) -> bool:
+        """Whether a connection still stands: not revoked, not past its ceiling.
+
+        For credentials minted *from* a connection and used elsewhere -- a
+        framed app's access to its own files -- which must end when the
+        connection does, by whichever of its several paths it ends.
+        """
+        async with self._uow_factory() as uow:
+            scopes = await McpAccessRepository(uow).live_grant_scopes(grant_id)
+        return scopes is not None
+
     async def verify(self, token: str, *, pod_id: UUID) -> McpPrincipal | None:
         """The principal this token acts as on this pod, or ``None``.
 

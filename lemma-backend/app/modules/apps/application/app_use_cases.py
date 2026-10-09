@@ -23,6 +23,7 @@ from fastapi import Request
 
 from app.core.authorization.context import ResourceRef
 from app.core.authorization.permissions import Permissions
+from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.scope import pod_context_scope, uow_scope
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -35,6 +36,7 @@ from app.modules.apps.services.app_access import (
     remember_host_access,
 )
 from app.modules.identity.contracts.app_sessions import session_is_live_for
+from app.modules.mcp_access.contracts import grant_is_live
 from app.modules.apps.services.app_service import AppService
 from app.modules.apps.services.archive_validation import inspect_app_archive
 from app.core.concurrency.offload import run_blocking
@@ -270,6 +272,30 @@ class AppUseCases:
                 )
         return app.id
 
+    async def authorize_person_for_app(self, *, slug: str, user_id: UUID) -> AppEntity:
+        """The live app at ``slug``, if ``user_id`` may open it -- asked with no
+        browser request in hand, for an app opened inside an AI tool."""
+        async with uow_scope(self._uow_factory) as uow:
+            app = await self._build(uow).repository.get_by_public_slug(slug)
+            if app is None or app.id is None:
+                raise AppNotFoundError()
+            ctx = await create_authorization_data_service(uow).build_user_context(
+                user_id=user_id, pod_id=app.pod_id
+            )
+            try:
+                authorized = await self._build(uow).get_app_by_name(
+                    app.pod_id, app.name, user_id, raise_not_found=True, ctx=ctx
+                )
+            except DomainError as error:
+                # One answer for "not yours" and "not there", as on the app
+                # host, so a guessed slug is not confirmed.
+                if error.status_code not in {401, 403, 404, 410}:
+                    raise
+                raise AppNotFoundError() from error
+        if authorized is None or authorized.id != app.id:
+            raise AppNotFoundError()
+        return authorized
+
     async def authorize_host_viewer(
         self,
         claims: AppAccessClaims,
@@ -291,6 +317,10 @@ class AppUseCases:
         if not await session_is_live_for(
             claims.session_handle, claims.user_id
         ) or not await account_may_sign_in(claims.user_id):
+            return False
+        # Opened inside an AI tool: it lasts as long as that connection, which
+        # ends by more routes than a session does.
+        if claims.grant_id is not None and not await grant_is_live(claims.grant_id):
             return False
         try:
             app_id = await self.authorize_host_access(
