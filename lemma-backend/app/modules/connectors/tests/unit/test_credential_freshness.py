@@ -125,6 +125,27 @@ class TestTheHotPath:
         assert credentials["access_token"] == "fresh"
 
     @pytest.mark.asyncio
+    async def test_a_shared_account_is_refreshed_as_its_owner_for_anyone(self):
+        # A pinned shared account (one mailbox the whole pod sends from) is used
+        # by people who do not own it. The refresh looks the account up by its
+        # owner; asking as the caller found nothing, so every teammate's call
+        # failed with ACCOUNT_NOT_FOUND while the token was due.
+        connector_service = AsyncMock()
+        connector_service.get_account_credentials.return_value = {
+            "access_token": "fresh"
+        }
+        service = self._service(connector_service)
+        account = self._account(datetime.now(timezone.utc) - timedelta(minutes=1))
+        teammate = uuid4()
+
+        credentials = await service._resolve_execution_credentials(account, teammate)
+
+        connector_service.get_account_credentials.assert_awaited_once_with(
+            account.id, account.user_id, account.organization_id
+        )
+        assert credentials["access_token"] == "fresh"
+
+    @pytest.mark.asyncio
     async def test_a_non_oauth_account_is_never_refreshed(self):
         from types import SimpleNamespace
 

@@ -90,7 +90,12 @@ served through the ordinary public asset route, so the PUBLIC visibility gate
 covers them: an unpublished app does not describe itself in a manifest. The
 service worker exists only to satisfy the browser's installability check and
 caches nothing but the offline page — caching app assets would pin a stale
-release onto whoever installed it.
+release onto whoever installed it. It answers navigations from their preload,
+not by re-fetching `event.request`: a re-fetched navigation arrives with
+`Sec-Fetch-Dest: empty`, and a private app's host decides between its sign-in
+page and a bare 401 by whether the request loads a page. The host also accepts
+`Sec-Fetch-Mode: navigate` for that, so workers installed before the preload
+still reach the sign-in page.
 
 The offer never interrupts a first visit. The workspace marks its
 "open in a tab" links with `#install` so the app's builder is asked at the

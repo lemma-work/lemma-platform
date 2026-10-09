@@ -1,17 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { lemma } from "@/session/client";
 import { source } from "@/data";
 import { isForbidden } from "@/session/auth-state";
 import { BackIcon, ChatIcon, ChevronRightIcon, WarningIcon } from "@/ui/icons";
 import {
-    byNewest, readRunDetail, readRuns, readWorkflows, runMillis, runTone,
+    byNewest, millisOf, readRunDetail, readRuns, readWorkflows, runMillis, runTone,
     sayCancelRefusal, sayFor, sayStatus, sayWhen, stillGoing,
     type StepRow, type WorkflowRow,
 } from "./runs";
-import { readShape, type FlowStep, type WorkflowShape } from "./shape";
+import { readShape, type FlowArm, type FlowItem, type FlowStep, type WorkflowShape } from "./shape";
 import { samples } from "@/data/samples";
 import { usePaneVisible } from "@/shell/pane-visible";
 import { runsPollEvery } from "./use-run";
@@ -28,13 +28,16 @@ import { runsPollEvery } from "./use-run";
  *  workflows, and a bordered box round each makes the eye cross a border to
  *  get from one name to the next.
  *
- *  Nothing here draws the graph. `workflows.visualize` returns an entire HTML
- *  debugging page rather than a graph format, so there is nothing to compose
- *  with — and at this size a picture would answer worse than the list does.
- *  "How does this run" is a question about order, and the answer to a question
- *  about order is a column you read downwards. The run history beneath it is
- *  already drawn that way; the two now stack on the same spine, so a failed
- *  node named in the history is findable by eye in the shape above it.
+ *  Nothing here draws a box-and-arrow graph. `workflows.visualize` returns an
+ *  entire HTML debugging page rather than a graph format, so there is nothing
+ *  to compose with — and at this size a canvas would answer worse than an
+ *  outline does. "How does this run" is a question about order, so the answer
+ *  is still a column you read downwards. But where the workflow decides, the
+ *  column forks: each rule gets an arm with its own steps, and the arms close
+ *  again where they meet. A flat column there said every arm runs, one after
+ *  another, which is the one thing a decision guarantees does not happen. The
+ *  run history beneath it is drawn on the same spine, so a failed node named
+ *  in the history is findable by eye in the shape above it.
  *
  *  Nothing here edits the graph either, and that is the same decision the
  *  agents list makes: a workflow is changed by asking the teammate to change
@@ -330,7 +333,7 @@ export function Shape({ query, teammate, onDiscuss }: {
                                 ))}
                             </span>
                         </li>
-                        {shape.ordered.map((step, at) => <Step key={step.id || "step-" + at} step={step} />)}
+                        <Items items={shape.flow} />
                     </ol>
 
                     {shape.ordered.length === 0 && shape.orphans.length === 0 && (
@@ -348,17 +351,21 @@ export function Shape({ query, teammate, onDiscuss }: {
                         </p>
                     )}
 
-                    {shape.orphans.length > 0 && (
+                    {shape.loose.length > 0 && (
                         <>
                             {/* Named plainly, because an orphan is a real
                                 finding. A step nothing reaches is work
                                 somebody wrote and then wired past, and it will
                                 sit there being nobody's fault forever unless
-                                something says it is there. */}
+                                something says it is there. One spine per
+                                chain: an orphaned chain is still joined to
+                                itself, just not to anything above it. */}
                             <h5 className="wf-heading wf-heading--sub">Unconnected steps</h5>
-                            <ol className="wf-spine wf-spine--loose">
-                                {shape.orphans.map((step, at) => <Step key={step.id || "orphan-" + at} step={step} />)}
-                            </ol>
+                            {shape.loose.map((items, at) => (
+                                <ol className="wf-spine wf-spine--loose" key={at}>
+                                    <Items items={items} />
+                                </ol>
+                            ))}
                         </>
                     )}
 
@@ -383,13 +390,13 @@ export function Shape({ query, teammate, onDiscuss }: {
  *  is the string `failed_node_id` names when a run dies, so the two lists
  *  have to be readable against each other by eye.
  */
-function Step({ step }: { step: FlowStep }) {
+function Step({ step, children }: { step: FlowStep; children?: ReactNode }) {
     /* A label that repeats the id is two columns of the same word. */
     const named = Boolean(step.label && step.label !== step.id);
     return (
         <li className="wf-spine__row" data-kind={step.kind || undefined} data-broken={step.unreadable || undefined}>
             <span className="wf-spine__mark" aria-hidden="true" />
-            <span className="wf-spine__body">
+            <div className="wf-spine__body">
                 <span className="wf-spine__title">
                     {named ? <strong>{step.label}</strong> : step.id && <b>{step.id}</b>}
                     <i>{step.says}</i>
@@ -398,9 +405,89 @@ function Step({ step }: { step: FlowStep }) {
                 {step.detail.map((line, at) => (
                     <span className="wf-spine__note" key={at}>{line}</span>
                 ))}
-            </span>
+                {children}
+            </div>
         </li>
     );
+}
+
+/** The outline, a row per item. A fork and a loop are rows like any other
+ *  step, with what happens inside them nested under their title, so the
+ *  spine's rule runs past them to whatever comes next. */
+function Items({ items }: { items: FlowItem[] }) {
+    return items.map((item, at) => {
+        switch (item.type) {
+            case "step":
+                return <Step key={item.step.id || "step-" + at} step={item.step} />;
+            case "fork":
+                return (
+                    <Step key={item.step.id || "fork-" + at} step={item.step}>
+                        {/* Said once, so each arm can be only its value. */}
+                        {item.on && <span className="wf-spine__note">On <code>{item.on}</code></span>}
+                        <div className="wf-fork">
+                            {item.arms.map((arm, one) => <Arm key={one} arm={arm} then={item.then} switched={Boolean(item.on)} />)}
+                        </div>
+                    </Step>
+                );
+            case "loop":
+                return (
+                    <Step key={item.step.id || "loop-" + at} step={item.step}>
+                        <ol className="wf-spine wf-spine--inner"><Items items={item.body} /></ol>
+                    </Step>
+                );
+            case "jump":
+                return (
+                    <li className="wf-spine__row wf-spine__row--jump" key={"jump-" + at}>
+                        <span className="wf-spine__mark" aria-hidden="true">{item.back ? "↩" : "→"}</span>
+                        <div className="wf-spine__body">
+                            <span className="wf-spine__title">
+                                <i>{item.to ? (item.back ? "Back to" : "On to") : "Goes to"}</i>
+                                {item.to ? nameOf(item.to) : <b>{item.id || "a step it did not name"}</b>}
+                                {!item.to && item.id && <i>, which is not a step here</i>}
+                            </span>
+                        </div>
+                    </li>
+                );
+            case "end":
+                return (
+                    <li className="wf-spine__row wf-spine__row--end" key={"end-" + at}>
+                        <span className="wf-spine__mark" aria-hidden="true" />
+                        <div className="wf-spine__body">
+                            <span className="wf-spine__title"><i>{item.inLoop ? "On to the next one." : "The run ends here."}</i></span>
+                        </div>
+                    </li>
+                );
+        }
+    });
+}
+
+/** One way out of a decision: the condition, then what it leads to. The
+ *  condition is set in mono because it is an expression the teammate wrote
+ *  and somebody reading it may want to quote it back. */
+function Arm({ arm, then, switched }: { arm: FlowArm; then: FlowStep | null; switched: boolean }) {
+    return (
+        <div className="wf-arm">
+            <p className="wf-arm__when">
+                {arm.when === null ? "Otherwise" : <>{switched ? "Is" : "If"} <code>{arm.when}</code></>}
+            </p>
+            <ol className="wf-spine wf-spine--inner">
+                {arm.items.length > 0 ? <Items items={arm.items} /> : (
+                    <li className="wf-spine__row wf-spine__row--jump">
+                        <span className="wf-spine__mark" aria-hidden="true">↓</span>
+                        <div className="wf-spine__body">
+                            <span className="wf-spine__title"><i>Straight on{then ? " to" : ""}</i>{then && nameOf(then)}</span>
+                        </div>
+                    </li>
+                )}
+            </ol>
+        </div>
+    );
+}
+
+/** A step named the way its own row names it, for a line that points at it. */
+function nameOf(step: FlowStep): ReactNode {
+    if (step.label && step.label !== step.id) return <strong>{step.label}</strong>;
+    return <b>{step.id}</b>;
 }
 
 /* ── one run ───────────────────────────────────────────────────────── */
@@ -542,11 +629,10 @@ function Steps({ steps, currentNodeId }: { steps: StepRow[]; currentNodeId: stri
 }
 
 function stepMillis(step: StepRow): number | null {
-    if (!step.startedAt) return null;
-    const from = Date.parse(step.startedAt);
-    if (Number.isNaN(from)) return null;
-    const to = step.completedAt ? Date.parse(step.completedAt) : Date.now();
-    if (Number.isNaN(to)) return null;
+    const from = millisOf(step.startedAt);
+    if (from === null) return null;
+    const to = step.completedAt ? millisOf(step.completedAt) : Date.now();
+    if (to === null) return null;
     return to >= from ? to - from : null;
 }
 
