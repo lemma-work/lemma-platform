@@ -10,6 +10,9 @@ keeps it).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 SURFACE_APPLY_FIELDS = frozenset(
     {
         "account_id",
@@ -35,3 +38,25 @@ SCHEDULE_APPLY_FIELDS = frozenset(
         "visibility",
     }
 )
+
+#: What a TIME schedule may not carry: there is no event for a filter to judge.
+TIME_SCHEDULE_FILTER_FIELDS = ("filter_instruction", "filter_output_schema")
+
+
+def without_time_schedule_filter(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """A schedule payload with any filter left off a TIME schedule.
+
+    Returns the payload and whether a filter was dropped. A time schedule fires
+    on the clock, so a filter on one was never asked, and the server now refuses
+    a new one; a bundle exported before that may still carry it. Dropping it,
+    and saying so, keeps those bundles importable with nothing lost.
+    """
+    copied = dict(payload)
+    if str(copied.get("schedule_type") or "").upper() != "TIME":
+        return copied, False
+    dropped = any(copied.get(field) for field in TIME_SCHEDULE_FILTER_FIELDS)
+    for field in TIME_SCHEDULE_FILTER_FIELDS:
+        copied.pop(field, None)
+    return copied, dropped

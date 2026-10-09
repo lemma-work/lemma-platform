@@ -17,6 +17,12 @@ def _event_routers():
     return [router]
 
 
+def _register_streaq() -> None:
+    # The job that asks a decision step's question; `handlers.py`, imported by
+    # `_event_routers`, carries the module's other tasks.
+    import app.modules.workflow.events.decision_task  # noqa: F401
+
+
 def _resource_names():
     """How this module's resources are addressed by name in a grant.
 
@@ -43,6 +49,7 @@ module = LemmaModule(
     resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
+    register_streaq=_register_streaq,
     stream_groups=(
         ("function_run_events", "workflow-function-events"),
         ("agent_events", "workflow-agent-events"),

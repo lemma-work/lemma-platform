@@ -7,11 +7,15 @@ from typing import List
 from uuid import UUID
 
 from app.modules.datastore.domain.events import DatastoreRecordEvent, RecordOrigin
+from app.modules.schedule.domain.interfaces import ScheduleFilterTaskQueue
 from app.modules.schedule.domain.match_conditions import evaluate_match_conditions
 from app.modules.schedule.domain.schedule import ScheduleFireStatus, ScheduleType
 from app.modules.schedule.domain.value_objects import (
     DatastoreOperation,
     parse_datastore_operation,
+)
+from app.modules.schedule.infrastructure.adapters.filter_task_queue import (
+    StreaqScheduleFilterTaskQueue,
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
@@ -59,9 +63,11 @@ class DatastoreEventHandler:
         self,
         schedule_repository: ScheduleRepository,
         schedule_processor: ScheduleProcessor,
+        filter_task_queue: ScheduleFilterTaskQueue | None = None,
     ):
         self.schedule_repository = schedule_repository
         self.schedule_processor = schedule_processor
+        self.filter_task_queue = filter_task_queue or StreaqScheduleFilterTaskQueue()
 
     async def handle_datastore_event(
         self,
@@ -103,18 +109,35 @@ class DatastoreEventHandler:
                 await self._record_fire(schedule.id, status=ScheduleFireStatus.FILTERED)
                 continue
 
-            # Let the connection go before processing. A schedule carrying a
-            # filter_instruction runs an LLM inference inline here, once per
-            # matching schedule, and holding the transaction across that keeps
-            # a pooled connection idle for the length of every call in the
-            # loop. The webhook sibling (schedule_consumer) already does this
-            # and says why in its docstring.
+            # Let the connection go before anything leaves the process -- the
+            # filter task's enqueue or the fire's publish -- rather than hold
+            # one transaction open across every schedule's awaits in this loop.
             #
             # A commit rather than `connection_released`: a previous iteration
             # may have written a FILTERED fire row, and `safe_to_release`
             # correctly refuses a dirty session -- the release would be a
             # silent no-op exactly when the loop is longest.
             await commit_now(self.schedule_repository)
+
+            owner = event.owner_user_id or schedule.user_id
+            if schedule.filter_instruction:
+                # Judged by the same task a webhook's filter is: retried with
+                # backoff when the provider does not answer, dead-lettered when
+                # it never does, not judged twice for a redelivered event, and
+                # recorded as a FILTERED run carrying its answers when skipped.
+                # Asking inline would hold this stream for the length of a
+                # model call per schedule, with none of that. Queued under
+                # DATA_TRIGGER, which the job carries to the task, for the same
+                # reason the inline path below runs under it.
+                with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
+                    await self.filter_task_queue.enqueue(
+                        schedule_id=schedule.id,
+                        payload=event.payload or {},
+                        metadata=metadata,
+                        source_event_id=str(event.event_id),
+                        user_id=owner,
+                    )
+                continue
 
             # One bad schedule must not drop the event for the rest.
             try:
@@ -124,10 +147,10 @@ class DatastoreEventHandler:
                 # changed, and DATA_TRIGGER is the honest answer for everything
                 # raised from here down.
                 with origin_scope(Origin(OriginKind.DATA_TRIGGER)):
-                    fired = await self.schedule_processor.process_event(
+                    processed = await self.schedule_processor.process_event(
                         schedule=schedule,
                         payload=event.payload or {},
-                        user_id=event.owner_user_id or schedule.user_id,
+                        user_id=owner,
                         metadata=metadata,
                         source_event_id=str(event.event_id),
                     )
@@ -154,11 +177,11 @@ class DatastoreEventHandler:
                 schedule.id,
                 status=(
                     ScheduleFireStatus.TRIGGERED
-                    if fired
+                    if processed.fired
                     else ScheduleFireStatus.FILTERED
                 ),
             )
-            if fired:
+            if processed.fired:
                 fired_schedule_ids.append(schedule.id)
 
         return fired_schedule_ids

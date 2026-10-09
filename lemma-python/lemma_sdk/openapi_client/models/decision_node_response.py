@@ -28,7 +28,7 @@ T = TypeVar("T", bound="DecisionNodeResponse")
 class DecisionNodeResponse:
     """
     Attributes:
-        config (DecisionNodeConfig): Configuration for Decision node.
+        config (DecisionNodeConfig): Configuration for Decision node: `rules`, or a `question`, never both.
         id (str):
         label (None | str | Unset):
         position (DecisionNodeResponsePositionType0 | None | Unset):

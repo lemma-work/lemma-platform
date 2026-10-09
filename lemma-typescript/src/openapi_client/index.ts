@@ -132,6 +132,8 @@ export type { DecisionExampleBody } from './models/DecisionExampleBody.js';
 export type { DecisionNode } from './models/DecisionNode.js';
 export type { DecisionNodeConfig } from './models/DecisionNodeConfig.js';
 export type { DecisionNodeResponse } from './models/DecisionNodeResponse.js';
+export type { DecisionQuestion } from './models/DecisionQuestion.js';
+export type { DecisionQuestionExample } from './models/DecisionQuestionExample.js';
 export type { DecisionResponse } from './models/DecisionResponse.js';
 export type { DecisionRule } from './models/DecisionRule.js';
 export type { DecisionUsageResponse } from './models/DecisionUsageResponse.js';

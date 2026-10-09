@@ -10,7 +10,12 @@ from app.core.authorization.context import Context
 from app.modules.workflow.domain.context import LoopScope, RunContextReader
 from app.modules.workflow.domain.errors import WorkflowDomainError
 from app.modules.workflow.domain.workflow import WorkflowEntity
-from app.modules.workflow.domain.ports import AgentPort, FunctionPort, SchedulePort
+from app.modules.workflow.domain.ports import (
+    AgentPort,
+    DecisionPort,
+    FunctionPort,
+    SchedulePort,
+)
 from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
@@ -52,12 +57,14 @@ class RunStepper:
         agent: AgentPort,
         function: FunctionPort,
         schedule: SchedulePort,
+        decision: DecisionPort,
         authz_ctx: Context | None = None,
         registry: dict[NodeType, NodeExecutor] | None = None,
     ):
         self._agent = agent
         self._function = function
         self._schedule = schedule
+        self._decision = decision
         self._authz_ctx = authz_ctx
         self._registry = registry or EXECUTOR_REGISTRY
 
@@ -172,10 +179,19 @@ class RunStepper:
         return StepResult()
 
     async def continue_after(
-        self, run: WorkflowRunEntity, flow: WorkflowEntity, node_id: str
+        self,
+        run: WorkflowRunEntity,
+        flow: WorkflowEntity,
+        node_id: str,
+        *,
+        forced: str | None = None,
     ) -> StepResult:
-        """Continue execution after node_id completed externally (resume)."""
-        self.move_past(run, flow, node_id)
+        """Continue execution after node_id completed externally (resume).
+
+        `forced` is the node a decision's answer chose; without it the run
+        follows node_id's outgoing edge, as every other resume does.
+        """
+        self.move_past(run, flow, node_id, forced=forced)
         if run.status != WorkflowRunStatus.RUNNING:
             self._log_outcome(run)
             return StepResult()
@@ -256,6 +272,7 @@ class RunStepper:
             agent=self._agent,
             function=self._function,
             schedule=self._schedule,
+            decision=self._decision,
             authz_ctx=self._authz_ctx,
         )
 

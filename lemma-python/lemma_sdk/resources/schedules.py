@@ -17,6 +17,7 @@ from ..openapi_client.models.schedule_detail_response import ScheduleDetailRespo
 from ..openapi_client.models.schedule_list_response import ScheduleListResponse
 from ..openapi_client.models.schedule_run_list_response import ScheduleRunListResponse
 from ..openapi_client.models.schedule_run_response import ScheduleRunResponse
+from ..openapi_client.models.schedule_run_status import ScheduleRunStatus
 from ..openapi_client.models.schedule_type import ScheduleType
 from ..openapi_client.models.update_schedule_request import UpdateScheduleRequest
 from ..openapi_client.types import UNSET
@@ -95,12 +96,30 @@ class PodSchedules(BoundResource):
     def delete(self, schedule_id: str) -> None:
         self._call(schedule_delete, self._pod_uuid(), self._schedule_id(schedule_id))
 
-    def runs(self, schedule_id: str, *, limit: int = 100) -> ScheduleRunListResponse:
+    def runs(
+        self,
+        schedule_id: str,
+        *,
+        limit: int = 100,
+        status: ScheduleRunStatus | str | None = None,
+        skipped: bool | None = None,
+    ) -> ScheduleRunListResponse:
+        """A schedule's runs, newest first.
+
+        `status` keeps runs reporting that status (a target's outcome once it
+        has one). `skipped=True` keeps only events the schedule's filter
+        skipped, `skipped=False` leaves them out -- what a busy webhook
+        schedule's history usually needs.
+        """
+        if isinstance(status, str):
+            status = ScheduleRunStatus(status.upper())
         return self._call(
             schedule_run_list,
             self._pod_uuid(),
             self._schedule_id(schedule_id),
             limit=limit,
+            status=status if status is not None else UNSET,
+            skipped=skipped if skipped is not None else UNSET,
         )
 
     def retry_run(self, schedule_id: str, run_id: str) -> ScheduleRunResponse:

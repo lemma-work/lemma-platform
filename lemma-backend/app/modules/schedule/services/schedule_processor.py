@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Literal, Optional
 from uuid import UUID
 
 from app.modules.schedule.domain.interfaces import (
@@ -17,6 +18,22 @@ from app.modules.schedule.infrastructure.adapters.schedule_event_publisher impor
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class ProcessedEvent:
+    """What became of one event: fired, skipped by the filter, or ignored.
+
+    `llm_output` is the filter's answers whichever way it went, so a skip can be
+    recorded with the reason it was skipped.
+    """
+
+    outcome: Literal["fired", "filtered", "inactive"]
+    llm_output: dict[str, object] | None = None
+
+    @property
+    def fired(self) -> bool:
+        return self.outcome == "fired"
 
 
 class ScheduleProcessor:
@@ -38,14 +55,14 @@ class ScheduleProcessor:
         user_id: UUID,
         metadata: Optional[Dict[str, Any]] = None,
         source_event_id: str | None = None,
-    ) -> bool:
+    ) -> ProcessedEvent:
         """Process schedule event and publish when accepted."""
         if schedule is None:
             raise ValueError("schedule is required")
         if not schedule.is_active:
-            return False
+            return ProcessedEvent("inactive")
 
-        llm_output: Optional[Dict[str, Any]] = None
+        llm_output: dict[str, object] | None = None
 
         if schedule.filter_instruction:
             if self.filter_service is None:
@@ -54,16 +71,16 @@ class ScheduleProcessor:
             # worth retrying is a policy question, and it is answered at the
             # task boundary in `handle_llm_filter_task` — this layer does not
             # know whether its caller can retry.
-            should_proceed, llm_output = await self.filter_service.filter_event(
+            verdict = await self.filter_service.filter_event(
                 instruction=_filter_instruction(schedule.filter_instruction, metadata),
                 output_schema=schedule.filter_output_schema,
                 event_payload=payload,
                 schedule=schedule,
             )
-
-            if not should_proceed:
+            llm_output = verdict.output
+            if not verdict.proceed:
                 logger.debug("schedule.schedule_processor.s_filtered_out_llm.observed")
-                return False
+                return ProcessedEvent("filtered", llm_output)
 
         if not source_event_id:
             raise ValueError("source_event_id is required to publish a schedule fire")
@@ -76,7 +93,7 @@ class ScheduleProcessor:
             llm_output=llm_output,
             source_event_id=source_event_id,
         )
-        return True
+        return ProcessedEvent("fired", llm_output)
 
 
 def _filter_instruction(instruction: str, metadata: Mapping[str, object] | None) -> str:

@@ -5,7 +5,12 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.modules.workflow.domain.context import ContextReader
-from app.modules.workflow.domain.ports import AgentPort, FunctionPort, SchedulePort
+from app.modules.workflow.domain.ports import (
+    AgentPort,
+    DecisionPort,
+    FunctionPort,
+    SchedulePort,
+)
 
 
 @dataclass
@@ -21,4 +26,5 @@ class StepContext:
     agent: AgentPort
     function: FunctionPort
     schedule: SchedulePort
+    decision: DecisionPort
     authz_ctx: Context | None = None
