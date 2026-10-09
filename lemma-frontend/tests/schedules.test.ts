@@ -500,3 +500,14 @@ test("a copy of a server-event schedule is offered only accounts on that server"
     const mine = readServerEvents({ items: [offer("t1", "tracker", "issue.created"), offer("w1", "wiki", "issue.created"), offer("t2", "tracker", "page.edited")] });
     assert.deepEqual([...accountsOffering(mine, job)], ["t1"]);
 });
+
+test("a schedule the system turned off says why, rather than reading as paused", async () => {
+    const { healthOf, readSchedule } = await import("../src/schedule/schedules.ts");
+    const why = "Turned off: the person whose account it listened through is no longer in this space.";
+    const job = readSchedule({
+        id: "s1", name: "triage", schedule_type: "WEBHOOK", agent_name: "pod_default", agent_id: "a1", account_id: "acc1",
+        config: { source: "mcp", event: "issue.created" }, is_active: false, last_error: why,
+    });
+    assert.deepEqual(healthOf(job), { tone: "bad", line: why });
+    assert.equal(healthOf(readSchedule({ ...job.raw, last_error: null })).tone, "off", "a plain pause is still just off");
+});

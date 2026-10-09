@@ -31,9 +31,10 @@ UNSUPPORTED = -32014
 CALLBACK_ENDPOINT_ERROR = -32015
 INVALID_PARAMS = -32602
 
-#: How long a subscription lasts before the client must refresh it. The client
-#: may ask for less; it is never granted more, and never forever, so a
-#: connection nobody is using stops receiving on its own.
+#: How long a subscription lasts before the client must refresh it: what the
+#: client asked for, clamped between MIN_TTL and MAX_TTL, DEFAULT_TTL when it
+#: asked for nothing. Never forever, so a connection nobody is using stops
+#: receiving on its own; never so short that refreshing is all it does.
 DEFAULT_TTL = timedelta(hours=1)
 MAX_TTL = timedelta(hours=24)
 MIN_TTL = timedelta(minutes=5)

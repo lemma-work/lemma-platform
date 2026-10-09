@@ -198,7 +198,7 @@ function Row({ podId, job, mine, owner, orgId, open, onOpen, onOpenRun, onOpenCo
                     {job.instruction && <small className="sched-row__detail">{job.instruction}</small>}
 
                     {health.line && <span className="sched-row__health">{health.line}</span>}
-                    {job.lastError && health.tone === "bad" && (
+                    {job.lastError && health.tone === "bad" && job.lastError !== health.line && (
                         <span className="sched-row__error" title={job.lastError}>{job.lastError}</span>
                     )}
                 </span>

@@ -358,6 +358,9 @@ export function healthOf(job: StandingJob): { tone: Tone; line: string } {
             line: "Stopped by itself after " + job.failures + " failures in a row. Resuming clears the count.",
         };
     }
+    /* Turned off by the system for a reason it wrote down -- its author left,
+       or its server stopped listening. That is a fault to read, not a pause. */
+    if (!job.active && job.lastError.startsWith("Turned off:")) return { tone: "bad", line: job.lastError };
     if (!job.active) return { tone: "off", line: "It will not fire until somebody resumes it." };
     if (job.target.kind === "none") return { tone: "bad", line: "No agent or workflow is assigned to this schedule." };
     if (job.needsSetup) return { tone: "warn", line: job.needsSetup };

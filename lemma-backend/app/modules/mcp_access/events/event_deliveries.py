@@ -36,6 +36,7 @@ from app.modules.datastore.domain.events import DATASTORE_EVENTS_STREAM
 from app.modules.mcp_access.domain.events import RECORD_CREATED
 from app.modules.mcp_access.infrastructure.rate_limit import RateLimiter
 from app.modules.mcp_access.infrastructure.subscription_repository import (
+    FAN_OUT_PAGE,
     EventSubscriptionRepository,
 )
 from app.modules.mcp_access.services.event_delivery import (
@@ -90,22 +91,27 @@ async def fan_out_record_event(
     except ValueError:
         return 0
     table = str(event.get("table_name") or "")
-    async with uow_factory() as uow:
-        subscriptions = await EventSubscriptionRepository(uow).live_for(
-            pod_id=pod_id, name=RECORD_CREATED, table=table, now=now
-        )
-    for subscription in subscriptions:
-        await queue.enqueue(
-            TASK,
-            _job_id=f"mcp-event:{subscription.public_id}:{event.get('event_id')}",
-            subscription_id=subscription.public_id,
-            pod_id=str(pod_id),
-            table=table,
-            record_id=str(event.get("record_id")),
-            event_id=str(event.get("event_id")),
-            occurred_at=str(event.get("occurred_at")),
-        )
-    return len(subscriptions)
+    enqueued, after = 0, None
+    while True:
+        async with uow_factory() as uow:
+            page = await EventSubscriptionRepository(uow).live_for(
+                pod_id=pod_id, name=RECORD_CREATED, table=table, now=now, after=after
+            )
+        for subscription in page:
+            await queue.enqueue(
+                TASK,
+                _job_id=f"mcp-event:{subscription.public_id}:{event.get('event_id')}",
+                subscription_id=subscription.public_id,
+                pod_id=str(pod_id),
+                table=table,
+                record_id=str(event.get("record_id")),
+                event_id=str(event.get("event_id")),
+                occurred_at=str(event.get("occurred_at")),
+            )
+        enqueued += len(page)
+        if len(page) < FAN_OUT_PAGE:
+            return enqueued
+        after = page[-1].public_id
 
 
 @reliable_redis_stream_subscriber(

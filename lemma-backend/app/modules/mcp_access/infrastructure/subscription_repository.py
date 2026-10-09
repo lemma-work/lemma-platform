@@ -10,16 +10,13 @@ from sqlalchemy import case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.log.log import get_logger
 from app.modules.mcp_access.infrastructure.models import (
     McpEventSubscription,
     McpOAuthGrant,
 )
 
-logger = get_logger(__name__)
-
-#: One row event never fans out to more deliveries than this.
-MAX_DELIVERIES_PER_EVENT = 200
+#: Subscriptions read per page when one row event fans out.
+FAN_OUT_PAGE = 200
 
 #: At most this many subscriptions are listed for a page of connections.
 MAX_LISTED = 500
@@ -225,8 +222,16 @@ class EventSubscriptionRepository:
         )
 
     async def live_for(
-        self, *, pod_id: UUID, name: str, table: str, now: datetime
+        self,
+        *,
+        pod_id: UUID,
+        name: str,
+        table: str,
+        now: datetime,
+        after: str | None = None,
     ) -> list[StoredSubscription]:
+        """One page of the subscriptions a new row in this table goes to, in
+        id order after ``after``; the caller pages until one comes back short."""
         rows = list(
             (
                 await self._session.execute(
@@ -239,19 +244,14 @@ class EventSubscriptionRepository:
                             McpEventSubscription.arguments, "table"
                         )
                         == table,
+                        McpEventSubscription.public_id > (after or ""),
                         *_delivering(now),
                     )
-                    .order_by(McpEventSubscription.created_at)
-                    .limit(MAX_DELIVERIES_PER_EVENT)
+                    .order_by(McpEventSubscription.public_id)
+                    .limit(FAN_OUT_PAGE)
                 )
             ).scalars()
         )
-        if len(rows) == MAX_DELIVERIES_PER_EVENT:
-            logger.warning(
-                "mcp_access.subscriptions.fan_out_saturated.degraded",
-                pod_id=str(pod_id),
-                limit=MAX_DELIVERIES_PER_EVENT,
-            )
         return [_stored(row) for row in rows]
 
     async def record_delivery(

@@ -805,7 +805,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'mcp_access.rate_limit.unavailable.degraded': EventSpec('warning', frozenset()),
     'mcp_access.refresh_token.replayed': EventSpec('warning', frozenset({'client_id', 'grant_id'})),
     'mcp_access.refresh_token.retried': EventSpec('info', frozenset({'client_id', 'grant_id'})),
-    'mcp_access.subscriptions.fan_out_saturated.degraded': EventSpec('warning', frozenset({'limit', 'pod_id'})),
     'mcp_access.tasks.sweep_event_subscriptions.observed': EventSpec('info', frozenset({'removed'})),
     'mcp_access.tasks.sweep_grants.observed': EventSpec('info', frozenset({'ended'})),
     'net.impersonating_client.fetch_completed.observed': EventSpec('debug', frozenset({'bytes', 'status_code'})),
