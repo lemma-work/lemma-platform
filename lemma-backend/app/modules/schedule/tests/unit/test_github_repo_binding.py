@@ -31,7 +31,7 @@ class TestWhatTheDeliverySays:
         context = _repo_context(
             {
                 "repository": REPOSITORY,
-                "pull_request": {"head": {"ref": "feature/commas"}},
+                "pull_request": {"head": {"ref": "feature/commas", "repo": REPOSITORY}},
             },
             "pull_request",
         )
@@ -125,7 +125,7 @@ class TestTheTwoHalvesAgree:
         context = _repo_context(
             {
                 "repository": REPOSITORY,
-                "pull_request": {"head": {"ref": "feature/commas"}},
+                "pull_request": {"head": {"ref": "feature/commas", "repo": REPOSITORY}},
             },
             "pull_request",
         )
