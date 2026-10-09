@@ -28,7 +28,9 @@ class IdentityKind(StrEnum):
     EMAIL = "EMAIL"
     TELEGRAM = "TELEGRAM"
     #: A signed-in user of the customer's own product, as named in a token
-    #: their server signed: ``{widget id}:{their user id}``.
+    #: their server signed: ``host:{their user id}``. Keyed by the pod, not the
+    #: widget, so the same customer reached through another of the pod's
+    #: widgets -- or a widget made again -- is still the same contact.
     HOST = "HOST"
 
 

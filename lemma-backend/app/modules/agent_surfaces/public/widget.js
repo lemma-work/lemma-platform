@@ -6,7 +6,11 @@
  * Optional attributes:
  *   data-lemma-token="<host token>"  a signed-in user of the page's product, signed
  *                                    by the page's server with the widget's secret
- *                                    (or call Lemma.identify(token) later)
+ *                                    (or call Lemma.identify(token) later). A host
+ *                                    token lives ten minutes and so does the chat
+ *                                    it opens, unless the page hands over fresh
+ *                                    ones: Lemma.identify(function () { return
+ *                                    fetch("/my/lemma-token").then(...) })
  *   data-lemma-color="#5a3fd4"       the accent colour
  *   data-lemma-greeting="Hi!"        the first thing the chat says
  *   data-lemma-table="signups"       draw a form for a table the pod opened to
@@ -21,9 +25,14 @@
  * page.
  *
  * Everything the server says is built into the page as DOM nodes -- markdown
- * included -- and never parsed as markup. Requests are JSON sent as text/plain
- * so the browser sends no CORS pre-flight. Answers arrive on a fetch stream of
- * one JSON object per line; polling is the fallback.
+ * included -- and never parsed as markup.
+ *
+ * The wire: POST /session trades the session secret kept in localStorage (or a
+ * host token, or nothing) for a fifteen-minute access token, which rides as
+ * `Authorization: Bearer` on every other call and is never stored. Bodies are
+ * JSON. Answers arrive on a fetch stream of one JSON object per line, whose
+ * first line is a handshake; polling /history is the fallback, and catches up
+ * whatever a stream missed whenever one opens or ends.
  */
 (function () {
   "use strict";
@@ -45,12 +54,18 @@
       : "Hi! How can we help?");
   var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var pageMode = script.hasAttribute("data-lemma-page");
-  var state = { session: null, isContact: false, title: "" };
+  var state = { access: null, accessUntil: 0, secret: null, isContact: false, title: "" };
 
-  function remember(saved) {
+  // Only the session's secret is kept, and only for a visitor nobody signed in:
+  // a host session must not outlive the host's own sign-in on a shared machine.
+  function remember() {
     try {
-      if (saved) window.localStorage.setItem(storeKey, JSON.stringify(saved));
-      else window.localStorage.removeItem(storeKey);
+      if (state.secret && !hostToken) {
+        window.localStorage.setItem(
+          storeKey,
+          JSON.stringify({ secret: state.secret, isContact: state.isContact, title: state.title })
+        );
+      } else window.localStorage.removeItem(storeKey);
     } catch (e) {
       /* storage blocked: the chat lasts as long as the page */
     }
@@ -58,26 +73,32 @@
   function recalled() {
     try {
       var saved = JSON.parse(window.localStorage.getItem(storeKey) || "null");
-      return saved && typeof saved.session === "string" ? saved : null;
+      return saved && typeof saved.secret === "string" ? saved : null;
     } catch (e) {
       return null;
     }
   }
 
-  function request(path, body, signal) {
+  function request(path, options) {
+    options = options || {};
+    var headers = {};
+    if (options.auth !== false && state.access) headers.Authorization = "Bearer " + state.access;
+    if (options.body !== undefined) headers["Content-Type"] = "application/json";
     return fetch(base + path, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=UTF-8" },
-      body: JSON.stringify(body || {}),
-      signal: signal,
+      method: options.method || (options.body !== undefined ? "POST" : "GET"),
+      headers: headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      signal: options.signal,
+      credentials: "omit",
     });
   }
-  function call(path, body) {
-    return request(path, body).then(function (response) {
+  function call(path, options) {
+    return request(path, options).then(function (response) {
       return response.json().then(function (data) {
         if (!response.ok) {
-          var error = new Error((data && data.error) || "Something went wrong");
+          var error = new Error((data && (data.message || data.error)) || "Something went wrong");
           error.code = data && data.code;
+          error.status = response.status;
           throw error;
         }
         return data;
@@ -85,34 +106,103 @@
     });
   }
 
-  function start() {
-    return call("/session", { host_token: hostToken }).then(function (data) {
-      state.session = data.session;
-      state.isContact = data.is_contact;
-      state.title = data.title || "";
-      remember(hostToken ? null : { session: state.session, isContact: state.isContact, title: state.title });
-      return data;
+  // The proof-of-work a deployment with bot protection asks for before it starts
+  // an anonymous session or sends a code: find the number whose SHA-256 with the
+  // salt is the challenge. Nothing to do when the server says it is off.
+  function hex(buffer) {
+    return Array.prototype.map
+      .call(new Uint8Array(buffer), function (b) { return ("0" + b.toString(16)).slice(-2); })
+      .join("");
+  }
+  function solve(challenge) {
+    if (!challenge || !challenge.enabled) return Promise.resolve(null);
+    if (!window.crypto || !window.crypto.subtle) {
+      return Promise.reject(new Error("This page can't complete the security check."));
+    }
+    var encoder = new TextEncoder();
+    function from(number) {
+      if (number > challenge.maxnumber) return Promise.reject(new Error("The security check could not be completed."));
+      return window.crypto.subtle.digest("SHA-256", encoder.encode(challenge.salt + number)).then(function (digest) {
+        if (hex(digest) === challenge.challenge) {
+          return btoa(JSON.stringify({
+            algorithm: challenge.algorithm, challenge: challenge.challenge, number: number,
+            salt: challenge.salt, signature: challenge.signature,
+          })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        }
+        // Yield now and then so a slow machine's page stays usable meanwhile.
+        if (number % 500 === 499) return new Promise(function (r) { setTimeout(r, 0); }).then(function () { return from(number + 1); });
+        return from(number + 1);
+      });
+    }
+    return from(0);
+  }
+  function proof(purpose) {
+    return call("/challenge?purpose=" + purpose, { auth: false }).then(solve);
+  }
+
+  function hostTokenNow() {
+    if (typeof hostToken !== "function") return Promise.resolve(hostToken);
+    return Promise.resolve(hostToken()).then(function (token) {
+      return typeof token === "string" && token ? token : null;
     });
   }
-  function ensureSession() {
-    if (state.session) return Promise.resolve();
-    var saved = hostToken ? null : recalled();
-    if (saved) {
-      state.session = saved.session;
-      state.isContact = !!saved.isContact;
-      state.title = saved.title || "";
-      return Promise.resolve();
-    }
-    return start();
+  function adopt(data) {
+    state.access = data.access_token;
+    state.accessUntil = Date.now() + Math.max(30, (data.expires_in || 900) - 60) * 1000;
+    if (data.secret) state.secret = data.secret;
+    state.isContact = !!data.is_contact;
+    if (data.title) state.title = data.title;
+    remember();
+    return data;
   }
+  function exchange(body) {
+    return call("/session", { body: body, auth: false }).then(adopt);
+  }
+  // A session, kept or new, and a fresh access token for it.
+  function start() {
+    return hostTokenNow().then(function (token) {
+      if (state.secret || token) {
+        return exchange({ secret: state.secret, host_token: token }).catch(function (error) {
+          if (error.code !== "no_session" || token) throw error;
+          state.secret = null;
+          remember();
+          return start();
+        });
+      }
+      return proof("session").then(function (altcha) {
+        return exchange({ altcha: altcha });
+      });
+    });
+  }
+  var starting = null;
+  function ensureSession() {
+    if (state.access && Date.now() < state.accessUntil) return Promise.resolve();
+    if (!state.secret && !hostToken) {
+      var saved = recalled();
+      if (saved) {
+        state.secret = saved.secret;
+        state.isContact = !!saved.isContact;
+        state.title = saved.title || "";
+      }
+    }
+    if (!starting) {
+      starting = start().then(
+        function () { starting = null; },
+        function (error) { starting = null; throw error; }
+      );
+    }
+    return starting;
+  }
+  // Run ``fn`` with a live access token: refreshed when it has lapsed, and
+  // once more if the server says it did anyway.
   function withSession(fn) {
     return ensureSession()
       .then(fn)
       .catch(function (error) {
-        if (error.code !== "no_session") throw error;
-        state.session = null;
-        remember(null);
-        return start().then(fn);
+        if (error.status !== 401 || (error.code !== "bad_token" && error.code !== "no_session")) throw error;
+        state.access = null;
+        if (error.code === "no_session") state.secret = null;
+        return ensureSession().then(fn);
       });
   }
 
@@ -502,13 +592,35 @@
     }
   }
 
+  // A stream that will not open is retried with growing, jittered waits, and
+  // after a few tries the chat falls back to polling.
+  var streamFailures = 0;
+  function streamWait() {
+    var ceiling = Math.min(30000, 1000 * Math.pow(2, streamFailures));
+    return ceiling / 2 + Math.random() * (ceiling / 2);
+  }
   function openStream() {
-    if (streaming || noStream || !state.session) return;
+    if (streaming || noStream || !state.access) return;
     streaming = true;
-    var gotFrames = false;
-    request("/stream", { session: state.session })
+    var opened = false, quiet = false;
+    withSession(function () {
+      return request("/stream").then(function (response) {
+        if (response.status === 401) {
+          return response.json().then(function (data) {
+            var error = new Error((data && data.message) || "Sign in again");
+            error.code = data && data.code;
+            error.status = 401;
+            throw error;
+          });
+        }
+        return response;
+      });
+    })
       .then(function (response) {
-        if (response.status === 204) return;
+        if (response.status === 204) {
+          quiet = true;
+          return;
+        }
         if (!response.ok || !response.body) throw new Error("no stream");
         var reader = response.body.getReader();
         var decoder = new TextDecoder();
@@ -521,12 +633,21 @@
             buffer = parts.pop();
             parts.forEach(function (line) {
               if (!line.trim()) return;
-              gotFrames = true;
+              var frame;
               try {
-                onFrame(JSON.parse(line));
+                frame = JSON.parse(line);
               } catch (e) {
-                /* a line we do not understand */
+                return; /* a line we do not understand */
               }
+              if (frame.type === "open") {
+                // The handshake: the stream is up. Whatever was said while it
+                // was down is in the history.
+                opened = true;
+                streamFailures = 0;
+                poll();
+                return;
+              }
+              onFrame(frame);
             });
             return pump();
           });
@@ -534,12 +655,23 @@
         return pump();
       })
       .catch(function () {
-        if (!gotFrames) noStream = true;
+        if (!opened) streamFailures += 1;
       })
       .then(function () {
         streaming = false;
-        if (busy && isOpen() && !noStream) openStream();
-        else if (busy) keepPolling(90);
+        if (opened) poll();
+        // Nothing has been said yet, so there is nothing to watch: sending a
+        // message opens the stream again.
+        if (quiet || !busy) return;
+        if (streamFailures >= 4) noStream = true;
+        if (noStream || !isOpen()) {
+          keepPolling(90);
+          return;
+        }
+        window.setTimeout(function () {
+          if (busy && isOpen()) openStream();
+          else if (busy) keepPolling(90);
+        }, opened ? 250 : streamWait());
       });
   }
 
@@ -560,9 +692,9 @@
     if (busy && message.role === "assistant" && !streaming) setBusy(false);
   }
   function poll(initial) {
-    if (!state.session || (live && streaming)) return Promise.resolve();
+    if (!state.access || (live && streaming)) return Promise.resolve();
     return withSession(function () {
-      return call("/history", { session: state.session, after: lastSequence });
+      return call("/history?after=" + lastSequence);
     })
       .then(function (data) {
         (data.messages || []).forEach(function (m) {
@@ -588,7 +720,7 @@
     add(el("div", "lw-msg lw-user", text));
     setBusy(true);
     withSession(function () {
-      return call("/messages", { session: state.session, text: text });
+      return call("/messages", { body: { text: text } });
     })
       .then(function () {
         if (noStream) keepPolling(120);
@@ -634,14 +766,17 @@
       if (!value) return;
       go.disabled = true;
       var step = email
-        ? call("/code/verify", { session: state.session, email: email, code: value }).then(function () {
-            state.isContact = true;
-            if (!hostToken) remember(state);
+        ? withSession(function () {
+            return call("/code/verify", { body: { email: email, code: value } });
+          }).then(function (data) {
+            adopt(data);
             card.remove();
             if (after) after();
           })
         : withSession(function () {
-            return call("/code", { session: state.session, email: value });
+            return proof("code").then(function (altcha) {
+              return call("/code", { body: { email: value, altcha: altcha } });
+            });
           }).then(function () {
             email = value;
             says.textContent = "Enter the 6-digit code we sent to " + value + ".";
@@ -695,6 +830,7 @@
     var compose = el("div", "lw-compose");
     input = el("textarea");
     input.rows = 1;
+    input.maxLength = 4000;
     input.placeholder = "Write a message…";
     input.setAttribute("aria-label", "Message");
     sendButton = el("button", "lw-send");
@@ -865,14 +1001,12 @@
 
   function addRow(table, values) {
     return withSession(function () {
-      return call("/rows", { session: state.session, table: table, values: values });
+      return call("/rows", { body: { table: table, values: values } });
     });
   }
 
   function describeTable(table) {
-    return withSession(function () {
-      return call("/table", { session: state.session, table: table });
-    });
+    return call("/table?table=" + encodeURIComponent(table), { auth: false });
   }
 
   function renderForm(into, spec) {
@@ -1089,10 +1223,14 @@
         callback(event.detail);
       });
     },
+    /** A host token, or a function returning one (or a promise of one) that is
+     *  asked again whenever the chat needs a fresh one. */
     identify: function (token) {
       hostToken = token;
-      state.session = null;
-      return start();
+      state.access = null;
+      state.secret = null;
+      remember();
+      return ensureSession();
     },
   };
 

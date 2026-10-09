@@ -301,13 +301,19 @@ one:
   anything the model put there.
 - **Web widgets.** `/pods/{pod_id}/web-widgets` (a chat; public key,
   encrypted signing secret shown once and rotatable, allowed origins, answer,
-  looked-after-by). Public endpoints under `/public/web/{public_key}`: session
-  (optionally with a host token, HS256, `aud` = public key, ≤ 10 minutes),
-  messages, stream, history, email code and verify, table and rows; bodies are JSON as
-  `text/plain` so no CORS pre-flight, and responses name the origin only when
-  the widget allows it. An anonymous visitor is an outsider; a host token
-  (`host`) or a code (`code`) makes them a contact, upgrading their
-  conversation in place. A row goes to a table opened to visitors
+  looked-after-by). Public endpoints under `/public/web/{public_key}`: session,
+  challenge, messages, stream, history, email code and verify, table and rows,
+  served only while `PUBLIC_WEB_ENABLED` is on. A session (`visitor_sessions`)
+  is opened with nothing (after an Altcha proof when bot protection is on), a
+  host token (HS256, `aud` = public key, ≤ 10 minutes) or the secret the page
+  kept, and answers with a 15-minute `visitor-access` token sent as
+  `Authorization: Bearer`; bodies are JSON. Anonymous sessions end after 90
+  days, a contact's 30 days after last use, and a host session never refreshes
+  without a fresh host token; reissuing the secret or forgetting the contact
+  revokes them. CORS for these paths comes from the widget's own origins, never
+  with credentials. An anonymous visitor is an outsider; a host token
+  (`host`) or a code (`code`) makes them a contact under a new secret,
+  upgrading their conversation in place. A row goes to a table opened to visitors
   (`datastore_public_rows`), as the member who opened it, with the visitor's
   contact on a contact-owned table. `/public/web/widget.js` is the chat and the
   form drawer. Limits per widget,

@@ -61,9 +61,13 @@ Each widget has `page_url` and `embed`.
   draws the form where the tag is. Optional `data-lemma-title`, `data-lemma-intro`,
   `data-lemma-thanks`, `data-lemma-color`.
 - **Their own design:** build an HTML app (`lemma-builder` → `references/apps.md`)
-  from `assets/form-app.html`. Mark the form `<form data-lemma-table="signups">`
+  from `assets/form-app.html`. Mark the form `<form method="post" data-lemma-table="signups">`
   with inputs named after the open columns, or call `Lemma.addRow(table, values)`
-  yourself. If the widget lists `allowed_origins`, add the app's host to it.
+  yourself. If the widget lists `allowed_origins`, add the app's origin to it
+  (`https://host[:port]`, no path; `http://` only for `localhost`).
+  The page holds only the widget's public key. The script keeps the visitor's
+  session for itself and sends a short-lived token with every call, so never
+  copy one into the page or call `/public/web` yourself.
 
 The script gives the page:
 

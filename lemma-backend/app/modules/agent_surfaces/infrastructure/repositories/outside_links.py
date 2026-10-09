@@ -21,8 +21,9 @@ from app.modules.agent_surfaces.domain.groups import (
 from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurfaceConversationLinkModel,
 )
-from app.modules.agent_surfaces.infrastructure.web_widget_models import (
-    WebSessionModel,
+from app.modules.contacts.contracts.visitor_sessions import (
+    conversation_has_visitor,
+    latest_visitor_conversation,
 )
 
 
@@ -50,13 +51,9 @@ async def links_to_people_outside(session: AsyncSession, conversation_id: UUID) 
         )
         .exists()
     )
-    from_the_web = (
-        select(WebSessionModel.id)
-        .where(WebSessionModel.conversation_id == conversation_id)
-        .exists()
-    )
-    statement = select(or_(linked, from_the_web))
-    return bool((await session.execute(statement)).scalar())
+    if (await session.execute(select(linked))).scalar():
+        return True
+    return await conversation_has_visitor(session, conversation_id)
 
 
 async def latest_contact_thread(
@@ -76,19 +73,11 @@ async def latest_contact_thread(
             .limit(1)
         )
     ).first()
-    web = (
-        await session.execute(
-            select(WebSessionModel.conversation_id, WebSessionModel.last_seen_at)
-            .where(
-                WebSessionModel.contact_id == contact_id,
-                WebSessionModel.conversation_id.is_not(None),
-            )
-            .order_by(WebSessionModel.last_seen_at.desc())
-            .limit(1)
-        )
-    ).first()
-    if web is not None and (linked is None or web.last_seen_at > linked.updated_at):
-        return web.conversation_id, WEB_PLATFORM
+    web = await latest_visitor_conversation(session, contact_id)
+    if web is not None:
+        web_conversation_id, web_seen_at = web
+        if linked is None or web_seen_at > linked.updated_at:
+            return web_conversation_id, WEB_PLATFORM
     if linked is not None:
         return linked.conversation_id, linked.platform
     return None

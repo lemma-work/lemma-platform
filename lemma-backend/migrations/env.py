@@ -55,7 +55,12 @@ from app.modules.mcp_access.infrastructure import models as mcp_access_models  #
 # Contacts (contacts, contact_identities)
 from app.modules.contacts.infrastructure import models as contact_models  # noqa: F401
 
-# Web widgets (agent_surface_web_widgets, _web_sessions, _web_codes)
+# Visitors' sessions (visitor_sessions, agent_surface_web_codes)
+from app.modules.contacts.infrastructure import (  # noqa: F401
+    visitor_sessions as visitor_session_models,
+)
+
+# Web widgets (agent_surface_web_widgets)
 from app.modules.agent_surfaces.infrastructure import (  # noqa: F401
     web_widget_models,
 )
@@ -85,6 +90,7 @@ REGISTERED_MODEL_MODULES = (
     workspace_models,
     mcp_access_models,
     contact_models,
+    visitor_session_models,
     web_widget_models,
 )
 

@@ -22,7 +22,7 @@ anonymous visitors, web widgets with public keys, email codes.
 | Piece | What it is |
 | --- | --- |
 | Table permission | `datastore_public_rows`: who outside may add rows (`anyone`, or confirmed `contacts`), which columns, opened by which member. Rows are added as that member, through the same validation, permission check and insert events as their own hand. `PUT/GET/DELETE /pods/{pod}/datastore/tables/{table}/public-rows` |
-| What a page may do | `POST /public/web/{key}/table` (the open columns), `POST /public/web/{key}/rows` (add one row; nothing read back). `contact_id` is stamped on a contact-owned table for a confirmed visitor, never taken from the page |
+| What a page may do | `GET /public/web/{key}/table?table=` (the open columns), `POST /public/web/{key}/rows` (add one row; nothing read back). `contact_id` is stamped on a contact-owned table for a confirmed visitor, never taken from the page |
 | The hosted form | `/public/web/{key}/page?table=signups`, drawn by `widget.js` from the open columns; a column's description is its question |
 | Any website | the widget script with `data-lemma-table`, or a plain `<form data-lemma-table>`, or `Lemma.addRow(table, values)` |
 | Custom design | the `lemma-form` skill: the teammate builds a form app from a template, on the app's own host |

@@ -1,337 +1,353 @@
 """The public endpoints a web widget calls, with nothing but its public key.
 
-Unauthenticated by design (`/public/web` is excluded from session auth): the
-public key names the widget, and ``services/web_chat`` decides what a visitor
-may do with it.
+Unauthenticated by the platform (``/public`` is excluded from session auth):
+the public key names the widget (``PublicWidgetDep``), and the visitor's own
+access token names them (``PublicVisitorDep``). ``services/web_visitors`` and
+``services/web_chat`` decide what a visitor may do.
 
-Bodies are JSON sent as ``text/plain``, and the session token rides in the body.
-That keeps every request "simple" in CORS terms, so a browser never sends a
-pre-flight the app-wide CORS policy would refuse for a customer's origin. Each
-response then names the page's origin itself -- only when the widget allows it.
+Bodies are ordinary JSON and the token rides in ``Authorization``, so the
+browser pre-flights each call. ``PublicWebCORSMiddleware`` answers those from
+the widget's own allowed origins, and puts the page's origin on every response
+-- errors included -- only when the widget allows it. Errors use the API's usual
+envelope, ``{"message", "code", ...}``, with ``code`` the word a page acts on.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import get_uow_factory
-from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frames
+from app.modules.agent_surfaces.api.public_dependencies import (
+    OptionalVisitorDep,
+    PublicVisitorDep,
+    PublicWidgetDep,
+    VisitorAddressDep,
+    web_chat,
+)
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.web_widgets import WebWidget, normalize_origin
-from app.modules.agent_surfaces.services.web_chat import WebChat, WebChatRefused
+from app.modules.agent_surfaces.domain.web_widgets import refused
+from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
+from app.modules.agent_surfaces.services.web_chat import MAX_MESSAGE_CHARS, WebChat
+from app.modules.agent_surfaces.services.web_visitors import (
+    StartedSession,
+    WebVisitors,
+)
 
 router = APIRouter(prefix="/public/web", tags=["Agent Surfaces (Web)"])
 
-_MAX_BODY_BYTES = 65_536
-
 
 class SessionRequest(BaseModel):
-    host_token: str | None = Field(default=None, max_length=4096)
+    secret: str | None = Field(
+        default=None,
+        max_length=128,
+        description="The secret a previous answer returned, to come back to that session.",
+    )
+    host_token: str | None = Field(
+        default=None,
+        max_length=4096,
+        description="A token the page's own server signed with the widget's secret.",
+    )
+    altcha: str | None = Field(
+        default=None,
+        max_length=4096,
+        description="The solved challenge, when starting an anonymous session.",
+    )
+
+
+class SessionResponse(BaseModel):
+    access_token: str = Field(
+        description="Send as `Authorization: Bearer` on every other call. Never store it."
+    )
+    secret: str | None = Field(
+        description="Only when new: keep it to come back. Null means keep the one you have."
+    )
+    is_contact: bool
+    display_name: str | None
+    title: str | None = None
+    expires_in: int = Field(description="Seconds until the access token expires.")
 
 
 class MessageRequest(BaseModel):
-    session: str = Field(max_length=128)
-    text: str = Field(max_length=8000)
+    text: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
 
 
-class StreamRequest(BaseModel):
-    session: str = Field(max_length=128)
+class Accepted(BaseModel):
+    ok: bool = True
 
 
-class HistoryRequest(BaseModel):
-    session: str = Field(max_length=128)
-    after: int = -1
+class HistoryMessage(BaseModel):
+    role: str
+    text: str
+    sequence: int
+
+
+class HistoryResponse(BaseModel):
+    messages: list[HistoryMessage]
 
 
 class CodeRequest(BaseModel):
-    session: str = Field(max_length=128)
     email: str = Field(max_length=320)
+    altcha: str | None = Field(default=None, max_length=4096)
 
 
-class VerifyRequest(CodeRequest):
+class VerifyRequest(BaseModel):
+    email: str = Field(max_length=320)
     code: str = Field(max_length=12)
 
 
-class TableRequest(BaseModel):
-    session: str | None = Field(default=None, max_length=128)
+class TableColumn(BaseModel):
+    name: str
+    type: str
+    required: bool
+    options: list[str]
+    description: str | None
+
+
+class TableResponse(BaseModel):
+    table: str
+    contacts_only: bool
+    columns: list[TableColumn]
+
+
+class RowRequest(BaseModel):
     table: str = Field(max_length=255)
-
-
-class RowRequest(TableRequest):
     values: dict[str, object] = Field(default_factory=dict)
 
 
-def _chat(uow_factory: UnitOfWorkFactory = Depends(get_uow_factory)) -> WebChat:
-    return WebChat(uow_factory)
+def _visitors(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> WebVisitors:
+    return WebVisitors(uow_factory)
 
 
-def _own_origin() -> str:
-    """Where Lemma serves a widget's hosted page, which every widget allows."""
-    url = str(settings.api_url)
-    scheme, _, rest = url.partition("://")
-    return normalize_origin(f"{scheme}://{rest.split('/', 1)[0]}")
-
-
-def _allowed(widget: WebWidget, origin: str) -> bool:
-    return normalize_origin(origin) == _own_origin() or widget.allows_origin(origin)
-
-
-def _cors(request: Request, widget: WebWidget | None) -> dict[str, str]:
-    origin = request.headers.get("origin")
-    if not origin or widget is None or not _allowed(widget, origin):
-        return {}
-    return {"Access-Control-Allow-Origin": origin, "Vary": "Origin"}
-
-
-def _address(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
-
-
-async def _body[T: BaseModel](request: Request, model: type[T]) -> T:
-    # Read as it arrives and stop at the cap: the sender chooses the size, and a
-    # key copied off a page must not be a way to make the server hold a body.
-    raw = bytearray()
-    async for chunk in request.stream():
-        raw.extend(chunk)
-        if len(raw) > _MAX_BODY_BYTES:
-            raise WebChatRefused("That is too long", status_code=413, code="too_large")
-    try:
-        return model.model_validate_json(bytes(raw) or b"{}")
-    except ValidationError as exc:
-        raise WebChatRefused(
-            "That request was not understood", status_code=400, code="bad_request"
-        ) from exc
-
-
-async def _widget_for(request: Request, chat: WebChat, public_key: str) -> WebWidget:
-    widget = await chat.widget_for_key(public_key)
-    origin = request.headers.get("origin")
-    if origin and not _allowed(widget, origin):
-        raise WebChatRefused(
-            "This widget is not allowed on this site", status_code=403, code="origin"
-        )
-    return widget
-
-
-def _refusal(
-    request: Request, widget: WebWidget | None, exc: WebChatRefused
-) -> JSONResponse:
-    return JSONResponse(
-        {"error": exc.message, "code": exc.code},
-        status_code=exc.status_code,
-        headers=_cors(request, widget),
+def _session_response(started: StartedSession, *, title: str | None) -> SessionResponse:
+    return SessionResponse(
+        access_token=started.access_token,
+        secret=started.secret,
+        is_contact=started.is_contact,
+        display_name=started.display_name,
+        title=title,
+        expires_in=started.expires_in,
     )
 
 
-@router.post("/{public_key}/session", operation_id="public.web.session.start")
+@router.get("/{public_key}/challenge", operation_id="public.web.challenge.read")
+async def web_challenge(
+    widget: PublicWidgetDep,
+    purpose: str = Query(default="session", pattern="^(session|code)$"),
+    visitors: WebVisitors = Depends(_visitors),
+) -> Mapping[str, object]:
+    """A proof-of-work to solve before starting a session or asking for a code.
+
+    ``{"enabled": false}`` when the deployment has bot protection off.
+    """
+    del widget  # resolved for the switch, the key and the origin
+    return await visitors.visitor_challenge(for_code=purpose == "code")
+
+
+@router.post(
+    "/{public_key}/session",
+    operation_id="public.web.session.start",
+    response_model=SessionResponse,
+)
 async def web_start_session(
-    public_key: str, request: Request, chat: WebChat = Depends(_chat)
-) -> JSONResponse:
-    widget = None
-    try:
-        widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, SessionRequest)
-        started = await chat.start_visitor_session(
-            widget, host_token=body.host_token, address=_address(request)
-        )
-        title = await chat.widget_title(widget)
-    except WebChatRefused as exc:
-        return _refusal(request, widget, exc)
-    return JSONResponse(
-        {
-            "session": started.token,
-            "is_contact": started.is_contact,
-            "display_name": started.display_name,
-            "title": title,
-        },
-        headers=_cors(request, widget),
+    body: SessionRequest,
+    widget: PublicWidgetDep,
+    address: VisitorAddressDep,
+    visitors: WebVisitors = Depends(_visitors),
+    chat: WebChat = Depends(web_chat),
+) -> SessionResponse:
+    """Start a session, or come back to one: either way, a new access token."""
+    started = await visitors.start_visitor_session(
+        widget,
+        secret=body.secret,
+        host_token=body.host_token,
+        altcha=body.altcha,
+        address=address,
     )
+    return _session_response(started, title=await chat.widget_title(widget))
 
 
-@router.post("/{public_key}/messages", operation_id="public.web.message.send")
+@router.post(
+    "/{public_key}/messages",
+    operation_id="public.web.message.send",
+    status_code=202,
+    response_model=Accepted,
+)
 async def web_send_message(
-    public_key: str, request: Request, chat: WebChat = Depends(_chat)
-) -> JSONResponse:
-    widget = None
-    try:
-        widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, MessageRequest)
-        await chat.send_visitor_message(widget, token=body.session, text=body.text)
-    except WebChatRefused as exc:
-        return _refusal(request, widget, exc)
-    return JSONResponse({"ok": True}, status_code=202, headers=_cors(request, widget))
+    body: MessageRequest,
+    widget: PublicWidgetDep,
+    visitor: PublicVisitorDep,
+    chat: WebChat = Depends(web_chat),
+) -> Accepted:
+    await chat.send_visitor_message(widget, visitor, text=body.text)
+    return Accepted()
 
 
-@router.post("/{public_key}/stream", operation_id="public.web.stream.read")
+@router.get("/{public_key}/stream", operation_id="public.web.stream.read")
 async def web_stream_answers(
-    public_key: str,
-    request: Request,
-    chat: WebChat = Depends(_chat),
+    visitor: PublicVisitorDep,
+    chat: WebChat = Depends(web_chat),
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> Response:
     """The bot's answer as it is written, one JSON object per line.
 
-    Read with ``fetch`` rather than ``EventSource`` so the session stays in the
-    body and the request stays simple. Only what a visitor may see is sent:
+    The first line is ``{"type": "open"}``, a handshake that says the stream is
+    up, not a frame of the conversation. Only what a visitor may see follows:
     see ``agent.contracts.visitor_stream``. The page reconnects when it closes.
+    A session holds at most two streams at once.
     """
-    widget = None
-    try:
-        widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, StreamRequest)
-        conversation_id = await chat.visitor_conversation(widget, token=body.session)
-    except WebChatRefused as exc:
-        return _refusal(request, widget, exc)
+    conversation_id = await chat.visitor_conversation(visitor)
     if conversation_id is None:
-        return Response(status_code=204, headers=_cors(request, widget))
+        return Response(status_code=204)
+    limiter = WebWidgetLimiter()
+    session_id = visitor.session.session_id
+    if not await limiter.open_visitor_stream(session_id=session_id):
+        raise refused("This chat is already open elsewhere", 429, "too_many_streams")
+
+    async def release() -> None:
+        await limiter.close_visitor_stream(session_id=session_id)
+
     return StreamingResponse(
-        _lines(conversation_id, uow_factory),
+        _lines(conversation_id, uow_factory, release=release),
         media_type="application/x-ndjson",
-        headers={
-            **_cors(request, widget),
-            "Cache-Control": "no-store",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
 
 
 async def _lines(
-    conversation_id: UUID, uow_factory: UnitOfWorkFactory
+    conversation_id: UUID,
+    uow_factory: UnitOfWorkFactory,
+    *,
+    release: Callable[[], Awaitable[None]],
 ) -> AsyncIterator[str]:
-    yield _line({"type": "open"})
-    async for frame in visitor_frames(
-        conversation_id,
-        uow_factory=uow_factory,
-        max_seconds=surface_settings.surface_web_stream_seconds,
-    ):
-        yield "\n" if frame is None else _line(frame)
+    try:
+        yield _line({"type": "open"})
+        async for frame in visitor_frames(
+            conversation_id,
+            uow_factory=uow_factory,
+            max_seconds=surface_settings.surface_web_stream_seconds,
+        ):
+            yield "\n" if frame is None else _line(frame)
+    finally:
+        await release()
 
 
-def _line(frame: dict[str, object]) -> str:
+def _line(frame: Mapping[str, object]) -> str:
     """One frame on the wire. A delta is a few words, a message one answer."""
     return json.dumps(frame) + "\n"
 
 
-@router.post("/{public_key}/history", operation_id="public.web.history.read")
+@router.get(
+    "/{public_key}/history",
+    operation_id="public.web.history.read",
+    response_model=HistoryResponse,
+)
 async def web_read_history(
-    public_key: str, request: Request, chat: WebChat = Depends(_chat)
-) -> JSONResponse:
-    widget = None
-    try:
-        widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, HistoryRequest)
-        messages = await chat.visitor_history(
-            widget, token=body.session, after=body.after
-        )
-    except WebChatRefused as exc:
-        return _refusal(request, widget, exc)
-    return JSONResponse(
-        {
-            "messages": [
-                {"role": m.role, "text": m.text, "sequence": m.sequence}
-                for m in messages
-            ]
-        },
-        headers=_cors(request, widget),
+    visitor: PublicVisitorDep,
+    after: int = Query(default=-1, ge=-1),
+    chat: WebChat = Depends(web_chat),
+) -> HistoryResponse:
+    messages = await chat.visitor_history(visitor, after=after)
+    return HistoryResponse(
+        messages=[
+            HistoryMessage(role=m.role, text=m.text, sequence=m.sequence)
+            for m in messages
+        ]
     )
 
 
-@router.post("/{public_key}/code", operation_id="public.web.code.send")
+@router.post(
+    "/{public_key}/code", operation_id="public.web.code.send", response_model=Accepted
+)
 async def web_send_code(
-    public_key: str, request: Request, chat: WebChat = Depends(_chat)
-) -> JSONResponse:
-    widget = None
-    try:
-        widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, CodeRequest)
-        await chat.send_visitor_code(
-            widget, token=body.session, email=body.email, address=_address(request)
-        )
-    except WebChatRefused as exc:
-        return _refusal(request, widget, exc)
-    return JSONResponse({"ok": True}, headers=_cors(request, widget))
-
-
-@router.post("/{public_key}/code/verify", operation_id="public.web.code.verify")
-async def web_verify_code(
-    public_key: str, request: Request, chat: WebChat = Depends(_chat)
-) -> JSONResponse:
-    widget = None
-    try:
-        widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, VerifyRequest)
-        verified = await chat.verify_visitor_code(
-            widget, token=body.session, email=body.email, code=body.code
-        )
-    except WebChatRefused as exc:
-        return _refusal(request, widget, exc)
-    return JSONResponse(
-        {"is_contact": verified.is_contact, "display_name": verified.display_name},
-        headers=_cors(request, widget),
+    body: CodeRequest,
+    widget: PublicWidgetDep,
+    visitor: PublicVisitorDep,
+    address: VisitorAddressDep,
+    visitors: WebVisitors = Depends(_visitors),
+) -> Accepted:
+    await visitors.send_visitor_code(
+        widget, visitor, email=body.email, altcha=body.altcha, address=address
     )
+    return Accepted()
 
 
-@router.post("/{public_key}/table", operation_id="public.web.table.read")
+@router.post(
+    "/{public_key}/code/verify",
+    operation_id="public.web.code.verify",
+    response_model=SessionResponse,
+)
+async def web_verify_code(
+    body: VerifyRequest,
+    widget: PublicWidgetDep,
+    visitor: PublicVisitorDep,
+    address: VisitorAddressDep,
+    visitors: WebVisitors = Depends(_visitors),
+) -> SessionResponse:
+    """Confirm an email address: the session becomes a contact's, under a new
+    secret and a new access token, which replace the old ones."""
+    started = await visitors.verify_visitor_code(
+        widget, visitor, email=body.email, code=body.code, address=address
+    )
+    return _session_response(started, title=None)
+
+
+@router.get(
+    "/{public_key}/table",
+    operation_id="public.web.table.read",
+    response_model=TableResponse,
+)
 async def web_read_table(
-    public_key: str, request: Request, chat: WebChat = Depends(_chat)
-) -> JSONResponse:
+    widget: PublicWidgetDep,
+    table: str = Query(max_length=255),
+    chat: WebChat = Depends(web_chat),
+) -> TableResponse:
     """What a page may ask for on a table the pod opened to visitors.
 
     The open columns only, in order: enough to draw a form, and nothing else
     about the table or its rows.
     """
-    widget = None
-    try:
-        widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, TableRequest)
-        opened, contacts_only = await chat.visitor_table(
-            widget, token=body.session, table=body.table
-        )
-    except WebChatRefused as exc:
-        return _refusal(request, widget, exc)
-    return JSONResponse(
-        {
-            "table": opened.name,
-            "contacts_only": contacts_only,
-            "columns": [
-                {
-                    "name": column.name,
-                    "type": column.type,
-                    "required": column.required,
-                    "options": list(column.options),
-                    "description": column.description,
-                }
-                for column in opened.columns
-            ],
-        },
-        headers=_cors(request, widget),
+    opened, contacts_only = await chat.visitor_table(widget, table=table)
+    return TableResponse(
+        table=opened.name,
+        contacts_only=contacts_only,
+        columns=[
+            TableColumn(
+                name=column.name,
+                type=column.type,
+                required=column.required,
+                options=list(column.options),
+                description=column.description,
+            )
+            for column in opened.columns
+        ],
     )
 
 
-@router.post("/{public_key}/rows", operation_id="public.web.row.add")
+@router.post(
+    "/{public_key}/rows",
+    operation_id="public.web.row.add",
+    status_code=201,
+    response_model=Accepted,
+)
 async def web_add_row(
-    public_key: str, request: Request, chat: WebChat = Depends(_chat)
-) -> JSONResponse:
+    body: RowRequest,
+    widget: PublicWidgetDep,
+    visitor: OptionalVisitorDep,
+    address: VisitorAddressDep,
+    chat: WebChat = Depends(web_chat),
+) -> Accepted:
     """Add one row to a table the pod opened to visitors. Nothing is read back."""
-    widget = None
-    try:
-        widget = await _widget_for(request, chat, public_key)
-        body = await _body(request, RowRequest)
-        await chat.add_visitor_row(
-            widget,
-            token=body.session,
-            table=body.table,
-            answers=body.values,
-            address=_address(request),
-        )
-    except WebChatRefused as exc:
-        return _refusal(request, widget, exc)
-    return JSONResponse({"ok": True}, status_code=201, headers=_cors(request, widget))
+    await chat.add_visitor_row(
+        widget, visitor, table=body.table, answers=body.values, address=address
+    )
+    return Accepted()

@@ -86,17 +86,35 @@ export function formEmbed(embed: string, table: string): string {
     return embed.replace(/\s+async><\/script>$/, ` data-lemma-table="${table}" async></script>`);
 }
 
-/** A plain HTML form on someone's own page, sent through the same script. */
+/** Text as it may sit in HTML, inside an element or a quoted attribute. An
+ *  option is whatever a member typed, and this snippet is pasted into a page. */
+function escapeHtml(value: string): string {
+    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** A plain HTML form on someone's own page, sent through the same script.
+ *
+ *  `method="post"`: the script sends the answers itself, but if it has not
+ *  loaded the browser submits the form on its own, and a GET would put every
+ *  answer in the address bar, the history and the server's logs. */
 export function htmlFormSnippet(embed: string, table: string, columns: OfferedColumn[]): string {
     const fields = columns.map((column) => {
         const required = column.required ? " required" : "";
+        const name = escapeHtml(column.name);
         if (column.options.length) {
-            return `  <select name="${column.name}"${required}>${column.options.map((option) => `<option>${option}</option>`).join("")}</select>`;
+            const options = column.options.map((option) => `<option>${escapeHtml(option)}</option>`).join("");
+            return `  <select name="${name}"${required}>${options}</select>`;
         }
         const type = column.type === "INTEGER" || column.type === "FLOAT" ? "number" : column.type === "BOOLEAN" ? "checkbox" : column.type === "DATE" ? "date" : "text";
-        return `  <input name="${column.name}" type="${type}"${required}>`;
+        return `  <input name="${name}" type="${type}"${required}>`;
     });
-    return [`<form data-lemma-table="${table}">`, ...fields, "  <button>Send</button>", "</form>", embed.replace(/\s+async></, " data-lemma-chat=\"off\" async><")].join("\n");
+    return [
+        `<form method="post" data-lemma-table="${escapeHtml(table)}">`,
+        ...fields,
+        "  <button>Send</button>",
+        "</form>",
+        embed.replace(/\s+async></, " data-lemma-chat=\"off\" async><"),
+    ].join("\n");
 }
 
 /** What to ask the teammate for a form in the space's own design. */

@@ -13,9 +13,12 @@ import hashlib
 import secrets
 from datetime import datetime
 from enum import StrEnum
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
+
+from app.core.domain.errors import DomainError
 
 PUBLIC_KEY_PREFIX = "pk_"
 SECRET_PREFIX = "sk_"
@@ -59,19 +62,54 @@ class WebWidget(BaseModel):
         return bool(origin) and normalize_origin(origin or "") in self.allowed_origins
 
 
-class WebSession(BaseModel):
-    model_config = ConfigDict(frozen=True)
+class WebChatRefused(DomainError):
+    """What a visitor is told when the widget will not do what they asked.
 
-    id: UUID
-    widget_id: UUID
-    conversation_id: UUID | None
-    contact_id: UUID | None
-    contact_strength: str | None
-    display_name: str | None
+    ``code`` is the short word a page acts on (``no_session``, ``bad_token``,
+    ``needs_contact``...), carried in the API's usual error envelope.
+    """
+
+    def __init__(self, message: str, *, status_code: int, code: str) -> None:
+        super().__init__(message, code=code, status_code=status_code)
+
+
+def refused(message: str, status_code: int, code: str) -> WebChatRefused:
+    return WebChatRefused(message, status_code=status_code, code=code)
 
 
 def normalize_origin(origin: str) -> str:
     return origin.strip().rstrip("/").lower()
+
+
+#: The only pages a widget may name over plain HTTP: the developer's own machine.
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+
+def parse_origin(value: str) -> str:
+    """``value`` as an origin a widget may name, or ``ValueError`` saying why.
+
+    A scheme and a host, with a port if it has one, and nothing else: a path or
+    a query would never match the ``Origin`` a browser sends, so a member who
+    typed one would be refused on their own site without knowing why. HTTPS,
+    except for exactly ``localhost`` and ``127.0.0.1``.
+    """
+    text = value.strip()
+    parsed = urlsplit(text)
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError(f"That port isn't a number: {text}") from None
+    host = (parsed.hostname or "").lower()
+    if not parsed.scheme or not host:
+        raise ValueError(f"Origins look like https://example.com: {text}")
+    if parsed.username or parsed.password:
+        raise ValueError(f"Origins carry no user name: {text}")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError(f"Origins have no path or query: {text}")
+    scheme = parsed.scheme.lower()
+    if scheme != "https" and not (scheme == "http" and host in _LOOPBACK_HOSTS):
+        raise ValueError(f"Origins are https:// addresses: {text}")
+    return f"{scheme}://{host}" + (f":{port}" if port is not None else "")
 
 
 def mint_public_key() -> str:
@@ -82,19 +120,15 @@ def mint_secret() -> str:
     return SECRET_PREFIX + secrets.token_urlsafe(32)
 
 
-def mint_session_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
 def mint_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def digest(value: str) -> str:
-    """How a session token or a code is stored: never in the clear.
+    """How a code is stored: never in the clear.
 
-    A plain SHA-256 is enough for a 256-bit session token. A six-digit code is
-    guessable from its digest, which is why codes expire in minutes, allow few
-    attempts, and are salted with the session they belong to (see callers).
+    A six-digit code is guessable from its digest, which is why codes expire in
+    minutes, allow few attempts, and are salted with the session they belong to
+    (see callers).
     """
     return hashlib.sha256(value.encode("utf-8")).hexdigest()

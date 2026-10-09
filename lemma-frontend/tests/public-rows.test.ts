@@ -42,11 +42,13 @@ test("the form is the chat's page and script, told which table", () => {
     assert.equal(formLink("https://api.example/public/web/pk_1/page", "signups"), "https://api.example/public/web/pk_1/page?table=signups");
     assert.equal(formEmbed(embed, "signups"), '<script src="https://api.example/public/web/widget.js" data-lemma-key="pk_1" data-lemma-table="signups" async></script>');
     const html = htmlFormSnippet(embed, "signups", closed.offered);
-    assert.match(html, /<form data-lemma-table="signups">/);
+    assert.match(html, /<form method="post" data-lemma-table="signups">/);
     assert.match(html, /<input name="full_name" type="text" required>/);
     assert.match(html, /<input name="seats" type="number">/);
     assert.match(html, /<select name="track"><option>Design<\/option><option>Code<\/option><\/select>/);
     assert.match(html, /data-lemma-chat="off" async>/);
+    const odd = htmlFormSnippet(embed, "signups", [{ ...closed.offered[0], name: "pick", options: ['A & "B"', "<script>"] }]);
+    assert.match(odd, /<option>A &amp; &quot;B&quot;<\/option><option>&lt;script&gt;<\/option>/);
     assert.match(customFormAsk("signups"), /lemma-form skill/);
 });
 
