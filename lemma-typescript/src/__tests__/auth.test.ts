@@ -37,6 +37,9 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     document.cookie = "st-last-access-token-update=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   });
 
+  // Back from the sign-in portal: where a half-cleared host is asked about.
+  const fromPortal = () => vi.spyOn(document, "referrer", "get").mockReturnValue("https://auth.x.test/");
+
   it("short-circuits to unauthenticated without hitting the network when no local session exists", async () => {
     doesSessionExist.mockResolvedValue(false);
     const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -59,12 +62,12 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     // cookies and never reaches this host's marker.
     document.cookie = "st-last-access-token-update=1700000000000; path=/";
     const seen: string[] = [];
-    doesSessionExist
-      .mockImplementationOnce(async () => false)
-      .mockImplementationOnce(async () => {
-        seen.push(document.cookie);
-        return true;
-      });
+    fromPortal();
+    doesSessionExist.mockResolvedValueOnce(false);
+    vi.mocked(Session.attemptRefreshingSession).mockImplementationOnce(async () => {
+      seen.push(document.cookie);
+      return true;
+    });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ id: "u1", email: "a@x.test" }), { status: 200 }),
     );
@@ -73,21 +76,38 @@ describe("AuthManager.checkAuth cookie-mode session gate", () => {
     const state = await auth.checkAuth();
 
     expect(state.status).toBe("authenticated");
-    expect(doesSessionExist).toHaveBeenCalledTimes(2);
+    expect(doesSessionExist).toHaveBeenCalledTimes(1);
+    expect(Session.attemptRefreshingSession).toHaveBeenCalledTimes(1);
     expect(seen[0]).not.toContain("st-last-access-token-update");
+  });
+
+  it.each([
+    ["a gateway error", new Response(null, { status: 502 })],
+    ["a transport failure", new TypeError("Failed to fetch")],
+  ])("a recovery that meets %s is unreachable, not signed out", async (_label, failure) => {
+    document.cookie = "st-last-access-token-update=1700000000000; path=/";
+    fromPortal();
+    doesSessionExist.mockResolvedValueOnce(false);
+    vi.mocked(Session.attemptRefreshingSession).mockRejectedValueOnce(failure);
+
+    const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
+    expect((await auth.checkAuth()).status).toBe("unreachable");
   });
 
   it("the recovery is tried once per page, so a signed-out app cannot storm refresh", async () => {
     doesSessionExist.mockResolvedValue(false);
+    vi.mocked(Session.attemptRefreshingSession).mockResolvedValue(false);
     const auth = new AuthManager("https://api.x.test", "https://auth.x.test");
 
+    fromPortal();
     document.cookie = "st-last-access-token-update=1700000000000; path=/";
     expect((await auth.checkAuth()).status).toBe("unauthenticated");
     // The refused refresh writes the marker back, as SuperTokens does.
     document.cookie = "st-last-access-token-update=1700000000001; path=/";
     auth.markUnauthenticated();
     expect((await auth.checkAuth()).status).toBe("unauthenticated");
-    expect(doesSessionExist).toHaveBeenCalledTimes(3);
+    expect(doesSessionExist).toHaveBeenCalledTimes(2);
+    expect(Session.attemptRefreshingSession).toHaveBeenCalledTimes(1);
   });
 
   it("retries the refresh once after the duplicate-cookie answer, and is signed in", async () => {
@@ -310,6 +330,39 @@ describe("AuthManager request headers", () => {
     expect(headers.get("content-type")).toBe("application/json");
     expect(headers.get("x-custom")).toBe("present");
     expect(init.credentials).toBe("omit");
+  });
+});
+
+describe("AuthManager.redirectToAuth", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function locations() {
+    const own = { href: "https://crm.apps.x.test/inbox" } as Location;
+    const top = { location: { href: "https://x.test/pod/p1" } } as Window;
+    vi.spyOn(window, "location", "get").mockReturnValue(own);
+    return { own, top };
+  }
+
+  it("signs in at the top from a workspace pane, which the sign-in page refuses to be framed in", () => {
+    const { own, top } = locations();
+    vi.spyOn(window, "top", "get").mockReturnValue(top);
+
+    new AuthManager("https://api.x.test", "https://x.test/auth").redirectToAuth();
+
+    const destination = new URL(top.location.href);
+    expect(destination.origin + destination.pathname).toBe("https://x.test/auth");
+    expect(destination.searchParams.get("redirect_uri")).toBe("https://crm.apps.x.test/inbox");
+    expect(own.href).toBe("https://crm.apps.x.test/inbox");
+  });
+
+  it("signs in in place when it is the top window", () => {
+    const { own } = locations();
+
+    new AuthManager("https://api.x.test", "https://x.test/auth").redirectToAuth();
+
+    expect(new URL(own.href).pathname).toBe("/auth");
   });
 });
 

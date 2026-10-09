@@ -27,9 +27,12 @@ function server(refreshStatus: number): void {
   fetchMock.mockImplementation(async (input) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (url === REFRESH) {
-      return refreshStatus === 200
-        ? new Response("{}", { status: 200, headers: { "front-token": frontToken() } })
-        : new Response("{}", { status: refreshStatus, headers: { "front-token": "remove" } });
+      if (refreshStatus === 200) {
+        return new Response("{}", { status: 200, headers: { "front-token": frontToken() } });
+      }
+      // Only the API refuses a session; a gateway error says nothing about it.
+      const headers: Record<string, string> = refreshStatus === 401 ? { "front-token": "remove" } : {};
+      return new Response("{}", { status: refreshStatus, headers });
     }
     if (url === `${API}/users/me`) {
       return new Response(JSON.stringify({ id: "u1", email: "a@x.test" }), { status: 200 });
@@ -57,9 +60,14 @@ describe("a pod app whose host kept the update marker from an ended session", ()
     fetchMock.mockReset();
     // A failed refresh on this host left the marker and took the front token.
     document.cookie = `${MARKER}=1700000000000; path=/`;
+    // Back from the sign-in portal, the way the loop arrives.
+    vi.spyOn(document, "referrer", "get").mockReturnValue("https://auth.x.test/");
   });
 
-  afterEach(clearCookies);
+  afterEach(() => {
+    clearCookies();
+    vi.restoreAllMocks();
+  });
 
   it("is told there is no session without the server being asked", async () => {
     server(200);
@@ -87,5 +95,42 @@ describe("a pod app whose host kept the update marker from an ended session", ()
     auth.markUnauthenticated();
     expect((await auth.checkAuth()).status).toBe("unauthenticated");
     expect(calledUrls()).toEqual([REFRESH]);
+  });
+
+  it.each([
+    ["typed or bookmarked", ""],
+    ["reached from another site", "https://search.example/"],
+  ])("is not asked about when the page was %s", async (_label, referrer) => {
+    // Not the loop's shape; a signed-out visitor should not pay a refresh.
+    vi.spyOn(document, "referrer", "get").mockReturnValue(referrer);
+    server(200);
+    const auth = new AuthManager(API, "https://auth.x.test");
+
+    expect((await auth.checkAuth()).status).toBe("unauthenticated");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("is not asked about on the portal's own host, where signing in rewrites the markers", async () => {
+    server(200);
+    const auth = new AuthManager(API, `${window.location.origin}/auth`);
+
+    expect((await auth.checkAuth()).status).toBe("unauthenticated");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports an API that did not answer the recovery, not a sign-out", async () => {
+    // A deploy or a gateway error is something to wait out; signed out sends a
+    // signed-in person to the sign-in page and skips the reconnect retry.
+    server(502);
+    const failing = new AuthManager(API, "https://auth.x.test");
+    expect((await failing.checkAuth()).status).toBe("unreachable");
+
+    clearCookies();
+    resetMarkerRecoveryForTests();
+    document.cookie = `${MARKER}=1700000000000; path=/`;
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    const offline = new AuthManager(API, "https://auth.x.test");
+    expect((await offline.checkAuth()).status).toBe("unreachable");
   });
 });

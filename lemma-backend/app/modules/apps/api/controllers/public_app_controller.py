@@ -51,6 +51,7 @@ _SLUG_HEADER = "X-App-Public-Slug"
 # Host-only cookies the SuperTokens browser SDK keeps on each app host.
 _SESSION_MARKER = "st-last-access-token-update"
 _FRONT_TOKEN = "sFrontToken"
+_FROM_THIS_SITE = {"same-site", "same-origin"}
 
 
 def _loads_a_page(request: Request) -> bool:
@@ -85,7 +86,11 @@ def _can_show_access_page(request: Request, asset_path: str | None) -> bool:
         return False
     if _loads_a_page(request):
         return True
-    return PurePosixPath(asset_path or "").suffix.lower() in {"", ".html", ".htm"}
+    return _suffix(asset_path) in {"", ".html", ".htm"}
+
+
+def _suffix(asset_path: str | None) -> str:
+    return PurePosixPath(asset_path or "").suffix.lower()
 
 
 def _asset_not_found_response(
@@ -173,9 +178,19 @@ def _expire_stale_session_marker(request: Request, response: Response) -> None:
     with a new front token, and an ended one is refused as before. It is done
     here, on the page load, because each app bundles the SDK it was built
     with; a fix in the SDK reaches a bundled app only when it is rebuilt.
+
+    Only for a page reached from this site: back from the portal, framed by
+    the workspace, or from the app itself (its own links, its access page's
+    reload, a navigation its install worker forwarded). Those are the loop's
+    shapes. A visitor who typed the address or came from a search pays no
+    refused refresh for it; a signed-in one on a half-cleared host is shown the
+    app's sign-in once, and the trip back from the portal repairs it.
     """
     cookies = request.cookies
     if _SESSION_MARKER not in cookies or _FRONT_TOKEN in cookies:
+        return
+    # Absent from browsers that predate fetch metadata, which keep the repair.
+    if request.headers.get("sec-fetch-site", "same-site") not in _FROM_THIS_SITE:
         return
     response.delete_cookie(_SESSION_MARKER, path="/")
     # A response that sets a cookie is this browser's alone.
@@ -197,7 +212,9 @@ async def _serve_host_asset(
     )
     if asset is not None:
         response = app_asset_response(asset)
-        if asset.is_entrypoint and _is_navigation(request):
+        if _is_navigation(request) and (
+            asset.is_entrypoint or _suffix(asset_path) in {".html", ".htm"}
+        ):
             _expire_stale_session_marker(request, response)
         return response
     if host is None:

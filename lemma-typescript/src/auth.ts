@@ -398,9 +398,37 @@ function hasCookie(name: string): boolean {
 }
 
 /** The update marker with no front token: SuperTokens' "no session", decided without asking. */
-function isHalfCleared(): boolean {
+export function isHalfCleared(): boolean {
   if (typeof document === "undefined") return false;
   return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
+}
+
+/** Forget the stale answer, so SuperTokens asks the server the next time. */
+export function dropUpdateMarker(): void {
+  document.cookie = `${UPDATE_MARKER_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+}
+
+/**
+ * Whether this page came by a way the stale marker loops through.
+ *
+ * Two shapes: back from the sign-in portal, and framed by the workspace --
+ * one origin, the portal's -- plus the app's own pages in between. A page
+ * typed, bookmarked or reached from a search is neither, and recovering there
+ * would cost every signed-out visitor a refused refresh per load; a signed-in
+ * one sees the app's sign-in once, and the trip back from the portal
+ * recovers. Never on the portal's own host: signing in there writes that
+ * host's markers itself, so it cannot loop.
+ */
+function cameFromThisSite(authUrl: string): boolean {
+  try {
+    const here = window.location.origin;
+    const portal = new URL(authUrl, window.location.href).origin;
+    if (here === portal) return false;
+    const from = document.referrer ? new URL(document.referrer).origin : "";
+    return from === portal || from === here;
+  } catch {
+    return false;
+  }
 }
 
 /** Set once a half-cleared session recovery has been tried in this page. */
@@ -737,12 +765,17 @@ export class AuthManager {
    * marker is always this host's, and the refresh cookie travels to the API
    * either way. Once per page, so a genuinely signed-out app costs one refused
    * refresh per load rather than a storm.
+   *
+   * The refresh is asked for directly, not through `doesSessionExist()`, which
+   * folds a network error or a 5xx into "no": an API mid-deploy would sign the
+   * person out instead of being waited out. A refresh that fails that way
+   * throws, and the caller reads it as unreachable.
    */
   private async recoverHalfClearedSession(): Promise<boolean> {
     if (markerRecoveryTried || typeof document === "undefined") return false;
     markerRecoveryTried = true;
-    document.cookie = `${UPDATE_MARKER_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
-    return Session.doesSessionExist();
+    dropUpdateMarker();
+    return Session.attemptRefreshingSession();
   }
 
   /**
@@ -780,6 +813,8 @@ export class AuthManager {
       return refreshFailureKind(error);
     }
     if (halfCleared) {
+      // The refresh below would answer from the marker too, and sign out.
+      if (!cameFromThisSite(this.authUrl)) return "absent";
       try {
         return (await this.recoverHalfClearedSession()) ? "exists" : "absent";
       } catch (error) {
@@ -945,7 +980,20 @@ export class AuthManager {
       return;
     }
     const redirectUri = options.redirectUri ?? window.location.href;
-    window.location.href = this.getAuthUrl({ ...options, redirectUri });
+    const url = this.getAuthUrl({ ...options, redirectUri });
+    // The sign-in page refuses every frame (`frame-ancestors 'none'`), so an
+    // app shown in a workspace pane that navigated itself landed on the
+    // browser's "refused to connect" page. Sign in at the top instead, as a
+    // private app's access page does.
+    if (window.top && window.top !== window.self) {
+      try {
+        window.top.location.href = url;
+        return;
+      } catch {
+        // A sandbox that withholds top navigation: the frame is all there is.
+      }
+    }
+    window.location.href = url;
   }
 
   /**

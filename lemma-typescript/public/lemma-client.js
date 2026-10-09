@@ -9695,6 +9695,20 @@ var LemmaClient = (() => {
     if (typeof document === "undefined") return false;
     return hasCookie(UPDATE_MARKER_COOKIE) && !hasCookie(FRONT_TOKEN_COOKIE);
   }
+  function dropUpdateMarker() {
+    document.cookie = `${UPDATE_MARKER_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+  function cameFromThisSite(authUrl) {
+    try {
+      const here = window.location.origin;
+      const portal = new URL(authUrl, window.location.href).origin;
+      if (here === portal) return false;
+      const from = document.referrer ? new URL(document.referrer).origin : "";
+      return from === portal || from === here;
+    } catch {
+      return false;
+    }
+  }
   var markerRecoveryTried = false;
   var AuthManager = class {
     /**
@@ -9976,12 +9990,17 @@ var LemmaClient = (() => {
      * marker is always this host's, and the refresh cookie travels to the API
      * either way. Once per page, so a genuinely signed-out app costs one refused
      * refresh per load rather than a storm.
+     *
+     * The refresh is asked for directly, not through `doesSessionExist()`, which
+     * folds a network error or a 5xx into "no": an API mid-deploy would sign the
+     * person out instead of being waited out. A refresh that fails that way
+     * throws, and the caller reads it as unreachable.
      */
     async recoverHalfClearedSession() {
       if (markerRecoveryTried || typeof document === "undefined") return false;
       markerRecoveryTried = true;
-      document.cookie = `${UPDATE_MARKER_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
-      return import_session2.default.doesSessionExist();
+      dropUpdateMarker();
+      return import_session2.default.attemptRefreshingSession();
     }
     /**
      * Whether the API answers at all -- its liveness probe, not a session check.
@@ -10015,6 +10034,7 @@ var LemmaClient = (() => {
         return refreshFailureKind(error);
       }
       if (halfCleared) {
+        if (!cameFromThisSite(this.authUrl)) return "absent";
         try {
           return await this.recoverHalfClearedSession() ? "exists" : "absent";
         } catch (error) {
@@ -10141,7 +10161,15 @@ var LemmaClient = (() => {
         return;
       }
       const redirectUri = (_a = options.redirectUri) != null ? _a : window.location.href;
-      window.location.href = this.getAuthUrl({ ...options, redirectUri });
+      const url = this.getAuthUrl({ ...options, redirectUri });
+      if (window.top && window.top !== window.self) {
+        try {
+          window.top.location.href = url;
+          return;
+        } catch {
+        }
+      }
+      window.location.href = url;
     }
     /**
      * Optional full logout flow:
@@ -19534,6 +19562,7 @@ var LemmaClient = (() => {
     return buildAuthUrl(url.href, { redirectUri });
   }
   async function refreshMainSession() {
+    if (isHalfCleared()) dropUpdateMarker();
     let timer;
     const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error("The session service did not answer")), 1e4);
