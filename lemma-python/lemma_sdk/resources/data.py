@@ -25,6 +25,10 @@ from ..openapi_client.api.tables import (
     table_delete,
     table_get,
     table_list,
+    table_public_rows_close,
+    table_public_rows_get,
+    table_public_rows_list,
+    table_public_rows_open,
     table_update,
 )
 from ..openapi_client.models.add_column_request import AddColumnRequest
@@ -35,9 +39,12 @@ from ..openapi_client.models.create_record_request import CreateRecordRequest
 from ..openapi_client.models.create_table_request import CreateTableRequest
 from ..openapi_client.models.datastore_query_request import DatastoreQueryRequest
 from ..openapi_client.models.datastore_query_response import DatastoreQueryResponse
+from ..openapi_client.models.open_table_request import OpenTableRequest
+from ..openapi_client.models.open_tables_response import OpenTablesResponse
 from ..openapi_client.models.record_list_response import RecordListResponse
 from ..openapi_client.models.table_detail_response import TableDetailResponse
 from ..openapi_client.models.table_list_response import TableListResponse
+from ..openapi_client.models.table_opening_response import TableOpeningResponse
 from ..openapi_client.models.update_record_request import UpdateRecordRequest
 from ..openapi_client.models.update_table_request import UpdateTableRequest
 from ..openapi_client.types import UNSET
@@ -139,6 +146,32 @@ class PodTables(BoundResource):
 
     def remove_column(self, table: str, column: str) -> TableDetailResponse:
         return self._call(table_column_remove, self._pod_uuid(), table, column)
+
+    def public_rows(self, table: str) -> TableOpeningResponse:
+        """Who outside the pod may add rows to ``table``, and which columns could be open."""
+        return self._call(table_public_rows_get, self._pod_uuid(), table)
+
+    def open_public_rows(
+        self, table: str, *, columns: list[str], audience: str = "anyone"
+    ) -> TableOpeningResponse:
+        """Let people outside the pod add rows to ``table`` -- ``"anyone"`` or
+        confirmed ``"contacts"`` -- writing only ``columns``. A form is then any
+        page that adds a row through a web widget's key."""
+        return self._call(
+            table_public_rows_open,
+            self._pod_uuid(),
+            table,
+            body={"audience": audience, "columns": columns},
+            body_model=OpenTableRequest,
+        )
+
+    def close_public_rows(self, table: str) -> None:
+        """Stop people outside the pod adding rows to ``table``."""
+        self._call(table_public_rows_close, self._pod_uuid(), table)
+
+    def list_public_rows(self) -> OpenTablesResponse:
+        """The pod's tables that take rows from outside, and from whom."""
+        return self._call(table_public_rows_list, self._pod_uuid())
 
 
 class PodRecords(BoundResource):

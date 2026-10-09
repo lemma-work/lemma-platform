@@ -10,6 +10,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.surface_channel_route_response import SurfaceChannelRouteResponse
+    from ..models.surface_contacts_config import SurfaceContactsConfig
     from ..models.surface_groups_config import SurfaceGroupsConfig
     from ..models.surface_identity_config_response import SurfaceIdentityConfigResponse
     from ..models.surface_send_policy_config import SurfaceSendPolicyConfig
@@ -26,6 +27,8 @@ class SurfaceConfigResponse:
 
     Attributes:
         channels (list[SurfaceChannelRouteResponse] | Unset):
+        contacts (SurfaceContactsConfig | Unset): Whom the bot answers in private chats beyond the pod's members.
+            Mirrored.
         groups (SurfaceGroupsConfig | Unset): How the bot treats people outside the pod in its groups. Mirrored.
         identity (SurfaceIdentityConfigResponse | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
@@ -34,6 +37,7 @@ class SurfaceConfigResponse:
     """
 
     channels: list[SurfaceChannelRouteResponse] | Unset = UNSET
+    contacts: SurfaceContactsConfig | Unset = UNSET
     groups: SurfaceGroupsConfig | Unset = UNSET
     identity: SurfaceIdentityConfigResponse | Unset = UNSET
     send_policy: SurfaceSendPolicyConfig | Unset = UNSET
@@ -48,6 +52,10 @@ class SurfaceConfigResponse:
             for channels_item_data in self.channels:
                 channels_item = channels_item_data.to_dict()
                 channels.append(channels_item)
+
+        contacts: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.contacts, Unset):
+            contacts = self.contacts.to_dict()
 
         groups: dict[str, Any] | Unset = UNSET
         if not isinstance(self.groups, Unset):
@@ -74,6 +82,8 @@ class SurfaceConfigResponse:
         field_dict.update({})
         if channels is not UNSET:
             field_dict["channels"] = channels
+        if contacts is not UNSET:
+            field_dict["contacts"] = contacts
         if groups is not UNSET:
             field_dict["groups"] = groups
         if identity is not UNSET:
@@ -90,6 +100,7 @@ class SurfaceConfigResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.surface_channel_route_response import SurfaceChannelRouteResponse
+        from ..models.surface_contacts_config import SurfaceContactsConfig
         from ..models.surface_groups_config import SurfaceGroupsConfig
         from ..models.surface_identity_config_response import (
             SurfaceIdentityConfigResponse,
@@ -109,6 +120,13 @@ class SurfaceConfigResponse:
                 )
 
                 channels.append(channels_item)
+
+        _contacts = d.pop("contacts", UNSET)
+        contacts: SurfaceContactsConfig | Unset
+        if isinstance(_contacts, Unset):
+            contacts = UNSET
+        else:
+            contacts = SurfaceContactsConfig.from_dict(_contacts)
 
         _groups = d.pop("groups", UNSET)
         groups: SurfaceGroupsConfig | Unset
@@ -147,6 +165,7 @@ class SurfaceConfigResponse:
 
         surface_config_response = cls(
             channels=channels,
+            contacts=contacts,
             groups=groups,
             identity=identity,
             send_policy=send_policy,

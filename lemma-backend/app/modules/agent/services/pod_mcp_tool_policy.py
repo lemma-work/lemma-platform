@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from mcp.types import ToolAnnotations
 
+from app.modules.agent.services.pod_mcp_views import TABLE_VIEW, PodMcpView
 from app.modules.mcp_access.contracts import Scope
 
 
@@ -34,6 +35,8 @@ class ToolPolicy:
     destructive: bool = False
     idempotent: bool = True
     open_world: bool = False
+    view: PodMcpView | None = None
+    """Where a host that supports MCP Apps shows the result, if anywhere."""
 
     def annotations(self) -> ToolAnnotations:
         read_only = self.scope is Scope.READ
@@ -50,8 +53,8 @@ class ToolPolicy:
 
 POD_TOOL_POLICIES: dict[str, ToolPolicy] = {
     "pod_tables": ToolPolicy("List tables", Scope.READ),
-    "pod_get_records": ToolPolicy("Read records", Scope.READ),
-    "pod_query": ToolPolicy("Query tables with SQL", Scope.READ),
+    "pod_get_records": ToolPolicy("Read records", Scope.READ, view=TABLE_VIEW),
+    "pod_query": ToolPolicy("Query tables with SQL", Scope.READ, view=TABLE_VIEW),
     "pod_list_files": ToolPolicy("List files", Scope.READ),
     "pod_read_file": ToolPolicy("Read a file", Scope.READ),
     "pod_search_files": ToolPolicy("Search files", Scope.READ),

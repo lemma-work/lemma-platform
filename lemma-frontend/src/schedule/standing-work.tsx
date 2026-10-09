@@ -169,7 +169,7 @@ function Row({ podId, job, mine, owner, orgId, open, onOpen, onOpenRun, onOpenCo
                         {job.needsSetup && <em className="sched-tag sched-tag--setup">needs setup</em>}
                         {!mine && <em className="sched-tag sched-tag--owner">by {owner ?? "someone else"}</em>}
                         {mine && job.visibility === "POD" && job.kind !== "DATASTORE" && <em className="sched-tag sched-tag--owner">shared</em>}
-                        {job.filter && <em className="sched-tag" title={job.filter}>filtered</em>}
+                        {job.filter && job.kind !== "TIME" && <em className="sched-tag" title={job.filter}>filtered</em>}
                         {!job.active && <em className="sched-tag">paused</em>}
                     </span>
 
@@ -316,7 +316,12 @@ function CopyForMe({ podId, job, orgId }: { podId: string; job: StandingJob; org
 /* ── its firings ────────────────────────────────────────────────────── */
 
 function Runs({ podId, job, onOpenRun, onOpenConversation }: { podId: string; job: StandingJob } & OpenTarget) {
-    const runs = useScheduleRuns(podId, job.id);
+    /* A filter that skips most of a busy webhook's events would otherwise fill
+       the screenful with skips and hide every real firing, so the history is
+       the firings, and the skips are one click away when the question is "why
+       didn't it run?". */
+    const [skipped, setSkipped] = useState(false);
+    const runs = useScheduleRuns(podId, job.id, skipped);
     const retry = useRetryRun(podId, job.id);
     const mayRetry = may(job, SCHEDULE_EDIT);
 
@@ -331,8 +336,16 @@ function Runs({ podId, job, onOpenRun, onOpenConversation }: { podId: string; jo
                     <button className="linkish" onClick={() => void runs.refetch()}>Try again</button>
                 </p>
             )}
+            {job.filter && job.kind !== "TIME" && (
+                <p className="sched-runs__note">
+                    {skipped ? "Events the filter skipped." : "Firings."}{" "}
+                    <button className="linkish" aria-pressed={skipped} onClick={() => setSkipped(!skipped)}>
+                        {skipped ? "Show firings" : "Show skipped events"}
+                    </button>
+                </p>
+            )}
             {runs.isSuccess && runs.data.length === 0 && (
-                <p className="sched-runs__note">No triggers recorded yet.</p>
+                <p className="sched-runs__note">{skipped ? "Nothing skipped yet." : "No triggers recorded yet."}</p>
             )}
 
             {(runs.data ?? []).map((run, at) => (
@@ -343,7 +356,9 @@ function Runs({ podId, job, onOpenRun, onOpenConversation }: { podId: string; jo
                         {run.retryOf && <em className="sched-tag">a retry</em>}
                         {run.attempts > 1 && <em className="sched-tag">{run.attempts} attempts</em>}
                     </span>
-                    <span className="sched-run__error">{run.error}</span>
+                    {run.status === "FILTERED" && !run.error
+                        ? <span className="sched-run__error sched-run__error--why">{run.judgement}</span>
+                        : <span className="sched-run__error">{run.error}</span>}
                     <span className="sched-run__at">{agoOf(run.at)}</span>
                     {run.targetRunId && run.targetKind === "workflow" && onOpenRun && (
                         <button className="btn btn--small" onClick={() => onOpenRun(run.targetRunId, job.target.label || job.title)}>

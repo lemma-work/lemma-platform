@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pydantic_ai.capabilities import AbstractCapability
 
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.surface_prompts import surface_platform_guidance
 
 
@@ -22,10 +23,14 @@ class SurfacePlatformCapability(AbstractCapability[object]):
     """Append per-platform guidance to the cached system-prompt prefix."""
 
     def __init__(
-        self, platform: str, *, answers_outsider: bool = False, in_group: bool = False
+        self,
+        platform: str,
+        *,
+        audience: Audience = Audience(),
+        in_group: bool = False,
     ) -> None:
         self._platform = platform
-        self._answers_outsider = answers_outsider
+        self._audience = audience
         self._in_group = in_group
 
     def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
@@ -34,6 +39,6 @@ class SurfacePlatformCapability(AbstractCapability[object]):
     def get_instructions(self) -> str:
         return surface_platform_guidance(
             self._platform,
-            answers_outsider=self._answers_outsider,
+            audience=self._audience,
             in_group=self._in_group,
         )

@@ -39,6 +39,7 @@ class FunctionActionResponse:
         code_path (None | str | Unset):
         config (JsonObject | None | Unset):
         config_schema (JsonObject | None | Unset): Optional configuration schema derived from the function code.
+        contacts_invoke (bool | Unset): Callable from a contact's conversation. Default: False.
         description (None | str | Unset):
         icon_url (None | str | Unset):
         revision_hash (None | str | Unset):
@@ -60,6 +61,7 @@ class FunctionActionResponse:
     code_path: None | str | Unset = UNSET
     config: JsonObject | None | Unset = UNSET
     config_schema: JsonObject | None | Unset = UNSET
+    contacts_invoke: bool | Unset = False
     description: None | str | Unset = UNSET
     icon_url: None | str | Unset = UNSET
     revision_hash: None | str | Unset = UNSET
@@ -129,6 +131,8 @@ class FunctionActionResponse:
         else:
             config_schema = self.config_schema
 
+        contacts_invoke = self.contacts_invoke
+
         description: None | str | Unset
         if isinstance(self.description, Unset):
             description = UNSET
@@ -175,6 +179,8 @@ class FunctionActionResponse:
             field_dict["config"] = config
         if config_schema is not UNSET:
             field_dict["config_schema"] = config_schema
+        if contacts_invoke is not UNSET:
+            field_dict["contacts_invoke"] = contacts_invoke
         if description is not UNSET:
             field_dict["description"] = description
         if icon_url is not UNSET:
@@ -292,6 +298,8 @@ class FunctionActionResponse:
 
         config_schema = _parse_config_schema(d.pop("config_schema", UNSET))
 
+        contacts_invoke = d.pop("contacts_invoke", UNSET)
+
         def _parse_description(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -337,6 +345,7 @@ class FunctionActionResponse:
             code_path=code_path,
             config=config,
             config_schema=config_schema,
+            contacts_invoke=contacts_invoke,
             description=description,
             icon_url=icon_url,
             revision_hash=revision_hash,

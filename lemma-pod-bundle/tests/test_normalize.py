@@ -345,3 +345,46 @@ def test_normalize_schedule_payload_leaves_a_clean_config_alone():
     }
 
     assert _normalize_schedule_payload(schedule)["config"] == {"cron": "0 9 * * *"}
+
+
+def test_a_time_schedule_is_exported_without_the_filter_it_never_asked():
+    from lemma_pod_bundle.normalize import _normalize_schedule_payload
+
+    exported = _normalize_schedule_payload(
+        {
+            "name": "nightly",
+            "schedule_type": "TIME",
+            "config": {"cron": "0 2 * * *"},
+            "filter_instruction": "only weekdays",
+            "filter_output_schema": {"type": "object"},
+        }
+    )
+
+    assert "filter_instruction" not in exported
+    assert "filter_output_schema" not in exported
+
+
+def test_a_webhook_schedule_keeps_its_filter():
+    from lemma_pod_bundle.normalize import _normalize_schedule_payload
+
+    exported = _normalize_schedule_payload(
+        {"name": "inbox", "schedule_type": "WEBHOOK", "filter_instruction": "VIPs"}
+    )
+
+    assert exported["filter_instruction"] == "VIPs"
+
+
+def test_import_drops_a_time_schedule_filter_and_says_so():
+    from lemma_pod_bundle.apply_fields import without_time_schedule_filter
+
+    payload, dropped = without_time_schedule_filter(
+        {"schedule_type": "time", "filter_instruction": "x", "config": {}}
+    )
+    assert dropped is True
+    assert "filter_instruction" not in payload
+
+    unchanged, dropped = without_time_schedule_filter(
+        {"schedule_type": "TIME", "filter_instruction": "", "config": {}}
+    )
+    assert dropped is False, "an empty filter is nothing to warn about"
+    assert "filter_instruction" not in unchanged

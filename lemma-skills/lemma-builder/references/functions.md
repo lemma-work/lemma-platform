@@ -315,7 +315,7 @@ urls.expires_at   # when urls.url stops working
 link = pod.files.create_signed_url("/reports/summary.pdf")                       # defaults: 3h, 50 downloads
 link = pod.files.create_signed_url("/reports/summary.pdf",
                                    expires_seconds=604800, max_hits=5)           # 7d, 5 downloads
-link.signed_url   # https://<api>/s/<code>  — short, copy-pasteable
+link.signed_url   # https://<api>/public/s/<code>  — short, copy-pasteable
 link.expires_at
 link.max_hits     # effective cap (max 7d / 1000 hits; out of range is a 422)
 ```
@@ -469,6 +469,15 @@ lemma functions permissions get save_expense
 
 A run failing with `MISSING_WORKLOAD_RESOURCE_GRANT` names the resource it tried to
 reach — add exactly that grant and retry.
+
+### Opening a function to contacts
+
+`PUT /pods/{pod}/functions/{name}/contacts` `{"contacts_invoke": true}` lets a
+contact's conversation call it (the `contact_function` tool). It runs as its owner's
+runs do, held to its own grants, and receives the asking contact as `contact_id` in
+its input — set by the platform, never by the model. Its output goes to the agent
+answering the contact, so return only what that person may be told. See
+`people-outside.md`.
 
 ### Exposing a function as an agent's tool
 

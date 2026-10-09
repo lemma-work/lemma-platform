@@ -18,7 +18,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
 from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind
-from streaq import Worker
+from streaq import StreaqRetry, Worker
 
 from app.core.config import settings
 from app.core.infrastructure.channels.channel_service import channel_service
@@ -696,6 +696,19 @@ async def run_worker_lanes(
         await _stop_secondary_lanes()
 
 
+def job_failure_is_terminal(exc: Exception) -> bool:
+    """Whether streaq is done with a job that raised ``exc``.
+
+    streaq reschedules a ``StreaqRetry`` and nothing else: any other exception
+    ends the job there and then, on whatever try it was. So a failure is never
+    "retrying" because its try count is low, and a deliberate retry is never a
+    failure because its count is high -- a job may allow more tries than the
+    default. A retry asked for past ``max_tries`` is failed by streaq when it is
+    next dequeued, before any middleware runs.
+    """
+    return not isinstance(exc, StreaqRetry)
+
+
 def _register_observability_middleware(
     worker: Worker[AppWorkerContext],
 ) -> None:
@@ -744,7 +757,7 @@ def _register_observability_middleware(
                             span.set_attribute("lemma.outcome", outcome)
                             raise
                         except Exception as exc:
-                            terminal = task.tries >= JOB_MAX_RETRIES
+                            terminal = job_failure_is_terminal(exc)
                             outcome = "failed" if terminal else "retrying"
                             span.set_attribute("lemma.outcome", outcome)
                             duration_ms = round(

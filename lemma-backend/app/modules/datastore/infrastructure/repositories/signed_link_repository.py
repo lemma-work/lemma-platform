@@ -1,4 +1,4 @@
-"""Durable records for public short file links (``/s/{code}``)."""
+"""Durable records for public short file links (``/public/s/{code}``)."""
 
 from __future__ import annotations
 

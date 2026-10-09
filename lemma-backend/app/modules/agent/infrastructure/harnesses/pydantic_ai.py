@@ -36,6 +36,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
     ModelRequestStreamer,
 )
 from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instruction_parts
 from app.modules.agent.services.run_phase_spans import run_phase
@@ -318,7 +319,7 @@ class PydanticAIHarness:
         )
         # Last, so it sees the final tool list: on a stranger's run, whatever
         # every assembler above left in, only the allow-listed names survive.
-        if getattr(ctx, "answers_outsider", False):
+        if run_audience(ctx).answers_outsiders:
             capabilities.append(OutsiderToolGateCapability())
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,

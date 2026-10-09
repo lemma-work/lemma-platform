@@ -95,7 +95,7 @@ async def get_export(
     ),
     response_class=StreamingResponse,
     # NOT pod-scoped: `user: CurrentUser` requires auth; the token is verified in
-    # the use case. Kept out of EXCLUDED_PATHS so the global auth gate applies.
+    # the use case. Kept out of `auth_exemptions` so the global auth gate applies.
 )
 async def download_bundle(
     user: CurrentUser,

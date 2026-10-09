@@ -15,6 +15,10 @@ export type FunctionDetailResponse = {
      * Optional configuration schema derived from the function code.
      */
     config_schema?: (JsonObject | null);
+    /**
+     * Callable from a contact's conversation.
+     */
+    contacts_invoke?: boolean;
     created_at: (string | null);
     description?: (string | null);
     icon_url?: (string | null);

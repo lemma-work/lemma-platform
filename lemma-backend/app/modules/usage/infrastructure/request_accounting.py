@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +26,33 @@ from app.modules.usage.infrastructure.price_catalog import RateCard
 
 def _key(window: BudgetWindow) -> tuple[str, str, str, datetime]:
     return window.kind, str(window.organization_id), str(window.user_id), window.start
+
+
+def _window_cost(window: BudgetWindow) -> Select[tuple[Decimal]]:
+    """What has been spent inside one window, recomputed from the ledger."""
+    query = select(func.coalesce(func.sum(recorded_cost()), 0)).where(
+        UsageRecord.profile_scope == "SYSTEM",
+        UsageRecord.occurred_at >= window.start,
+        UsageRecord.occurred_at < window.end,
+    )
+    if window.organization_id is not None:
+        query = query.where(UsageRecord.organization_id == window.organization_id)
+    if window.user_id is not None:
+        query = query.where(UsageRecord.user_id == window.user_id)
+    if window.source_types:
+        query = query.where(UsageRecord.source_type.in_(window.source_types))
+    if window.excluded_source_types:
+        query = query.where(
+            UsageRecord.source_type.notin_(window.excluded_source_types)
+        )
+    if window.excluded_organization_ids:
+        query = query.where(
+            or_(
+                UsageRecord.organization_id.is_(None),
+                UsageRecord.organization_id.notin_(window.excluded_organization_ids),
+            )
+        )
+    return query
 
 
 async def lock_counters(
@@ -60,24 +87,7 @@ async def lock_counters(
             )
         ).one()
         # Legacy writers and changing exclusion policies make a cached total unsafe.
-        query = select(func.coalesce(func.sum(recorded_cost()), 0)).where(
-            UsageRecord.profile_scope == "SYSTEM",
-            UsageRecord.occurred_at >= window.start,
-            UsageRecord.occurred_at < window.end,
-        )
-        if window.organization_id is not None:
-            query = query.where(UsageRecord.organization_id == window.organization_id)
-        if window.user_id is not None:
-            query = query.where(UsageRecord.user_id == window.user_id)
-        if window.excluded_organization_ids:
-            query = query.where(
-                or_(
-                    UsageRecord.organization_id.is_(None),
-                    UsageRecord.organization_id.notin_(
-                        window.excluded_organization_ids
-                    ),
-                )
-            )
+        query = _window_cost(window)
         counter.used_usd = money(await session.scalar(query) or 0)
         if counter.limit_usd != window.limit:
             counter.warning_emitted = False

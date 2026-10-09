@@ -33,11 +33,10 @@ from app.modules.datastore.infrastructure.sql_identifiers import (
     sanitize_identifier,
 )
 from app.core.log.log import get_logger
+from app.modules.datastore.domain.row_security import RowPrincipal
+from app.modules.datastore.infrastructure.rls_context import apply_row_principal
 
 logger = get_logger(__name__)
-
-# The user an anonymous context reads RLS tables as: nobody, so no rows.
-_NOBODY = UUID(int=0)
 
 
 class SchemaManager:
@@ -552,36 +551,10 @@ class SchemaManager:
         )
 
     async def set_rls_context(
-        self,
-        session: AsyncSession,
-        user_id: UUID | None,
-        *,
-        is_pod_admin: bool = False,
+        self, session: AsyncSession, principal: RowPrincipal
     ) -> None:
-        """Set the RLS context for the current session, in one round trip.
-
-        This runs before every RLS-guarded read and write, so a second statement
-        here is a second round trip on the hottest path there is. Both settings
-        stay transaction-local (``set_config(..., true)`` is the function form
-        of ``SET LOCAL``), so nothing leaks to the next borrower of the
-        connection and a transaction-mode pooler stays usable.
-
-        ``None`` is somebody with no rows: a run answering a person outside the
-        pod reads a Public table under an anonymous context. It becomes the nil
-        UUID, which no row is stamped with, so the policy matches nothing --
-        where ``str(None)`` failed the policy's uuid cast and turned an empty
-        answer into an error.
-        """
-        await session.execute(
-            text(
-                "SELECT set_config('app.current_user_id', :user_id, true), "
-                "set_config('app.current_user_is_pod_admin', :is_pod_admin, true)"
-            ),
-            {
-                "user_id": str(user_id or _NOBODY),
-                "is_pod_admin": "true" if is_pod_admin else "false",
-            },
-        )
+        """Name who this session reads as; see ``rls_context.apply_row_principal``."""
+        await apply_row_principal(session, principal)
 
     async def close(self) -> None:
         if self._owns_engine:

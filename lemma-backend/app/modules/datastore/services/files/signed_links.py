@@ -33,7 +33,7 @@ from app.modules.datastore.services.files.signed_url import (
 
 
 class SignedLinks:
-    """Public short links (``/s/{code}``) for one pod's datastore files."""
+    """Public short links (``/public/s/{code}``) for one pod's datastore files."""
 
     def __init__(self, reader, file_repository):
         self._reader = reader
@@ -56,7 +56,7 @@ class SignedLinks:
     ) -> tuple[DatastoreFileEntity, str, datetime, int]:
         """Mint a public, hit-capped short signed URL for a pod file.
 
-        The returned ``{api_url}/s/{code}`` link needs no auth to open, expires
+        The returned ``{api_url}/public/s/{code}`` link needs no auth to open, expires
         after ``expires_seconds`` (clamped to the configured ceiling), and serves
         the bytes at most ``max_hits`` times over (also clamped). Authorization
         to create one mirrors a normal file read — the read is what proves the

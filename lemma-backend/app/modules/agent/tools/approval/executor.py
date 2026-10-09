@@ -22,7 +22,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.context import ApprovedExecution
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.outsiders import OutsiderRunRefused, answers_outsiders
+from app.modules.agent.domain.outsiders import Audience, OutsiderRunRefused
 from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
@@ -75,7 +75,7 @@ class ApprovalExecutor:
         # An approval runs a tool with the approver's own authority. A stranger's
         # run never pauses to ask for one, and nothing may be run as the member
         # in the conversation that answers strangers, whatever recorded it.
-        if deps.answers_outsider:
+        if deps.audience.answers_outsiders:
             raise OutsiderRunRefused(_NOTHING_RUNS_AS_THE_MEMBER)
 
         async with self.uow_factory() as uow:
@@ -88,7 +88,7 @@ class ApprovalExecutor:
             agent = None
             if conversation is not None and conversation.agent_id is not None:
                 agent = await AgentRepository(uow).get(conversation.agent_id)
-        if answers_outsiders(conversation):
+        if Audience.of(conversation).answers_outsiders:
             raise OutsiderRunRefused(_NOTHING_RUNS_AS_THE_MEMBER)
 
         approved = ApprovedExecution(

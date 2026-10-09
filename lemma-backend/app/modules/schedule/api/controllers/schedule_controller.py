@@ -3,7 +3,7 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.api.dependencies import UoWDep
 from app.core.api.pagination import parse_uuid_page_token
@@ -25,6 +25,7 @@ from app.modules.schedule.api.schemas.schedule_schemas import (
 )
 from app.modules.schedule.domain.schedule import (
     ScheduleCreateEntity,
+    ScheduleRunStatus,
     ScheduleType,
     ScheduleUpdateEntity,
 )
@@ -67,6 +68,7 @@ async def create_schedule(
         "connector_trigger_id": request.connector_trigger_id,
         "filter_instruction": request.filter_instruction,
         "filter_output_schema": request.filter_output_schema,
+        "include_outside_rows": request.include_outside_rows,
     }
     if request.visibility is not None:
         schedule_create_data["visibility"] = request.visibility
@@ -136,12 +138,30 @@ async def list_schedule_runs(
     service: ScheduleServiceDep,
     ctx: PodContextDep,
     limit: int = 100,
+    status: Optional[ScheduleRunStatus] = Query(
+        None,
+        description=(
+            "Only runs that report this status -- the target's outcome once "
+            "there is one."
+        ),
+    ),
+    skipped: Optional[bool] = Query(
+        None,
+        description=(
+            "true: only events the schedule's filter skipped. false: leave them "
+            "out, which is what a busy webhook schedule's history usually needs. "
+            "Omitted: both."
+        ),
+    ),
 ) -> ScheduleRunListResponse:
-    runs = await service.list_schedule_runs(
+    # Straight to the run service: the schedule service only passed it along.
+    runs = await service.run_service.list_schedule_runs(
         pod_id=pod_id,
         schedule_id=schedule_id,
         ctx=ctx,
         limit=max(1, min(limit, 1000)),
+        status=status,
+        skipped=skipped,
     )
     return ScheduleRunListResponse(
         items=[ScheduleRunResponse.model_validate(item) for item in runs],
@@ -225,6 +245,7 @@ async def update_schedule(
         instruction=request.instruction,
         filter_instruction=request.filter_instruction,
         filter_output_schema=request.filter_output_schema,
+        include_outside_rows=request.include_outside_rows,
         is_active=request.is_active,
         visibility=request.visibility,
     )

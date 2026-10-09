@@ -2,7 +2,7 @@
 
 The sibling module ``file_download_response.py`` builds responses for bodies
 that are *already in memory* and explains there why that is the right shape for
-an authenticated download. This one is for the two public routes — ``/s/{code}``
+an authenticated download. This one is for the two public routes — ``/public/s/{code}``
 and ``/public/datastore/files?token=`` — which stream straight from object
 storage and must therefore decide their headers before the first byte goes out.
 
