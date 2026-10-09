@@ -277,6 +277,16 @@
     font-size: 16px;
     line-height: 1.7;
 }
+/* Emphasis in a page has to read as emphasis. Weight stops at 500 everywhere
+   else (design.md), but a document is read at 16px, where a bold one step
+   above its own body disappears into it — this is the allowance prose gets,
+   and it is the browser's own weight for `strong`. */
+.filecard--full .md strong,
+.filecard--full .md b,
+.shared__sheet .md strong,
+.shared__sheet .md b {
+    font-weight: 700;
+}
 .filecard--full .md h1,
 .shared__sheet .md h1 {
     font-size: 34px;
