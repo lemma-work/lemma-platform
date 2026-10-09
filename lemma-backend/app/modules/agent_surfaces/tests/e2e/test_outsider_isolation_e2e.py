@@ -140,7 +140,7 @@ async def _stranger_asks(
         script=script,
     )
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is True
+    assert context.audience.answers_outsiders is True
     return context
 
 

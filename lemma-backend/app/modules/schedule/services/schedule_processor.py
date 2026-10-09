@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 from uuid import UUID
@@ -71,7 +72,7 @@ class ScheduleProcessor:
             # task boundary in `handle_llm_filter_task` — this layer does not
             # know whether its caller can retry.
             verdict = await self.filter_service.filter_event(
-                instruction=schedule.filter_instruction,
+                instruction=_filter_instruction(schedule.filter_instruction, metadata),
                 output_schema=schedule.filter_output_schema,
                 event_payload=payload,
                 schedule=schedule,
@@ -93,3 +94,16 @@ class ScheduleProcessor:
             source_event_id=source_event_id,
         )
         return ProcessedEvent("fired", llm_output)
+
+
+def _filter_instruction(instruction: str, metadata: Mapping[str, object] | None) -> str:
+    """The filter's instruction, told first when the row came from outside.
+
+    The filter reads the row before anything else does, and a stranger wrote
+    it: the same notice the run gets heads the filter's instruction, so text in
+    the row cannot pass itself off as the member's.
+    """
+    notice = (metadata or {}).get("row_notice")
+    if (metadata or {}).get("untrusted_row") and isinstance(notice, str):
+        return f"{notice}\n\n{instruction}"
+    return instruction

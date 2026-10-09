@@ -48,7 +48,7 @@ cancellation.
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
 | `/me/runtime/agent-hosts...`, `/agent-host/link` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
-| `/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL |
+| `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-11-08) |
 
 ## Run lifecycle
 

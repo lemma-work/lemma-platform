@@ -1,8 +1,14 @@
-"""One instance of each service, built on first use.
+"""One instance of each stateful piece, built on first use.
 
 Lazily, because the pieces hold a Redis client and a metadata-document cache,
 and building them at import would open a connection pool in every process that
 merely imports the contracts -- including the worker, which serves none of this.
+
+The services that carry the issuer are built per call instead, around those
+cached pieces: a service cached once keeps whatever ``settings.api_url`` was
+when its first caller reached it, and a verifier holding a different issuer
+from the server that minted the token refuses every token as for another
+resource.
 """
 
 from __future__ import annotations
@@ -59,56 +65,31 @@ def _ephemeral() -> EphemeralStore:
     return EphemeralStore()
 
 
-# The three below keep the URLs they are built with, so each is cached on
-# those URLs rather than once for the process: a server, consent service or
-# verifier first built while the API's URL was something else would go on
-# issuing or checking tokens for that URL -- every token minted for the real
-# one refused as being for another resource. The URLs do not change in a
-# running deployment, so each is still built once there.
-
-
 def authorization_server() -> LemmaAuthorizationServer:
-    return _authorization_server(issuer(), settings.auth_frontend_url)
-
-
-@lru_cache(maxsize=1)
-def _authorization_server(
-    api_url: str, auth_frontend_url: str
-) -> LemmaAuthorizationServer:
     return LemmaAuthorizationServer(
         uow_factory=_uow_factory(),
         clients=client_directory(),
         ephemeral=_ephemeral(),
-        api_url=api_url,
-        auth_frontend_url=auth_frontend_url,
+        api_url=issuer(),
+        auth_frontend_url=settings.auth_frontend_url,
         account_may_sign_in=account_may_sign_in,
         pod_is_live=_pod_is_live,
     )
 
 
 def consent_service() -> ConsentService:
-    return _consent_service(issuer())
-
-
-@lru_cache(maxsize=1)
-def _consent_service(api_url: str) -> ConsentService:
     return ConsentService(
         uow_factory=_uow_factory(),
         clients=client_directory(),
         ephemeral=_ephemeral(),
-        issuer=api_url,
+        issuer=issuer(),
     )
 
 
 def access_token_verifier() -> AccessTokenVerifier:
-    return _access_token_verifier(issuer())
-
-
-@lru_cache(maxsize=1)
-def _access_token_verifier(api_url: str) -> AccessTokenVerifier:
     return AccessTokenVerifier(
         uow_factory=_uow_factory(),
-        api_url=api_url,
+        api_url=issuer(),
         account_may_sign_in=account_may_sign_in,
         pod_is_live=_pod_is_live,
     )

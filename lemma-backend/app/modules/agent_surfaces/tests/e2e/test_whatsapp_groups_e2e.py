@@ -249,7 +249,7 @@ async def test_a_client_in_the_group_is_answered_there_from_what_is_public(
 
     # Answered as the pod: the member's conversation for this group's outsiders.
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is True
+    assert context.audience.answers_outsiders is True
     assert context.user_id == owner
 
     # In the group, through the Groups API, and never to the client's own number.
@@ -324,7 +324,7 @@ async def test_a_member_is_answered_as_themselves_when_they_name_the_bot(
     )
 
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is False
+    assert context.audience.answers_outsiders is False
     assert context.user_id == owner
     sent = await wait_for_messages(message_store, "WHATSAPP", min_count=1)
     answer = [message for message in sent if message.get("type") == "text"][-1]

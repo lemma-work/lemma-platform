@@ -29,6 +29,7 @@ from app.modules.agent.domain.private_notes import (
     PRIVATE_NOTE_KEY,
     WRITTEN_IN_LEMMA_KEY,
     is_private_note,
+    note_in_member_dm,
     run_metadata_for,
     written_in_lemma_into,
 )
@@ -216,10 +217,7 @@ class TurnCoordinator:
         metadata.pop("author_user_id", None)
         metadata.pop("agent_run_id", None)
         metadata.pop(NOTE_IN_DM_KEY, None)
-        if (
-            is_private_note(metadata)
-            and (conversation.metadata or {}).get("conversation_kind") == "DM"
-        ):
+        if is_private_note(metadata) and note_in_member_dm(conversation.metadata):
             metadata[NOTE_IN_DM_KEY] = True
 
         saved_user_message = await self.conversation_repository.append_message(

@@ -12,8 +12,8 @@ them:
 
 Built and dropped concurrently: ``schedule_runs`` is written on every fire.
 
-Revision ID: 0044_decisions_adoption
-Revises: 0043_surface_groups
+Revision ID: 0046_decisions_adoption
+Revises: 0045_public_rows
 """
 
 from collections.abc import Sequence
@@ -21,8 +21,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0044_decisions_adoption"
-down_revision = "0043_surface_groups"
+revision = "0046_decisions_adoption"
+down_revision = "0045_public_rows"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

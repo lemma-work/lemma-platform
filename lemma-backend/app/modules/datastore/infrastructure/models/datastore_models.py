@@ -47,6 +47,12 @@ class DatastoreTable(UUIDAuditBase):
     config: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
     enable_rls: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     visibility: Mapped[str] = mapped_column(String(30), default="POD", nullable=False)
+    #: Rows the pod keeps about its contacts, each readable by its own contact.
+    contact_owned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    #: What a contact may read of their own rows: a member's explicit choice.
+    contact_columns: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         Index(
@@ -70,6 +76,8 @@ class DatastoreTable(UUIDAuditBase):
             config=self.config,
             enable_rls=self.enable_rls,
             visibility=self.visibility,
+            contact_owned=self.contact_owned,
+            contact_columns=list(self.contact_columns or []),
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -169,7 +177,7 @@ class DatastoreFile(UUIDAuditBase):
 
 
 class DatastoreSignedLink(UUIDAuditBase):
-    """A public short link (``/s/{code}``) to one datastore file.
+    """A public short link (``/public/s/{code}``) to one datastore file.
 
     The link record lives here rather than only in Redis because it is a
     capability grant, not a cache: it is the whole of what stands between a URL

@@ -68,6 +68,7 @@ async def create_schedule(
         "connector_trigger_id": request.connector_trigger_id,
         "filter_instruction": request.filter_instruction,
         "filter_output_schema": request.filter_output_schema,
+        "include_outside_rows": request.include_outside_rows,
     }
     if request.visibility is not None:
         schedule_create_data["visibility"] = request.visibility
@@ -244,6 +245,7 @@ async def update_schedule(
         instruction=request.instruction,
         filter_instruction=request.filter_instruction,
         filter_output_schema=request.filter_output_schema,
+        include_outside_rows=request.include_outside_rows,
         is_active=request.is_active,
         visibility=request.visibility,
     )

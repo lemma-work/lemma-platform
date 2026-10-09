@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lemma Forms"
+  short_description: "Collect responses from people outside the pod"
+  default_prompt: "Use $lemma-form to collect responses from customers or the public: open a table to outside rows for the columns to ask, then share the hosted form link, embed it on a website, or design a form app with the pod's chat beside it."
