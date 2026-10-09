@@ -320,6 +320,13 @@ adopt any one design system.
 
 - Apps run inside an iframe in the shell — keep them self-contained; no top-level
   navigation assumptions.
+- An app can also be opened inside ChatGPT, through the pod's MCP connector.
+  There it is framed in ChatGPT's page, has no Lemma cookie, and signs in with a
+  token the Lemma view around it hands the SDK — automatically, as long as all
+  API traffic goes through `LemmaClient` (no hand-rolled `fetch` with
+  `credentials: "include"`). `isEmbeddedInHost()` says when it is; hide
+  sign-out there. A Vite app needs a build with this SDK release or later;
+  HTML apps load the current SDK and need nothing.
 - **Don't poll for fresh data.** A `setInterval` refetch flickers and hammers the API;
   use `useLiveRecords` / `useWatchChanges` (the table WebSocket). For a filtered live
   list, pass `reconcile: "refetch"` or an `accept` predicate (`app-recipes/rls-table.md`).

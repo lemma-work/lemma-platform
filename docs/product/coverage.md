@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 171 |
 | `gap` | 2 |
-| `manual` | 21 |
+| `manual` | 23 |
 | `planned` | 11 |
 | `withdrawn` | 0 |
-| **total** | **205** |
+| **total** | **207** |
 
 Scenario tests declaring a promise: 428.
 
@@ -244,6 +244,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ACCESS-023` Revoking a person's access revokes their software's too | `covered` | `test_removing_a_person_stops_their_delegations` |
 | `PS-ACCESS-040` A person connects an outside AI tool to one pod, and it acts as them | `manual` | — |
 | `PS-ACCESS-041` A person sees what they have connected, and disconnecting takes effect at once | `manual` | — |
+| `PS-ACCESS-042` A connected tool shows a pod's records as a table the person can work in | `manual` | — |
+| `PS-ACCESS-043` A connected tool opens a pod's app, and the person uses it there as themselves | `manual` | — |
 | `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_resource_can_be_previewed`, `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
 | `PS-ACCESS-031` Refusals are informative without leaking | `covered` | `test_a_refusal_is_informative`, `test_a_refusal_does_not_leak` |
 
