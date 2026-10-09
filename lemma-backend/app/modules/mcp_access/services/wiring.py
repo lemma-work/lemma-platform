@@ -59,34 +59,56 @@ def _ephemeral() -> EphemeralStore:
     return EphemeralStore()
 
 
-@lru_cache(maxsize=1)
+# The three below keep the URLs they are built with, so each is cached on
+# those URLs rather than once for the process: a server, consent service or
+# verifier first built while the API's URL was something else would go on
+# issuing or checking tokens for that URL -- every token minted for the real
+# one refused as being for another resource. The URLs do not change in a
+# running deployment, so each is still built once there.
+
+
 def authorization_server() -> LemmaAuthorizationServer:
+    return _authorization_server(issuer(), settings.auth_frontend_url)
+
+
+@lru_cache(maxsize=1)
+def _authorization_server(
+    api_url: str, auth_frontend_url: str
+) -> LemmaAuthorizationServer:
     return LemmaAuthorizationServer(
         uow_factory=_uow_factory(),
         clients=client_directory(),
         ephemeral=_ephemeral(),
-        api_url=issuer(),
-        auth_frontend_url=settings.auth_frontend_url,
+        api_url=api_url,
+        auth_frontend_url=auth_frontend_url,
         account_may_sign_in=account_may_sign_in,
         pod_is_live=_pod_is_live,
     )
 
 
-@lru_cache(maxsize=1)
 def consent_service() -> ConsentService:
+    return _consent_service(issuer())
+
+
+@lru_cache(maxsize=1)
+def _consent_service(api_url: str) -> ConsentService:
     return ConsentService(
         uow_factory=_uow_factory(),
         clients=client_directory(),
         ephemeral=_ephemeral(),
-        issuer=issuer(),
+        issuer=api_url,
     )
 
 
-@lru_cache(maxsize=1)
 def access_token_verifier() -> AccessTokenVerifier:
+    return _access_token_verifier(issuer())
+
+
+@lru_cache(maxsize=1)
+def _access_token_verifier(api_url: str) -> AccessTokenVerifier:
     return AccessTokenVerifier(
         uow_factory=_uow_factory(),
-        api_url=issuer(),
+        api_url=api_url,
         account_may_sign_in=account_may_sign_in,
         pod_is_live=_pod_is_live,
     )
