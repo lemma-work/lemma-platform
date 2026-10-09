@@ -92,19 +92,26 @@ A code is never sent to a handle the contact typed during the conversation.
 
 ## Authority
 
-A contact's run gets a new `ActorType.CONTACT` context, pinned to the pod and
-carrying `contact_id`. Like the anonymous context, grants give it nothing.
+A contact's run gets an `ActorType.CONTACT` context, pinned to the pod and
+carrying `contact_id`, built by `build_outsider_context` whichever door they
+came in by. Like the anonymous context, grants give it nothing, and neither
+passes the pod-membership check.
 
 1. **Public reads**, the same as an outsider's.
 2. **Their own rows.** A table opts in as contact-owned: it gets a `contact_id`
-   column and a policy `contact_id = current_setting('app.current_contact_id')`,
-   alongside the existing per-user policy in `schema_manager`. Contacts read
-   these rows and nothing else. They never write tables directly.
+   column and a policy that fails closed: a session reading as a member sees
+   every row, one naming a contact sees theirs, and one naming nobody sees
+   nothing. Every pod session takes its principal from the context
+   (`RowPrincipal.of`). Contacts read only the columns a member chose
+   (`contact_columns`), and never write tables directly. A contact-owned table
+   is never Public.
 3. **Opted-in functions.** Only a function marked `contacts: invoke` is callable
    from a contact's run. It runs as the **function's own workload** with the
-   function's grants, never as a member. The platform injects `contact_id` and
-   identity strength into its input. The model cannot set or override them, so a
-   prompt cannot make a function act for another contact.
+   function's grants, never as a member: the run has no user, carries the
+   contact, and authenticates with a `function-run` token that reaches only its
+   pod's data. Its reads of contact-owned tables see that contact's rows only.
+   The platform writes `contact_id` into its input, replacing whatever the
+   model sent. Identity strength is not passed yet (see Step-up).
 
 Everything else is withheld by the same allowlist and harness gate outsiders use
 (`outsider_tools.py`, `outsider_gate.py`): no sandbox, no browser, no connector
@@ -291,23 +298,29 @@ one:
   required to be a pod member. Only the pod's own bots answer contacts:
   email always, a chat bot when it has its own account or credentials.
 - **Contact runs.** A contact's conversation carries `audience: contact` and the
-  contact's id; `answers_outsiders` is true of it, so the outsider rules hold
-  unchanged (anonymous, Public reads, the tool allowlist and gate, in-process
-  runtime only). The routing link `~contact:{id}` is the second, independent
-  record of it. The brief and platform guidance say the chat is private, name
-  the contact as a quoted name, and list what is theirs. Audited as
-  `contact:{id}`.
-- **Their own rows.** `contact_owned` on a datastore table adds `contact_id`
-  and a row policy (`app.current_contact_id`): sessions naming no contact see
-  every row, a session naming one sees only that contact's. A contact's run
-  reads through `contact_records`, which sets the contact from the run, runs as
-  the NOBYPASSRLS query role and filters by contact as well. Not combinable
-  with per-user `enable_rls`.
+  contact's id, read once into the run's `Audience` (`agent/domain/outsiders`),
+  which everything the run builds takes its answer from: the CONTACT context,
+  the tool allowlist and gate, the brief, the private-note labels and the
+  metering scope. A member's note in a contact's chat is labelled as the
+  keeper's and never to be repeated. The routing link `~contact:{id}` is how a
+  conversation that lost its metadata is repaired, to the same contact. Names
+  reach the prompt sanitised and quoted. Audited as `contact:{id}`.
+- **Their own rows.** `contact_owned` on a datastore table adds `contact_id`,
+  the `contact_columns` a contact may read, and the fail-closed row policy. A
+  contact's run reads through `contact_records`, which sets the contact from the
+  run, runs as the NOBYPASSRLS query role, filters by contact as well and
+  returns only the chosen columns. Record reads by an outsider, or by work done
+  for a contact, are refused on such a table; a query reads under the policy.
+  Not combinable with per-user `enable_rls`, in any order of PATCH, and never
+  Public.
 - **Functions for contacts.** `PUT /pods/{pod_id}/functions/{name}/contacts`
-  opens a function. A contact's run calls it through `contact_function`; it runs
-  as its owner's runs do (owner's authority narrowed by the function's grants)
-  with the contact's id written into `contact_id` in its input, replacing
-  anything the model put there.
+  opens a function: its owner, or a pod administrator, and only when its input
+  declares `contact_id`. A contact's run calls it through `contact_function`; it
+  runs as the function's own workload with no user (`function_runs.user_id`
+  null, `contact_id` set), on a `function-run` token, held to its grants and to
+  the contact's rows. At most `FUNCTION_CONTACT_CALLS_PER_DAY` calls per
+  contact per function; a tool call is never run twice; a run still going at
+  the wait deadline is cancelled and reported as such.
 - **Web widgets.** `/pods/{pod_id}/web-widgets` (a chat; public key,
   encrypted signing secret shown once and rotatable, allowed origins, answer,
   looked-after-by). Public endpoints under `/public/web/{public_key}`: session,
@@ -352,7 +365,9 @@ one:
   (`USAGE_CONTACTS_MONTHLY_DEFAULT_USD`, $50); removing the cap is recorded as
   no limit. Past the cap a surface starts no run: the person is told once a day
   that a person will reply, the member is told, and the conversation is handed
-  to them for the rest of the month.
+  to them for the rest of the month. The web chat is held the same way. Vision,
+  titles and history compaction in an outside run count towards the cap, never
+  the member's windows.
 - **The app.** A Contacts place in the space (People with a sheet per
   contact; On your website; What contacts can use), a "Private messages from
   people outside" select in a bot's settings, and the contacts cap in the
@@ -361,11 +376,19 @@ one:
   `pod.functions.set_contacts_invoke` in Python; `client.contacts` (with
   `.widgets`) and `functions.setContactsInvoke` in TypeScript.
 
+- **Switched on deliberately.** `PUBLIC_WEB_ENABLED` is off by default: every
+  `/public/web` endpoint and hosted page answers 404, and no widget, open table
+  or bot can be set to answer people outside until an operator turns it on.
+  `PUBLIC_PAGES_URL` serves the hosted pages on their own cookieless origin.
+- **Every public endpoint is under `/public/`.** The rule, its exceptions and
+  the gate that holds it are in CONTRIBUTING.md.
+
 Not built yet: WhatsApp templates (follow-ups past the 24-hour window), a
-`List-Unsubscribe` header on follow-up email, newsletters to subscribers, bot
-protection on a widget's first message, step-up codes for contact functions (the `requires` strength),
-pod bundles carrying `contact_owned` and `contacts_invoke`, and a hand-off
-control beyond what `message_user` gives.
+`List-Unsubscribe` header on follow-up email, newsletters to subscribers,
+step-up codes for contact functions (the `requires` strength), pod bundles
+carrying `contact_owned`, `contact_columns`, `contacts_invoke` and
+`include_outside_rows`, and a hand-back control in the app for a conversation
+handed to a member.
 
 ## Build order
 

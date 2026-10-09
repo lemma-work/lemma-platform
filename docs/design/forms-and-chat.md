@@ -38,8 +38,22 @@ anonymous visitors, web widgets with public keys, email codes.
 | Agent on a web visitor's run | Fill the visible form's open columns; the existing contact tools |
 | Member | Open a table they can change; the grant goes when they or the table do |
 
-Limits: `surface_web_submissions_per_widget_per_day` per widget and address,
-and the organization's contacts cap for any agent work a row starts.
+Limits: `surface_web_submissions_per_widget_per_day` per widget and address
+(the address checked first, so one address cannot spend a widget's day), and
+the organization's contacts cap for any agent work a row starts.
+
+What a stranger's row may set off:
+
+- **Its insert event is marked as from outside** and names the visitor
+  (`visitor:{session}`) or contact, not the member who opened the table.
+- **A DATASTORE schedule ignores it** unless the schedule asks for outside rows
+  (`include_outside_rows`, off by default). When one does, its LLM filter and
+  the run it starts are both told the row's content is untrusted.
+- **Integrity errors read alike.** A duplicate or a missing reference is
+  refused in one form ("We couldn't save that answer"). A unique, key or
+  foreign-key column opens only to confirmed contacts, so an anonymous visitor
+  cannot probe what is there.
+- **Nothing opens while forms are switched off** (`PUBLIC_WEB_ENABLED`).
 
 ## Not building
 
@@ -50,6 +64,6 @@ and the organization's contacts cap for any agent work a row starts.
 
 ## Next
 
-- `forms.lemma.work/<id>` mapped onto the hosted page.
-- Bot protection before the hosted page opens to everyone.
+- `forms.lemma.work/<id>` mapped onto the hosted page. `PUBLIC_PAGES_URL`
+  already serves the pages on their own origin; the domain is infrastructure.
 - "Your requests": a confirmed contact's own rows of a contact-owned table.
