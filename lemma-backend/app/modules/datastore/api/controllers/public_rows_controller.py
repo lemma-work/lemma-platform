@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import PodContextDep
+from app.core.public_web import public_web_enabled
 from app.modules.datastore.domain.public_rows import PublicAudience, PublicColumn
 from app.modules.datastore.services.public_rows import (
     OpeningRefused,
@@ -132,6 +133,16 @@ async def put_public_rows(
     uow: UoWDep,
     ctx: PodContextDep,
 ) -> TableOpeningResponse:
+    if not public_web_enabled():
+        # Opening a table is what lets a page add rows to it; on a deployment
+        # that serves no pages to people outside, it would open nothing.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PUBLIC_WEB_DISABLED",
+                "message": "Forms are switched off on this deployment",
+            },
+        )
     try:
         opening = await open_table(
             uow,

@@ -30,6 +30,16 @@ from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
 pytestmark = pytest.mark.e2e
 
+
+@pytest.fixture(autouse=True)
+def public_web_switched_on(monkeypatch):
+    """Forms are off on a deployment until an operator turns them on; these
+    are about what an open table does once they are."""
+    from app.core.public_web import public_web_settings
+
+    monkeypatch.setattr(public_web_settings, "public_web_enabled", True)
+
+
 CONTACT = UUID(int=11)
 
 
@@ -275,3 +285,17 @@ async def test_an_outside_row_starts_only_a_schedule_that_asked_for_it(
     by_member = await _fire(db_session, member)
     assert {schedule_id for schedule_id, _ in by_member.fired} == {ignores, accepts}
     assert all("untrusted_row" not in data for _, data in by_member.fired)
+
+
+async def test_no_table_opens_while_forms_are_switched_off(
+    pod_api: DatastoreApi, monkeypatch
+):
+    from app.core.public_web import public_web_settings
+
+    monkeypatch.setattr(public_web_settings, "public_web_enabled", False)
+    table = await _signups(pod_api)
+
+    refused = await _open(pod_api, table, audience="anyone", columns=["full_name"])
+
+    assert refused.status_code == status.HTTP_409_CONFLICT, refused.text
+    assert refused.json()["code"] == "PUBLIC_WEB_DISABLED"
