@@ -408,8 +408,8 @@ class ConversationBinder:
         return (
             conversation is not None
             and conversation.user_id == user_id
-            and conversation.answers_outsiders
-            and conversation.contact_id == contact_id
+            and conversation.audience.answers_outsiders
+            and conversation.audience.contact_id == contact_id
         )
 
     async def _starts_new_conversation(

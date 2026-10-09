@@ -70,6 +70,12 @@ def budget_windows(
                 end=end,
                 limit=None if limit is None else money(limit),
                 excluded_organization_ids=excluded if user is not None else (),
+                # What answering people outside cost is the organization's,
+                # so it never fills the allowance of the member who looked
+                # after the conversation either.
+                excluded_source_types=(
+                    OUTSIDE_AUDIENCE_SOURCES if user is not None else ()
+                ),
             )
         )
     if outside_audience:

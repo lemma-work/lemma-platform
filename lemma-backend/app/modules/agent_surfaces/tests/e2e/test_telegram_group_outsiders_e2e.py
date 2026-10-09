@@ -196,7 +196,7 @@ async def test_a_stranger_is_answered_for_the_pod_from_what_is_public(
     # Answered, and answered as the pod: the member's conversation for this
     # group's outsiders, never the stranger's own.
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is True
+    assert context.audience.answers_outsiders is True
     assert context.user_id == owner
     conversation = (
         await db_session.execute(

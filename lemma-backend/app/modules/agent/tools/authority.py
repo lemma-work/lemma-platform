@@ -46,18 +46,17 @@ async def tool_authorization_context(
     uow: SqlAlchemyUnitOfWork, deps: AgentContext
 ) -> Context:
     """The authorization context one agent tool call runs under."""
-    if deps.answers_outsider:
+    audience = deps.audience
+    if audience.answers_outsiders:
         # A contact is named in the audit trail and narrows contact-owned
         # tables to their rows; a group's outsiders are one conversation.
         return build_outsider_context(
             session=uow.session,
             pod_id=deps.pod_id,
             organization_id=deps.org_id,
-            contact_id=deps.contact_id,
+            contact_id=audience.contact_id,
             actor_id=(
-                None
-                if deps.contact_id is not None
-                else f"outsider:{deps.conversation_id}"
+                None if audience.is_contact else f"outsider:{deps.conversation_id}"
             ),
         )
     authorization = create_authorization_data_service(uow)

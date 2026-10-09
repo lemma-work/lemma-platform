@@ -23,7 +23,8 @@ because there are three jobs:
     per-delta split lets ``<thi`` + ``nk>`` through and the user reads the
     model's reasoning as it is typed. This holds back trailing text that could
     still turn out to be the start of a tag and releases it once the next delta
-    proves otherwise.
+    proves otherwise. It is also how the other two read a whole string, so a
+    streamed answer and the message saved from it hide exactly the same text.
 
 It lives in ``app/core`` rather than beside its first caller because the agent
 module and the surfaces module both need it, and a module may not import
@@ -33,7 +34,7 @@ another's infrastructure.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from enum import Enum
 from typing import Literal
 
 #: The tags the convention uses. ``<thinking>`` is accepted as well because
@@ -42,58 +43,48 @@ THINKING_TAGS: tuple[str, str] = ("<think>", "</think>")
 
 Segment = tuple[Literal["thinking", "text"], str]
 
-# A tag's attributes are ``[^<>]*``, never ``[^>]*``: a tag never contains another
-# ``<``, and without that stop every ``<think`` in a run of them scans to the end of
-# the string, which is quadratic in what a model was made to repeat.
+# One reader decides, for the whole string and for the stream alike: the
+# whole-string functions feed the text through `ThinkingStreamSplitter` in one
+# go. Two readers had two answers -- the stream hid what a saved message showed,
+# or the reverse -- and a reasoning block one of them missed reached a person.
 #
-# Blocks are found by walking forward from one open tag to its close (`_blocks`),
-# not by one alternation over the whole text: the rules are the ones such a regex
-# would encode, in its order, and the walk is linear by construction.
-#   - a self-closing ``<think/>`` is an empty block, not an unclosed open tag
-#   - an open tag runs to the *first* close after it, so two blocks stay two
-#   - an open tag that is never closed runs to the end of the text -- a model that
-#     writes ``<think>`` and never closes it has reasoned for the rest of the
-#     message, and treating the remainder as an answer is the worst of the options.
-_OPEN_RE = re.compile(r"<think(?:ing)?[^<>]*>", re.IGNORECASE)
+# The reader walks forward once, in one of three states, and never looks back:
+#   - text: an open tag starts reasoning, a fence marker starts a code fence;
+#   - a code fence: everything up to the same marker is the answer's code, tags
+#     included -- an answer explaining the convention in a code block is still
+#     an answer. A fence never closed runs to the end, as it does on screen;
+#   - reasoning: everything up to the first close is reasoning, fences included
+#     -- a thought that drafts code is still a thought. A block never closed
+#     runs to the end: a model that writes ``<think>`` and never closes it has
+#     reasoned for the rest of the message, and treating the remainder as an
+#     answer is the worst of the options.
+#
+# A tag's name ends where the name ends: ``<thinker>`` is not ``<think>``. Its
+# attributes are ``[^<>]*``, never ``[^>]*``: a tag never contains another ``<``,
+# and without that stop every ``<think`` in a run of them scans to the end of the
+# string, which is quadratic in what a model was made to repeat.
+_TAG_NAME = r"think(?:ing)?(?=[\s/>])"
+_OPEN_TAG = rf"<{_TAG_NAME}[^<>]*>"
+_TEXT_TOKEN_RE = re.compile(rf"```|~~~|{_OPEN_TAG}", re.IGNORECASE)
 _CLOSE_RE = re.compile(r"</think(?:ing)?>", re.IGNORECASE)
-_SELF_CLOSING_RE = re.compile(r"<think(?:ing)?[^<>]*/>", re.IGNORECASE)
+_FENCES = ("```", "~~~")
 
-# Longest tag we must never emit half of: ``</thinking>``.
-_MAX_TAG = len("</thinking>")
-
-# Fenced code spans, so a tag *inside* one is prose about the convention rather
-# than an instance of it. An answer explaining `<think>` tags in a code block is
-# rare but it is a real answer, and eating it would be a worse bug than the one
-# this module fixes.
-_FENCE_RE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
-
-
-def _fenced_spans(text: str) -> list[tuple[int, int]]:
-    return [(m.start(), m.end()) for m in _FENCE_RE.finditer(text)]
+# What the end of the stream may be holding of a tag that is not complete yet,
+# from its ``<``: part of the name, or the name and attributes of any length
+# still waiting for their ``>``.
+_PARTIAL_OPEN_RE = re.compile(
+    r"<(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?|<think(?:ing)?[\s/][^<>]*",
+    re.IGNORECASE,
+)
+_PARTIAL_CLOSE_RE = re.compile(
+    r"<(?:/(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?)?", re.IGNORECASE
+)
 
 
-def _inside_any(index: int, spans: list[tuple[int, int]]) -> bool:
-    return any(start <= index < end for start, end in spans)
-
-
-def _blocks(text: str) -> Iterator[tuple[int, int, str]]:
-    """Every reasoning block as ``(start, end, body)``, in order.
-
-    A block whose open tag sits inside a fenced code span is not one: the walk
-    steps over it whole, and carries on after where it would have ended.
-    """
-    fenced = _fenced_spans(text)
-    cursor = 0
-    while (opening := _OPEN_RE.search(text, cursor)) is not None:
-        if _SELF_CLOSING_RE.fullmatch(opening.group()):
-            end, body = opening.end(), ""
-        elif (closing := _CLOSE_RE.search(text, opening.end())) is not None:
-            end, body = closing.end(), text[opening.end() : closing.start()]
-        else:
-            end, body = len(text), text[opening.end() :]
-        if not _inside_any(opening.start(), fenced):
-            yield opening.start(), end, body
-        cursor = max(end, opening.start() + 1)
+class _State(Enum):
+    TEXT = "text"
+    FENCE = "fence"
+    THINKING = "thinking"
 
 
 def split_thinking_segments(text: str) -> list[Segment]:
@@ -104,22 +95,14 @@ def split_thinking_segments(text: str) -> list[Segment]:
     """
     if not text:
         return []
-
-    segments: list[Segment] = []
-    cursor = 0
-
-    for start, end, body in _blocks(text):
-        before = text[cursor:start]
-        if before.strip():
-            segments.append(("text", before))
-        if body.strip():
-            segments.append(("thinking", body))
-        cursor = end
-
-    remainder = text[cursor:]
-    if remainder.strip():
-        segments.append(("text", remainder))
-    return segments
+    splitter = ThinkingStreamSplitter()
+    merged: list[Segment] = []
+    for kind, chunk in (*splitter.feed(text), *splitter.flush()):
+        if merged and merged[-1][0] == kind:
+            merged[-1] = (kind, merged[-1][1] + chunk)
+        else:
+            merged.append((kind, chunk))
+    return [(kind, chunk) for kind, chunk in merged if chunk.strip()]
 
 
 def has_thinking_tokens(text: str | None) -> bool:
@@ -148,69 +131,139 @@ class ThinkingStreamSplitter:
 
     Stateful for the length of one stream, because a tag can arrive in pieces.
     ``feed`` returns the segments that are safe to emit *now*; anything that
-    could still be the start of a tag is held until the next delta settles it,
-    and ``flush`` releases whatever is left when the stream ends.
+    could still be the start of a tag or a fence marker is held until the next
+    delta settles it, and ``flush`` releases whatever is left when the stream
+    ends.
+
+    Each character is read once: the buffer holds only what is undecided, and
+    a held tag that is only waiting for its ``>`` is not read again until a
+    delta could finish it.
     """
 
     def __init__(self) -> None:
         self._buffer = ""
-        self._inside = False
+        self._state = _State.TEXT
+        self._fence = ""
+        # The buffer is a tag's name and attributes, waiting for ``>``.
+        self._awaiting_tag_end = False
 
     @property
     def inside_thinking(self) -> bool:
         """Whether the stream is currently mid-reasoning."""
-        return self._inside
+        return self._state is _State.THINKING
 
     def feed(self, delta: str) -> list[Segment]:
+        if self._awaiting_tag_end and "<" not in delta and ">" not in delta:
+            # Still waiting: nothing in this delta can complete or end it.
+            self._buffer += delta
+            return []
         self._buffer += delta
+        self._awaiting_tag_end = False
         out: list[Segment] = []
-
-        while True:
-            if self._inside:
-                match = _CLOSE_RE.search(self._buffer)
-                if match is None:
-                    # Release all but a possible partial closing tag.
-                    safe_upto = self._safe_prefix_end()
-                    if safe_upto:
-                        out.append(("thinking", self._buffer[:safe_upto]))
-                        self._buffer = self._buffer[safe_upto:]
-                    break
-                if match.start():
-                    out.append(("thinking", self._buffer[: match.start()]))
-                self._buffer = self._buffer[match.end() :]
-                self._inside = False
-                continue
-
-            match = _OPEN_RE.search(self._buffer)
-            if match is not None:
-                if match.start():
-                    out.append(("text", self._buffer[: match.start()]))
-                self._buffer = self._buffer[match.end() :]
-                # ``<think/>`` opens and closes in one go.
-                self._inside = not _SELF_CLOSING_RE.fullmatch(match.group())
-                continue
-
-            safe_upto = self._safe_prefix_end()
-            if safe_upto:
-                out.append(("text", self._buffer[:safe_upto]))
-                self._buffer = self._buffer[safe_upto:]
-            break
-
+        position = 0
+        while position < len(self._buffer):
+            step = {
+                _State.TEXT: self._read_text,
+                _State.FENCE: self._read_fence,
+                _State.THINKING: self._read_thinking,
+            }[self._state]
+            advanced = step(position, out)
+            if advanced is None:
+                break
+            position = advanced
+        else:
+            self._buffer = ""
         return [(kind, chunk) for kind, chunk in out if chunk]
 
     def flush(self) -> list[Segment]:
         """Whatever is left, once no further delta can change its meaning."""
         remainder = self._buffer
         self._buffer = ""
+        self._awaiting_tag_end = False
         if not remainder:
             return []
-        # An unclosed block ends as reasoning, as `_blocks` reads one: the
-        # model reasoned to the end and never wrote an answer.
-        return [("thinking" if self._inside else "text", remainder)]
+        # An unclosed block ends as reasoning: the model reasoned to the end
+        # and never wrote an answer.
+        return [("thinking" if self.inside_thinking else "text", remainder)]
 
-    def _safe_prefix_end(self) -> int:
-        """How much of the buffer cannot be the opening of a tag."""
-        last_open = self._buffer.rfind("<")
-        if last_open != -1 and (len(self._buffer) - last_open) <= _MAX_TAG:
+    # Each reader consumes from ``position``, appends what it decided, and
+    # returns where the next one starts -- or ``None`` once the rest of the
+    # buffer is undecided, keeping only that undecided rest.
+
+    def _read_text(self, position: int, out: list[Segment]) -> int | None:
+        buffer = self._buffer
+        match = _TEXT_TOKEN_RE.search(buffer, position)
+        if match is None:
+            held = self._held_in_text(position)
+            out.append(("text", buffer[position:held]))
+            self._buffer = buffer[held:]
+            return None
+        pending = buffer.rfind("<", position, match.start())
+        if pending != -1 and _PARTIAL_OPEN_RE.fullmatch(buffer, pending):
+            # A tag still being written began before this token and may yet
+            # end after it, which would make the token one of its attributes.
+            out.append(("text", buffer[position:pending]))
+            self._buffer = buffer[pending:]
+            self._awaiting_tag_end = len(self._buffer) > len("<thinking")
+            return None
+        token = match.group()
+        if token in _FENCES:
+            out.append(("text", buffer[position : match.end()]))
+            self._state, self._fence = _State.FENCE, token
+        else:
+            out.append(("text", buffer[position : match.start()]))
+            # ``<think/>`` opens and closes in one go.
+            if not token.endswith("/>"):
+                self._state = _State.THINKING
+        return match.end()
+
+    def _read_fence(self, position: int, out: list[Segment]) -> int | None:
+        buffer = self._buffer
+        end = buffer.find(self._fence, position)
+        if end == -1:
+            held = _held_marker(buffer, position, self._fence)
+            out.append(("text", buffer[position:held]))
+            self._buffer = buffer[held:]
+            return None
+        closed = end + len(self._fence)
+        out.append(("text", buffer[position:closed]))
+        self._state, self._fence = _State.TEXT, ""
+        return closed
+
+    def _read_thinking(self, position: int, out: list[Segment]) -> int | None:
+        buffer = self._buffer
+        match = _CLOSE_RE.search(buffer, position)
+        if match is None:
+            held = len(buffer)
+            last_open = buffer.rfind("<", position)
+            if last_open != -1 and _PARTIAL_CLOSE_RE.fullmatch(buffer, last_open):
+                held = last_open
+            out.append(("thinking", buffer[position:held]))
+            self._buffer = buffer[held:]
+            return None
+        out.append(("thinking", buffer[position : match.start()]))
+        self._state = _State.TEXT
+        return match.end()
+
+    def _held_in_text(self, position: int) -> int:
+        """Where the undecided tail of the text starts: a partial open tag, or
+        a partial fence marker."""
+        buffer = self._buffer
+        last_open = buffer.rfind("<", position)
+        if last_open != -1 and _PARTIAL_OPEN_RE.fullmatch(buffer, last_open):
+            # Only the name-and-attributes shape can grow without bound; a
+            # partial name is a handful of characters and is simply re-read.
+            self._awaiting_tag_end = len(buffer) - last_open > len("<thinking")
             return last_open
-        return len(self._buffer)
+        held = len(buffer)
+        for fence in _FENCES:
+            held = min(held, _held_marker(buffer, position, fence))
+        return held
+
+
+def _held_marker(buffer: str, position: int, marker: str) -> int:
+    """Where a trailing, still-incomplete ``marker`` starts, else the end."""
+    for length in range(len(marker) - 1, 0, -1):
+        if len(buffer) - position >= length and buffer.endswith(marker[:length]):
+            return len(buffer) - length
+    return len(buffer)

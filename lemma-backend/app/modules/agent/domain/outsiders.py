@@ -20,14 +20,20 @@ runner, the MCP bridge, the approval executor -- already reads the conversation.
 
 **A contact is somebody outside the pod too.** A contact's conversation -- a
 private chat with a person the pod knows by a vouched-for handle -- carries the
-``contact`` audience and the contact's id, and ``answers_outsiders`` is true of
-it: every rule above holds for a contact's run exactly as for a stranger's in a
-group. What the contact adds is a name, and a private chat rather than a group.
+``contact`` audience and the contact's id, and its ``Audience`` answers
+outsiders: every rule above holds for a contact's run exactly as for a
+stranger's in a group. What the contact adds is a name, and a private chat
+rather than a group.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import Self
 from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.entities import Conversation
@@ -40,8 +46,6 @@ AUDIENCE_KEY = "audience"
 OUTSIDERS = "outsiders"
 CONTACT = "contact"
 CONTACT_KEY = "contact_id"
-
-_OUTSIDE_AUDIENCES = frozenset({OUTSIDERS, CONTACT})
 
 #: Keys only routing may write, and that no client may drop or forge.
 _PROTECTED_KEYS = (AUDIENCE_KEY, CONTACT_KEY)
@@ -77,30 +81,101 @@ OUTSIDER_TOOLSETS = frozenset(
 OUTSIDE_ANSWER_TOOL = "respond_to_notification"
 
 
-def _metadata(conversation: Conversation | None) -> dict[str, object]:
-    if conversation is None or not isinstance(conversation.metadata, dict):
-        return {}
-    return conversation.metadata
+class AudienceKind(StrEnum):
+    """Whom a conversation answers. The values are what ``AUDIENCE_KEY`` stores."""
+
+    MEMBER = "member"
+    OUTSIDERS = OUTSIDERS
+    CONTACT = CONTACT
 
 
-def answers_outsiders(conversation: Conversation | None) -> bool:
-    """Whether this conversation's turns come from people outside the pod.
+class Audience(BaseModel):
+    """Whom one run answers, decided once and carried on everything the run builds.
 
-    True for a group's outsiders and for a contact alike: both are answered as
-    nobody, and nothing that decides what a run may do needs to tell them apart.
+    Read off the conversation by :meth:`from_conversation_metadata` and nowhere
+    else, so the authorizer, the toolset, the brief, the private-note labels and
+    the metering scope cannot each reach a different answer from the same row --
+    a contact's run that one reader took for a group's stranger, say, and
+    another for nobody outside at all.
+
+    ``contact_id`` is set exactly when ``kind`` is ``CONTACT``. A conversation
+    that says ``contact`` without an id it can parse is still somebody outside
+    the pod: it reads as ``OUTSIDERS``, never as a member's.
     """
-    return _metadata(conversation).get(AUDIENCE_KEY) in _OUTSIDE_AUDIENCES
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: AudienceKind = AudienceKind.MEMBER
+    contact_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _contact_id_only_for_a_contact(self) -> Self:
+        if (self.kind is AudienceKind.CONTACT) != (self.contact_id is not None):
+            raise ValueError("contact_id is set exactly for a contact audience")
+        return self
+
+    @classmethod
+    def member(cls) -> Audience:
+        return cls()
+
+    @classmethod
+    def outsiders(cls) -> Audience:
+        return cls(kind=AudienceKind.OUTSIDERS)
+
+    @classmethod
+    def contact(cls, contact_id: UUID) -> Audience:
+        return cls(kind=AudienceKind.CONTACT, contact_id=contact_id)
+
+    @classmethod
+    def from_conversation_metadata(
+        cls, metadata: Mapping[str, object] | None
+    ) -> Audience:
+        """The audience a conversation's metadata records."""
+        if not isinstance(metadata, Mapping):
+            return cls.member()
+        recorded = metadata.get(AUDIENCE_KEY)
+        if recorded == CONTACT:
+            try:
+                return cls.contact(UUID(str(metadata.get(CONTACT_KEY))))
+            except ValueError:
+                return cls.outsiders()
+        if recorded == OUTSIDERS:
+            return cls.outsiders()
+        return cls.member()
+
+    @classmethod
+    def of(cls, conversation: Conversation | None) -> Audience:
+        """The audience ``conversation`` answers; a member's when there is none."""
+        return cls.from_conversation_metadata(getattr(conversation, "metadata", None))
+
+    @property
+    def answers_outsiders(self) -> bool:
+        """True for a group's outsiders and for a contact alike: both are
+        answered as nobody, and nothing that decides what a run may do needs to
+        tell them apart."""
+        return self.kind is not AudienceKind.MEMBER
+
+    @property
+    def is_contact(self) -> bool:
+        return self.kind is AudienceKind.CONTACT
+
+    def to_metadata(self) -> dict[str, object]:
+        """The keys a conversation records this audience under."""
+        if self.kind is AudienceKind.CONTACT:
+            return {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(self.contact_id)}
+        if self.kind is AudienceKind.OUTSIDERS:
+            return {AUDIENCE_KEY: OUTSIDERS}
+        return {}
 
 
-def conversation_contact_id(conversation: Conversation | None) -> UUID | None:
-    """The contact this conversation is a private chat with, if it is one."""
-    metadata = _metadata(conversation)
-    if metadata.get(AUDIENCE_KEY) != CONTACT:
-        return None
-    try:
-        return UUID(str(metadata.get(CONTACT_KEY)))
-    except ValueError:
-        return None
+def run_audience(deps: object) -> Audience:
+    """The audience a run's context carries, or a member's when it carries none.
+
+    For readers handed something shaped like an ``AgentContext`` that may not
+    be one -- a bare ``RunContext.deps`` in a capability, say.
+    """
+    audience = getattr(deps, "audience", None)
+    return audience if isinstance(audience, Audience) else Audience.member()
 
 
 def with_audience_kept(
@@ -163,7 +238,7 @@ def refuse_owner_workspace(deps: object) -> None:
     allowed reaches one, and this is where any that tries is stopped, whatever
     let it through.
     """
-    if getattr(deps, "answers_outsider", False):
+    if run_audience(deps).answers_outsiders:
         raise OutsiderRunRefused(
             "A workspace is not available when answering someone outside the pod."
         )

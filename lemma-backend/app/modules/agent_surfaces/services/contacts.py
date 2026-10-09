@@ -56,6 +56,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.notification_reposit
 from app.modules.agent_surfaces.platforms.email_authentication import (
     EmailAuthenticationVerdict,
 )
+from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.fallback_reply_service import to_sender_alone
@@ -394,7 +395,7 @@ class ContactDoor:
             route=route,
             conversation_id=link.conversation_id,
             created_conversation_title=created_title,
-            answers_outsider=True,
+            audience=Audience.contact(contact.id),
         )
 
     async def _in_pod(self, user_id: UUID, pod_id: UUID) -> bool:

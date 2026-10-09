@@ -62,6 +62,8 @@ from app.modules.agent.services.workspace_model_fallback import (
     WorkspaceRuntimeResolver,
     resolve_workspace_runtime,
 )
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.services.run_usage_recorder import outside_source_for
 from app.modules.usage.contracts.execution import UsageExecutionContext
 from app.modules.usage.contracts.metering import metering_execution
 
@@ -150,6 +152,7 @@ class TitleGenerator(Protocol):
         pod_id: UUID,
         user_text: str,
         reply_text: str | None,
+        audience: Audience = ...,
     ) -> str | None: ...
 
 
@@ -199,7 +202,14 @@ class ConversationTitleGenerator:
         pod_id: UUID,
         user_text: str,
         reply_text: str | None,
+        audience: Audience = Audience(),
     ) -> str | None:
+        """A title for the conversation, metered as ``audience``'s spend.
+
+        A title for a conversation answering somebody outside the pod costs
+        what their run costs: the contacts cap, never the allowance of the
+        member who owns the conversation.
+        """
         resolved = await self._resolve_runtime(
             organization_id=organization_id, user_id=user_id, pod_id=pod_id
         )
@@ -216,6 +226,7 @@ class ConversationTitleGenerator:
             organization_id=organization_id,
             pod_id=pod_id,
             source_type="conversation_title",
+            outside_audience=outside_source_for(audience),
         )
         agent = (self._llm_agent or PydanticAIAgent)(
             model, system_prompt=_TITLE_SYSTEM_PROMPT
@@ -365,6 +376,7 @@ class ConversationTitleService:
                         pod_id=conversation.pod_id,
                         user_text=user_text,
                         reply_text=opening.assistant_text,
+                        audience=Audience.of(conversation),
                     )
                 except Exception:
                     # Not a retry point — one shot per conversation, and the

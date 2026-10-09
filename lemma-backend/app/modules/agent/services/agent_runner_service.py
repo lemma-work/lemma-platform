@@ -31,7 +31,7 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import ConversationNotFoundError
-from app.modules.agent.domain.outsiders import answers_outsiders
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.domain.harness_options import HarnessOptions
@@ -88,8 +88,11 @@ from app.modules.agent.services.run_observer_delivery import (
     notify_run_finished,
     notify_run_started,
 )
-from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
-from app.modules.usage.contracts import UsageReservation, run_source_type
+from app.modules.agent.services.run_usage_recorder import (
+    RunUsageRecorder,
+    usage_source_for,
+)
+from app.modules.usage.contracts import UsageReservation
 from app.modules.usage.contracts.execution import (
     usage_context_from_agent_context,
 )
@@ -185,6 +188,7 @@ class AgentRunnerService:
             user_id=user_id,
             agent_id=conversation.agent_id,
             started_at=agent_run.started_at,
+            usage_source=usage_source_for(Audience.of(conversation)),
         )
         if agent_run.status != AgentRunStatus.RUNNING:
             await self.finalizer.finish(
@@ -259,7 +263,7 @@ class AgentRunnerService:
                 organization_id=conversation.organization_id,
                 user_id=user_id,
                 runtime_profile=runtime_profile_snapshot,
-                outside_audience=answers_outsiders(conversation),
+                outside_audience=ctx.audience.answers_outsiders,
             )
             run_with_usage = run.with_runtime_profile(
                 runtime_profile_snapshot
@@ -330,10 +334,7 @@ class AgentRunnerService:
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
-                            source_type=run_source_type(
-                                answers_outsider=ctx.answers_outsider,
-                                answers_contact=ctx.contact_id is not None,
-                            ),
+                            source_type=run.usage_source,
                             source_id=str(agent_run_id),
                         )
                         async with metering_execution(
@@ -455,7 +456,7 @@ class AgentRunnerService:
             user_id=user_id,
             organization_id=conversation.organization_id,
         )
-        if not answers_outsiders(conversation):
+        if not Audience.of(conversation).answers_outsiders:
             return resolved
         return await in_process_runtime(
             resolved,
@@ -537,7 +538,7 @@ class AgentRunnerService:
                     conversation_id=agent_run.conversation_id,
                     run_id=agent_run.id,
                 )
-                if answers_outsiders(conversation) and not run_is_private(
+                if Audience.of(conversation).answers_outsiders and not run_is_private(
                     agent_run.metadata
                 ):
                     messages = without_private_runs(

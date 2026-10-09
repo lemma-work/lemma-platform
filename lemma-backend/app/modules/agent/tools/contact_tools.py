@@ -3,7 +3,7 @@
 * ``contact_records`` reads the contact's own rows of a contact-owned table.
 * ``contact_function`` calls a function the pod opened to contacts.
 
-Both take the contact from the run (``deps.contact_id``, set by routing from a
+Both take the contact from the run (``deps.audience``, set by routing from a
 vouched-for handle) and never from the model: there is no argument to name a
 contact by, so a prompt cannot ask for somebody else's rows or act for them.
 Offered only on a contact's run; a group's outsiders are nobody in particular
@@ -109,7 +109,7 @@ def build_contact_toolset(
     ) -> dict[str, object]:
         """Read the rows a contact-owned table holds about the person you are
         talking to. Only their rows are ever returned."""
-        contact_id, pod_id = ctx.deps.contact_id, ctx.deps.pod_id
+        contact_id, pod_id = ctx.deps.audience.contact_id, ctx.deps.pod_id
         if contact_id is None or pod_id is None:
             return {"success": False, "error": _NOT_A_CONTACT}
         try:
@@ -134,7 +134,7 @@ def build_contact_toolset(
     ) -> dict[str, object]:
         """Run a function the pod opened to contacts, for the person you are
         talking to. Use it for what they ask you to do, not to explore."""
-        contact_id, pod_id = ctx.deps.contact_id, ctx.deps.pod_id
+        contact_id, pod_id = ctx.deps.audience.contact_id, ctx.deps.pod_id
         if contact_id is None or pod_id is None:
             return {"success": False, "error": _NOT_A_CONTACT}
         try:

@@ -143,7 +143,7 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
 
     # Answered as a contact: the member's conversation, marked as theirs.
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is True
+    assert context.audience.is_contact is True
     assert context.user_id == owner
     conversation = (
         await db_session.execute(

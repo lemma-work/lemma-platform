@@ -33,18 +33,32 @@ class AgentRunUsage(BaseModel):
     metadata: dict[str, object] | None = None
 
 
-def run_source_type(*, answers_outsider: bool, answers_contact: bool) -> str:
-    """What an agent run's usage is recorded under.
+def outside_audience_source(
+    *, answers_outsider: bool, answers_contact: bool
+) -> str | None:
+    """The source a run answering somebody outside the organization is
+    recorded under, or ``None`` for any other run.
 
-    A run answering somebody outside the organization is recorded apart, so it
-    spends the organization's budget and its contacts cap rather than the
-    allowance of the member who looks after the conversation.
+    Recorded apart, so it spends the organization's budget and its contacts
+    cap rather than the allowance of the member who looks after the
+    conversation. Handed to ``UsageExecutionContext.outside_audience`` by work
+    done for such a run under a source of its own.
     """
     if answers_contact:
         return CONTACT_RUN
     if answers_outsider:
         return OUTSIDER_RUN
-    return "agent_run"
+    return None
+
+
+def run_source_type(*, answers_outsider: bool, answers_contact: bool) -> str:
+    """What an agent run's usage is recorded under."""
+    return (
+        outside_audience_source(
+            answers_outsider=answers_outsider, answers_contact=answers_contact
+        )
+        or "agent_run"
+    )
 
 
 class MeteredRequest(Protocol):
@@ -61,6 +75,7 @@ class MeteredRequest(Protocol):
 
 __all__ = [
     "AgentRunUsage",
+    "outside_audience_source",
     "run_source_type",
     "MeteredRequest",
     "ModelPricing",

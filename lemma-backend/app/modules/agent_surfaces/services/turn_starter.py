@@ -188,7 +188,7 @@ class SurfaceTurnStarter:
                 metadata["channel_context_withheld"] = background.withheld
             if background.audience is not None:
                 metadata["outside_audience"] = background.audience.to_metadata()
-        elif not context.answers_outsider:
+        elif not context.audience.answers_outsiders:
             # Email is a DM to the pod's mailbox, but a reply-all reaches
             # everybody on the thread.
             audience = await self._email_audience(context)
@@ -228,7 +228,7 @@ class SurfaceTurnStarter:
         not open them anyway. The run is told, so it does not look like it
         ignored the file.
         """
-        if context.answers_outsider:
+        if context.audience.answers_outsiders:
             return every_attachment_failed(
                 context.event, reason="Files from outside the pod are not saved"
             )
@@ -282,7 +282,7 @@ class SurfaceTurnStarter:
             )
             outside = outside_names(lines)
             withheld = 0
-            if not context.answers_outsider:
+            if not context.audience.answers_outsiders:
                 lines, withheld = for_member_run(lines)
         # The message being answered was logged on its way in and is already
         # the prompt; repeating it as background shows the agent the question
@@ -291,7 +291,7 @@ class SurfaceTurnStarter:
             lines.pop()
         audience = (
             None
-            if context.answers_outsider
+            if context.audience.answers_outsiders
             else chat_audience(
                 platform=context.platform,
                 group=group,
@@ -329,7 +329,7 @@ class SurfaceTurnStarter:
                 group=group,
                 membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
                 agent_display_name=context.agent_display_name,
-                for_stranger=context.answers_outsider,
+                for_stranger=context.audience.answers_outsiders,
             )
         return group, logged
 

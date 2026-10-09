@@ -10,7 +10,12 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.usage.contracts import AgentRunUsage, UsageReservation
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.usage.contracts import (
+    AgentRunUsage,
+    UsageReservation,
+    outside_audience_source,
+)
 from app.modules.usage.contracts.execution import (
     UsageExecutionContext,
     UsageService,
@@ -18,6 +23,20 @@ from app.modules.usage.contracts.execution import (
 )
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.usage.contracts.metering import check_run_budget, finalize_metered_run
+
+
+def outside_source_for(audience: Audience) -> str | None:
+    """The usage source of work done for a run answering somebody outside the
+    pod, or ``None`` when ``audience`` is a member's."""
+    return outside_audience_source(
+        answers_outsider=audience.answers_outsiders,
+        answers_contact=audience.is_contact,
+    )
+
+
+def usage_source_for(audience: Audience) -> str:
+    """What a run answering ``audience`` records its usage under."""
+    return outside_source_for(audience) or "agent_run"
 
 
 class RunUsageRecorder:
@@ -58,11 +77,19 @@ class RunUsageRecorder:
             model_name = str(runtime_profile.get("provider_model_name") or "default")
         with run_phase("usage_reserve"):
             async with self.uow_factory() as uow:
+                # The same rule as the metered path above: a run answering
+                # somebody outside the pod is never held to, or reserved
+                # against, the allowance of the member who looks after it.
+                # Past this check no limit applies to it, so there is nothing
+                # of the organization's to reserve either.
                 await self._service(uow).require_remote_budget_support(
                     organization_id=organization_id,
                     user_id=user_id,
                     profile_scope=profile_scope,
+                    outside_audience=outside_audience,
                 )
+                if outside_audience:
+                    return None
                 reservation = await self._service(uow).reserve_for_profile(
                     organization_id=organization_id,
                     user_id=user_id,

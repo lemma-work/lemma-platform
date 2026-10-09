@@ -41,6 +41,7 @@ from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
 )
+from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.outsider_limits import OutsiderTurnLimiter
@@ -206,5 +207,5 @@ class OutsiderDoor:
             route=route,
             conversation_id=link.conversation_id,
             created_conversation_title=created_title,
-            answers_outsider=True,
+            audience=Audience.outsiders(),
         )
