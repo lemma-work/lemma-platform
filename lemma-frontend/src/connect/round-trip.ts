@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { isDesktop } from "@/desktop/bridge";
-import { openExternal } from "@/desktop/open-external";
+import { holdTab, openExternal } from "@/desktop/open-external";
 
 /** Getting somebody back from a provider's consent page, and hearing how it went.
  *
@@ -59,6 +59,12 @@ const ROUND_TRIP_MS = 15 * 60_000;
  *  leaving two copies of it open. The opened page is the provider's, at a URL
  *  the API just minted; that is the trade every OAuth tab makes.
  *
+ *  Opened empty and given a face first (`holdTab`), then pointed at the
+ *  provider. An authorize URL is very often a redirect to the consent screen,
+ *  and the tab used to sit on `about:blank` for the whole of that — which reads
+ *  as a click that did nothing, and is when somebody closes the tab the round
+ *  trip needed. `what` is the provider's name in the page that holds it.
+ *
  *  In the desktop app the webview opens no tab at all: the shell routes the
  *  request to the system browser, `window.open` answers `null` either way, and
  *  a browser tab there has no opener to report to. So it goes through
@@ -67,7 +73,7 @@ const ROUND_TRIP_MS = 15 * 60_000;
  *
  *  False when the browser refused, which it may for a window opened after an
  *  await rather than inside the click — the caller then offers a link. */
-export function openAuthorization(url: string): boolean {
+export function openAuthorization(url: string, what: string): boolean {
     /* Set whether or not the tab opens: a refused one is followed by a link
        the person opens by hand, and that is still a round trip. */
     sentAt = Date.now();
@@ -75,8 +81,11 @@ export function openAuthorization(url: string): boolean {
         openExternal(url);
         return true;
     }
-    const opened = window.open(url, "_blank");
-    return opened !== null;
+    const opened = window.open("", "_blank");
+    if (opened === null) return false;
+    holdTab(opened, what);
+    opened.location.replace(url);
+    return true;
 }
 
 const OUTCOME_KEYS = ["connect", "connector", "account", "code", "reason"];

@@ -336,6 +336,41 @@ test("the provider's tab comes back to the completion page, carrying where it st
     assert.equal(failed.text, "access_denied");
 });
 
+test("the provider's tab is given a face before it is pointed anywhere", async () => {
+    const { openAuthorization } = await import("../src/connect/round-trip.ts");
+    const body = { children: [] as { tag: string; textContent: string }[] };
+    const tab = {
+        closed: false,
+        opener: {} as unknown,
+        document: {
+            title: "",
+            createElement(tag: string) { return { tag, textContent: "" }; },
+            body: {
+                replaceChildren(...nodes: { tag: string; textContent: string }[]) { body.children = nodes; },
+            },
+        },
+        location: { replaced: "", replace(url: string) { this.replaced = url; } },
+    };
+    (globalThis as { window?: unknown }).window = { open: () => tab };
+    try {
+        assert.equal(openAuthorization("https://slack.example/authorize", "Slack"), true);
+        /* Written before the provider is pointed at: an authorize URL is often
+           a redirect to the consent screen, and the tab used to read
+           `about:blank` for the whole of it. */
+        assert.equal(tab.document.title, "Taking you to Slack\u2026");
+        assert.ok(body.children.some((one) => one.textContent === "Taking you to Slack\u2026"));
+        assert.equal(tab.location.replaced, "https://slack.example/authorize");
+        /* Deliberately not `noopener`: the outcome comes home through it. */
+        assert.notEqual(tab.opener, null);
+        /* A refused tab is reported rather than assumed, so the caller offers
+           the link the person can open by hand. */
+        (globalThis as { window?: unknown }).window = { open: () => null };
+        assert.equal(openAuthorization("https://slack.example/authorize", "Slack"), false);
+    } finally {
+        delete (globalThis as { window?: unknown }).window;
+    }
+});
+
 test("the role refusal is said as the role it is", () => {
     // Making an install needs an owner or editor; the backend tells anyone
     // else "no connectors in organization <uuid>", which nobody can act on.
