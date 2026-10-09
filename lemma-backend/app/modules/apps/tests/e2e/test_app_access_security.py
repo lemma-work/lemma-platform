@@ -512,6 +512,38 @@ async def test_sign_out_and_account_disable_end_access(
     assert_gate(await browser.get(hosted_app.origin + "/assets/app.js"))
 
 
+async def test_a_public_apps_other_pages_revalidate(
+    browser, hosted_app, authenticated_client
+):
+    """A bundler names its scripts by their content, never a page.
+
+    `reports.html` keeps its name across releases, so an immutable copy kept
+    the last release's page for a year and never asked the server again.
+    """
+    archive = io.BytesIO(build_dist_archive(CONTENT))
+    with ZipFile(archive, "a") as bundle:
+        bundle.writestr("reports.html", "<html><body>PUBLIC_REPORT</body></html>")
+    await _upload(
+        authenticated_client, hosted_app.pod_id, hosted_app.name, archive.getvalue()
+    )
+    path = f"/pods/{hosted_app.pod_id}/apps/{hosted_app.name}"
+    public = await authenticated_client.patch(path, json={"visibility": "PUBLIC"})
+    assert public.status_code == 200, public.text
+
+    page = await browser.get(hosted_app.origin + "/reports.html")
+    assert page.status_code == 200 and "PUBLIC_REPORT" in page.text
+    assert page.headers["cache-control"] == "public, no-cache"
+    again = await browser.get(
+        hosted_app.origin + "/reports.html",
+        headers={"If-None-Match": page.headers["etag"]},
+    )
+    assert again.status_code == 304
+    assert again.headers["cache-control"] == "public, no-cache"
+
+    script = await browser.get(hosted_app.origin + "/assets/app.js")
+    assert script.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
 async def test_public_to_private_stops_anonymous_and_conditional_reads(
     browser, hosted_app, authenticated_client
 ):

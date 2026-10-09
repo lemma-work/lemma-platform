@@ -32,7 +32,10 @@ from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.ports import AppRepositoryPort
 from app.modules.apps.services import app_cover, app_install_assets
 from app.modules.apps.services.app_cover import AppCoverSpec
-from app.modules.apps.services.app_storage_phase import _AssetReadInputs
+from app.modules.apps.services.app_storage_phase import (
+    _AssetReadInputs,
+    guess_media_type,
+)
 from app.modules.apps.config import apps_settings
 
 logger = structlog.get_logger()
@@ -289,6 +292,9 @@ class AppAssetResolver:
         quoted_etag = self._quote_etag(etag)
         if self._etag_matches(etag, request_etag):
             return AppAssetDocument(
+                # A 304's headers replace the cached copy's, so it needs the
+                # page's type to keep an HTML page revalidating.
+                media_type=guess_media_type(normalized_asset_path),
                 etag=quoted_etag,
                 not_modified=True,
                 # A cover's address never changes while its picture does, so it
