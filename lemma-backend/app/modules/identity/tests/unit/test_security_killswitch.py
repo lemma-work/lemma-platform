@@ -42,6 +42,7 @@ def _connection() -> SimpleNamespace:
     return SimpleNamespace(
         url=SimpleNamespace(path="/pods/does-not-matter"),
         scope={"type": "http", "method": "GET"},
+        headers={},
         state=SimpleNamespace(),
     )
 

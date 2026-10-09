@@ -14,6 +14,8 @@ user id, an email address the receiving mail service authenticated.
 | --- | --- |
 | `contacts` | One person per pod, and the name to address them by. Cascades from the pod |
 | `contact_identities` | The handles a contact is known by (`PHONE`, `EMAIL`, `TELEGRAM`, `HOST`) and who vouched for each (`strength`: `CHANNEL`, `HOST`, `CODE`, `MEMBER`). Unique per pod and handle, so one number is one contact whichever bot it writes to. `last_inbound_at` is when they last wrote from it; `unsubscribed_at` when they asked not to be written to there |
+| `visitor_sessions` | One web visitor's chat with one widget, found by a secret only their page holds (stored hashed). Anonymous, or a contact by a host token or a code (`strength`). Ends at `expires_at` -- 90 days for an anonymous chat, 30 days after last use for a contact's, a host session only as long as the host keeps signing -- or when `revoked_at` is set by a reissued widget secret or a forgotten contact. Swept hourly |
+| `agent_surface_web_codes` | A one-time code sent to an email a visitor typed, hashed with its session; ten minutes, five guesses counted atomically. Swept once used or expired |
 
 - `GET /pods/{pod_id}/contacts` and `GET /pods/{pod_id}/contacts/{id}`: takes
   `conversation.read`. Pages with an opaque `before` / `next_before`
