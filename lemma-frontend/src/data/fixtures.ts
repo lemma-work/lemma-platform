@@ -30,6 +30,7 @@ import {
     type Runtime,
 } from "./runtimes";
 import { SAMPLE_TABLES, sampleShape, sampleTable } from "./sample-tables";
+import { madeIn } from "./made";
 
 /** A stand-in for when there is no session — enough to judge the layout, and
  *  loudly labelled so it is never mistaken for your pods. */
@@ -2566,14 +2567,17 @@ export const fixtureSource: PodSource = {
     async listLibrary(podId, kind, directory) {
         if (hiredHere(podId)) return { items: [] };
         const updated = "2026-09-14T08:00:00Z";
+        /* Made here, in front of what the sample already had: a folder somebody
+           just created belongs at the top of its listing, as it does live. */
+        const made = madeIn(directory);
         if (kind === "tables") return { items: SAMPLE_TABLES.map(table => ({
             id: table.name, name: table.name, kind: "table" as const, path: table.name, updated, detail: table.detail,
         })) };
-        if (directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) return { items: sampleMemoryIn(directory) };
-        if (directory === "/me") return { items: [...sampleMemoryIn("/me"), { id: "personal-note", name: "My notes.md", kind: "file" as const, path: "/me/notes.md", updated, detail: "Personal notes" }] };
-        if (directory === "/skills") return { items: SAMPLE_SKILLS.map(skill => ({ id: "skill-" + skill.folder, name: skill.folder, kind: "folder" as const, path: "/skills/" + skill.folder, updated: skill.updated, detail: "Instructions and supporting resources" })) };
-        if (directory.startsWith("/skills/")) return { items: [{ id: "skill-md", name: "SKILL.md", kind: "file" as const, path: directory + "/SKILL.md", updated, detail: "Skill instructions" }] };
-        return { items: directory === "/" ? [
+        if (directory === "/memory" || directory.startsWith("/memory/") || directory.startsWith("/me/agents")) return { items: [...made, ...sampleMemoryIn(directory)] };
+        if (directory === "/me") return { items: [...made, ...sampleMemoryIn("/me"), { id: "personal-note", name: "My notes.md", kind: "file" as const, path: "/me/notes.md", updated, detail: "Personal notes" }] };
+        if (directory === "/skills") return { items: [...made, ...SAMPLE_SKILLS.map(skill => ({ id: "skill-" + skill.folder, name: skill.folder, kind: "folder" as const, path: "/skills/" + skill.folder, updated: skill.updated, detail: "Instructions and supporting resources" }))] };
+        if (directory.startsWith("/skills/")) return { items: [...made, { id: "skill-md", name: "SKILL.md", kind: "file" as const, path: directory + "/SKILL.md", updated, detail: "Skill instructions" }] };
+        return { items: [...made, ...(directory === "/" ? [
             { id: "pdf", name: "Project overview.pdf", kind: "file" as const, path: "/sample-document.pdf", updated, detail: "PDF document" },
             { id: "me", name: "me", kind: "folder" as const, path: "/me", updated, detail: "Personal" },
             { id: "skills", name: "skills", kind: "folder" as const, path: "/skills", updated, detail: "Skills" },
@@ -2584,7 +2588,7 @@ export const fixtureSource: PodSource = {
             { id: "log", name: "run-2026-09-14.log", kind: "file" as const, path: "/run-2026-09-14.log", updated, detail: "Log" },
             { id: "docs", name: "Documents", kind: "folder" as const, path: "/documents", updated, detail: "Folder" },
             { id: "system", name: ".internal", kind: "folder" as const, path: "/.internal", updated, detail: "Internal files" },
-        ] : [{ id: "brief", name: "Project brief.md", kind: "file" as const, path: "/documents/brief.md", updated, detail: "Project context" }] };
+        ] : [{ id: "brief", name: "Project brief.md", kind: "file" as const, path: "/documents/brief.md", updated, detail: "Project context" }])] };
     },
     async tableColumns(_podId, name) { return sampleTable(name)?.columns ?? []; },
     /* Paged like the real one, fifty at a time. A sample that hands over every
