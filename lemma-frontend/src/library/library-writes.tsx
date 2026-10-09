@@ -73,10 +73,10 @@ export function useLibraryWrites(podId: string, directory: string) {
         }
     }
 
-    async function upload(files: File[]) {
-        if (files.length === 0) return;
-        const big = files.filter(tooLarge);
-        const rest = files.filter((file) => !tooLarge(file));
+    /** What will not be taken, said before anything is: one file is named with
+     *  its size, and a pile of them is counted, because the list of names would
+     *  be longer than the message it was read in. */
+    function reportTooLarge(big: File[]) {
         setProblem(
             big.length === 0
                 ? null
@@ -84,7 +84,12 @@ export function useLibraryWrites(podId: string, directory: string) {
                   ? big[0].name + " is too large to upload (" + describeSize(big[0].size) + ")."
                   : big.length + " files are too large to upload.",
         );
-        for (const file of rest) await writeOne(file, directory);
+    }
+
+    async function upload(files: File[]) {
+        if (files.length === 0) return;
+        reportTooLarge(files.filter(tooLarge));
+        for (const file of files) if (!tooLarge(file)) await writeOne(file, directory);
     }
 
     /** A drop, which carries folders as readily as files. The tree is read
@@ -105,12 +110,17 @@ export function useLibraryWrites(podId: string, directory: string) {
             setProblem("That drop could not be read. Try dragging it in again.");
             return;
         }
-        /* The files first. An upload makes the folders above it (`mkdir -p`),
-           so by the time an empty folder inside a dropped folder is made, the
-           folder it sits in exists. Made the other way round, an empty folder
-           whose parent only the upload was going to create would fail and the
-           drop would carry on without it. */
-        for (const each of tree.files) await writeOne(each.file, each.directory);
+        /* A dropped folder is the other way a file arrives here, and the same
+           ceiling the picker applies is applied to it: a file that is too
+           large is refused before it is written, not after a minute of
+           uploading. */
+        reportTooLarge(tree.files.map((each) => each.file).filter(tooLarge));
+        /* The files go in first: an upload makes the folders above it
+           (`mkdir -p`), so by the time an empty folder inside a dropped folder
+           is made, the folder it sits in exists. Made the other way round, an
+           empty folder whose parent only the upload was going to create would
+           fail, and the drop would carry on without it. */
+        for (const each of tree.files) if (!tooLarge(each.file)) await writeOne(each.file, each.directory);
         for (const folder of tree.folders) {
             /* The sample has no server to make a parent on the way to a file,
                so every folder is made there; live, only the folders an upload
