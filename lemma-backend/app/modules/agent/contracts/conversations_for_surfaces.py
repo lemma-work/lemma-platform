@@ -49,13 +49,8 @@ from app.modules.agent.api.dependencies import get_conversation_service
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
-    CONTACT,
-    CONTACT_KEY,
     OUTSIDE_ANSWER_TOOL,
-    OUTSIDERS,
-    answers_outsiders,
-    conversation_contact_id,
+    Audience,
 )
 from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.value_objects import (
@@ -100,10 +95,9 @@ class SurfaceConversation:
     #: the closest thing, and it is what decides whether a notification
     #: continues the thread or opens a new one.
     updated_at: datetime
-    #: Opened by routing to answer people outside the pod (``domain/outsiders``).
-    answers_outsiders: bool = False
-    #: The contact this is a private chat with, when it is one.
-    contact_id: UUID | None = None
+    #: Whom routing opened it to answer: a member, a group's people from
+    #: outside the pod, or one contact in a private chat (``domain/outsiders``).
+    audience: Audience = Audience()
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,8 +165,7 @@ def _conversation(entity) -> SurfaceConversation:
         agent_id=entity.agent_id,
         title=entity.title,
         updated_at=entity.updated_at,
-        answers_outsiders=answers_outsiders(entity),
-        contact_id=conversation_contact_id(entity),
+        audience=Audience.of(entity),
     )
 
 
@@ -242,13 +235,9 @@ async def open_surface_conversation(
     them.
     """
     if for_contact is not None:
-        metadata = {
-            **(metadata or {}),
-            AUDIENCE_KEY: CONTACT,
-            CONTACT_KEY: str(for_contact),
-        }
+        metadata = {**(metadata or {}), **Audience.contact(for_contact).to_metadata()}
     elif for_outsiders:
-        metadata = {**(metadata or {}), AUDIENCE_KEY: OUTSIDERS}
+        metadata = {**(metadata or {}), **Audience.outsiders().to_metadata()}
     conversation = await _service(uow).create_conversation(
         pod_id=pod_id,
         agent_name=agent_name,

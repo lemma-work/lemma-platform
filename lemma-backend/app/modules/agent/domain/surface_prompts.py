@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.domain.prompt_names import clean_name, quoted_name
 from app.modules.agent_surfaces.contracts.platforms import (
     PlatformFacts,
     ProgressStyle,
@@ -37,18 +39,17 @@ def is_group_conversation(ctx: object) -> bool:
 def surface_platform_guidance(
     platform: str | None,
     *,
-    answers_outsider: bool = False,
-    answers_contact: bool = False,
+    audience: Audience = Audience(),
     in_group: bool = False,
 ) -> str:
     """The standing system-prompt fragment for a surface platform.
 
     Returns ``""`` for an unknown or absent platform so callers can append
-    unconditionally. ``answers_outsider`` adds the section for a run speaking
-    for the pod to somebody outside it, and ``in_group`` the one for a chat
+    unconditionally. An ``audience`` outside the pod adds the section for a run
+    speaking for the pod to somebody outside it -- narrowed, for a contact, to
+    a private chat only they read -- and ``in_group`` the one for a chat
     several people read; both are stable per conversation, so they ride in the
-    cached prefix with the rest. ``answers_contact`` narrows the outsider
-    section to a contact's private chat, where only they read the answer.
+    cached prefix with the rest.
     """
     facts = platform_facts(platform)
     if facts is None:
@@ -84,9 +85,9 @@ def surface_platform_guidance(
     if facts.is_channel_capable:
         lines.append(_channel_context_section(facts))
 
-    if answers_contact:
+    if audience.is_contact:
         lines.append(_CONTACT_SECTION)
-    elif answers_outsider:
+    elif audience.answers_outsiders:
         lines.append(_OUTSIDER_SECTION)
 
     return "\n\n".join(lines)
@@ -169,16 +170,15 @@ def audience_notice(audience: object) -> str | None:
     people the pod does not know read it too. Said on the message it applies to,
     with the names where they are known, because "be careful" in general is
     nothing a model can act on and "Dana from Acme reads this" is.
+
+    Every name here was chosen by somebody outside the pod, so each is cleaned
+    and written as a JSON string (``domain/prompt_names``).
     """
     if not isinstance(audience, dict):
         return None
-    outsiders = [
-        " ".join(str(name).split()) for name in audience.get("outsiders") or [] if name
-    ]
-    recipients = [
-        " ".join(str(name).split()) for name in audience.get("recipients") or [] if name
-    ]
-    where = " ".join(str(audience.get("where") or "").split()) or "this chat"
+    outsiders = _quoted_names(audience.get("outsiders"))
+    recipients = _quoted_names(audience.get("recipients"))
+    where = clean_name(audience.get("where")) or "this chat"
     who = (
         ", ".join(outsiders)
         if outsiders
@@ -201,6 +201,12 @@ def audience_notice(audience: object) -> str | None:
         "needs that, say so briefly and offer to send it to them directly."
     )
     return "\n".join(lines)
+
+
+def _quoted_names(names: object) -> list[str]:
+    if not isinstance(names, list):
+        return []
+    return [quoted for name in names if (quoted := quoted_name(name)) is not None]
 
 
 def withheld_background_note(count: int) -> str:

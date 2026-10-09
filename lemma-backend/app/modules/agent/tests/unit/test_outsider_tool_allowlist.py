@@ -23,6 +23,7 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.profiles import ModelProfile
 
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.capabilities.outsider_gate import (
     WITHHELD_MESSAGE,
     OutsiderToolGateCapability,
@@ -117,7 +118,7 @@ def _stranger_deps(**overrides) -> BaseAgentContext:
         org_id=uuid4(),
         conversation_id=uuid4(),
         is_pod_default_agent=True,
-        answers_outsider=True,
+        audience=Audience.outsiders(),
         **overrides,
     )
 
@@ -229,5 +230,5 @@ async def test_no_workspace_is_opened_for_a_strangers_run():
 
 
 def test_a_members_run_reaches_its_workspace_as_before():
-    refuse_owner_workspace(SimpleNamespace(answers_outsider=False))
+    refuse_owner_workspace(SimpleNamespace(audience=Audience.member()))
     refuse_owner_workspace(SimpleNamespace())

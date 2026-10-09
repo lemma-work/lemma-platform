@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.tools.contact_tools import (
     ContactFunctionRequest,
     ContactRecordsRequest,
@@ -27,7 +28,10 @@ CONTACT = uuid4()
 
 
 def _ctx(*, contact_id=CONTACT):
-    return SimpleNamespace(deps=SimpleNamespace(contact_id=contact_id, pod_id=POD))
+    audience = (
+        Audience.contact(contact_id) if contact_id is not None else Audience.outsiders()
+    )
+    return SimpleNamespace(deps=SimpleNamespace(audience=audience, pod_id=POD))
 
 
 def _run(completed: bool, output=None) -> ContactFunctionOutcome:

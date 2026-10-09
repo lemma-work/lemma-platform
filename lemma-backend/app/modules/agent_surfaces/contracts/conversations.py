@@ -21,7 +21,8 @@ from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_re
     SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.outside_links import (
-    links_to_people_outside,
+    OutsideLink,
+    outside_link,
 )
 
 
@@ -33,15 +34,20 @@ async def surface_id_for_conversation(uow, conversation_id: UUID) -> UUID | None
     return link.surface_id if link is not None else None
 
 
-async def conversation_answers_outsiders(uow, conversation_id: UUID) -> bool:
-    """Whether routing opened this conversation to answer people outside the pod.
+async def conversation_outside_link(uow, conversation_id: UUID) -> OutsideLink | None:
+    """Whom routing opened this conversation to answer, if anybody outside the pod.
 
     The second, independent half of "is this a stranger's run": the agent module
     stamps the fact on the conversation's metadata, and this asks the link that
     routing wrote. Either one saying so makes the run a stranger's, so a
-    conversation that lost its flag still never runs with its owner's authority.
+    conversation that lost its flag still never runs with its owner's authority
+    -- and a contact's chat that lost it is still that contact's.
     """
-    return await links_to_people_outside(uow.session, conversation_id)
+    return await outside_link(uow.session, conversation_id)
 
 
-__all__ = ["conversation_answers_outsiders", "surface_id_for_conversation"]
+__all__ = [
+    "OutsideLink",
+    "conversation_outside_link",
+    "surface_id_for_conversation",
+]

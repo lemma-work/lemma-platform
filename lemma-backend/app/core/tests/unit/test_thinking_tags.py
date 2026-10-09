@@ -206,3 +206,73 @@ def test_a_run_of_unfinished_tags_is_read_in_linear_time():
         split_thinking_segments(text)
         strip_thinking_tokens(text)
         assert time.perf_counter() - started < 1.0, repeated
+
+
+# --- the review's probes ----------------------------------------------------
+
+
+def test_a_tag_quoted_in_a_fence_does_not_swallow_the_next_real_block():
+    """The fenced tag used to be walked to *its* close -- the real block's -- and
+    the whole span skipped as prose, so the real reasoning was shown."""
+    text = f"```\n{OPEN}\n```\n{OPEN}SECRET{CLOSE}Answer"
+
+    assert "SECRET" not in strip_thinking_tokens(text)
+    assert strip_thinking_tokens(text).endswith("Answer")
+    assert ("thinking", "SECRET") in split_thinking_segments(text)
+    assert "SECRET" not in "".join(
+        chunk for kind, chunk in _stream(list(text)) if kind == "text"
+    )
+
+
+def test_a_half_written_tag_with_long_attributes_is_held_back():
+    """Held by its shape, not by a length: an attribute pushed the ``<`` past
+    the longest bare tag and the rest of the tag streamed out as the answer."""
+    splitter = ThinkingStreamSplitter()
+    released = splitter.feed("Sure. <think type='reasoning' source='model-internal'")
+    released += splitter.feed(f">SECRET{CLOSE}Done.")
+    released += splitter.flush()
+
+    assert "SECRET" not in "".join(chunk for kind, chunk in released if kind == "text")
+    assert ("thinking", "SECRET") in released
+
+
+def test_a_tag_whose_name_only_starts_with_think_is_not_a_tag():
+    for name in ("thinker", "thinkpad", "thinking-cap"):
+        text = f"<{name}>keep me</{name}> and the rest"
+        assert strip_thinking_tokens(text) == text
+        assert _stream(list(text)) == [("text", text)]
+
+
+def test_the_stream_and_the_saved_message_hide_the_same_text():
+    """The saved message is read by the same splitter, so whatever the deltas,
+    the two never disagree about what was reasoning."""
+    cases = [
+        f"```\n{OPEN}\n```\n{OPEN}SECRET{CLOSE}Answer",
+        f"Intro ~~~\n{OPEN}x{CLOSE}\n~~~ {OPEN_LONG}hidden{CLOSE_LONG} tail",
+        f"<think a='1'>one{CLOSE} mid <thinker> {SELF_CLOSING} end",
+        f"Code: ```py\nprint('{OPEN}')\n``` and {OPEN}unclosed",
+        f"open fence ``` never closed {OPEN}shown as code{CLOSE}",
+        f"<think a ```b> held {CLOSE} then ``` x {OPEN}y{CLOSE}",
+    ]
+    for text in cases:
+        whole = split_thinking_segments(text)
+        for size in (1, 2, 3, 5, 8):
+            deltas = [text[i : i + size] for i in range(0, len(text), size)]
+            streamed = [
+                (kind, chunk) for kind, chunk in _stream(deltas) if chunk.strip()
+            ]
+            assert streamed == whole, (text, size)
+
+
+def test_many_fences_and_blocks_are_read_in_linear_time():
+    """The fence check was ``any`` over every fence for every block."""
+    import time
+
+    unit = f"```\ncode {OPEN} quoted\n```\n{OPEN}reasoning{CLOSE}answer ~~~x~~~ "
+    text = unit * (200_000 // len(unit))
+    started = time.perf_counter()
+    stripped = strip_thinking_tokens(text)
+    elapsed = time.perf_counter() - started
+
+    assert "reasoning" not in stripped
+    assert elapsed < 0.5

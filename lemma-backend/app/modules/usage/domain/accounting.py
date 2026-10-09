@@ -74,6 +74,8 @@ class BudgetWindow(BaseModel):
     excluded_organization_ids: tuple[UUID, ...] = ()
     #: Counts only usage recorded under these sources; empty counts all of it.
     source_types: tuple[str, ...] = ()
+    #: Leaves out usage recorded under these sources.
+    excluded_source_types: tuple[str, ...] = ()
 
 
 class RequestReceipt(BaseModel):

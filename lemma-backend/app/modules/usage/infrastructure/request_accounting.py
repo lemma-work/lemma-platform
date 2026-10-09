@@ -41,6 +41,10 @@ def _window_cost(window: BudgetWindow) -> Select[tuple[Decimal]]:
         query = query.where(UsageRecord.user_id == window.user_id)
     if window.source_types:
         query = query.where(UsageRecord.source_type.in_(window.source_types))
+    if window.excluded_source_types:
+        query = query.where(
+            UsageRecord.source_type.notin_(window.excluded_source_types)
+        )
     if window.excluded_organization_ids:
         query = query.where(
             or_(
