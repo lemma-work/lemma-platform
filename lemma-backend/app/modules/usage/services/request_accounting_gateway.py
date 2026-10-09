@@ -18,12 +18,10 @@ from app.modules.usage.domain.accounting import (
 from app.modules.usage.domain.budget_windows import budget_windows
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import ModelUsageEvent
+from app.modules.usage.services.contacts_cap import applicable_contacts_cap
 from app.modules.usage.services.usage_service import UsageService
 from app.modules.usage.domain.ports import UsageLimitValues, normalize_limit_values
 from app.modules.usage.infrastructure import request_accounting
-from app.modules.usage.infrastructure.contacts_cap_repository import (
-    UsageContactsCapRepository,
-)
 from app.modules.usage.infrastructure.price_catalog import RateCard
 from app.modules.usage.services.usage_limit_provider import build_usage_limit_port
 from app.core.log.log import get_logger
@@ -65,10 +63,11 @@ class PostgresRequestAccountingGateway:
     async def _with_contacts_cap(
         self, uow: SqlAlchemyUnitOfWork, limits: UsageLimitValues
     ) -> UsageLimitValues:
-        """``limits``, with the organization's own contacts cap where it set one.
+        """``limits``, with the contacts cap that applies to the organization.
 
-        Read only for a run that answers people outside the organization: no
-        other request is held to it, so no other request pays for the read.
+        Its own where an owner set one, the deployment's default where nobody
+        did. Read only for a run that answers people outside the organization:
+        no other request is held to it, so no other request pays for the read.
         """
         organization_id = self.identity.organization_id
         if (
@@ -76,12 +75,15 @@ class PostgresRequestAccountingGateway:
             or self.identity.source_type not in OUTSIDE_AUDIENCE_SOURCES
         ):
             return limits
-        cap = await UsageContactsCapRepository(uow.session).monthly_limit(
-            organization_id
+        cap = await applicable_contacts_cap(
+            uow, organization_id, settings=self.settings
         )
-        if cap is None:
-            return limits
-        return replace(limits, contacts_monthly_limit_usd=float(cap))
+        return replace(
+            limits,
+            contacts_monthly_limit_usd=(
+                None if cap.limit_usd is None else float(cap.limit_usd)
+            ),
+        )
 
     def _windows(self, limits: UsageLimitValues, now: datetime) -> list[BudgetWindow]:
         return [

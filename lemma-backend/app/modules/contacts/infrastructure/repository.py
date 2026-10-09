@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, literal, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.contacts.domain.entities import (
     Contact,
-    ContactIdentity,
+    ContactHandle,
     IdentityKind,
     IdentityStrength,
     normalize_handle,
@@ -26,8 +27,28 @@ from app.modules.contacts.infrastructure.models import (
 MAX_PAGE = 200
 
 
-def _identity(row: ContactIdentityModel) -> ContactIdentity:
-    return ContactIdentity(
+class UnusableHandle(ValueError):
+    """A handle with nothing left once it is spelled the one way handles are.
+
+    A phone number of punctuation alone, an address of spaces: nobody can be
+    found or written to by one, so no contact is opened for it.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class ContactCursor:
+    """Where one page of the listing ended: the last contact's place in it.
+
+    Both halves, because two contacts made in one transaction share a
+    timestamp, and a cursor of the time alone skips whichever came second.
+    """
+
+    created_at: datetime
+    contact_id: UUID
+
+
+def _identity(row: ContactIdentityModel) -> ContactHandle:
+    return ContactHandle(
         id=row.id,
         contact_id=row.contact_id,
         kind=IdentityKind(row.kind),
@@ -98,7 +119,7 @@ class ContactRepository:
         """
         handle = normalize_handle(kind, value)
         if not handle:
-            raise ValueError("A contact needs a handle")
+            raise UnusableHandle("A contact needs a handle")
         existing = await self.find_by_handle(pod_id=pod_id, kind=kind, value=handle)
         if existing is not None:
             return existing
@@ -132,17 +153,23 @@ class ContactRepository:
         return found
 
     async def list(
-        self, *, pod_id: UUID, limit: int = 50, before: datetime | None = None
+        self, *, pod_id: UUID, limit: int = 50, before: ContactCursor | None = None
     ) -> list[Contact]:
         """The pod's contacts, newest first, a page at a time."""
         query = select(ContactModel).where(ContactModel.pod_id == pod_id)
         if before is not None:
-            query = query.where(ContactModel.created_at < before)
+            query = query.where(
+                tuple_(ContactModel.created_at, ContactModel.id)
+                < tuple_(
+                    literal(before.created_at, ContactModel.created_at.type),
+                    literal(before.contact_id, ContactModel.id.type),
+                )
+            )
         rows = list(
             await self.session.scalars(
-                query.order_by(ContactModel.created_at.desc()).limit(
-                    max(1, min(limit, MAX_PAGE))
-                )
+                query.order_by(
+                    ContactModel.created_at.desc(), ContactModel.id.desc()
+                ).limit(max(1, min(limit, MAX_PAGE)))
             )
         )
         identities: dict[UUID, list[ContactIdentityModel]] = {
@@ -193,6 +220,21 @@ class ContactRepository:
             .where(ContactIdentityModel.id == identity_id)
             .values(unsubscribed_at=datetime.now(timezone.utc))
         )
+
+    async def unsubscribe_handle(
+        self, *, pod_id: UUID, kind: IdentityKind, value: str
+    ) -> bool:
+        """The contact wrote "STOP" from this handle. Whether there was one."""
+        result = await self.session.execute(
+            update(ContactIdentityModel)
+            .where(
+                ContactIdentityModel.pod_id == pod_id,
+                ContactIdentityModel.kind == kind.value,
+                ContactIdentityModel.value == normalize_handle(kind, value),
+            )
+            .values(unsubscribed_at=datetime.now(timezone.utc))
+        )
+        return bool(result.rowcount)
 
     async def _identities_of(
         self, contact_ids: list[UUID]

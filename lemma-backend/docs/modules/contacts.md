@@ -15,15 +15,24 @@ user id, an email address the receiving mail service authenticated.
 | `contacts` | One person per pod, and the name to address them by. Cascades from the pod |
 | `contact_identities` | The handles a contact is known by (`PHONE`, `EMAIL`, `TELEGRAM`, `HOST`) and who vouched for each (`strength`: `CHANNEL`, `HOST`, `CODE`, `MEMBER`). Unique per pod and handle, so one number is one contact whichever bot it writes to. `last_inbound_at` is when they last wrote from it; `unsubscribed_at` when they asked not to be written to there |
 
-- `GET /pods/{pod_id}/contacts` and `GET /pods/{pod_id}/contacts/{id}`: any
-  member who can read the pod.
+- `GET /pods/{pod_id}/contacts` and `GET /pods/{pod_id}/contacts/{id}`: takes
+  `conversation.read`. Pages with an opaque `before` / `next_before`
+  (`created_at` and id).
 - `PATCH /pods/{pod_id}/contacts/{id}`: rename; takes `pod.update`.
-- `DELETE /pods/{pod_id}/contacts/{id}`: forget a contact, their handles and
-  their conversations, in one transaction; takes `pod.member.manage`.
-- `GET /pods/{pod_id}/contacts/{id}/export`: their handles, their words and the
-  bot's answers (never tool calls or private notes); takes `pod.member.manage`.
-- `contracts`: `find_contact`, `open_contact` and `contact_by_id`, for the
-  surface that resolves a sender and the run that addresses them.
+- `DELETE /pods/{pod_id}/contacts/{id}`: forget a contact; takes
+  `pod.member.manage`. `services/forget.py`: their rows in contact-owned tables
+  first (`datastore/contracts/contact_rows.delete_contact_rows`), then one
+  main-database transaction for their conversations, handles, web chat
+  sessions and codes, and stored platform profiles
+  (`agent_surfaces/contracts/contacts`), blanking the questions of theirs that
+  reached members' inboxes.
+- `GET /pods/{pod_id}/contacts/{id}/export`: a page of their handles, their
+  words and the bot's answers (never tool calls or private notes), then their
+  rows; follow `next_cursor`. Takes `pod.member.manage`.
+- `contracts`: `find_contact`, `open_contact`, `contact_by_id`,
+  `contact_handles` (as `ContactHandle`), `note_inbound` and the two
+  unsubscribes, for the surface that resolves a sender and the run that
+  addresses them.
 
 ## What it does not own
 

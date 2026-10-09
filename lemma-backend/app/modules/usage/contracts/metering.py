@@ -13,6 +13,7 @@ from app.modules.usage.services.usage_context import UsageExecutionContext
 
 from pydantic_ai.models import Model
 from app.modules.usage.domain.errors import UsageLimitExceededError
+from app.modules.usage.services.contacts_cap import contacts_cap_status
 from app.modules.usage.services.usage_service_factory import build_usage_service
 
 if TYPE_CHECKING:
@@ -32,7 +33,8 @@ async def check_run_budget(
 
     ``outside_audience``: the run answers a contact or a group's outsiders, so
     it is the organization's spend and the personal limits of ``user_id`` -- the
-    member who looks after the conversation -- do not apply to it.
+    member who looks after the conversation -- do not apply to it. The
+    organization's contacts cap does, default included.
     """
     if profile_scope.upper() != "SYSTEM":
         return
@@ -40,6 +42,14 @@ async def check_run_budget(
         limits = await build_usage_service(uow).get_usage_limits(
             organization_id=organization_id, user_id=user_id
         )
+        if (
+            outside_audience
+            and organization_id is not None
+            and (await contacts_cap_status(uow, organization_id)).reached
+        ):
+            raise UsageLimitExceededError(
+                "The organization's monthly cap on answering contacts is reached"
+            )
     scopes = (
         (limits["org_monthly"],)
         if outside_audience

@@ -165,3 +165,79 @@ async def _read(
                 "A contact read lost the contact it was scoped to"
             )
         return rows
+
+
+async def delete_rows_of_contact(
+    schema: DatastoreSchemaPort, pod_id: UUID, table_name: str, contact_id: UUID
+) -> int:
+    """Delete one contact's rows of a contact-owned table. How many went.
+
+    As the schema's owner, with the session naming the contact, so the policy
+    holds the delete to their rows even if the ``WHERE`` were ever wrong.
+    """
+    schema_name = schema.get_schema_name(pod_id)
+    table = sanitize_identifier(table_name)
+    async with schema.session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text(f"SELECT set_config('{_SETTING}', :contact, true)"),
+                {"contact": str(contact_id)},
+            )
+            result = await session.execute(
+                text(
+                    f'DELETE FROM "{schema_name}"."{table}" '
+                    f'WHERE "{CONTACT_COLUMN}" = :contact'
+                ),
+                {"contact": contact_id},
+            )
+            return int(result.rowcount or 0)
+
+
+async def read_rows_of_contact_after(
+    schema: DatastoreSchemaPort,
+    pod_id: UUID,
+    table_name: str,
+    contact_id: UUID,
+    *,
+    key_column: str,
+    after_key: str | None,
+    limit: int,
+) -> list[dict[str, object]]:
+    """A page of one contact's rows, in key order, after ``after_key``.
+
+    Keyed rather than offset, so a row added or removed while an export is
+    paged through never moves one from a page already read into the next.
+    The key is compared as text because a table's key may be of any type.
+    """
+    await schema.ensure_query_role()
+    schema_name = schema.get_schema_name(pod_id)
+    table = sanitize_identifier(table_name)
+    key = sanitize_identifier(key_column)
+    query_role = sanitize_identifier(datastore_settings.datastore_query_role)
+    after = "" if after_key is None else f'AND "{key}"::text > :after '
+    async with schema.session_factory() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        await session.execute(
+            text(
+                "SELECT set_config('app.current_user_id', :nobody, true), "
+                "set_config('app.current_user_is_pod_admin', 'false', true), "
+                f"set_config('{_SETTING}', :contact, true)"
+            ),
+            {"nobody": str(_NOBODY), "contact": str(contact_id)},
+        )
+        await session.execute(text(f'SET LOCAL ROLE "{query_role}"'))
+        parameters: dict[str, object] = {
+            "contact": contact_id,
+            "limit": max(1, min(limit, MAX_CONTACT_ROWS)),
+        }
+        if after_key is not None:
+            parameters["after"] = after_key
+        result = await session.execute(
+            text(
+                f'SELECT * FROM "{schema_name}"."{table}" '
+                f'WHERE "{CONTACT_COLUMN}" = :contact {after}'
+                f'ORDER BY "{key}"::text LIMIT :limit'
+            ),
+            parameters,
+        )
+        return [dict(row._mapping) for row in result]

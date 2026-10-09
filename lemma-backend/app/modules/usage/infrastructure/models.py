@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import DateTime, Float, Index, Numeric, String, text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Numeric, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -220,9 +220,12 @@ class UsageLimitCounter(UUIDAuditBase):
 class UsageContactsCap(UUIDAuditBase):
     """What an organization lets its bots spend answering contacts, a month.
 
-    Set by an organization admin; absent means no cap of the organization's
-    own. Contacts are never billed, so this is the only ceiling on what people
-    outside the organization can cost it, apart from the turn rate limits.
+    Set by an organization owner. No row means the deployment's default
+    (``usage_contacts_monthly_default_usd``); a row with no limit means the
+    owner removed the cap, which the default never overrides. Contacts are
+    never billed, so this is the only ceiling on what people outside the
+    organization can cost it, apart from the turn rate limits. Goes with the
+    organization.
     """
 
     __tablename__ = "usage_contacts_caps"
@@ -230,7 +233,9 @@ class UsageContactsCap(UUIDAuditBase):
         Index("uq_usage_contacts_cap_org", "organization_id", unique=True),
     )
 
-    organization_id: Mapped[UUID] = mapped_column(nullable=False)
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
     monthly_limit_usd: Mapped[Decimal | None] = mapped_column(
         Numeric(24, 9), nullable=True
     )

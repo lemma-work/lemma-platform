@@ -48,6 +48,7 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.services.contact_keepers import owned_or_moved
 
 logger = get_logger(__name__)
 
@@ -229,6 +230,7 @@ class ConversationBinder:
                     parsed=parsed,
                     resolved_user=resolved_user,
                     route=route,
+                    for_contact=for_contact,
                 )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
@@ -323,6 +325,7 @@ class ConversationBinder:
         parsed: ParsedInboundSurfaceEvent,
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
+        for_contact: UUID | None = None,
     ) -> AgentSurfaceConversationLink | None:
         """The link this person's private chat already has, under an older address.
 
@@ -373,10 +376,12 @@ class ConversationBinder:
         )
         if (
             conversation is None
-            or conversation.user_id != user_id
             or conversation.pod_id != route.pod_id
             or not _same_agent(
                 conversation.agent_id, route.agent_id, pod_id=route.pod_id
+            )
+            or not await owned_or_moved(
+                self.uow, conversation, user_id, contact_id=for_contact
             )
         ):
             return None
@@ -407,9 +412,11 @@ class ConversationBinder:
         )
         return (
             conversation is not None
-            and conversation.user_id == user_id
             and conversation.answers_outsiders
             and conversation.contact_id == contact_id
+            and await owned_or_moved(
+                self.uow, conversation, user_id, contact_id=contact_id
+            )
         )
 
     async def _starts_new_conversation(

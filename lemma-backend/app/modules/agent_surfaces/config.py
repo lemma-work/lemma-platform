@@ -294,6 +294,25 @@ class SurfaceSettings(BaseSettings):
             "next day; contacts it already knows are unaffected."
         ),
     )
+    surface_contact_follow_ups_per_contact_per_day: int = Field(
+        default=10,
+        ge=0,
+        description=(
+            "How many messages members may write first to one contact in a "
+            "day. A follow-up speaks for the pod to somebody who did not ask, "
+            "on a number or address whose sender reputation the pod depends on."
+        ),
+    )
+    surface_parked_mail_notes_per_surface_per_hour: int = Field(
+        default=20,
+        ge=0,
+        description=(
+            "How many inbox notes about unverified email one bot leaves in an "
+            "hour. Anybody can forge mail from as many addresses as they like; "
+            "past this, one note says more arrived, and the rest of the hour's "
+            "are logged only."
+        ),
+    )
     surface_allow_unverified_phone_match: bool = Field(
         default=False,
         description=(

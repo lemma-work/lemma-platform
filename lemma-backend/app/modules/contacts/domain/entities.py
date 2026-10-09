@@ -71,7 +71,30 @@ def normalize_handle(kind: IdentityKind, value: str) -> str:
     return cleaned
 
 
-class ContactIdentity(BaseModel):
+#: What a contact writes to stop hearing from the pod, as carriers and mail
+#: senders have long taught people to: ``STOP`` on a text channel, and the
+#: words people use for the same thing by email.
+STOP_WORDS = frozenset({"STOP", "STOPALL", "UNSUBSCRIBE", "OPTOUT", "OPT OUT"})
+
+
+def is_stop_request(text: str) -> bool:
+    """Whether a whole message is a request to stop, and nothing else.
+
+    The whole message only: "stop sending me the wrong size" is a question for
+    the bot, not an unsubscribe. Trailing punctuation is forgiven, case and
+    surrounding space are ignored.
+    """
+    words = " ".join(text.strip().rstrip(".!").split()).upper()
+    return words in STOP_WORDS
+
+
+class ContactHandle(BaseModel):
+    """One handle of one contact, and what decides whether the pod may write to it.
+
+    The one shape for a handle, whichever side of the module boundary reads it:
+    the contacts API lists it, a follow-up picks the handle to write to by it.
+    """
+
     model_config = ConfigDict(frozen=True)
 
     id: UUID
@@ -91,4 +114,4 @@ class Contact(BaseModel):
     pod_id: UUID
     display_name: str | None
     created_at: datetime
-    identities: tuple[ContactIdentity, ...] = ()
+    identities: tuple[ContactHandle, ...] = ()

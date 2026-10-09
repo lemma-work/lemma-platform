@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import UUID
 
 from ..openapi_client.api.contacts import (
@@ -31,10 +30,12 @@ class PodContacts(BoundResource):
     the handles they are known by.
     """
 
-    def list(
-        self, *, limit: int = 50, before: datetime | None = None
-    ) -> ContactListResponse:
-        """The pod's contacts, newest first. Page with ``next_before``."""
+    def list(self, *, limit: int = 50, before: str | None = None) -> ContactListResponse:
+        """The pod's contacts, newest first.
+
+        Page by passing the last page's ``next_before`` as ``before``; it is
+        opaque, and absent on the last page.
+        """
         return self._call(
             contact_list,
             self._pod_uuid(),
@@ -61,8 +62,9 @@ class PodContacts(BoundResource):
     def follow_up(self, contact_id: str | UUID, message: str) -> FollowUpResponse:
         """Write to a contact in their latest conversation, where the channel allows.
 
-        Refused when they unsubscribed there, when WhatsApp's 24-hour window
-        has closed, or when they never wrote to the pod.
+        Takes ``contact.message`` (editors and up). Refused when they
+        unsubscribed there, when WhatsApp's 24-hour window has closed, when
+        they never wrote to the pod, or past the day's follow-ups to them.
         """
         return self._call(
             contact_follow_up,
@@ -72,10 +74,24 @@ class PodContacts(BoundResource):
             body_model=FollowUpRequest,
         )
 
-    def export(self, contact_id: str | UUID) -> ContactExportResponse:
-        """Everything the pod holds about a contact. Takes a pod admin."""
-        return self._call(contact_export, self._pod_uuid(), as_uuid(contact_id))
+    def export(
+        self, contact_id: str | UUID, *, cursor: str | None = None
+    ) -> ContactExportResponse:
+        """One page of everything the pod holds about a contact. Takes a pod admin.
+
+        Their conversations, then their rows in contact-owned tables. Pass the
+        page's ``next_cursor`` as ``cursor`` until it is absent.
+        """
+        return self._call(
+            contact_export,
+            self._pod_uuid(),
+            as_uuid(contact_id),
+            cursor=cursor if cursor is not None else UNSET,
+        )
 
     def delete(self, contact_id: str | UUID) -> None:
-        """Forget a contact, their handles and their conversations. Takes a pod admin."""
+        """Forget a contact: their rows, handles, conversations and chat sessions.
+
+        Takes a pod admin.
+        """
         self._call(contact_delete, self._pod_uuid(), as_uuid(contact_id))

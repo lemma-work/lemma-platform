@@ -15,12 +15,14 @@ import { UsageService } from "../openapi_client/services/UsageService.js";
  * can read the pod can list them; `remove` takes a pod admin.
  *
  * Contacts are never billed. What answering them may cost an organization a
- * month is its contacts cap, set by an organization owner or editor.
+ * month is its contacts cap: the deployment's default until an organization
+ * owner sets one.
  */
 export class ContactsNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
 
-  /** The pod's contacts, newest first. Page with `next_before`. */
+  /** The pod's contacts, newest first. Pass the opaque `next_before` back as
+   *  `before` for the next page. */
   list(podId: string, options: { limit?: number; before?: string } = {}) {
     return this.client.request(() =>
       ContactsService.contactList(podId, options.limit ?? 50, options.before),
@@ -40,20 +42,23 @@ export class ContactsNamespace {
   }
 
   /** Write to a contact in their latest conversation, where the channel allows:
-   *  never where they unsubscribed, and on WhatsApp only within 24 hours of
-   *  their last message. */
+   *  never where they unsubscribed, on WhatsApp only within 24 hours of their
+   *  last message, and a few times a day at most. Takes `contact.message`. */
   followUp(podId: string, contactId: string, message: string) {
     return this.client.request(() =>
       ContactsService.contactFollowUp(podId, contactId, { message }),
     );
   }
 
-  /** Everything the pod holds about a contact: handles and conversations. */
-  export(podId: string, contactId: string) {
-    return this.client.request(() => ContactsService.contactExport(podId, contactId));
+  /** One page of everything the pod holds about a contact: handles,
+   *  conversations, then rows. Pass `next_cursor` back as `cursor` until absent. */
+  export(podId: string, contactId: string, options: { cursor?: string } = {}) {
+    return this.client.request(() =>
+      ContactsService.contactExport(podId, contactId, options.cursor),
+    );
   }
 
-  /** Forget a contact, their handles and their conversations. */
+  /** Forget a contact: their rows, handles, conversations and chat sessions. */
   remove(podId: string, contactId: string) {
     return this.client.request(() => ContactsService.contactDelete(podId, contactId));
   }
@@ -65,7 +70,7 @@ export class ContactsNamespace {
     );
   }
 
-  /** Set the cap in USD, or clear it with `null`. */
+  /** Set the cap in USD, or `null` for no limit. Takes an organization owner. */
   setCap(organizationId: string, monthlyLimitUsd: number | null) {
     return this.client.request(() =>
       UsageService.usageOrganizationContactsCapUpdate(organizationId, {

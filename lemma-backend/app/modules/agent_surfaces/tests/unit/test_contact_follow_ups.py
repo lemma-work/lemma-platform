@@ -13,18 +13,25 @@ from app.modules.agent_surfaces.services.contact_follow_ups import (
     handle_for_unsubscribe,
     unsubscribe_token,
 )
-from app.modules.contacts.contracts import ContactHandleRef, IdentityKind
+from app.modules.contacts.contracts import (
+    ContactHandle,
+    IdentityKind,
+    IdentityStrength,
+)
 
 pytestmark = pytest.mark.unit
 
 NOW = datetime(2026, 10, 5, 12, tzinfo=timezone.utc)
 
 
-def _handle(kind: IdentityKind, *, wrote=None, unsubscribed=None) -> ContactHandleRef:
-    return ContactHandleRef(
+def _handle(kind: IdentityKind, *, wrote=None, unsubscribed=None) -> ContactHandle:
+    return ContactHandle(
         id=uuid4(),
+        contact_id=uuid4(),
         kind=kind,
         value="x",
+        strength=IdentityStrength.CHANNEL,
+        verified_at=NOW,
         last_inbound_at=wrote,
         unsubscribed_at=unsubscribed,
     )

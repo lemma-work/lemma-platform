@@ -769,6 +769,16 @@ An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
 `{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
 organizations at once. Slugs are organization handles, not display names.
 
+Answering people outside an organization -- contacts, and strangers in groups --
+has a ceiling of its own, which an organization owner sets in Usage. Until one
+does, this default applies; an owner who removes the cap chose no limit, and
+the default does not apply to them.
+
+```dotenv
+# USD a month. Unset (empty) means no default ceiling.
+USAGE_CONTACTS_MONTHLY_DEFAULT_USD=50
+```
+
 ### When the cost of the work cannot be established
 
 A limit is enforced against a price, and there is not always one to enforce

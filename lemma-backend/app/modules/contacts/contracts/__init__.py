@@ -8,7 +8,6 @@ member's action, through this module's own API.
 
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -16,21 +15,31 @@ from pydantic import BaseModel, ConfigDict
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.contacts.domain.entities import (
     Contact,
+    ContactHandle,
     IdentityKind,
     IdentityStrength,
+    is_stop_request,
+    normalize_handle,
 )
-from app.modules.contacts.infrastructure.repository import ContactRepository
+from app.modules.contacts.infrastructure.repository import (
+    ContactRepository,
+    UnusableHandle,
+)
 
 __all__ = [
-    "ContactHandleRef",
+    "ContactHandle",
     "ContactRef",
+    "UnusableHandle",
     "contact_handles",
     "unsubscribe_handle",
+    "unsubscribe_by_handle",
     "note_inbound",
     "IdentityKind",
     "IdentityStrength",
     "contact_by_id",
     "find_contact",
+    "is_stop_request",
+    "normalize_handle",
     "open_contact",
 ]
 
@@ -43,18 +52,6 @@ class ContactRef(BaseModel):
     id: UUID
     pod_id: UUID
     display_name: str | None
-
-
-class ContactHandleRef(BaseModel):
-    """One handle of a contact, with what decides whether the pod may write to it."""
-
-    model_config = ConfigDict(frozen=True)
-
-    id: UUID
-    kind: IdentityKind
-    value: str
-    last_inbound_at: datetime | None
-    unsubscribed_at: datetime | None
 
 
 def _ref(contact: Contact | None) -> ContactRef | None:
@@ -89,6 +86,7 @@ async def open_contact(
 
     The caller is the one that checked the handle: only a handle a platform
     or mail service vouched for may be passed with ``CHANNEL`` strength.
+    Raises ``UnusableHandle`` for one with nothing left once normalised.
     """
     contact = await ContactRepository(uow.session).open(
         pod_id=pod_id,
@@ -122,25 +120,23 @@ async def note_inbound(
 
 async def contact_handles(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, contact_id: UUID
-) -> list[ContactHandleRef]:
+) -> list[ContactHandle]:
     """Every handle this contact is known by, or none once they are forgotten."""
     contact = await ContactRepository(uow.session).get(
         pod_id=pod_id, contact_id=contact_id
     )
-    if contact is None:
-        return []
-    return [
-        ContactHandleRef(
-            id=identity.id,
-            kind=identity.kind,
-            value=identity.value,
-            last_inbound_at=identity.last_inbound_at,
-            unsubscribed_at=identity.unsubscribed_at,
-        )
-        for identity in contact.identities
-    ]
+    return [] if contact is None else list(contact.identities)
 
 
 async def unsubscribe_handle(uow: SqlAlchemyUnitOfWork, *, handle_id: UUID) -> None:
     """The contact asked not to be written to at this handle."""
     await ContactRepository(uow.session).unsubscribe(identity_id=handle_id)
+
+
+async def unsubscribe_by_handle(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, kind: IdentityKind, value: str
+) -> bool:
+    """The contact wrote "STOP" from this handle; whether the pod knew it."""
+    return await ContactRepository(uow.session).unsubscribe_handle(
+        pod_id=pod_id, kind=kind, value=value
+    )

@@ -26,6 +26,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.ingress_context import (
     AgentSurfaceContext,
     SurfaceChatContext,
@@ -62,7 +63,14 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     deliver_fallback_reply,
+    to_sender_alone,
 )
+from app.modules.agent_surfaces.services.outside_cap import (
+    first_word_today,
+    hand_to_a_person,
+    held_for_a_person,
+)
+from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.services.group_log import (
     GroupBackground,
     for_member_run,
@@ -162,6 +170,9 @@ class SurfaceTurnStarter:
             uow_factory=self.uow_factory,
         ):
             return
+        if await self._waits_for_a_person(context):
+            await self._hand_to_a_person(context, adapter, credentials)
+            return
         with suppress(*PLATFORM_TRANSPORT_ERRORS):
             await adapter.add_processing_indicator(
                 credentials=credentials,
@@ -215,6 +226,60 @@ class SurfaceTurnStarter:
         # into the run already going, which answers all of them at once.
         async with self.uow_factory() as uow:
             await write_inbound_message(context, message_text, metadata, uow)
+
+    async def _waits_for_a_person(self, context: SurfaceChatContext) -> bool:
+        """Whether an outsider's turn starts no run, before anything is spent on it.
+
+        Asked ahead of the typing indicator, file handling and transcription:
+        a turn no run will answer should not look as if one is.
+        """
+        if not context.answers_outsider or context.pod_id is None:
+            return False
+        async with self.uow_factory() as uow:
+            return await held_for_a_person(
+                uow, pod_id=context.pod_id, conversation_id=context.conversation_id
+            )
+
+    async def _hand_to_a_person(
+        self,
+        context: SurfaceChatContext,
+        adapter: SurfacePlatformAdapterPort,
+        credentials: dict[str, object],
+    ) -> None:
+        """Keep the message for the member, and tell the person once a day."""
+        if context.pod_id is None:
+            return
+        tell = await first_word_today(context.conversation_id)
+        async with self.uow_factory() as uow:
+            held = await hand_to_a_person(
+                uow,
+                tell=tell,
+                pod_id=context.pod_id,
+                conversation_id=context.conversation_id,
+                owner_id=context.user_id,
+                # Not transcribed or saved: no run will read it, and an
+                # outsider's files are never saved (see `_ingest_files`).
+                text=context.message_text.strip() or "[a message with no text]",
+                metadata=_message_metadata(context, AttachmentIngest()),
+            )
+        if held.reply is None:
+            return
+        try:
+            await reply_text(
+                adapter=adapter,
+                credentials=credentials,
+                event=to_sender_alone(context.event),
+                message=held.reply,
+                metadata={"agent_display_name": context.agent_display_name},
+            )
+        except (AgentSurfaceError, *PLATFORM_TRANSPORT_ERRORS):
+            # The message is kept and the member told; only the courtesy line
+            # did not land, and the conversation already shows it.
+            logger.warning(
+                "agent_surfaces.outside_cap.reply_not_sent.degraded",
+                platform=context.platform.value,
+                exc_info=True,
+            )
 
     async def _ingest_files(
         self, context: SurfaceChatContext, credentials: dict[str, Any]
