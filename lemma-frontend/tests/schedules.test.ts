@@ -360,3 +360,9 @@ test("a time schedule is copied without the filter it never asked", () => {
     assert.equal("filter_instruction" in body, false);
     assert.equal("filter_output_schema" in body, false);
 });
+
+test("the demo's skipped run says what the filter decided", async () => {
+    const { fixtureSource } = await import("../src/data/fixtures.ts");
+    const [skip] = await fixtureSource.listScheduleRuns("pod-1", "s2", { skipped: true });
+    assert.equal(skip?.judgement, "The filter said no (94% sure).");
+});

@@ -1208,7 +1208,10 @@ let SCHEDULES: Record<string, unknown>[] = [
         config: { source: "slack" },
         instruction: null,
         filter_instruction: "Only when the message names one of the five competitors.",
-        filter_output_schema: { type: "object", properties: { matters: { type: "boolean" } } },
+        filter_output_schema: {
+            type: "object",
+            properties: { matters: { type: "boolean", description: "Does the message name one of the five competitors?" } },
+        },
         account_id: "acct-1",
         connector_trigger_id: "slack_message_posted",
         user_id: "sample-user",
@@ -1337,12 +1340,22 @@ const SCHEDULE_RUNS: Record<string, Record<string, unknown>[]> = {
         {
             id: "r-2a", schedule_id: "s2", status: "FILTERED", attempts: 1, target_kind: "WORKFLOW",
             target_run_id: null, source_occurred_at: ago(40 * MINUTES), created_at: ago(40 * MINUTES),
-            payload: { text: "Reminder: standup moved to 10." }, metadata: {}, llm_output: { matters: false },
+            payload: { text: "Reminder: standup moved to 10." }, metadata: {},
+            /* The answers as the filter records them: each question, then
+               `should_proceed`, then which provider decided and how sure. */
+            llm_output: {
+                matters: false, should_proceed: false,
+                _decision: { provider: "typesafe", model: "jev-latest", unsure: false, confidence: { matters: 0.95, should_proceed: 0.94 } },
+            },
         },
         {
             id: "r-2b", schedule_id: "s2", status: "COMPLETED", attempts: 1, target_kind: "WORKFLOW",
             target_run_id: "wr-17", source_occurred_at: ago(5 * HOURS), created_at: ago(5 * HOURS),
-            payload: {}, metadata: {}, llm_output: { matters: true },
+            payload: {}, metadata: {},
+            llm_output: {
+                matters: true, should_proceed: true,
+                _decision: { provider: "typesafe", model: "jev-latest", unsure: false, confidence: { matters: 0.91, should_proceed: 0.9 } },
+            },
         },
     ],
     s3: [
