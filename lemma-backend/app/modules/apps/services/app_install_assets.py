@@ -31,6 +31,11 @@ _SERVICE_WORKER = """
 // navigations and nothing else -- an app ships a new release whenever its
 // author rebuilds, so a worker that cached app assets would serve last week's
 // build to whoever installed it.
+//
+// A navigation is answered from its preload, which the browser sends as the
+// navigation itself. Re-fetching event.request instead tells the server the
+// request is not a page load (Sec-Fetch-Dest: empty), and a private app's
+// host answers that with a bare 401 where it would show its sign-in page.
 const CACHE = "lemma-app-shell";
 const OFFLINE = "%(offline)s";
 
@@ -44,18 +49,23 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(
+    Promise.all([
+      self.registration.navigationPreload
+        ? self.registration.navigationPreload.enable()
+        : null,
+      caches.keys().then((keys) => Promise.all(
         keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))
-      ))
-      .then(() => self.clients.claim())
+      )),
+    ]).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener("fetch", (event) => {
   if (event.request.mode !== "navigate") return;
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(OFFLINE))
+    Promise.resolve(event.preloadResponse)
+      .then((preloaded) => preloaded || fetch(event.request))
+      .catch(() => caches.match(OFFLINE))
   );
 });
 """
@@ -163,11 +173,16 @@ def reserved_asset_etag(app: AppEntity, name: str) -> str:
     """A tag over what the reserved files are built from, not over the build.
 
     A rebuild leaves an installed icon and manifest alone; renaming the app
-    replaces both, which is the only time either actually changes.
+    replaces both, which is the only time either actually changes. The worker
+    and the offline page are built from their templates too: a browser may
+    revalidate an installed worker, and a tag blind to the template would
+    answer every changed worker with a 304.
     """
-    return hashlib.sha256(
-        "\x00".join((app.name or "", app.public_slug or "", name)).encode("utf-8")
-    ).hexdigest()[:12]
+    parts = [app.name or "", app.public_slug or "", name]
+    template = {"sw.js": _SERVICE_WORKER, "offline.html": _OFFLINE_PAGE}.get(name)
+    if template is not None:
+        parts.append(template)
+    return hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
 class ReservedAsset(NamedTuple):

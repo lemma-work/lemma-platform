@@ -17,7 +17,7 @@
  *  the ones that matter off screen.
  */
 
-import { runTone, stillGoing, type RunRow, type WaitRow } from "./runs";
+import { millisOf, runTone, stillGoing, type RunRow, type WaitRow } from "./runs";
 import type { FlowStep, WorkflowShape } from "./shape";
 
 /** Kinds a run can be parked at. An unreadable step ("") is kept: it is a
@@ -110,8 +110,7 @@ function byWaitingLongest(left: BoardCard, right: BoardCard): number {
 }
 
 function stamp(iso: string | null): number {
-    const at = iso ? Date.parse(iso) : NaN;
-    return Number.isNaN(at) ? Number.MAX_SAFE_INTEGER : at;
+    return millisOf(iso) ?? Number.MAX_SAFE_INTEGER;
 }
 
 /** What a run at this step is waiting on: the wait's own kind when the run
