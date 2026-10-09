@@ -35,6 +35,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Agent Host](architecture/agent-host.md) | Running local coding agents against a pod, how Desktop supervises them, and the link they talk to Lemma over |
 | [Agent Host run events](architecture/agent-host-events.md) | What a local agent run reports: the normalized events, the canonical tool names, and the recorded transcripts they are held to |
 | [Pods as remote MCP servers](architecture/mcp-connector.md) | Adding a pod to Claude, ChatGPT or any MCP client by URL: what each client requires, the OAuth server, scopes, revocation and limits |
+| [A pod as a plugin](architecture/mcp-plugin.md) | Making a connected pod a first-class plugin in Claude and ChatGPT: the MCP Apps table view, the views and packaging to come, and directory listings against one URL per pod |
 | [Agent memory](architecture/agent-memory.md) | Where an agent's durable facts live, what is loaded into every prompt, and what bounds it |
 | [Usage accounting](design/usage-accounting.md) | Spending authority, batched receipts, ongoing limits, failure recovery and rollout |
 | [Database connection scope](design/db-connection-scope.md) | How long a pooled connection is held, the gates that keep it short, and what authorization costs |

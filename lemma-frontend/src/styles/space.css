@@ -6097,6 +6097,17 @@ samp,
     justify-content: flex-start;
     background: var(--paper);
 }
+/* An app's card shows its cover, edge to edge: the picture its links unfurl
+   with, drawn by the host or shipped in the app's build. */
+.all__card-top:has(> .app-cover) {
+    padding: 0;
+}
+.app-cover {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
 .all__preview {
     display: -webkit-box;
     -webkit-line-clamp: 6;
