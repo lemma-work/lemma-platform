@@ -27,7 +27,11 @@ def test_public_app_runtime_includes_safe_social_metadata():
     assert 'content="Evidence &lt; guesses"' in body
     assert 'name="twitter:card" content="summary_large_image"' in body
     assert 'rel="canonical" href="https://research.apps.lemma.work"' in body
-    assert "https://lemma.work/api/social-card?" in body
+    # The app's own origin answers with its cover, drawn or shipped.
+    assert (
+        'property="og:image" content="https://research.apps.lemma.work/.lemma/cover.png"'
+        in body
+    )
 
 
 def test_private_app_runtime_does_not_claim_a_public_url():
