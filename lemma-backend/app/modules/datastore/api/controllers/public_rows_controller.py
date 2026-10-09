@@ -3,7 +3,8 @@
 Opening a table lets a page -- an app, a website, the page Lemma hosts -- add
 rows to it for people who are not members: confirmed contacts, or anyone. Only
 the chosen columns, never a read. Reading what is open takes reading the table;
-opening and closing it take changing it.
+opening and closing it take changing it. Listing what is open shows only the
+tables the caller can read.
 """
 
 from __future__ import annotations
@@ -14,13 +15,8 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import UoWDep
-from app.core.authorization.dependencies import PodContextDep, require_action
-from app.core.authorization.permissions import Permissions
-from app.modules.datastore.domain.public_rows import (
-    MAX_PUBLIC_COLUMNS,
-    PublicAudience,
-    PublicColumn,
-)
+from app.core.authorization.dependencies import PodContextDep
+from app.modules.datastore.domain.public_rows import PublicAudience, PublicColumn
 from app.modules.datastore.services.public_rows import (
     OpeningRefused,
     TableOpening,
@@ -43,6 +39,7 @@ class PublicColumnResponse(BaseModel):
     required: bool = Field(description="The table needs it, so it must be open.")
     options: list[str]
     description: str | None
+    input: str = Field(description="The form control to ask with.")
 
 
 class TableOpeningResponse(BaseModel):
@@ -64,7 +61,12 @@ class TableOpeningResponse(BaseModel):
 
 class OpenTableRequest(BaseModel):
     audience: PublicAudience
-    columns: list[str] = Field(min_length=1, max_length=MAX_PUBLIC_COLUMNS)
+    columns: list[str] = Field(
+        description=(
+            "The columns people outside may fill, in the order to ask them. "
+            "Checked against the table when it is opened."
+        )
+    )
 
 
 class OpenTableSummary(BaseModel):
@@ -83,6 +85,7 @@ def _column(column: PublicColumn) -> PublicColumnResponse:
         required=column.required,
         options=list(column.options),
         description=column.description,
+        input=column.input,
     )
 
 
@@ -164,12 +167,14 @@ async def delete_public_rows(
     response_model=OpenTablesResponse,
     operation_id="table.public_rows.list",
     summary="Tables Open To People Outside",
-    dependencies=[require_action(Permissions.POD_READ)],
+    description="The open tables of the pod that the caller can read.",
 )
-async def list_public_rows(pod_id: UUID, uow: UoWDep) -> OpenTablesResponse:
+async def list_public_rows(
+    pod_id: UUID, uow: UoWDep, ctx: PodContextDep
+) -> OpenTablesResponse:
+    opened = await open_tables(uow, pod_id=pod_id, readable_by_ctx=ctx)
     return OpenTablesResponse(
         items=[
-            OpenTableSummary(table=name, audience=audience)
-            for name, audience in await open_tables(uow, pod_id=pod_id)
+            OpenTableSummary(table=name, audience=audience) for name, audience in opened
         ]
     )

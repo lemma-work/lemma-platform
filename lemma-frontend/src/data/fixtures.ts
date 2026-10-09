@@ -2559,8 +2559,8 @@ function sampleReach(podId: string): ContactReach {
     if (!REACH.has(podId)) {
         REACH.set(podId, {
             tables: [
-                { name: "orders", contactOwned: true, perPerson: false },
-                { name: "price_list", contactOwned: false, perPerson: false },
+                { name: "orders", contactOwned: true, perPerson: false, contactColumns: ["item", "status"] },
+                { name: "price_list", contactOwned: false, perPerson: false, contactColumns: [] },
             ],
             functions: [
                 { name: "create_ticket", description: "Open a support ticket", contactsInvoke: true },
@@ -3028,10 +3028,13 @@ export const fixtureSource: PodSource = {
         await wait(160);
         return sampleReach(podId);
     },
-    async setTableContactOwned(podId: string, table: string, on: boolean) {
+    async setTableContactOwned(podId: string, table: string, on: boolean, columns?: string[]) {
         await wait(300);
         const row = sampleReach(podId).tables.find((entry) => entry.name === table);
-        if (row) row.contactOwned = on;
+        if (row) {
+            row.contactOwned = on;
+            row.contactColumns = on ? (columns ?? row.contactColumns) : [];
+        }
     },
     async setFunctionContactsInvoke(podId: string, fn: string, on: boolean) {
         await wait(300);

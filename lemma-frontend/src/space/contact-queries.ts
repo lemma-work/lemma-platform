@@ -28,6 +28,16 @@ export function useReach(podId: string, enabled = true) {
     return useQuery({ queryKey: reachKey(podId), enabled, queryFn: () => source.contactReach(podId), staleTime: 60_000 });
 }
 
+/** A table's own columns, the ones a member could show contacts. */
+export function useShareableColumns(podId: string, table: string | null) {
+    return useQuery({
+        queryKey: ["contact-columns", podId, table] as const,
+        enabled: table !== null,
+        queryFn: async () =>
+            (await source.tableColumns(podId, table ?? "")).filter((column) => !column.system && column.name !== "contact_id").map((column) => column.name),
+    });
+}
+
 export function useContactsCap(orgId: string, enabled = true) {
     return useQuery({ queryKey: capKey(orgId), enabled, queryFn: () => source.contactsCap(orgId), staleTime: 60_000 });
 }
@@ -82,8 +92,10 @@ export function useRemoveWidget(podId: string) {
 export function useReachChange(podId: string) {
     const cache = useQueryClient();
     return useMutation({
-        mutationFn: (change: { table: string; on: boolean } | { fn: string; on: boolean }) =>
-            "table" in change ? source.setTableContactOwned(podId, change.table, change.on) : source.setFunctionContactsInvoke(podId, change.fn, change.on),
+        mutationFn: (change: { table: string; on: boolean; columns?: string[] } | { fn: string; on: boolean }) =>
+            "table" in change
+                ? source.setTableContactOwned(podId, change.table, change.on, change.columns)
+                : source.setFunctionContactsInvoke(podId, change.fn, change.on),
         onSuccess: () => void cache.invalidateQueries({ queryKey: reachKey(podId) }),
     });
 }

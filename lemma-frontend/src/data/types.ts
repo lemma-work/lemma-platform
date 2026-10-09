@@ -648,7 +648,8 @@ export interface PodSource {
     closeTable(podId: string, table: string): Promise<void>;
     /** The space's tables and functions, with which ones contacts can reach. */
     contactReach(podId: string): Promise<ContactReach>;
-    setTableContactOwned(podId: string, table: string, on: boolean): Promise<void>;
+    /** Turning it on needs `columns`: what a contact may read of their own rows. */
+    setTableContactOwned(podId: string, table: string, on: boolean, columns?: string[]): Promise<void>;
     setFunctionContactsInvoke(podId: string, fn: string, on: boolean): Promise<void>;
     /** What answering contacts may cost the organization a month. */
     contactsCap(orgId: string): Promise<ContactsCap>;

@@ -9,7 +9,7 @@ import { readPodRoles } from "./pod-roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
 import { readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
 import { readOpening } from "./public-rows";
-import type { OpenTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
+import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
     agentRows,
@@ -701,6 +701,7 @@ export const liveSource: PodSource = {
                 name: table.name,
                 contactOwned: Boolean(table.contact_owned),
                 perPerson: Boolean(table.enable_rls),
+                contactColumns: (table as { contact_columns?: string[] }).contact_columns ?? [],
             })),
             functions: (functions.items ?? []).map((fn) => ({
                 name: fn.name,
@@ -709,8 +710,9 @@ export const liveSource: PodSource = {
             })),
         };
     },
-    async setTableContactOwned(podId, table, on) {
-        await lemma(podId).tables.update(table, { contact_owned: on });
+    async setTableContactOwned(podId, table, on, columns) {
+        const change = { contact_owned: on, ...(on && columns ? { contact_columns: columns } : {}) };
+        await lemma(podId).tables.update(table, change as UpdateTableRequest);
     },
     async setFunctionContactsInvoke(podId, fn, on) {
         await lemma(podId).functions.setContactsInvoke(fn, on);

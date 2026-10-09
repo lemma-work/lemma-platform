@@ -411,6 +411,7 @@ class DatastoreTableEntity(AggregateRoot):
     enable_rls: bool = True
     visibility: str = "POD"
     contact_owned: bool = False
+    contact_columns: List[str] = Field(default_factory=list)
     allowed_actions: List[str] = Field(default_factory=list)
 
     @property
@@ -555,6 +556,7 @@ class DatastoreTableSummaryEntity(BaseModel):
     enable_rls: bool = True
     visibility: str = "POD"
     contact_owned: bool = False
+    contact_columns: List[str] = Field(default_factory=list)
     allowed_actions: List[str] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None

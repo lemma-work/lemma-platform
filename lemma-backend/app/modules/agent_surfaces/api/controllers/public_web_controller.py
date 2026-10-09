@@ -308,6 +308,7 @@ async def web_read_table(
                     "required": column.required,
                     "options": list(column.options),
                     "description": column.description,
+                    "input": column.input,
                 }
                 for column in opened.columns
             ],

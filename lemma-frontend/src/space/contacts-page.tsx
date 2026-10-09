@@ -13,6 +13,7 @@ import {
     vouchedBy,
     widgetProblem,
     type Contact,
+    type ContactReach,
     type NewWebWidget,
     type WebWidget,
     type WidgetDraft,
@@ -29,6 +30,7 @@ import {
     useReachChange,
     useRemoveWidget,
     useRenameContact,
+    useShareableColumns,
     useWidgetChange,
     useWidgets,
 } from "./contact-queries";
@@ -346,8 +348,16 @@ function Reach({ pod }: { pod: Pod }) {
     const reach = useReach(pod.id);
     const change = useReachChange(pod.id);
     const [problem, setProblem] = useState<string | null>(null);
+    const [picking, setPicking] = useState<string | null>(null);
     const refused = (error: unknown) =>
         setProblem(isForbidden(error) ? "Only an editor of " + pod.name + " can change that." : "Couldn’t change it. Try again.");
+    const share = (table: string, columns: string[]) =>
+        change.mutate({ table, on: true, columns }, { onError: refused, onSuccess: () => setPicking(null) });
+    const flip = (table: string, on: boolean) => {
+        if (on) setPicking(table);
+        else if (picking === table) setPicking(null);
+        else change.mutate({ table, on: false }, { onError: refused });
+    };
 
     return (
         <section className="contacts__section" aria-labelledby="contacts-reach">
@@ -362,19 +372,30 @@ function Reach({ pod }: { pod: Pod }) {
                     <div>
                         <h3>Their own rows</h3>
                         {reach.data.tables.length === 0 ? <p className="contacts__quiet">No tables yet.</p> : reach.data.tables.map((table) => (
-                            <label key={table.name} className="smanage__check">
-                                <input
-                                    type="checkbox"
-                                    role="switch"
-                                    checked={table.contactOwned}
-                                    disabled={change.isPending || table.perPerson}
-                                    onChange={(event) => change.mutate({ table: table.name, on: event.target.checked }, { onError: refused })}
-                                />
-                                <span>
-                                    <span className="smanage__label">{table.name}</span>
-                                    <small>{table.perPerson ? "Each member sees their own rows, so contacts can’t." : table.contactOwned ? "Rows with a contact_id are that contact’s." : "Not shown to contacts."}</small>
-                                </span>
-                            </label>
+                            <div key={table.name}>
+                                <label className="smanage__check">
+                                    <input
+                                        type="checkbox"
+                                        role="switch"
+                                        checked={table.contactOwned || picking === table.name}
+                                        disabled={change.isPending || table.perPerson}
+                                        onChange={(event) => flip(table.name, event.target.checked)}
+                                    />
+                                    <span>
+                                        <span className="smanage__label">{table.name}</span>
+                                        <small>{reachNote(table)}</small>
+                                    </span>
+                                </label>
+                                {picking === table.name && (
+                                    <ContactColumns
+                                        podId={pod.id}
+                                        table={table.name}
+                                        saving={change.isPending}
+                                        onShare={(columns) => share(table.name, columns)}
+                                        onCancel={() => setPicking(null)}
+                                    />
+                                )}
+                            </div>
                         ))}
                     </div>
                     <div>
@@ -399,5 +420,52 @@ function Reach({ pod }: { pod: Pod }) {
             )}
             {problem && <p role="alert">{problem}</p>}
         </section>
+    );
+}
+
+function reachNote(table: ContactReach["tables"][number]): string {
+    if (table.perPerson) return "Each member sees their own rows, so contacts can’t.";
+    if (!table.contactOwned) return "Not shown to contacts.";
+    return "A contact sees " + table.contactColumns.join(", ") + " of the rows with their contact_id.";
+}
+
+/** The columns a contact may read of their own rows. The member's explicit
+ *  choice, so a column added to the table later stays members-only. */
+function ContactColumns({
+    podId,
+    table,
+    saving,
+    onShare,
+    onCancel,
+}: {
+    podId: string;
+    table: string;
+    saving: boolean;
+    onShare: (columns: string[]) => void;
+    onCancel: () => void;
+}) {
+    const columns = useShareableColumns(podId, table);
+    const [chosen, setChosen] = useState<string[]>([]);
+    const toggle = (name: string, on: boolean) => setChosen((now) => (on ? [...now, name] : now.filter((entry) => entry !== name)));
+
+    if (columns.isPending) return <p className="all__empty" role="status">Loading columns…</p>;
+    if (!columns.data) return <p role="alert">Couldn’t load the columns.</p>;
+    const names = columns.data;
+    return (
+        <fieldset className="contacts__quiet">
+            <legend>What a contact may see of their own rows</legend>
+            {names.map((name) => (
+                <label key={name} className="smanage__check">
+                    <input type="checkbox" checked={chosen.includes(name)} onChange={(event) => toggle(name, event.target.checked)} />
+                    <span className="smanage__label">{name}</span>
+                </label>
+            ))}
+            <div className="csheet__actions">
+                <button type="button" className="pill-button" disabled={saving || chosen.length === 0} onClick={() => onShare(names.filter((name) => chosen.includes(name)))}>
+                    Share these columns
+                </button>
+                <button type="button" className="linkish" onClick={onCancel}>Cancel</button>
+            </div>
+        </fieldset>
     );
 }

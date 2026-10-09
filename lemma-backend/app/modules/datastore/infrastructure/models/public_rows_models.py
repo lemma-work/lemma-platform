@@ -23,6 +23,8 @@ class DatastorePublicRowsModel(UUIDAuditBase):
     __table_args__ = (
         Index("uq_datastore_public_rows_table", "table_id", unique=True),
         Index("ix_datastore_public_rows_pod", "pod_id"),
+        # Deleting a member cascades through this column.
+        Index("ix_datastore_public_rows_opened_by", "opened_by"),
     )
 
     pod_id: Mapped[UUID] = mapped_column(

@@ -47,7 +47,8 @@ export interface NewWebWidget extends WebWidget {
 
 /** What contacts can reach of the space beyond what is Public. */
 export interface ContactReach {
-    tables: { name: string; contactOwned: boolean; perPerson: boolean }[];
+    /** `contactColumns`: what a contact may read of their own rows, chosen by a member. */
+    tables: { name: string; contactOwned: boolean; perPerson: boolean; contactColumns: string[] }[];
     functions: { name: string; description: string | null; contactsInvoke: boolean }[];
 }
 
