@@ -1,6 +1,6 @@
 /** The headers a shared file is served back with through `/d/<code>/file`.
  *
- *  The API already decides how its bytes may be rendered: `/s/<code>` answers
+ *  The API already decides how its bytes may be rendered: `/public/s/<code>` answers
  *  `inline` only for types a browser renders without running anything (PDF,
  *  images other than SVG, audio, video, plain text) and `attachment` for the
  *  rest, with `nosniff`. This proxy copied the type and dropped every one of

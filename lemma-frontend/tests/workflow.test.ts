@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-    byNewest, byStuckLongest, readAssignments, readRun, readRunDetail, readSteps,
+    byNewest, byStuckLongest, millisOf, readAssignments, readRun, readRunDetail, readSteps,
     readWait, readWorkflow, readWorkflows, runMillis, runTone, sayCancelRefusal,
     sayFor, sayRefusal, sayStatus, sayStuckFor, sayWhen, stillGoing, waitTypeOf,
 } from "../src/workflow/runs.ts";
-import { readFlowStep, readShape } from "../src/workflow/shape.ts";
+import { readFlowStep, readShape, switchOf, tidy, type FlowItem } from "../src/workflow/shape.ts";
 
 /* Shaped off the real responses: `WorkflowRunWaitAssignment` pairs a
    `WorkflowRunWaitResponse` with a `WorkflowRunSummaryResponse`
@@ -85,6 +85,7 @@ test("RUNNING says what it is actually stuck on", () => {
     assert.equal(sayStatus("RUNNING", "AGENT"), "Waiting on an agent");
     assert.equal(sayStatus("RUNNING", "FUNCTION"), "Waiting on a function");
     assert.equal(sayStatus("RUNNING", "TIME"), "Waiting on a timer");
+    assert.equal(sayStatus("RUNNING", "DECISION"), "Weighing a question");
     // A HUMAN wait on a RUNNING run is not a thing the engine produces, and
     // the status is the one to trust if it ever is.
     assert.equal(sayStatus("RUNNING", "HUMAN"), "Running");
@@ -128,6 +129,28 @@ test("a non-form wait has no schema rather than a broken one", () => {
     assert.equal(timer?.uiSchema, null);
     // A payload that is not an object at all is the same answer.
     assert.equal(readWait({ ...wait, payload: "nonsense" })?.schema, null);
+});
+
+test("a decision wait reads as one, with the question it is weighing", () => {
+    // executors/decision.py puts the whole request on the wait; the question
+    // is the description of the one property it asks.
+    const deciding = readWait({
+        ...wait,
+        wait_type: "DECISION",
+        assigned_pod_member_id: null,
+        external_ref: "ref-1",
+        payload: {
+            node_id: "collect",
+            instruction: "Triage.",
+            evidence: { subject: "Charged twice" },
+            schema: { type: "object", properties: { answer: { type: "boolean", description: "Is it a refund?" } } },
+            examples: [],
+        },
+    });
+    assert.equal(deciding?.type, "DECISION");
+    assert.equal(deciding?.question, "Is it a refund?");
+    assert.equal(deciding?.schema, null, "a decision wait is not a form");
+    assert.equal(readWait(wait)?.question, null);
 });
 
 test("an assignment needs both halves, and keeps the ones that have them", () => {
@@ -222,6 +245,22 @@ test("a run detail with a free-form context does not throw on it", () => {
     assert.equal(readRunDetail({ status: "RUNNING" }), null);
 });
 
+test("a run time with no zone on it is UTC, wherever the browser is", () => {
+    // `started_at` is a plain timestamp column and arrives as
+    // "2026-10-07T19:42:36.5", no zone. Read as local time, a run started a
+    // minute ago in India said "started 5h ago".
+    const utc = Date.UTC(2026, 9, 7, 19, 42, 36, 500);
+    assert.equal(millisOf("2026-10-07T19:42:36.500"), utc);
+    assert.equal(millisOf("2026-10-07T19:42:36.500Z"), utc);
+    assert.equal(millisOf("2026-10-08T01:12:36.500+05:30"), utc);
+    assert.equal(millisOf("2026-10-07T14:42:36.500-0500"), utc);
+    assert.equal(millisOf("2026-10-07"), Date.UTC(2026, 9, 7));
+    assert.equal(millisOf("not a time"), null);
+    assert.equal(millisOf(null), null);
+    // Five minutes after, in every zone — not "5h ago" in Kolkata.
+    assert.equal(sayWhen("2026-10-07T19:42:36.500", utc + 5 * 60_000), "5m ago");
+});
+
 test("how long it took, and how long it has been going", () => {
     const now = Date.parse("2026-09-18T09:10:00Z");
     const finished = readRun({ ...run, started_at: "2026-09-18T09:00:00Z", completed_at: "2026-09-18T09:02:30Z" })!;
@@ -300,6 +339,25 @@ function edge(source: string, target: string) {
 
 const ids = (steps: { id: string }[]) => steps.map((step) => step.id);
 
+/** An outline, small enough to compare whole: a step is its id, a jump is an
+ *  arrow and an id, and forks and loops keep what is inside them. */
+function outlineOf(items: FlowItem[]): unknown[] {
+    return items.map((item) => {
+        switch (item.type) {
+            case "step": return item.step.id;
+            case "fork": return {
+                fork: item.step.id,
+                then: item.then?.id ?? null,
+                on: item.on,
+                arms: item.arms.map((arm) => ({ when: arm.when, items: outlineOf(arm.items) })),
+            };
+            case "loop": return { loop: item.step.id, body: outlineOf(item.body) };
+            case "jump": return (item.back ? "↩ " : "→ ") + item.id;
+            case "end": return item.inLoop ? "(next one)" : "(the run ends)";
+        }
+    });
+}
+
 test("a linear flow reads top to bottom, in the order it runs", () => {
     const shape = readShape({
         name: "quarterly-audit",
@@ -358,7 +416,21 @@ test("a branch puts both arms under the decision and the join under both", () =>
     assert.deepEqual(decide.branches, ["escalate", "pay"]);
     // The rules are the shape. A decision that only says "branches" leaves the
     // reader to guess where, which is the question they opened this to answer.
-    assert.match(decide.detail[0], /collect\.amount > `5000` → escalate/);
+    assert.deepEqual(decide.rules[0], { when: "collect.amount > `5000`", to: "escalate" });
+    assert.deepEqual(decide.detail, []);
+
+    // Drawn, the decision forks: one arm per rule, one for when none match,
+    // and `done` back on the main line under the fork because both arms reach
+    // it. The no-match arm ends the run instead, and says so.
+    assert.deepEqual(outlineOf(shape.flow), [
+        "collect",
+        { fork: "decide", then: "done", on: null, arms: [
+            { when: "collect.amount > 5000", items: ["escalate"] },
+            { when: "collect.amount > 0", items: ["pay"] },
+            { when: null, items: ["(the run ends)"] },
+        ] },
+        "done",
+    ]);
 
     const collect = shape.ordered[0];
     assert.equal(collect.says, "Asks a person");
@@ -400,8 +472,175 @@ test("a loop prints its body before what comes after it, and does not hang", () 
     const loop = shape.ordered[1];
     assert.deepEqual(loop.branches, ["check"]);
     assert.equal(loop.detail[0], "Over intake.suppliers, as loop.supplier");
-    assert.equal(loop.detail[1], "Body starts at check");
+    assert.equal(loop.detail.length, 1);
+    // The body is drawn inside the loop, and the edge back to the loop is the
+    // end of a pass rather than a jump anywhere.
+    assert.deepEqual(outlineOf(shape.flow), ["intake", { loop: "each", body: ["check", "record"] }, "done"]);
     assert.equal(shape.start.detail[0], "When a row in suppliers is added or changed.");
+});
+
+test("arms that never meet again keep the biggest on the main line, and the rest read as side trips", () => {
+    // Wired the way a real one came back: check the slot, then post, wait and
+    // ask again, or stop; every outcome its own End. The decisions also carry
+    // an edge per rule, as the editor saves them — and the engine only ever
+    // reads the first edge as the fall-through (domain/workflow.py:71).
+    // Nesting every arm in full put the whole posting path inside the first
+    // arm and the waits a screen away from the question they answer.
+    const fn = (name: string) => ({ function_name: name });
+    const on = "(recheck.action || clock.action)";
+    const shape = readShape({
+        name: "post-lifecycle",
+        nodes: [
+            node("clock", "FUNCTION", fn("post_clock")),
+            node("recheck", "FUNCTION", fn("post_clock")),
+            node("route", "DECISION", { rules: [
+                { condition: on + " == 'publish'", next_node_id: "publish" },
+                { condition: on + " == 'wait_short'", next_node_id: "wait_short" },
+                { condition: on + " == 'wait_long'", next_node_id: "wait_long" },
+            ] }),
+            node("wait_long", "WAIT_UNTIL", { timeout_seconds: 3600 }),
+            node("wait_short", "WAIT_UNTIL", { timeout_seconds: 300 }),
+            node("publish", "FUNCTION", fn("publish_post")),
+            node("published", "DECISION", { rules: [
+                { condition: "publish.ok == `true` && publish.dry_run == `false`", next_node_id: "wait_1h" },
+                { condition: "publish.ok == `true`", next_node_id: "rehearsed" },
+            ] }),
+            node("wait_1h", "WAIT_UNTIL", { timeout_seconds: 3600 }),
+            node("snap_1h", "FUNCTION", fn("snapshot_metrics")),
+            node("wait_24h", "WAIT_UNTIL", { timeout_seconds: 82800 }),
+            node("snap_24h", "FUNCTION", fn("snapshot_metrics")),
+            node("measured", "END"),
+            node("rehearsed", "END"),
+            node("failed", "END"),
+            node("stopped", "END"),
+        ],
+        edges: [
+            edge("clock", "route"),
+            edge("route", "stopped"), edge("route", "publish"), edge("route", "wait_short"), edge("route", "wait_long"),
+            edge("wait_long", "recheck"), edge("wait_short", "recheck"), edge("recheck", "route"),
+            edge("publish", "published"),
+            edge("published", "failed"), edge("published", "wait_1h"), edge("published", "rehearsed"),
+            edge("wait_1h", "snap_1h"), edge("snap_1h", "wait_24h"), edge("wait_24h", "snap_24h"), edge("snap_24h", "measured"),
+        ],
+        start: { type: "DATASTORE_EVENT", config: { table_name: "drafts", operations: ["INSERT", "UPDATE"] } },
+    });
+
+    assert.ok(shape);
+    assert.equal(shape.trouble, null);
+    assert.deepEqual(shape.loose, []);
+    assert.deepEqual(outlineOf(shape.flow), [
+        "clock",
+        // Every rule compares the same thing, so it is said once and each arm
+        // is only its value. Posting goes straight on; the waits come back
+        // round; stopping is the first edge and ends on its own End.
+        { fork: "route", then: "publish", on, arms: [
+            { when: "'publish'", items: [] },
+            { when: "'wait_short'", items: ["wait_short", "recheck", "↩ route"] },
+            { when: "'wait_long'", items: ["wait_long", "→ recheck"] },
+            { when: null, items: ["stopped"] },
+        ] },
+        "publish",
+        // Rehearsal and failure are one step each; live is the rest of the
+        // workflow, and stays on the line. The backticks round `true` go.
+        { fork: "published", then: "wait_1h", on: null, arms: [
+            { when: "publish.ok == true && publish.dry_run == false", items: [] },
+            { when: "publish.ok == true", items: ["rehearsed"] },
+            { when: null, items: ["failed"] },
+        ] },
+        "wait_1h", "snap_1h", "wait_24h", "snap_24h", "measured",
+    ]);
+    // The flat order is still there, for counts and the run board.
+    assert.equal(shape.ordered.length, 15);
+});
+
+test("a body step that goes to what follows the loop runs inside every pass, so it is drawn there", () => {
+    // Legal to save, and easy to misread. A body step pointing anywhere but
+    // its loop keeps the loop's frame (execution/stepper.py move_past), so
+    // `after` runs once per item and again when the items run out. Drawing it
+    // only after the loop would say the decision breaks out, which it never
+    // does; after the loop it is pointed at instead.
+    const shape = readShape({
+        name: "body-runs-the-tail",
+        nodes: [
+            node("each", "LOOP", { items_path: "start.rows", child_node_id: "check" }),
+            node("check", "DECISION", { rules: [{ condition: "loop.item.ok", next_node_id: "after" }] }),
+            node("after", "FUNCTION", { function_name: "record" }),
+        ],
+        edges: [edge("each", "after"), edge("check", "after")],
+        start: { type: "MANUAL", config: null },
+    });
+
+    assert.ok(shape);
+    assert.deepEqual(outlineOf(shape.flow), [
+        { loop: "each", body: [
+            { fork: "check", then: "after", on: null, arms: [
+                { when: "loop.item.ok", items: [] },
+                { when: null, items: [] },
+            ] },
+            "after",
+        ] },
+        "→ after",
+    ]);
+});
+
+test("two arms the same size stay an either/or, each drawn in full", () => {
+    const shape = readShape({
+        name: "either",
+        nodes: [
+            node("ask", "DECISION", { rules: [{ condition: "start.ok", next_node_id: "yes" }] }),
+            node("yes", "AGENT", { agent_name: "one" }),
+            node("no", "AGENT", { agent_name: "two" }),
+        ],
+        edges: [edge("ask", "no")],
+        start: { type: "MANUAL", config: null },
+    });
+    assert.deepEqual(outlineOf(shape!.flow), [
+        { fork: "ask", then: null, on: null, arms: [
+            { when: "start.ok", items: ["yes"] },
+            { when: null, items: ["no"] },
+        ] },
+    ]);
+});
+
+test("a switch is only a switch when every rule compares the same thing to a value", () => {
+    assert.deepEqual(switchOf(["a.b == 'x'", "a.b == `2`"]), { on: "a.b", values: ["'x'", "2"] });
+    // `||` binds looser than `==`, so a bare one means half the condition.
+    assert.equal(switchOf(["a || b == 'x'", "a || b == 'y'"]), null);
+    assert.equal(switchOf(["a == 'x' && b == 'y'", "a == 'x' && b == 'z'"]), null);
+    // A double-quoted token is an identifier in JMESPath, not a string.
+    assert.equal(switchOf(['a == "x"', 'a == "y"']), null);
+    assert.equal(switchOf(["a == 'x'", "c == 'y'"]), null);
+    assert.equal(switchOf(["a == 'x'"]), null);
+    assert.equal(tidy("n > `5000` && ok == `true` && s == `\"x\"`"), "n > 5000 && ok == true && s == `\"x\"`");
+});
+
+test("a decision inside a loop ends the pass, not the run", () => {
+    const shape = readShape({
+        name: "check-each",
+        nodes: [
+            node("each", "LOOP", { items_path: "start.rows", child_node_id: "worth-it" }),
+            node("worth-it", "DECISION", { rules: [{ condition: "loop.item.score > `3`", next_node_id: "keep" }] }),
+            node("keep", "FUNCTION", { function_name: "keep-row" }),
+            node("report", "AGENT", { agent_name: "reporter" }),
+        ],
+        edges: [edge("each", "report"), edge("keep", "each")],
+        start: { type: "MANUAL", config: null },
+    });
+
+    assert.ok(shape);
+    // A guard: the no-match arm skips to the next item and says so, and the
+    // matching one carries straight on to `keep`, which stays on the body's
+    // main line.
+    assert.deepEqual(outlineOf(shape.flow), [
+        { loop: "each", body: [
+            { fork: "worth-it", then: "keep", on: null, arms: [
+                { when: "loop.item.score > 3", items: [] },
+                { when: null, items: ["(next one)"] },
+            ] },
+            "keep",
+        ] },
+        "report",
+    ]);
 });
 
 test("a step nothing reaches is found rather than lost", () => {
@@ -545,8 +784,13 @@ test("a malformed step is a row that says so, never a gap", () => {
     // A rule pointing at a node that does not exist still says where it meant
     // to go — the validator refuses these on save (domain/graph.py:74), so one
     // here means a graph written round the API.
-    assert.match(shape.ordered[1].detail[0], /x → nowhere/);
-    assert.match(shape.ordered[1].detail[1], /unreadable/);
+    assert.deepEqual(shape.ordered[1].rules, [{ when: "x", to: "nowhere" }]);
+    assert.match(shape.ordered[1].detail[0], /unreadable/);
+    const fork = shape.flow[1];
+    assert.equal(fork.type, "fork");
+    if (fork.type === "fork") assert.deepEqual(fork.arms[0].items, [{ type: "jump", to: null, id: "nowhere", back: false }]);
+    // And the outline keeps every step too, the leftovers under their heads.
+    assert.equal(shape.loose.flat().length, 3);
     assert.match(shape.start.says, /does not know \(WORMHOLE\)/);
 });
 
@@ -570,6 +814,55 @@ test("every node kind says what it does, and none of them throws on an empty con
     assert.match(bare[0].detail[0], /Nothing to fill in/);
     assert.match(bare[4].detail[1], /points at nothing/);
     assert.match(bare[5].detail[0], /did not carry/);
+});
+
+test("a decision that asks a question says the question, and its answers are its rules", () => {
+    const step = readFlowStep({
+        id: "triage",
+        type: "DECISION",
+        config: {
+            question: {
+                instruction: "Triage incoming email.",
+                evidence: { type: "expression", value: "start.payload.email" },
+                answer: { type: "string", enum: ["billing", "bug", "other"], description: "What is it about?" },
+                routes: { billing: "refund", bug: "file_bug" },
+                unsure_next_node_id: "ask",
+            },
+        },
+    }, 0);
+    assert.equal(step.says, "Asks: What is it about?");
+    assert.deepEqual(step.branches, ["refund", "file_bug", "ask"]);
+    // Drawn as arms by the outline, like a rule decision's, in the order the
+    // run tries them; the row itself only says what no arm can.
+    assert.deepEqual(step.rules, [
+        { when: "billing", to: "refund" },
+        { when: "bug", to: "file_bug" },
+        { when: "it cannot tell", to: "ask" },
+    ]);
+    assert.deepEqual(step.detail, ["If it cannot be answered at all, the run stops."]);
+    const yesNo = readFlowStep({ id: "d", type: "DECISION", config: { question: { routes: { true: "a" } } } }, 0);
+    assert.equal(yesNo.says, "Branches on a judgement", "a question with no description still says what it is");
+    assert.deepEqual(yesNo.rules, [{ when: "yes", to: "a" }]);
+});
+
+test("a question forks the outline: an arm per answer, then otherwise", () => {
+    const shape = readShape({
+        name: "refunds",
+        entry_node_id: "triage",
+        nodes: [
+            {
+                id: "triage",
+                type: "DECISION",
+                config: { question: { answer: { type: "boolean", description: "Is it a refund?" }, routes: { true: "refund" } } },
+            },
+            { id: "refund", type: "END", config: {} },
+            { id: "done", type: "END", config: {} },
+        ],
+        edges: [{ source: "triage", target: "done" }],
+    })!;
+    assert.deepEqual(outlineOf(shape.flow), [
+        { fork: "triage", then: null, on: null, arms: [{ when: "yes", items: ["refund"] }, { when: null, items: ["done"] }] },
+    ]);
 });
 
 /* ── the board ─────────────────────────────────────────────────────── */
@@ -645,6 +938,8 @@ test("a card says what it is held by from the kind of step", () => {
     assert.equal(sayHeldBy(screen.step, boardRun("x", {})), "Waiting on a person");
     assert.equal(sayHeldBy(draft.step, boardRun("x", { status: "RUNNING" })), "With an agent");
     assert.equal(sayHeldBy(null, boardRun("x", { status: "PENDING" })), "Starting");
+    const deciding = boardRun("x", { status: "RUNNING", waiting_on: { node_id: "route", wait_type: "DECISION" } });
+    assert.equal(sayHeldBy(null, deciding), "Weighing a question");
 });
 
 test("a run summary reads its title and the wait it is parked on", () => {

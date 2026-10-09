@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from app.core.authorization.context import ResourceType
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.outsiders import OUTSIDER_TOOLSETS, answers_outsiders
+from app.modules.agent.domain.outsiders import OUTSIDER_TOOLSETS, Audience
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 
@@ -256,7 +256,7 @@ def resolve_toolsets(
     allow_subagents = not is_sub_agent_run(conversation)
     if not allow_subagents:
         names = [name for name in names if name not in _SUB_AGENT_WITHHELD]
-    if answers_outsiders(conversation):
+    if Audience.of(conversation).answers_outsiders:
         names = [name for name in names if name in OUTSIDER_TOOLSETS]
         allow_subagents = False
     return ResolvedToolsets(

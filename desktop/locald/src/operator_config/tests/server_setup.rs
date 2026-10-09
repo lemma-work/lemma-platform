@@ -87,6 +87,7 @@ fn the_ai_section_names_the_side_job_models_and_declares_the_image_model() {
     assert_eq!(environment["VISION_MODEL"], "eyes");
     assert_eq!(environment["CONVERSATION_TITLE_MODEL"], "quick");
     assert_eq!(environment["HISTORY_SUMMARIZATION_MODEL"], "quick");
+    assert_eq!(environment["DECISION_MODEL"], "quick");
 }
 
 #[test]
@@ -96,6 +97,8 @@ fn without_a_fast_model_titles_use_the_default_and_summaries_are_left_alone() {
     let environment = store.backend_environment().unwrap();
     assert_eq!(environment["CONVERSATION_TITLE_MODEL"], "big");
     assert!(!environment.contains_key("HISTORY_SUMMARIZATION_MODEL"));
+    // Decisions fall back to the default model by themselves.
+    assert!(!environment.contains_key("DECISION_MODEL"));
     // The default cannot read images and none was chosen, so nothing claims to.
     assert!(!environment.contains_key("VISION_MODEL"));
 }
@@ -108,6 +111,7 @@ fn an_unconfigured_install_names_no_side_job_models() {
         "VISION_MODEL",
         "CONVERSATION_TITLE_MODEL",
         "HISTORY_SUMMARIZATION_MODEL",
+        "DECISION_MODEL",
     ] {
         assert!(!environment.contains_key(key), "{key} set with no provider");
     }
@@ -404,10 +408,17 @@ fn a_resend_key_and_the_email_section_save_as_one_change() {
     assert!(empty.is_err());
 }
 
+/// The voice is the workspace server's, so its key goes there alone. Routing
+/// what the caller says is a backend decision, so the TypeSafe key goes to the
+/// backend alone, and makes TypeSafe the backend's decision provider.
 #[test]
-fn the_voice_call_keys_go_to_the_frontend_and_never_the_backend() {
+fn the_voice_key_goes_to_the_frontend_and_the_routing_key_to_the_backend() {
     let (_root, store) = store_with(Default::default(), Default::default(), Default::default());
     assert!(store.frontend_environment().unwrap().is_empty());
+    assert!(!store
+        .backend_environment()
+        .unwrap()
+        .contains_key("DECISION_PROVIDER"));
     let integrations = store.snapshot().unwrap()["config"]["integrations"].clone();
     section(
         &store,
@@ -421,8 +432,9 @@ fn the_voice_call_keys_go_to_the_frontend_and_never_the_backend() {
     .unwrap();
     let frontend = store.frontend_environment().unwrap();
     assert_eq!(frontend["GEMINI_API_KEY"], "g-1");
-    assert_eq!(frontend["TYPESAFE_API_KEY"], "t-1");
+    assert!(!frontend.contains_key("TYPESAFE_API_KEY"));
     let backend = store.backend_environment().unwrap();
     assert!(!backend.contains_key("GEMINI_API_KEY"));
-    assert!(!backend.contains_key("TYPESAFE_API_KEY"));
+    assert_eq!(backend["TYPESAFE_API_KEY"], "t-1");
+    assert_eq!(backend["DECISION_PROVIDER"], "typesafe");
 }

@@ -60,6 +60,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store 
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.services.contact_keepers import (
+    tell_admins_a_keeper_left,
+)
 from app.modules.agent_surfaces.services.group_updates import apply_group_updates
 from app.modules.agent_surfaces.services.telegram_group_join import (
     claim_telegram_group_join,
@@ -67,7 +70,11 @@ from app.modules.agent_surfaces.services.telegram_group_join import (
 from app.modules.agent_surfaces.services.surface_inbound import (
     release_ingress_claim,
 )
-from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
+from app.modules.pod.domain.events import (
+    PodDeletedEvent,
+    PodEvents,
+    PodMemberRemovedEvent,
+)
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
 from app.core.log.log import get_logger
 
@@ -396,7 +403,14 @@ async def on_pod_deleted(
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
-    """Remove all surfaces for a deleted pod so its accounts become free."""
+    """Remove all surfaces for a deleted pod so its accounts become free.
+
+    Also where a member leaving the pod is heard: one consumer group for the
+    stream, as it already had, rather than a second one to keep alive.
+    """
+    if event.get("event_type") == PodMemberRemovedEvent.get_event_type():
+        await _on_member_removed(event, uow_factory=uow_factory, inbox=inbox)
+        return
     if event.get("event_type") != PodDeletedEvent.get_event_type():
         return
 
@@ -407,6 +421,26 @@ async def on_pod_deleted(
 
     await inbox.process(
         "agent-surfaces.pod-deletion",
+        event,
+        process,
+        max_attempts=CONSUMER_ATTEMPTS,
+    )
+
+
+async def _on_member_removed(
+    event: dict[str, object], *, uow_factory: UnitOfWorkFactory, inbox: EventInboxPort
+) -> None:
+    """Tell the pod's administrators if the member looked after any contacts."""
+
+    async def process() -> None:
+        parsed = PodMemberRemovedEvent.model_validate(event)
+        async with uow_factory() as uow:
+            await tell_admins_a_keeper_left(
+                uow, pod_id=parsed.pod_id, user_id=parsed.user_id
+            )
+
+    await inbox.process(
+        "agent-surfaces.pod-member-removed",
         event,
         process,
         max_attempts=CONSUMER_ATTEMPTS,

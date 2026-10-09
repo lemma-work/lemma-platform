@@ -91,7 +91,7 @@ async def test_a_members_turn_in_a_mixed_group_is_told_who_reads_it_and_not_show
     )
 
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is False
+    assert context.audience.answers_outsiders is False
     carried = " ".join(request["text"] for request in seen)
     assert "STRANGER-PLANTED" not in carried
     assert "Proofs are due Friday." in carried

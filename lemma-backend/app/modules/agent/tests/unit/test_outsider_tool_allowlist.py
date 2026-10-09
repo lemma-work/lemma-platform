@@ -23,6 +23,7 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.profiles import ModelProfile
 
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.capabilities.outsider_gate import (
     WITHHELD_MESSAGE,
     OutsiderToolGateCapability,
@@ -36,6 +37,8 @@ from app.modules.agent.domain.outsiders import (
 )
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools import registry
+from app.modules.agent.tools.contact_tools import build_contact_toolset
+from app.modules.agent.tools.form_tools import build_form_toolset
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher, UnknownToolError
 from app.modules.agent.tools.outsider_tools import (
@@ -57,6 +60,10 @@ def _kept_tool_names() -> set[str]:
         static = registry._TOOLSET_BY_NAME.get(toolset)
         if static is not None:
             names |= set(static.tools)
+    # Built per run rather than registered: on a contact's run, and on a web
+    # visitor's run.
+    names |= set(build_contact_toolset(uow_factory=lambda: None).tools)
+    names |= set(build_form_toolset(uow_factory=lambda: None).tools)
     return names
 
 
@@ -111,7 +118,7 @@ def _stranger_deps(**overrides) -> BaseAgentContext:
         org_id=uuid4(),
         conversation_id=uuid4(),
         is_pod_default_agent=True,
-        answers_outsider=True,
+        audience=Audience.outsiders(),
         **overrides,
     )
 
@@ -223,5 +230,5 @@ async def test_no_workspace_is_opened_for_a_strangers_run():
 
 
 def test_a_members_run_reaches_its_workspace_as_before():
-    refuse_owner_workspace(SimpleNamespace(answers_outsider=False))
+    refuse_owner_workspace(SimpleNamespace(audience=Audience.member()))
     refuse_owner_workspace(SimpleNamespace())

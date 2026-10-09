@@ -14,8 +14,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0044_mcp_event_subscriptions"
-REVISION = "0045_connector_events"
+BEFORE = "0047_mcp_event_subscriptions"
+REVISION = "0048_connector_events"
 TABLES = ("auth_config_events", "connector_event_subscriptions")
 
 

@@ -4,8 +4,9 @@
  *  `node_count` instead (`api/schemas.py:444`), so until somebody fetches one
  *  workflow the only thing this app could say about "what it runs the same way
  *  twice" was a number. `workflows.get(name)` carries `nodes`, `edges` and
- *  `start` (`api/schemas.py:414`); this turns those three into a start line
- *  and a list of steps in the order they run.
+ *  `start` (`api/schemas.py:414`); this turns those three into a start line,
+ *  a list of steps in the order they run, and an outline of the same steps
+ *  that forks where the workflow does.
  *
  *  Two things about the payload set the whole shape of this file.
  *
@@ -27,7 +28,7 @@
  *  that is one step short is worse than one with an ugly row in it.
  */
 
-import { isRecord, sayFor, str } from "./runs";
+import { isRecord, sayAnswer, sayFor, str } from "./runs";
 
 /* ── the kinds, as the backend spells them ─────────────────────────── */
 
@@ -160,8 +161,19 @@ export interface FlowStep {
     /** Where it can go that is not an edge: a decision's rule targets, a
      *  loop's body. Kept because the walk needs them and the row does not. */
     branches: string[];
+    /** A decision's rules, in the order they are tried. Empty on every other
+     *  kind. The outline draws one arm per rule, so the rows say nothing
+     *  about them. */
+    rules: FlowRule[];
     /** The payload was not a readable node at all. Drawn anyway. */
     unreadable: boolean;
+}
+
+export interface FlowRule {
+    /** The condition as written, or a sentence when the payload had none. */
+    when: string;
+    /** The step it goes to, or "" when it named none. */
+    to: string;
 }
 
 /** One node, guarded down to the last field.
@@ -180,6 +192,7 @@ export function readFlowStep(raw: unknown, at: number): FlowStep {
             says: "Step " + (at + 1) + " came back in a shape this app could not read.",
             detail: [],
             branches: [],
+            rules: [],
             unreadable: true,
         };
     }
@@ -187,13 +200,13 @@ export function readFlowStep(raw: unknown, at: number): FlowStep {
     const kind = str(raw.type) ?? "";
     const label = str(raw.label);
     const config = isRecord(raw.config) ? raw.config : null;
-    const base = { id, kind, label, unreadable: id === "" };
+    const base = { id, kind, label, rules: [], unreadable: id === "" };
 
     switch (kind) {
         case "FORM": return { ...base, says: "Asks a person", ...sayForm(config) };
         case "AGENT": return { ...base, says: sayTarget("Hands it to", config?.agent_name, "an agent"), ...sayInputs(config) };
         case "FUNCTION": return { ...base, says: sayTarget("Runs", config?.function_name, "a function"), ...sayInputs(config) };
-        case "DECISION": return { ...base, says: "Branches", ...sayDecision(config) };
+        case "DECISION": return { ...base, ...sayDecision(config) };
         case "LOOP": return { ...base, says: "Repeats for each item", ...sayLoop(config) };
         case "WAIT_UNTIL": return { ...base, says: "Waits", detail: sayTimeout(config), branches: [] };
         case "END": return { ...base, says: "Ends the run", detail: [], branches: [] };
@@ -269,37 +282,76 @@ function sayInputs(config: Record<string, unknown> | null): { detail: string[]; 
 
 /** The branches, with their conditions.
  *
- *  This is the one node type where the detail *is* the shape: a decision with
- *  its rules hidden is a step that says "branches" and leaves the reader to
- *  guess where. The first truthy rule wins and the outgoing edge is the
- *  fall-through (`domain/nodes/decision.py:26`), so the order is meaningful
- *  and the last line says what happens when none of them match.
+ *  The rules come back as data rather than as detail lines, because the
+ *  outline draws each one as an arm with its steps under it, and a condition
+ *  printed both on the row and over its arm is the same fact twice. The first
+ *  truthy rule wins and the outgoing edge is the fall-through
+ *  (`domain/nodes/decision.py:26`), so the order is kept exactly.
  */
-function sayDecision(config: Record<string, unknown> | null): { detail: string[]; branches: string[] } {
-    const rules = Array.isArray(config?.rules) ? config.rules : [];
+function sayDecision(config: Record<string, unknown> | null): { says: string; detail: string[]; branches: string[]; rules: FlowRule[] } {
+    if (isRecord(config?.question)) return sayQuestion(config.question);
+    const raw = Array.isArray(config?.rules) ? config.rules : [];
     const detail: string[] = [];
     const branches: string[] = [];
-    for (const rule of rules) {
+    const rules: FlowRule[] = [];
+    for (const rule of raw) {
         if (!isRecord(rule)) {
             detail.push("One of its branches came back unreadable.");
             continue;
         }
         const target = str(rule.next_node_id);
-        const condition = str(rule.condition);
         if (target) branches.push(target);
-        detail.push((condition ?? "on some condition the payload did not carry") + " → " + (target ?? "nowhere named"));
+        rules.push({ when: str(rule.condition) ?? "a condition the payload did not carry", to: target ?? "" });
     }
-    if (detail.length === 0) detail.push("No branches — it falls straight through.");
-    return { detail, branches };
+    if (raw.length === 0) detail.push("No branches — it falls straight through.");
+    return { says: "Branches", detail, branches, rules };
 }
 
+/** A decision that asks one closed question about some evidence and branches
+ *  on the answer (`DecisionQuestion`, `domain/nodes/decision.py`).
+ *
+ *  The question is the `description` of its `answer` schema, which is what a
+ *  person would ask in the step's place, so it is what the row says. Each
+ *  answer with a route, then the unsure route, comes back as a rule -- the
+ *  same order the run tries them in -- so the outline draws them as arms like
+ *  any decision's, with the fall-through as its "otherwise". What no arm can
+ *  show is the one detail line: a question that cannot be answered at all
+ *  stops the run rather than taking a branch.
+ */
+function sayQuestion(question: Record<string, unknown>): { says: string; detail: string[]; branches: string[]; rules: FlowRule[] } {
+    const answer = isRecord(question.answer) ? question.answer : null;
+    const asked = str(answer?.description);
+    const branches: string[] = [];
+    const rules: FlowRule[] = [];
+    const routes = isRecord(question.routes) ? question.routes : {};
+    for (const [key, target] of Object.entries(routes)) {
+        const next = str(target);
+        if (next) branches.push(next);
+        rules.push({ when: sayAnswer(key), to: next ?? "" });
+    }
+    const unsure = str(question.unsure_next_node_id);
+    if (unsure) {
+        branches.push(unsure);
+        rules.push({ when: "it cannot tell", to: unsure });
+    }
+    return {
+        says: asked ? "Asks: " + asked : "Branches on a judgement",
+        detail: ["If it cannot be answered at all, the run stops."],
+        branches,
+        rules,
+    };
+}
+
+/** The body is not a detail line either: the outline draws it inside the
+ *  loop. Only a body that points at nothing is said, since there is then
+ *  nothing to draw. */
 function sayLoop(config: Record<string, unknown> | null): { detail: string[]; branches: string[] } {
     const detail: string[] = [];
     const over = str(config?.items_path);
     const alias = str(config?.item_var_name) ?? "item";
     detail.push(over ? "Over " + over + ", as loop." + alias : "Over a list the payload did not name");
     const body = str(config?.child_node_id);
-    detail.push(body ? "Body starts at " + body : "Its body points at nothing.");
+    if (!body) detail.push("Its body points at nothing.");
     return { detail, branches: body ? [body] : [] };
 }
 
@@ -517,6 +569,345 @@ function sequence(out: number[][], roots: number[], allowed: Set<number>, topUp 
     return placed;
 }
 
+/* ── the way it branches ───────────────────────────────────────────── */
+
+/** One row of the drawn outline. */
+export type FlowItem =
+    | { type: "step"; step: FlowStep }
+    /** A decision with an arm per rule and one for when none match. `then`
+     *  is the step drawn straight after the fork — where the arms meet again,
+     *  or the arm kept on the main line — or null when every arm is drawn in
+     *  full. `on` is what every rule compares, when they all compare the
+     *  same thing, and then each arm's `when` is only the value. */
+    | { type: "fork"; step: FlowStep; arms: FlowArm[]; then: FlowStep | null; on: string | null }
+    /** A loop with its body drawn inside it. */
+    | { type: "loop"; step: FlowStep; body: FlowItem[] }
+    /** Goes on to a step drawn somewhere else. `back` when that step comes
+     *  earlier on the same path, which is a retry. `to` is null when the
+     *  step it names does not exist. */
+    | { type: "jump"; to: FlowStep | null; id: string; back: boolean }
+    /** A path that stops where the drawing would otherwise suggest it carries
+     *  on: the end of the run, or of one pass of a loop. */
+    | { type: "end"; inLoop: boolean };
+
+export interface FlowArm {
+    /** The rule's condition, or null for the arm taken when none match. */
+    when: string | null;
+    /** Empty when the arm goes straight to the fork's `then`. */
+    items: FlowItem[];
+}
+
+/** No step: the end of the run, or of one pass of a loop. */
+const EXIT = -1;
+
+interface Wiring {
+    steps: FlowStep[];
+    /** The engine's next step: the first edge out, which is the only one it
+     *  ever reads (`domain/workflow.py:71`). */
+    next: (number | undefined)[];
+    /** A decision's rules with their targets found. `to` is undefined when
+     *  the rule names a step that does not exist. */
+    rules: { when: string; to: number | undefined; id: string }[][];
+    body: (number | undefined)[];
+    /** The step drawn after a decision's fork: where its arms meet again, or
+     *  the arm kept on the main line when they never do. */
+    join: (number | null)[];
+    /** The join is a kept arm, not a meeting point. */
+    kept: boolean[];
+    placed: Set<number>;
+}
+
+/** Every step, laid out the way a person would explain it.
+ *
+ *  A topological list puts a decision's arms one after another, so "post",
+ *  "wait an hour" and "wait a day" read as three things that all happen. Here
+ *  a decision forks: each rule is an arm with its own steps under it, and the
+ *  arms close again at the first step every one of them reaches. That step is
+ *  the decision's immediate postdominator, and it goes back on the main line
+ *  under the fork, so a branch that rejoins reads as a detour rather than as
+ *  a second copy of the rest of the workflow.
+ *
+ *  Two rules make the postdominators match what people mean.
+ *
+ *  A decision with no outgoing edge ends the run when no rule matches. That
+ *  way out is drawn as its own arm saying the run ends, so it is left out of
+ *  where the arms meet. Counting it would mean no decision without an edge
+ *  ever rejoins, and a guard clause — wait and check again, or stop — would
+ *  push the whole rest of the workflow into its first arm.
+ *
+ *  Inside a loop's body, an edge back to the loop and the end of a chain both
+ *  mean "next item" (`execution/stepper.py:191`). Both count as leaving.
+ *
+ *  Arms that never meet again — post, or wait and ask again, or stop, each
+ *  ending its own way — have no such step. Nesting every arm in full there
+ *  buries the workflow's real work inside its first arm and pushes the other
+ *  arms a screen away from the question they answer. So the arm with the most
+ *  steps stays on the main line, drawn after the fork as if it were where
+ *  the arms meet, and the others read as side trips that visibly end or go
+ *  back. An arm that leads back to the decision never stays: that is the
+ *  retry, and the side trip is what it is.
+ *
+ *  A step reached a second way is drawn once, where the walk meets it first,
+ *  and every other path to it says where it goes: back, when the step is
+ *  earlier on the same path, otherwise on.
+ */
+export function outline(steps: FlowStep[], edges: EdgeRow[], entry: number): { flow: FlowItem[]; loose: FlowItem[][] } {
+    const wiring = wire(steps, edges);
+    const flow = entry >= 0 ? walk(wiring, entry, [], null, []) : [];
+
+    /* What the first step never reaches, from each head in turn. A ring with
+       no head still gets drawn: the first undrawn step starts it. */
+    const loose: FlowItem[][] = [];
+    for (;;) {
+        const left = steps.map((_, at) => at).filter((at) => !wiring.placed.has(at));
+        if (left.length === 0) break;
+        const pointed = new Set(left.flatMap((at) => targetsOf(wiring, at)));
+        const head = left.find((at) => !pointed.has(at)) ?? left[0];
+        loose.push(walk(wiring, head, [], null, []));
+    }
+    return { flow, loose };
+}
+
+function wire(steps: FlowStep[], edges: EdgeRow[]): Wiring {
+    const where = new Map<string, number>();
+    steps.forEach((step, at) => {
+        if (step.id && !where.has(step.id)) where.set(step.id, at);
+    });
+    const find = (id: string) => (id ? where.get(id) : undefined);
+
+    const next = steps.map((step) => {
+        if (!step.id || step.kind === "END") return undefined;
+        const edge = edges.find((one) => one.source === step.id);
+        return edge ? find(edge.target) : undefined;
+    });
+    const rules = steps.map((step) =>
+        step.kind === "DECISION" ? step.rules.map((rule) => ({ when: rule.when, to: find(rule.to), id: rule.to })) : [],
+    );
+    const body = steps.map((step) => (step.kind === "LOOP" ? find(step.branches[0] ?? "") : undefined));
+
+    const wiring: Wiring = { steps, next, rules, body, join: [], kept: [], placed: new Set() };
+    Object.assign(wiring, joinsOf(wiring));
+    return wiring;
+}
+
+function targetsOf(wiring: Wiring, at: number): number[] {
+    const out: number[] = [];
+    for (const rule of wiring.rules[at]) if (rule.to !== undefined) out.push(rule.to);
+    if (wiring.body[at] !== undefined) out.push(wiring.body[at]);
+    if (wiring.next[at] !== undefined) out.push(wiring.next[at]);
+    return out;
+}
+
+/** Where each decision's arms meet again; failing that, the arm to keep on
+ *  the main line; failing that, null.
+ *
+ *  Postdominator sets by plain iteration rather than Cooper–Harvey–Kennedy:
+ *  a workflow anybody can read has tens of steps, and this is the version
+ *  whose correctness can be seen. Each set starts full and only shrinks, so
+ *  it settles on the largest answer — which is what lets a retry loop that
+ *  comes back round still count as reaching the step after it.
+ */
+function joinsOf(wiring: Wiring): { join: (number | null)[]; kept: boolean[] } {
+    const { steps } = wiring;
+
+    /* Which steps sit inside which loop's body, so an edge from inside back
+       to that loop can be read as the end of a pass rather than a re-entry. */
+    const inside = new Map<number, Set<number>>();
+    steps.forEach((_, loop) => {
+        const start = wiring.body[loop];
+        if (start === undefined) return;
+        const seen = new Set<number>();
+        const stack = [start];
+        while (stack.length) {
+            const at = stack.pop();
+            if (at === undefined || at === loop || seen.has(at)) continue;
+            seen.add(at);
+            stack.push(...targetsOf(wiring, at));
+        }
+        inside.set(loop, seen);
+    });
+
+    /* Where each step can go next, for this purpose: a loop's body is its
+       own region, so a loop goes only to what follows it. */
+    const leaving = (from: number, to: number | undefined) =>
+        to === undefined || inside.get(to)?.has(from) ? EXIT : to;
+    const after = steps.map((step, at) => {
+        if (!step.id) return [];
+        const out: number[] = wiring.rules[at].map((rule) => leaving(at, rule.to));
+        const next = wiring.next[at];
+        /* A decision with no edge: the no-match way out, left out on purpose. */
+        if (next !== undefined || step.kind !== "DECISION" || out.length === 0) out.push(leaving(at, next));
+        return [...new Set(out)];
+    });
+
+    const reaches = steps.map(() => false);
+    for (let moved = true; moved; ) {
+        moved = false;
+        steps.forEach((_, at) => {
+            if (!reaches[at] && after[at].some((to) => to === EXIT || reaches[to])) {
+                reaches[at] = true;
+                moved = true;
+            }
+        });
+    }
+
+    const live = steps.map((_, at) => at).filter((at) => reaches[at]);
+    const below = steps.map((_, at) => new Set(reaches[at] ? live : []));
+    /* What every way out passes through, or null when none of them reach the
+       end at all. A way out that never ends constrains nothing. */
+    const meet = (from: number[]): Set<number> | null => {
+        if (from.includes(EXIT)) return new Set();
+        const sets = from.filter((to) => reaches[to]).map((to) => below[to]);
+        if (sets.length === 0) return null;
+        return new Set([...sets[0]].filter((one) => sets.every((set) => set.has(one))));
+    };
+    for (let moved = true; moved; ) {
+        moved = false;
+        for (const at of live) {
+            const settled = meet(after[at]) ?? new Set<number>();
+            settled.add(at);
+            if (settled.size !== below[at].size) {
+                below[at] = settled;
+                moved = true;
+            }
+        }
+    }
+
+    /* The nearest of what every arm passes through: the one with the most
+       steps still below it. */
+    const join = steps.map((step, at) => {
+        if (step.kind !== "DECISION" || !reaches[at]) return null;
+        const common = meet(after[at]);
+        if (!common) return null;
+        let nearest: number | null = null;
+        for (const one of common) {
+            if (one === at) continue;
+            if (nearest === null || below[one].size > below[nearest].size) nearest = one;
+        }
+        return nearest;
+    });
+
+    /* How many steps an arm holds before it ends: everything it reaches
+       without passing back through the decision or out of the loop the
+       decision is in. Null for an arm that leads back to the decision. */
+    const size = (decision: number, from: number): number | null => {
+        const stops = new Set([...inside].filter(([, body]) => body.has(decision)).map(([loop]) => loop));
+        const seen = new Set<number>();
+        const stack = [from];
+        while (stack.length) {
+            const at = stack.pop();
+            if (at === undefined || stops.has(at) || seen.has(at)) continue;
+            if (at === decision) return null;
+            seen.add(at);
+            stack.push(...targetsOf(wiring, at));
+        }
+        return seen.size;
+    };
+
+    const kept = steps.map(() => false);
+    steps.forEach((step, at) => {
+        if (step.kind !== "DECISION" || join[at] !== null || wiring.rules[at].length === 0) return;
+        const ways = [...new Set([...wiring.rules[at].map((rule) => rule.to), wiring.next[at]])]
+            .filter((to): to is number => to !== undefined);
+        const sized = ways.map((to) => ({ to, steps: size(at, to) ?? 0 })).sort((left, right) => right.steps - left.steps);
+        /* Only a clear winner. Two arms the same size are an either/or, and
+           keeping one would make the other look like the exception. */
+        if (sized.length < 2 || sized[0].steps === 0 || sized[0].steps === sized[1].steps) return;
+        join[at] = sized[0].to;
+        kept[at] = true;
+    });
+
+    return { join, kept };
+}
+
+/** `x == 'a'`, `x == 'b'`, … all on the same `x`: a switch, said once.
+ *
+ *  Only a raw string or a JSON literal counts as the value; a double-quoted
+ *  JMESPath token is an identifier, not a string. The subject may hold `||`
+ *  only inside brackets: comparison binds tighter than `||` and `&&`, so a
+ *  bare one would mean the comparison was only ever half the condition.
+ */
+export function switchOf(conditions: string[]): { on: string; values: string[] } | null {
+    if (conditions.length < 2) return null;
+    const parts = conditions.map((one) => /^\s*(.+?)\s*==\s*('[^']*'|`[^`]*`)\s*$/.exec(one));
+    const on = parts[0]?.[1];
+    if (!on || /==|!=|&&|\|\||[<>]/.test(on.replace(/\([^()]*\)/g, ""))) return null;
+    if (parts.some((one) => !one || one[1] !== on)) return null;
+    return { on, values: parts.map((one) => tidy(one?.[2] ?? "")) };
+}
+
+/** A condition as it should read: JMESPath's backticks round `true`, `null`
+ *  and numbers are syntax nobody reading needs. */
+export function tidy(condition: string): string {
+    return condition.replace(/`(true|false|null|-?\d+(?:\.\d+)?)`/g, "$1");
+}
+
+/** One path, until it ends, reaches where its fork meets again, or reaches
+ *  a step already drawn.
+ *
+ *  `joins` holds the meeting points of every fork this path is inside, the
+ *  innermost last. Reaching the innermost is the arm finishing, and the step
+ *  is drawn once, after the fork. Reaching an outer one skips the rest of the
+ *  inner fork, so that is said. `path` is every step drawn above this point
+ *  on the way here, which is what makes a jump a jump back.
+ */
+function walk(wiring: Wiring, from: number | undefined, joins: number[], loop: number | null, path: number[]): FlowItem[] {
+    const items: FlowItem[] = [];
+    const above = [...path];
+    let at = from;
+    while (at !== undefined) {
+        if (at === joins[joins.length - 1]) return items;
+        if (at === loop) return items.length ? items : [{ type: "end", inLoop: true }];
+        const step = wiring.steps[at];
+        if (wiring.placed.has(at) || joins.includes(at)) {
+            items.push({ type: "jump", to: step, id: step.id, back: above.includes(at) });
+            return items;
+        }
+        wiring.placed.add(at);
+        above.push(at);
+
+        if (step.kind === "DECISION" && wiring.rules[at].length) {
+            const join = wiring.join[at];
+            const inner = join === null ? joins : [...joins, join];
+            /* A kept arm is the rest of this line, so it is walked first: a
+               side trip that reaches into it then points on to it rather
+               than taking its steps away from the main line. */
+            const rest = join !== null && wiring.kept[at] ? walk(wiring, join, joins, loop, above) : null;
+            const switched = switchOf(wiring.rules[at].map((rule) => rule.when));
+            const arms: FlowArm[] = wiring.rules[at].map((rule, one) => ({
+                when: switched ? switched.values[one] : tidy(rule.when),
+                items: rule.to === undefined
+                    ? [{ type: "jump", to: null, id: rule.id, back: false }]
+                    : walk(wiring, rule.to, inner, loop, above),
+            }));
+            const fallThrough = wiring.next[at];
+            arms.push({
+                when: null,
+                items: fallThrough === undefined ? [{ type: "end", inLoop: loop !== null }] : walk(wiring, fallThrough, inner, loop, above),
+            });
+            items.push({ type: "fork", step, arms, then: join === null ? null : wiring.steps[join], on: switched?.on ?? null });
+            if (rest) return [...items, ...rest];
+            if (join === null) return items;
+            at = join;
+            continue;
+        }
+
+        if (step.kind === "LOOP" && wiring.body[at] !== undefined) {
+            items.push({ type: "loop", step, body: walk(wiring, wiring.body[at], [], at, above) });
+        } else {
+            items.push({ type: "step", step });
+        }
+        at = wiring.next[at];
+    }
+    /* The chain ran out inside a fork that has a step after it. Drawn
+       silently it would look like it carried on to that step — unless it
+       ran out on an End, whose own row already says so. */
+    const last = items[items.length - 1];
+    const ended = last?.type === "step" && last.step.kind === "END";
+    if (joins.length && !ended) items.push({ type: "end", inLoop: loop !== null });
+    return items;
+}
+
 /* ── the whole thing ───────────────────────────────────────────────── */
 
 export interface WorkflowShape {
@@ -526,6 +917,10 @@ export interface WorkflowShape {
     start: StartLine;
     ordered: FlowStep[];
     orphans: FlowStep[];
+    /** The same steps as `ordered`, laid out with their branches. */
+    flow: FlowItem[];
+    /** The same steps as `orphans`, one outline per chain nothing reaches. */
+    loose: FlowItem[][];
     trouble: string | null;
     /** What the server says this caller may do to it. */
     may: string[];
@@ -544,7 +939,11 @@ export function readShape(raw: unknown): WorkflowShape | null {
 
     const nodes = Array.isArray(raw.nodes) ? raw.nodes : [];
     const steps = nodes.map(readFlowStep);
-    const { ordered, orphans, trouble } = orderSteps(steps, readEdges(raw.edges), str(raw.entry_node_id));
+    const edges = readEdges(raw.edges);
+    const { ordered, orphans, trouble } = orderSteps(steps, edges, str(raw.entry_node_id));
+    /* The run order always opens on the first step, so the outline starts
+       from the same one rather than deciding it a second time. */
+    const { flow, loose } = outline(steps, edges, ordered.length ? steps.indexOf(ordered[0]) : -1);
 
     return {
         name,
@@ -553,6 +952,8 @@ export function readShape(raw: unknown): WorkflowShape | null {
         start: readStart(raw.start),
         ordered,
         orphans,
+        flow,
+        loose,
         trouble,
         may: Array.isArray(raw.allowed_actions) ? raw.allowed_actions.filter((one): one is string => typeof one === "string") : [],
     };

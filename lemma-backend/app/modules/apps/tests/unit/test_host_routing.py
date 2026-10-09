@@ -80,6 +80,16 @@ async def test_global_public_routes_pass_through_on_app_host():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/public/s/abc123", "/s/abc123"])
+async def test_short_file_links_pass_through_on_app_host(path):
+    """An app showing a shared image by its short link: the new path, and the
+    old one while its alias lives."""
+    scope = await _drive(path)
+    assert scope["path"] == path
+    assert all(key != b"x-app-public-slug" for key, _ in scope["headers"])
+
+
+@pytest.mark.asyncio
 async def test_app_assets_are_rewritten_with_slug():
     scope = await _drive("/assets/app.js")
     assert scope["path"] == "/public/apps/assets/app.js"

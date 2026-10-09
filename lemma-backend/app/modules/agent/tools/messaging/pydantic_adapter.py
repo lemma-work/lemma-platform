@@ -40,6 +40,7 @@ from app.modules.agent_surfaces.contracts.notifications import (
     send_notification,
 )
 from app.core.log.log import get_logger
+from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.pod.contracts import directory as pod_directory
 from app.modules.agent.tools.messaging.models import (
@@ -70,7 +71,7 @@ def _passes_a_question_on(deps: BaseAgentContext) -> bool:
     is to the member who looks after the conversation, passing on something it
     could not answer -- and that answer is what it relays back.
     """
-    return bool(getattr(deps, "answers_outsider", False))
+    return run_audience(deps).answers_outsiders
 
 
 def _instruction_for_reply(
@@ -84,11 +85,11 @@ def _instruction_for_reply(
     reading it. Their answer still comes back without one: it is recorded on the
     notification, and the stranger's conversation relays it.
     """
-    return None if deps.answers_outsider else request.background_instruction
+    return None if deps.audience.answers_outsiders else request.background_instruction
 
 
 def _title_for(deps: BaseAgentContext, request: MessageUserRequest) -> str:
-    if deps.answers_outsider:
+    if deps.audience.answers_outsiders:
         # The inbox label and email subject are the server's, not words a
         # stranger steered.
         return OUTSIDE_QUESTION_TITLE
@@ -167,7 +168,7 @@ async def message_user(
             success=False, error="message_user is only available inside a pod."
         )
 
-    if deps.answers_outsider and deps.keeper_asking:
+    if deps.audience.answers_outsiders and deps.keeper_asking:
         # It would reach the member who wrote the message, as though somebody
         # outside the pod had asked it.
         return MessageUserResponse(
@@ -179,7 +180,7 @@ async def message_user(
             ),
         )
 
-    if deps.answers_outsider:
+    if deps.audience.answers_outsiders:
         # A stranger's run reaches one person, the member who looks after the
         # conversation, whatever `to` says. Nothing is looked up first: a
         # different answer for an address that is in the pod and one that is
@@ -248,7 +249,7 @@ async def message_user(
         # A stranger's run does not choose how the member hears from it.
         channel=(
             request.channel.value
-            if request.channel and not deps.answers_outsider
+            if request.channel and not deps.audience.answers_outsiders
             else None
         ),
         background_instruction=_instruction_for_reply(deps, request),
@@ -352,7 +353,7 @@ async def list_pod_members(
         return ListPodMembersResponse(
             success=False, error="list_pod_members is only available inside a pod."
         )
-    if deps.answers_outsider:
+    if deps.audience.answers_outsiders:
         # The directory is read as the member who looks after this run, and
         # everything in it could be repeated to the stranger asking. Nobody
         # listed there could be messaged from here anyway.

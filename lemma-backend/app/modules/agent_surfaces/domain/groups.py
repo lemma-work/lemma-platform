@@ -38,6 +38,18 @@ from app.core.domain.entity import Entity
 #: user id on any platform: none of them starts with "~".
 OUTSIDERS_LINK_USER = "~outsiders"
 
+#: The link-key prefix of a contact's private chat; the contact's id follows.
+#: Not the platform's sender id, because a contact can write from WhatsApp one
+#: day and email the next, and because it keeps a member's own private chat with
+#: the bot -- keyed by their platform id -- apart from any contact's.
+CONTACT_LINK_USER_PREFIX = "~contact:"
+
+
+def contact_link_user(contact_id: UUID) -> str:
+    """The link key of one contact's private chat."""
+    return f"{CONTACT_LINK_USER_PREFIX}{contact_id}"
+
+
 #: How long the pod keeps what was said in a group. A group's page and the
 #: bot's background read only the recent past, and the people in a group --
 #: some of them strangers -- are told the log exists and how long it lasts.

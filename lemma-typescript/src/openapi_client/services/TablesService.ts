@@ -4,13 +4,37 @@
 /* eslint-disable */
 import type { AddColumnRequest } from '../models/AddColumnRequest.js';
 import type { CreateTableRequest } from '../models/CreateTableRequest.js';
+import type { OpenTableRequest } from '../models/OpenTableRequest.js';
+import type { OpenTablesResponse } from '../models/OpenTablesResponse.js';
 import type { TableDetailResponse } from '../models/TableDetailResponse.js';
 import type { TableListResponse } from '../models/TableListResponse.js';
+import type { TableOpeningResponse } from '../models/TableOpeningResponse.js';
 import type { UpdateTableRequest } from '../models/UpdateTableRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class TablesService {
+    /**
+     * Tables Open To People Outside
+     * The open tables of the pod that the caller can read.
+     * @param podId
+     * @returns OpenTablesResponse Successful Response
+     * @throws ApiError
+     */
+    public static tablePublicRowsList(
+        podId: string,
+    ): CancelablePromise<OpenTablesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/datastore/public-rows',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
     /**
      * List Tables
      * List tables in a datastore.
@@ -191,6 +215,80 @@ export class TablesService {
                 'table_name': tableName,
                 'column_name': columnName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Stop People Outside Adding Rows
+     * @param podId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    public static tablePublicRowsClose(
+        podId: string,
+        tableName: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/datastore/tables/{table_name}/public-rows',
+            path: {
+                'pod_id': podId,
+                'table_name': tableName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Who Outside May Add Rows
+     * @param podId
+     * @param tableName
+     * @returns TableOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    public static tablePublicRowsGet(
+        podId: string,
+        tableName: string,
+    ): CancelablePromise<TableOpeningResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/datastore/tables/{table_name}/public-rows',
+            path: {
+                'pod_id': podId,
+                'table_name': tableName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Let People Outside Add Rows
+     * Open the table to rows from people outside the pod -- confirmed contacts, or anyone -- for the chosen columns only. Rows are added as the member opening it, who must be able to change the table.
+     * @param podId
+     * @param tableName
+     * @param requestBody
+     * @returns TableOpeningResponse Successful Response
+     * @throws ApiError
+     */
+    public static tablePublicRowsOpen(
+        podId: string,
+        tableName: string,
+        requestBody: OpenTableRequest,
+    ): CancelablePromise<TableOpeningResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/datastore/tables/{table_name}/public-rows',
+            path: {
+                'pod_id': podId,
+                'table_name': tableName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

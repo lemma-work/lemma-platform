@@ -624,9 +624,13 @@ async def test_execute_operation_keeps_the_status_an_executor_reported():
         # the several things a 404 might mean actually happened.
         "upstream_message": "GitHub said: Not Found for /repos/acme/crm",
     }
-    # The top-level message stays fixed and ours; the provider's words travel in
-    # the details, where they are scrubbed of anything secret-shaped.
-    assert "acme/crm" not in str(exc_info.value)
+    # The message opens with our sentence and quotes the provider from the
+    # scrubbed details: the agent's connector tool shows the model `str(exc)`
+    # and nothing else, so a reason kept only in the details never reached it.
+    assert str(exc_info.value) == (
+        "Connector operation was not found by the provider. "
+        "The provider said: GitHub said: Not Found for /repos/acme/crm"
+    )
 
 
 class _BinaryResult(BaseModel):

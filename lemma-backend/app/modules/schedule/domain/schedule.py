@@ -254,6 +254,11 @@ class ScheduleEntity(Entity):
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
 
+    # DATASTORE only. A row added from outside the pod -- an open table's form
+    # -- is a stranger's words, and by default it starts nothing; a schedule
+    # that should react to it says so, and its run is told the row is untrusted.
+    include_outside_rows: bool = False
+
     visibility: str = "POD"
     is_active: bool = True
     is_internal: bool = (
@@ -330,6 +335,7 @@ class ScheduleCreateEntity(BaseModel):
     filter_output_schema: dict[str, Any] | None = None
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
+    include_outside_rows: bool = False
     # None means "caller did not specify": DATASTORE and GLOBAL-workflow
     # schedules default to POD; other schedules default to PERSONAL.
     visibility: str | None = None
@@ -354,5 +360,6 @@ class ScheduleUpdateEntity(BaseModel):
     instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
+    include_outside_rows: bool | None = None
     is_active: bool | None = None
     visibility: str | None = None

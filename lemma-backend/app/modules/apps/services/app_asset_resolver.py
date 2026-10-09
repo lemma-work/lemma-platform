@@ -30,8 +30,12 @@ from app.modules.apps.domain.entities import (
 )
 from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.ports import AppRepositoryPort
-from app.modules.apps.services import app_install_assets
-from app.modules.apps.services.app_storage_phase import _AssetReadInputs
+from app.modules.apps.services import app_cover, app_install_assets
+from app.modules.apps.services.app_cover import AppCoverSpec
+from app.modules.apps.services.app_storage_phase import (
+    _AssetReadInputs,
+    guess_media_type,
+)
 from app.modules.apps.config import apps_settings
 
 logger = structlog.get_logger()
@@ -264,7 +268,16 @@ class AppAssetResolver:
             public_url=public_url,
             is_entrypoint=is_entrypoint,
         )
-        if is_entrypoint:
+        cover = (
+            self._cover_spec(app, public_url)
+            if normalized_asset_path == app_cover.COVER_ASSET_PATH
+            else None
+        )
+        if cover is not None:
+            # The build's cover or the drawn one, decided only when storage is
+            # read -- so the tag covers both, and a rename redraws.
+            etag = f"{release.version}.{app_cover.cover_etag(cover)}"
+        elif is_entrypoint:
             config_token = runtime_config.runtime_config_token(
                 app.pod_id,
                 app=app_identity,
@@ -279,9 +292,14 @@ class AppAssetResolver:
         quoted_etag = self._quote_etag(etag)
         if self._etag_matches(etag, request_etag):
             return AppAssetDocument(
+                # A 304's headers replace the cached copy's, so it needs the
+                # page's type to keep an HTML page revalidating.
+                media_type=guess_media_type(normalized_asset_path),
                 etag=quoted_etag,
                 not_modified=True,
-                is_entrypoint=is_entrypoint,
+                # A cover's address never changes while its picture does, so it
+                # takes the entrypoint's revalidating cache policy.
+                is_entrypoint=is_entrypoint or cover is not None,
                 private=private,
             )
 
@@ -294,6 +312,15 @@ class AppAssetResolver:
             app=app_identity,
             branding=branding,
             private=private,
+            cover=cover,
+        )
+
+    def _cover_spec(self, app: AppEntity, public_url: str | None) -> AppCoverSpec:
+        return AppCoverSpec(
+            name=app.name or "",
+            description=app.description,
+            slug=app.public_slug or "",
+            label=urlparse(public_url or self.public_url(app)).netloc,
         )
 
 

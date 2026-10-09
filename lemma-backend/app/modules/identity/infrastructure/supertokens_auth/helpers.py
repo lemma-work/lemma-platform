@@ -70,34 +70,21 @@ async def get_user_token(
     user_id: UUID,
     delegation_claims: dict | None = None,
 ) -> str:
-    # we use the email password recipe here, but you can use the recipe you use
-    await _assert_local_user_can_authenticate(user_id)
-    user = await supertokens_get_user(str(user_id))
-
-    if user is None:
-        raise ValueError(f"User {user_id} not found")
-
-    payload: dict = {"isImpersonation": True}
-    if delegation_claims:
-        payload.update(validate_delegation_claims_payload(delegation_claims))
-        payload.setdefault(CLAIM_DELEGATION_VERSION, DELEGATION_VERSION)
-
-    session = await create_new_session_without_request_response(
-        "public",
-        user.login_methods[0].recipe_user_id,
-        payload,
-    )
-    return session.access_token
+    issued = await get_user_token_with_expiry(user_id, delegation_claims)
+    return issued.value
 
 
 async def get_user_token_with_expiry(
     user_id: UUID,
     delegation_claims: dict | None = None,
 ) -> IssuedUserToken:
-    """Mint an access token and retain the issuer's real expiry.
+    """Mint an access token and the time the issuer stops accepting it.
 
-    SuperTokens reports session expiry as epoch milliseconds. Callers that keep
-    a token for deferred work must use this value rather than a local cache TTL.
+    The expiry is the access token's own ``exp`` claim. ``session.get_expiry()``
+    reads like the same thing and is not: it is the *session's* expiry, which
+    lasts as long as the refresh token -- months by default, against the access
+    token's hour -- and a caller that kept the token until then would spend it
+    long after the gateway had started refusing it.
     """
 
     await _assert_local_user_can_authenticate(user_id)
@@ -115,10 +102,45 @@ async def get_user_token_with_expiry(
         user.login_methods[0].recipe_user_id,
         payload,
     )
-    expires_at_ms = await session.get_expiry()
+    expires_at = session.get_access_token_payload()["exp"]
     return IssuedUserToken(
         value=session.access_token,
-        expires_at=datetime.fromtimestamp(expires_at_ms / 1000, tz=timezone.utc),
+        expires_at=datetime.fromtimestamp(expires_at, tz=timezone.utc),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class IssuedDelegatedSession:
+    value: str
+    expires_at: datetime
+    """The access token's own ``exp``, not the session's."""
+    session_handle: str
+
+
+async def create_delegated_session(
+    user_id: UUID, delegation_claims: dict[str, object]
+) -> IssuedDelegatedSession:
+    """A new session carrying ``delegation_claims``, with what a holder of it
+    needs: the access token, when that token stops working, and the session's
+    handle, which other credentials can be bound to so they die with it."""
+    await _assert_local_user_can_authenticate(user_id)
+    user = await supertokens_get_user(str(user_id))
+    if user is None:
+        raise ValueError(f"User {user_id} not found")
+    payload: dict[str, object] = {"isImpersonation": True}
+    payload.update(validate_delegation_claims_payload(delegation_claims))
+    payload.setdefault(CLAIM_DELEGATION_VERSION, DELEGATION_VERSION)
+    session = await create_new_session_without_request_response(
+        "public",
+        user.login_methods[0].recipe_user_id,
+        payload,
+    )
+    return IssuedDelegatedSession(
+        value=session.access_token,
+        expires_at=datetime.fromtimestamp(
+            _access_token_expires_at_ms(session) / 1000, tz=timezone.utc
+        ),
+        session_handle=session.get_handle(),
     )
 
 

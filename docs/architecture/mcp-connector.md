@@ -49,7 +49,9 @@ ChatGPT, VS Code and others render them; ChatGPT also reads its older
 [client support](https://modelcontextprotocol.io/extensions/client-matrix),
 [MCP Apps in ChatGPT](https://developers.openai.com/apps-sdk/mcp-apps-in-chatgpt).
 
-None ships yet; see [not built yet](#not-built-yet).
+Record listings and query results render as a table (`ui://lemma/table`); what
+it does, how it was verified, and what comes next are in
+[A pod as a plugin](mcp-plugin.md).
 
 ## Decisions
 
@@ -323,17 +325,9 @@ draft with no SEP, so it is kept to `app/mcp_events.py` (the wire) and
 
 ## Not built yet
 
-- **MCP Apps.** A table view for `pod_get_records` and `pod_query` results is
-  the obvious first one: a static `ui://lemma/table` resource, linked from both
-  tools' `_meta.ui.resourceUri`, rendering the structured result the host
-  forwards. It is left out of this change because it needs a real host to
-  verify against, and a claude.ai connector needs a publicly reachable API.
-- **A Claude Code plugin.** A `lemma` plugin could carry the Lemma skills and
-  an `.mcp.json` whose URL is a `userConfig` value (`${user_config.pod_url}`),
-  distributed through a marketplace in a public repository
-  (`/plugin marketplace add <owner>/<repo>`). `lemma skills install --target
-  claude` already installs the skills; the plugin would add the connector
-  beside them and make both one install.
+- **More MCP Apps views, a Claude Code plugin, directory listings.** Planned,
+  in order, in [A pod as a plugin](mcp-plugin.md#what-comes-next-in-order),
+  including what one URL per pod means for a directory listing.
 - **A scenario journey.** The product-spec entries are PS-ACCESS-040 and
   PS-ACCESS-041. The module e2e test drives the whole exchange in-process; the
   `tests/scenarios/` journey over a real socket has not been built yet.

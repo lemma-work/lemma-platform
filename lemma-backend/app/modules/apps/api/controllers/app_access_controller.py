@@ -36,6 +36,10 @@ router = APIRouter(tags=["Apps"], redirect_slashes=False)
 
 class AppAccessRedeemRequest(BaseModel):
     ticket: str = Field(min_length=1, max_length=2048)
+    embedded: bool = False
+    """Redeemed by an app framed inside an AI tool (see
+    ``contracts/embedded_access.py``), for a ticket minted from that tool's
+    connection and for no other."""
 
 
 @router.post(
@@ -106,7 +110,9 @@ async def redeem_app_access(request: Request, data: AppAccessRedeemRequest) -> R
         if host is not None and request.headers.get("origin") == host.origin
         else None
     )
-    if claims is None:
+    # A connection's ticket only opens a framed app, and a framed app only
+    # takes a connection's ticket: the two cookies are not interchangeable.
+    if claims is None or data.embedded != (claims.grant_id is not None):
         return private_error(AppAccessInvalidError())
     cookie = replace(claims, expires_at=int(time.time()) + COOKIE_TTL_SECONDS)
     response = JSONResponse(
@@ -118,7 +124,11 @@ async def redeem_app_access(request: Request, data: AppAccessRedeemRequest) -> R
         max_age=COOKIE_TTL_SECONDS,
         secure=True,
         httponly=True,
-        samesite="lax",
+        # Framed in another site's page, a Lax cookie is never sent. None is,
+        # and Partitioned keeps it to that one embedding: the same app opened
+        # anywhere else does not see it.
+        samesite="none" if data.embedded else "lax",
+        partitioned=data.embedded,
         path="/",
     )
     return response

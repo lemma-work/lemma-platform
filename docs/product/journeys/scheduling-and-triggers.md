@@ -92,8 +92,14 @@ about it when it eventually cannot.
   triggering the work and shall skip the trigger when it does not hold.
 - The system shall record a skipped trigger as skipped, distinctly from one that
   never arrived and one that failed, so a person can tell the three apart.
+- When the condition is a judgement about the event rather than a rule, the
+  system shall keep the answer that decided a skip, so a person can see why.
+- The system shall let a person see a schedule's history with or without its
+  skipped triggers.
 - If evaluating the condition fails, then the system shall treat the trigger as
-  failed rather than silently skipping it.
+  failed rather than silently skipping it, and shall not start the work.
+- If a time schedule is given a condition, then the system shall refuse it,
+  because no event would ever reach it to be judged.
 
 **Contracts:** `schedule.create`, `schedule.run.list`
 

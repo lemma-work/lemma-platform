@@ -49,6 +49,7 @@ from app.modules.agent.domain.surface_prompts import is_group_conversation
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.domain.entities import Agent
+from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.prompts import (
     load_connectors_prompt,
@@ -284,7 +285,7 @@ async def _build_lemma_harness_tooling(
     core, extra = _partition_core_extra(
         full_toolsets,
         is_pod_default=ctx.is_pod_default_agent,
-        answers_outsider=bool(getattr(ctx, "answers_outsider", False)),
+        answers_outsider=run_audience(ctx).answers_outsiders,
     )
 
     # The todo toolset (if the agent has TODO) already arrives in `full_toolsets`
@@ -314,12 +315,13 @@ async def _build_lemma_harness_tooling(
     # conversation, so it rides in the cached prefix alongside the other
     # instruction-bearing capabilities.
     surface_platform = getattr(ctx, "surface_platform", None)
-    answers_outsider = bool(getattr(ctx, "answers_outsider", False))
+    audience = run_audience(ctx)
+    answers_outsider = audience.answers_outsiders
     if surface_platform and platform_is_known(surface_platform):
         capabilities.append(
             SurfacePlatformCapability(
                 str(surface_platform),
-                answers_outsider=answers_outsider,
+                audience=audience,
                 in_group=is_group_conversation(ctx),
             )
         )

@@ -14,8 +14,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = pytest.mark.e2e
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0043_surface_groups"
-REVISION = "0044_mcp_event_subscriptions"
+BEFORE = "0046_decisions_adoption"
+REVISION = "0047_mcp_event_subscriptions"
 TABLES = ("mcp_event_subscriptions",)
 
 

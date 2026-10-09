@@ -29,6 +29,7 @@ Everything named `lemma-*` is a product skill and installs by default.
 | [lemma-app-design](lemma-app-design/SKILL.md) | Designing and visually refining a pod app into something production-quality |
 | [lemma-app-qa](lemma-app-qa/SKILL.md) | Testing a pod app through real end-to-end journeys, authenticated, local or deployed |
 | [lemma-widget](lemma-widget/SKILL.md) | Building lightweight inline widgets for conversations |
+| [lemma-form](lemma-form/SKILL.md) | Collecting responses from people outside the pod: opening a table to outside rows and giving it a page, with the pod's chat beside it |
 | [lemma-artifact-author](lemma-artifact-author/SKILL.md) | Producing durable deliverables — Markdown, HTML, DOCX, PDF, XLSX, PPTX |
 | [lemma-data-analysis](lemma-data-analysis/SKILL.md) | Analyzing pod data: schemas, quality, KPIs, read-only queries |
 | [lemma-research](lemma-research/SKILL.md) | Source-backed investigations inside a pod |

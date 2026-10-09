@@ -66,6 +66,14 @@ class StubSchedulePort:
         return run_id
 
 
+class StubDecisionPort:
+    def __init__(self):
+        self.asked: list[str] = []
+
+    def ask_once_committed(self, external_ref: str) -> None:
+        self.asked.append(external_ref)
+
+
 def _flow(nodes, edges) -> WorkflowEntity:
     flow = WorkflowEntity(
         id=uuid4(),
@@ -87,11 +95,14 @@ def _run(flow: WorkflowEntity) -> WorkflowRunEntity:
     )
 
 
-def _stepper(function_results=None, agent=None, function=None) -> RunStepper:
+def _stepper(
+    function_results=None, agent=None, function=None, decision=None
+) -> RunStepper:
     return RunStepper(
         agent=agent or StubAgentPort(),
         function=function or StubFunctionPort(function_results),
         schedule=StubSchedulePort(),
+        decision=decision or StubDecisionPort(),
     )
 
 

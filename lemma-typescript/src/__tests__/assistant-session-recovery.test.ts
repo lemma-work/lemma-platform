@@ -294,3 +294,141 @@ describe("assistant session stream recovery", () => {
     expect(resumeStream).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("resuming after a queued approval", () => {
+  // What the transcript holds once the worker has run the approved tool and
+  // the follow-on run has answered.
+  const toolReturn = {
+    id: "msg-return",
+    role: "tool",
+    kind: "tool_return",
+    tool_call_id: "call-approve",
+    created_at: "2026-10-07T00:00:01.000Z",
+  };
+  const answer = {
+    id: "msg-answer",
+    role: "assistant",
+    kind: "text",
+    text: "Done.",
+    created_at: "2026-10-07T00:00:02.000Z",
+  };
+  const paused = { id: "conv-1", pod_id: "pod-1", status: "WAITING", last_run_finished_at: "2026-10-07T00:00:00.000Z" };
+
+  /** A session that has read the conversation paused on an approval, against
+   *  a server whose later reads are `reads`, in order, the last repeating. */
+  async function pausedSession(reads: Record<string, unknown>[]) {
+    const answers = [paused, ...reads];
+    let call = 0;
+    const get = vi.fn(async () => answers[Math.min(call++, answers.length - 1)]);
+    const messagesList = vi.fn(async () => ({ items: [toolReturn, answer], limit: 100, next_page_token: null }));
+    const resumeStream = vi.fn(async () => completedStream("run-2"));
+    const client = {
+      podId: "pod-1",
+      withPod() {
+        return this;
+      },
+      conversations: {
+        get,
+        list: async () => ({ items: [], limit: 20, next_page_token: null }),
+        messages: { list: messagesList },
+        resumeStream,
+      },
+    } as unknown as LemmaClient;
+    const session = captureHookResult<UseAssistantSessionResult>();
+
+    function Harness() {
+      session.set(useAssistantSession({ client, podId: "pod-1", conversationId: "conv-1", autoLoad: false }));
+      return null;
+    }
+
+    await render(createElement(Harness));
+    await act(async () => {
+      await session.get().refreshConversation("conv-1");
+    });
+    expect(session.get().status).toBe("WAITING");
+
+    let result: boolean | undefined;
+    await act(async () => {
+      void session.get()
+        .resumeIfRunning("conv-1", { expectRun: "queued", force: true })
+        .then((value) => { result = value; });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    return {
+      session,
+      get,
+      messagesList,
+      resumeStream,
+      result: () => result,
+      advance: (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); }),
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads the transcript as soon as a read shows the run already finished", async () => {
+    // The approved tool and the whole follow-on run fit between two reads, so
+    // no read ever says RUNNING. Waiting for one left the card on "Approval
+    // sent." for the rest of the ladder -- two minutes -- over an answer the
+    // server had already written.
+    vi.useFakeTimers();
+    const harness = await pausedSession([
+      paused,
+      { ...paused, status: "COMPLETED", last_run_finished_at: "2026-10-07T00:00:02.000Z" },
+    ]);
+    expect(harness.messagesList).not.toHaveBeenCalled();
+
+    await harness.advance(400);
+
+    expect(harness.result()).toBe(false);
+    expect(harness.get).toHaveBeenCalledTimes(3);
+    expect(harness.messagesList).toHaveBeenCalledOnce();
+    expect(harness.resumeStream).not.toHaveBeenCalled();
+    expect(harness.session.get().messages).toEqual([toolReturn, answer]);
+    expect(harness.session.get().status).toBe("COMPLETED");
+
+    // And it stops asking: nothing is left to wait for.
+    await harness.advance(120_000);
+    expect(harness.get).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads it when the follow-on run paused again on another request", async () => {
+    // WAITING before and WAITING after: only the finish time says a run came
+    // and went in between.
+    vi.useFakeTimers();
+    const harness = await pausedSession([
+      paused,
+      { ...paused, last_run_finished_at: "2026-10-07T00:00:02.000Z" },
+    ]);
+
+    await harness.advance(400);
+
+    expect(harness.result()).toBe(false);
+    expect(harness.messagesList).toHaveBeenCalledOnce();
+    expect(harness.resumeStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps waiting while the approved tool is still running, then attaches", async () => {
+    // The pause holding is not the run having happened: reading the
+    // transcript then would find nothing new and give up on the run to come.
+    vi.useFakeTimers();
+    const harness = await pausedSession([
+      paused,
+      paused,
+      { ...paused, status: "RUNNING", last_run_finished_at: null },
+    ]);
+
+    await harness.advance(400);
+    expect(harness.result()).toBeUndefined();
+    expect(harness.messagesList).not.toHaveBeenCalled();
+
+    await harness.advance(900);
+
+    expect(harness.result()).toBe(true);
+    expect(harness.resumeStream).toHaveBeenCalledOnce();
+    // Once, to catch up on the tool return published before anyone listened.
+    expect(harness.messagesList).toHaveBeenCalledOnce();
+  });
+});

@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     ConversationType,
@@ -320,7 +321,7 @@ async def test_a_strangers_turn_runs_in_the_members_conversation_for_outsiders()
     assert binder.seen["for_outsiders"] is True
     assert binder.seen["resolved_user"].internal_user_id == OWNER
     assert binder.seen["resolved_user"].external_user_id == OUTSIDERS_LINK_USER
-    assert context.answers_outsider is True
+    assert context.audience.answers_outsiders is True
     assert context.user_id == OWNER
     # Who actually asked goes on the message, for whoever reads the thread.
     assert context.message_metadata.sender_display_name == "Tom"
@@ -356,7 +357,7 @@ def _outsider_context() -> SurfaceChatContext:
         message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
         message_user_id=OWNER,
         event=_event(),
-        answers_outsider=True,
+        audience=Audience.outsiders(),
     )
 
 
@@ -366,8 +367,19 @@ def test_a_stranger_typing_approve_resolves_nothing():
     call would then run with the member's authority."""
     assert may_answer_a_pause(_outsider_context()) is False
     assert may_answer_a_pause(
-        _outsider_context().model_copy(update={"answers_outsider": False})
+        _outsider_context().model_copy(update={"audience": Audience.member()})
     )
+
+
+def test_a_strangers_turn_queued_before_the_audience_existed_stays_theirs():
+    payload = _outsider_context().model_dump(mode="json")
+    del payload["audience"]
+
+    queued = SurfaceChatContext.model_validate({**payload, "answers_outsider": True})
+
+    assert queued.audience == Audience.outsiders()
+    assert may_answer_a_pause(queued) is False
+    assert SurfaceChatContext.model_validate(payload).audience == Audience.member()
 
 
 # ---------------------------------------------------------- whom it answered

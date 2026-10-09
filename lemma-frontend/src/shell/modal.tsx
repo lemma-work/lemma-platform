@@ -10,16 +10,19 @@ import { CloseIcon } from "@/ui/icons";
  *  keypress closed both. Only the innermost answers the keyboard now. */
 const open: symbol[] = [];
 
-export function Modal({ title, subtitle, mark, narrow, wide, flush, onClose, children }: {
+export function Modal({ title, subtitle, mark, narrow, wide, flush, sticky, onClose, children }: {
     title: string; subtitle?: string;
     /** What the dialog is about, drawn before its title — a channel's mark. */
     mark?: ReactNode;
     narrow?: boolean; wide?: boolean; flush?: boolean;
+    /** Closed only by a button inside it: no Escape, no click outside, no ✕.
+     *  For something shown once, like a secret, that a stray click would lose. */
+    sticky?: boolean;
     onClose: () => void; children: ReactNode;
 }) {
     const panel = useRef<HTMLDivElement>(null);
     const close = useRef(onClose);
-    close.current = onClose;
+    close.current = sticky ? () => {} : onClose;
     const titleId = useId();
     useEffect(() => {
         const me = Symbol("modal");
@@ -46,13 +49,13 @@ export function Modal({ title, subtitle, mark, narrow, wide, flush, onClose, chi
             if (previous?.isConnected) previous.focus();
         };
     }, []);
-    return createPortal(<div className="modal" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    return createPortal(<div className="modal" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) close.current(); }}>
         <div className={`modal__panel${narrow ? " modal__panel--narrow" : ""}${wide ? " modal__panel--wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} ref={panel}>
             <header className="modal__head">
                 {mark
                     ? <div className="modal__titled"><span className="modal__mark" aria-hidden="true">{mark}</span><div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div></div>
                     : <div><h2 id={titleId}>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>}
-                <button className="modal__close" onClick={onClose} aria-label="Close"><CloseIcon size={20} /></button>
+                {!sticky && <button className="modal__close" onClick={onClose} aria-label="Close"><CloseIcon size={20} /></button>}
             </header>
             <div className={`modal__body${flush ? " modal__body--flush" : ""}`}>{children}</div>
         </div>

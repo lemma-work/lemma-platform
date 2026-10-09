@@ -5,7 +5,7 @@ import type { Pod } from "@/data";
 import { useMe } from "@/session/use-me";
 import { isForbidden } from "@/session/auth-state";
 import { boardOf, sayHeldBy, type BoardCard, type BoardColumn } from "@/workflow/board";
-import { sayFor, sayWhen } from "@/workflow/runs";
+import { millisOf, sayFor, sayWhen } from "@/workflow/runs";
 import type { WorkflowShape } from "@/workflow/shape";
 import { useMyWaits, useRunsInFlight } from "@/workflow/use-run";
 import { humanizeName } from "@/schedule/schedules";
@@ -54,11 +54,13 @@ export function RunBoard({ pod, workflowId, shape, onOpenRun, name }: {
        then jump into place; waiting a moment longer is the calmer of the two. */
     if (!runs.isSuccess || !shape || !workflowId || board.count === 0) return null;
 
+    /* "Started by", never "From": a card titled "From you" on a board that
+       also says "Waiting on you" reads as one more thing for you to do. */
     const starter = (card: BoardCard) => {
         const { run } = card;
         if (run.startType && HOW[run.startType]) return HOW[run.startType];
-        if (run.userId && run.userId === me) return "From you";
-        return "From " + (pod.members.find((member) => member.userId === run.userId)?.name ?? "someone here");
+        if (run.userId && run.userId === me) return "Started by you";
+        return "Started by " + (pod.members.find((member) => member.userId === run.userId)?.name ?? "someone here");
     };
     /* The person a form is assigned to, by membership id — what a wait names.
        Only a form waits on a person; any other wait says what it is on. */
@@ -127,9 +129,9 @@ function Lane({ column, starter, heldBy, onOpen }: {
  *  wait carries its own time — and when it started otherwise, said as such,
  *  so a run's age is never passed off as time spent at the step. */
 function sayAge(card: BoardCard): string {
-    if (card.here && card.since) {
-        const at = Date.parse(card.since);
-        const said = Number.isNaN(at) ? null : sayFor(Date.now() - at);
+    const at = millisOf(card.since);
+    if (card.here && at !== null) {
+        const said = sayFor(Date.now() - at);
         if (said) return said + " here";
     }
     return "started " + (sayWhen(card.since) ?? "—");

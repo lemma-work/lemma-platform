@@ -144,6 +144,9 @@ class FunctionResponse(BaseModel):
     type: FunctionType
     status: FunctionStatus
     visibility: str = "POD"
+    contacts_invoke: bool = Field(
+        default=False, description="Callable from a contact's conversation."
+    )
     code_path: str | None = None
     revision_hash: str | None = None
     code: str | None = (
@@ -183,6 +186,9 @@ class FunctionSummaryResponse(BaseModel):
     type: FunctionType
     status: FunctionStatus
     visibility: str = "POD"
+    contacts_invoke: bool = Field(
+        default=False, description="Callable from a contact's conversation."
+    )
     code_path: str | None = None
     revision_hash: str | None = None
     created_at: datetime | None
@@ -257,7 +263,18 @@ class FunctionRunResponse(BaseModel):
     id: UUID
     function_id: UUID
     revision_hash: str | None = None
-    user_id: UUID
+    user_id: UUID | None = None
+    contact_id: UUID | None = None
+    # Optional in the schema, though the server always sends it: an SDK built
+    # from this spec must still read runs from a server that predates it.
+    actor: str | None = Field(
+        default=None,
+        description=(
+            "Who the run acted for: `user:{id}` for a member, `contact:{id}` "
+            "for a contact's call (which runs as the function itself, with no "
+            "member), or `anonymous`."
+        ),
+    )
     input_data: JsonObject | None = None
     output_data: JsonObject | None = None
     status: FunctionRunStatus
@@ -277,7 +294,18 @@ class FunctionRunSummaryResponse(BaseModel):
 
     id: UUID
     function_id: UUID
-    user_id: UUID
+    user_id: UUID | None = None
+    contact_id: UUID | None = None
+    # Optional in the schema, though the server always sends it: an SDK built
+    # from this spec must still read runs from a server that predates it.
+    actor: str | None = Field(
+        default=None,
+        description=(
+            "Who the run acted for: `user:{id}` for a member, `contact:{id}` "
+            "for a contact's call (which runs as the function itself, with no "
+            "member), or `anonymous`."
+        ),
+    )
     status: FunctionRunStatus
     started_at: datetime | None
     completed_at: datetime | None
@@ -298,3 +326,17 @@ class FunctionMessageResponse(BaseModel):
     """Simple function action response."""
 
     message: str
+
+
+class FunctionContactAccessRequest(BaseModel):
+    """Open a function to contacts, or close it."""
+
+    contacts_invoke: bool = Field(
+        description=(
+            "Let a contact's conversation call this function. It runs as the "
+            "function itself, with no member behind it: its own grants, its own "
+            "pod, and only the asking contact's rows of contact-owned tables. "
+            "The platform puts the contact's `contact_id` in its input, so the "
+            "input schema must declare `contact_id`."
+        )
+    )

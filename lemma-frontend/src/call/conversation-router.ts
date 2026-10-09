@@ -2,7 +2,8 @@ import { readSSE, parseSSEJson, parseAssistantStreamEvent, upsertConversationMes
 import { buildTurns } from "@/thread/turns";
 import { resourceLabel } from "@/thread/display-resource";
 import { NEW_CONVERSATION } from "@/data/types";
-import { classifyCall, type ConversationSnapshot, type RouterState, type VoiceEvent } from "./routing";
+import type { Classify, ConversationSnapshot, RouteDecision, RouterState, VoiceEvent } from "./routing";
+import { classifyCall, RoutingRequestError } from "./decision-router";
 import { newId } from "./ids";
 
 export const running = (status: string) => ["RUNNING", "IN_PROGRESS", "PROCESSING", "STOP_REQUESTED"].includes(status.toUpperCase());
@@ -59,8 +60,9 @@ export class ConversationRouter {
     private client: LemmaClient;
     private podId: string;
     private changed: () => void;
-    private classify: typeof classifyCall;
-    constructor(client: LemmaClient, podId: string, changed: () => void, classify = classifyCall) {
+    private classify: Classify;
+    constructor(client: LemmaClient, podId: string, changed: () => void,
+        classify: Classify = (state, signal) => classifyCall(client, podId, state, signal)) {
         this.client = client; this.podId = podId; this.changed = changed; this.classify = classify;
     }
     subscribe = (listener: (event: VoiceEvent) => void) => {
@@ -78,20 +80,11 @@ export class ConversationRouter {
         for (const listener of this.listeners) listener(event);
     }
     private state(utterance: string, event?: VoiceEvent): RouterState {
-        // A generous but bounded context. Keep every candidate's identity and
-        // newest messages, then distribute the remaining text budget fairly.
-        const all = [...this.snapshots.values()];
-        const perConversation = Math.floor(300000 / Math.max(1, all.length));
-        return { mode: event ? "event" : "utterance", utterance, transcript: this.transcript.slice(-90000), podContext: this.podContext,
-            focusedConversationId: this.focusedId, recentEvents: this.recentEvents, conversations: all.map(s => {
-                let remaining = perConversation;
-                const messages = [...s.messages].reverse().flatMap(m => {
-                    if (remaining <= 0) return [];
-                    const text = m.text.slice(0, remaining); remaining -= text.length;
-                    return [{ ...m, text }];
-                }).reverse();
-                return { ...s, messages };
-            }), ...(event ? { event } : {}) };
+        // Everything the call knows. What fits a decision is chosen where the
+        // request is made (`evidenceFor`), against the API's byte limit.
+        return { mode: event ? "event" : "utterance", utterance, transcript: this.transcript, podContext: this.podContext,
+            focusedConversationId: this.focusedId, recentEvents: this.recentEvents, conversations: [...this.snapshots.values()],
+            ...(event ? { event } : {}) };
     }
     async open(selectedId: string | null) {
         if (this.active) return this.focusedId;
@@ -142,7 +135,22 @@ export class ConversationRouter {
         const task = this.serial.catch(() => {}).then(async () => {
             if (epoch !== this.epoch || !this.active) return;
             this.transcript = transcript;
-            const decision = await this.classify(this.state(text), this.controller.signal);
+            let decision: RouteDecision;
+            try { decision = await this.classify(this.state(text), this.controller.signal); }
+            catch (error) {
+                // No route (provider down, rate limited, offline, too slow):
+                // the voice carries on, quietly told nothing was sent, so it
+                // neither claims work started nor interrupts every utterance.
+                // A request this code could not build is a fault here, not an
+                // outage, and is said as one.
+                if (epoch !== this.epoch || !this.active) return;
+                const fault = error instanceof RoutingRequestError;
+                if (fault) console.error("Could not build the call's routing request.", error);
+                const why = fault ? "Routing failed for this" : "Routing is unavailable right now";
+                this.emit({ id, kind: "failed", conversationId: null, speak: false,
+                    text: `${why}: nothing was sent for this, and no result will come back from it. Do not claim it was sent. User said: ${text}` });
+                return;
+            }
             if (epoch !== this.epoch || !this.active) return;
             if (decision.action === "voice") return;
             if (decision.action === "clarify") {

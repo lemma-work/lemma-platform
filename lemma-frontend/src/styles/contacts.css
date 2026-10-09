@@ -1,0 +1,385 @@
+/* A space's contacts: the people its bots answer who are not in it, the chats
+   and forms it puts on websites, and what contacts can reach.
+
+   Colour only from tokens, weight never past 500. */
+
+.contacts {
+    max-width: 960px;
+}
+.contacts__head {
+    margin-bottom: 26px;
+}
+.contacts__head h1 {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+.contacts__head p {
+    max-width: 640px;
+    margin: 6px 0 0;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.contacts__section {
+    margin-bottom: 34px;
+}
+.contacts__section h2 {
+    margin: 0 0 12px;
+    font-size: 18px;
+    font-weight: 500;
+}
+.contacts__section h3 {
+    margin: 0 0 8px;
+    font-size: 15px;
+    font-weight: 500;
+}
+.contacts__sectionhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.contacts__sectionhead h2 {
+    margin: 0;
+}
+.contacts__quiet {
+    max-width: 640px;
+    margin: 0 0 12px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.contacts__trouble {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.contacts__trouble p {
+    margin: 0;
+}
+
+/* ── people ─────────────────────────────────────────────────────────── */
+.crows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+}
+.crow {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 12px;
+    border-bottom: 1px solid var(--line);
+    transition: background-color 120ms ease;
+}
+.crow:hover {
+    background: var(--wash-b);
+}
+.crow__open {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.crow__open::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+}
+.crow__open:focus-visible {
+    outline: none;
+}
+.crow:has(.crow__open:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: var(--r-sm);
+}
+.crow__name {
+    font-size: 15px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.crow__sub,
+.crow__when {
+    font-size: 13px;
+    color: var(--ink-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ── one contact ────────────────────────────────────────────────────── */
+.csheet {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.csheet fieldset {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+.csheet__handles {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.csheet__handles li {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.csheet__handles small {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.csheet__row {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+}
+.csheet__row .record-form__field {
+    flex: 1;
+}
+.csheet__write textarea {
+    resize: vertical;
+}
+.csheet__actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.csheet__actions p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.csheet__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+}
+.csheet__confirm {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.cradio {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    margin-right: 16px;
+    font-size: 14px;
+    accent-color: var(--accent);
+}
+
+/* ── on your website ────────────────────────────────────────────────── */
+.cwidgets {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.cwidget {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    background: var(--paper);
+}
+.cwidget__top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.cwidget__name {
+    font-size: 15px;
+    font-weight: 500;
+}
+.cwidget__kind,
+.cwidget__origins {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.cwidget__embed {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+.cwidget__embed code {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: var(--r-md);
+    background: var(--canvas);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.cwidget__actions {
+    display: flex;
+    gap: 16px;
+}
+
+/* ── what contacts can use ──────────────────────────────────────────── */
+.creach {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+}
+
+@media (max-width: 720px) {
+    .creach {
+        grid-template-columns: 1fr;
+    }
+    .csheet__row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+/* ── where a chat or a form lives on the web ───────────────────────── */
+.cplaces {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.cplace {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+}
+.cplace .cwidget__embed {
+    align-self: stretch;
+}
+
+/* ── collect responses: a table open to people outside ──────────────── */
+.collect fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+}
+.collect legend {
+    margin-bottom: 8px;
+    padding: 0;
+}
+.collect__who {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.collect__choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    font-size: 14px;
+    accent-color: var(--accent);
+}
+.collect__choice input {
+    margin-top: 3px;
+}
+.collect__choice > span,
+.collect__column {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.collect__choice small,
+.collect__column small,
+.collect__columns > small {
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.collect__columns ul {
+    margin: 0 0 8px;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+}
+.collect__columns li + li {
+    border-top: 1px solid var(--line);
+}
+.collect__columns label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--paper);
+    font-size: 14px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.collect__column small {
+    font-family: var(--mono);
+    font-size: 11.5px;
+}
+.collect__share {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+}
+.collect__share .cplaces {
+    align-self: stretch;
+}
+.collect__own {
+    align-self: stretch;
+    font-size: 14px;
+}
+.collect__own summary {
+    cursor: pointer;
+    color: var(--ink-2);
+}
+.collect__own .cwidget__embed {
+    margin-top: 8px;
+}

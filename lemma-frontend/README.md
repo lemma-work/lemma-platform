@@ -17,9 +17,14 @@ npm run dev
 Open http://localhost:3000. Set `NEXT_PUBLIC_API_URL` for live data, or
 `NEXT_PUBLIC_DATA=sample` for a local demo without a backend.
 
-See [.env.example](.env.example) for configuration. Voice calls require
-server-only `GEMINI_API_KEY` and `TYPESAFE_API_KEY`; never expose secrets through
-`NEXT_PUBLIC_*` variables. `/auth` provides sign-in; `/connect` supports manual token sign-in.
+See [.env.example](.env.example) for configuration. Voice calls require the
+server-only `GEMINI_API_KEY` (or `OPENAI_API_KEY` with
+`NEXT_PUBLIC_VOICE_PROVIDER=gpt-live`); never expose secrets through
+`NEXT_PUBLIC_*` variables. What a caller says is routed by the backend's
+decisions API through the SDK, so routing has no key here: the backend's
+`DECISION_PROVIDER` decides, and `typesafe` is the fast one (see
+[Decisions](../docs/configuration.md#decisions)). `/auth` provides sign-in;
+`/connect` supports manual token sign-in.
 
 ## Checks
 
@@ -104,8 +109,9 @@ The ingestion and asset proxy hosts are configurable at build time using
 `NEXT_PUBLIC_ANALYTICS_INGEST_HOST` and `NEXT_PUBLIC_ANALYTICS_ASSETS_HOST`.
 Only explicitly allowed event properties and redacted route templates leave
 the app; DOM autocapture and replay are disabled. Storage consent is remembered.
-Feature flags (Groups is the first) come from PostHog and are off wherever it
-does not run; `NEXT_PUBLIC_LEMMA_FEATURES=groups` turns one on regardless.
+Feature flags (`groups`, `contacts`) come from PostHog and are off wherever it
+does not run; `NEXT_PUBLIC_LEMMA_FEATURES=groups,contacts` turns them on
+regardless.
 
 Run `npm run check`, `npm test`, and `npm run build` for the component gates.
 With Node dependencies installed, the public website scenarios build and boot
