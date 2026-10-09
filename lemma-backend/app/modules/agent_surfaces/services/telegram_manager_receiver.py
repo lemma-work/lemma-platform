@@ -133,7 +133,6 @@ async def register_telegram_manager_webhook() -> None:
     bot_token = reveal_secret(surface_settings.telegram_manager_bot_token)
     if (
         not bot_token
-        or not surface_settings.telegram_manager_bot_username
         or surface_settings.enable_telegram_manager_polling_mode
         or not public_https_api_url_available()
     ):

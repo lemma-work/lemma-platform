@@ -158,7 +158,12 @@ class SurfaceSettings(BaseSettings):
     telegram_manager_bot_username: Optional[str] = Field(
         default=None,
         description=(
-            "Username of the Telegram control-plane bot, without or with the @ prefix."
+            "Username of the Telegram control-plane bot, without or with the @ "
+            "prefix. Optional: the token already says which bot this is, and "
+            "the setup link is built from the username Telegram reports for it. "
+            "This is the fallback for a deployment Telegram cannot be asked "
+            "about, and a stale value here can no longer send anybody to a bot "
+            "that does not exist."
         ),
     )
     telegram_manager_webhook_secret: Optional[SecretStr] = Field(

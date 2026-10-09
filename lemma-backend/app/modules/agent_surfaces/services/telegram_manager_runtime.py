@@ -50,5 +50,5 @@ class TelegramManagerRuntime(Protocol):
     ) -> AbstractAsyncContextManager[None]:
         raise NotImplementedError
 
-    def bot_launch_url(self, setup: TelegramManagedBotSetup) -> str:
+    async def bot_launch_url(self, setup: TelegramManagedBotSetup) -> str:
         raise NotImplementedError

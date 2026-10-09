@@ -20,6 +20,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.errors import (
     TelegramManagedBotSetupAlreadyInProgressError,
     TelegramManagedBotSetupNotFoundError,
+    TelegramManagerNotConfiguredError,
 )
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagedBotProvisioningClaim,
@@ -35,6 +36,15 @@ from app.modules.agent_surfaces.services.telegram_mini_app_service import (
 from app.modules.agent_surfaces.platforms.telegram.client import TelegramApiError
 
 pytestmark = pytest.mark.unit
+
+
+async def _telegram_cannot_be_asked(credentials: dict[str, str]) -> str | None:
+    """The lookup these tests inject: nothing here dials Telegram.
+
+    "Could not be asked" is the branch that falls back to the configured
+    username, and a test that cares what Telegram answers passes its own.
+    """
+    return None
 
 
 class _Store:
@@ -166,13 +176,18 @@ class _Store:
         self.processed_updates.add(update_id)
 
 
-def _service(store: _Store) -> TelegramManagerService:
+def _service(
+    store: _Store,
+    *,
+    bot_username_lookup=_telegram_cannot_be_asked,
+) -> TelegramManagerService:
     return TelegramManagerService(
         uow_factory=lambda: None,  # type: ignore[arg-type]
         store=store,  # type: ignore[arg-type]
         manager_token="manager-token",
         manager_username="@lemma_manager_bot",
         api_base_url="http://telegram.test/bot",
+        bot_username_lookup=bot_username_lookup,
     )
 
 
@@ -203,12 +218,52 @@ async def test_start_setup_builds_short_native_launch_and_suggestions():
 
     setup = await _start(service)
 
-    assert service.launch_url(setup).startswith(
-        "https://t.me/lemma_manager_bot?start=surface_"
-    )
+    # Telegram could not be asked, so the configured username is what is left.
+    assert service.launch_url(
+        setup, manager_username=await service.manager_username()
+    ).startswith("https://t.me/lemma_manager_bot?start=surface_")
     assert setup.suggested_bot_username.endswith("_bot")
     assert len(setup.suggested_bot_username) <= 32
     assert setup.status is TelegramManagedBotSetupStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_launch_url_names_the_bot_telegram_reports_not_the_configured_one():
+    """The link is a ``t.me/<username>`` page, so the username in it has to be
+    one Telegram knows. A configured one can stop naming this deployment's bot —
+    renamed in BotFather, or left behind by a rotated token — and then the link
+    opens nothing, halfway through somebody making a bot."""
+
+    async def _telegram_says(credentials: dict[str, str]) -> str | None:
+        return "the_real_manager_bot"
+
+    service = _service(_Store(), bot_username_lookup=_telegram_says)
+    setup = await _start(service)
+
+    assert await service.manager_username() == "the_real_manager_bot"
+    assert (
+        service.launch_url(setup, manager_username=await service.manager_username())
+        == f"https://t.me/the_real_manager_bot?start=surface_{setup.setup_id}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_link_is_published_when_no_username_can_be_found():
+    """No username anywhere is no bot to send anybody to: the setup says so
+    rather than handing out a page that does not open."""
+    service = TelegramManagerService(
+        uow_factory=lambda: None,  # type: ignore[arg-type]
+        store=_Store(),  # type: ignore[arg-type]
+        manager_token="manager-token",
+        manager_username=None,
+        api_base_url="http://telegram.test/bot",
+        bot_username_lookup=_telegram_cannot_be_asked,
+    )
+    setup = await _start(service)
+
+    assert await service.manager_username() is None
+    with pytest.raises(TelegramManagerNotConfiguredError):
+        service.launch_url(setup, manager_username=await service.manager_username())
 
 
 @pytest.mark.asyncio

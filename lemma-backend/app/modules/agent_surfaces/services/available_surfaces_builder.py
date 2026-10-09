@@ -192,13 +192,16 @@ def _managed_setup_available(platform: SurfacePlatform) -> bool:
     Telegram can hand someone their own bot through a manager bot, but only when
     this deployment has one configured. Publishing that as catalog data keeps the
     setup UI from offering a path that dead-ends after the user commits to it.
+
+    Its token is the whole of it: that is what makes this deployment's bot a
+    manager. The username the link is built from is read from Telegram when the
+    link is minted (``TelegramManagerService.manager_username``), so a stale
+    configured one is no longer a reason to hide the path -- nor a way to offer
+    one that goes nowhere.
     """
     if platform is not SurfacePlatform.TELEGRAM:
         return False
-    return bool(
-        reveal_secret(surface_settings.telegram_manager_bot_token)
-        and surface_settings.telegram_manager_bot_username
-    )
+    return bool(reveal_secret(surface_settings.telegram_manager_bot_token))
 
 
 def _email_domain(
