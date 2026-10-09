@@ -105,9 +105,14 @@ class McpWebhookSource:
             if not isinstance(challenge, str):
                 raise WebhookNotVerified()
             return VerifiedDelivery(
-                delivery=delivery, payload=payload, reply={"challenge": challenge}
+                delivery=delivery,
+                payload=payload,
+                reply={"challenge": challenge},
+                account_id=str(stored.account_id),
             )
-        return VerifiedDelivery(delivery=delivery, payload=payload)
+        return VerifiedDelivery(
+            delivery=delivery, payload=payload, account_id=str(stored.account_id)
+        )
 
     async def observe(self, verified: VerifiedDelivery) -> None:
         """When it last spoke, for the person reading the schedule. Never
@@ -148,4 +153,5 @@ class McpWebhookSource:
             },
             source_event_id=f"{MCP_WEBHOOK_SOURCE}:{subscription_id}:{event_id}",
             match={"provider_trigger_id": str(subscription_id)},
+            account_id=verified.account_id,
         )

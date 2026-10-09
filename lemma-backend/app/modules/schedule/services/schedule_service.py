@@ -26,6 +26,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleType,
     ScheduleUpdateEntity,
+    authored_config,
     normalize_datastore_schedule_config,
 )
 from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
@@ -131,6 +132,7 @@ class ScheduleService:
         schedule_create = schedule_create.model_copy(
             update={
                 "name": schedule_name_for(schedule_create),
+                "config": authored_config(schedule_create.config),
             }
         )
         schedule_create = await self._resolve_create_target(schedule_create)
@@ -433,7 +435,12 @@ class ScheduleService:
                 validate_global_workflow_is_unclaimed(
                     [item for item in existing_for_workflow if item.id != schedule_id]
                 )
-        updated = await resub.update_schedule_resubscribing(existing, update_data, self)
+        updated = await resub.update_schedule_resubscribing(
+            existing,
+            update_data,
+            self,
+            caller_id=ctx.user_id if ctx is not None else None,
+        )
 
         if is_explicit_reactivation(existing, updated, update_data):
             # Reactivating a schedule clears its circuit-breaker failure streak so

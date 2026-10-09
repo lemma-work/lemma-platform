@@ -7,7 +7,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.schedule.domain.errors import ScheduleInfrastructureError
+from app.modules.schedule.domain.errors import (
+    ScheduleAccessDeniedError,
+    ScheduleInfrastructureError,
+    ScheduleValidationError,
+)
 from app.modules.schedule.domain.interfaces import (
     ExternalScheduleWriter,
     ProvisionedTrigger,
@@ -80,9 +84,10 @@ async def write_update_resubscribing(
     repository: _Rows,
     writer: _Writer,
     uow: _Uow,
+    caller_id: UUID | None = None,
 ) -> ScheduleEntity | None:
     return await update_schedule_resubscribing(
-        existing, update_data, _Service(repository, writer, uow)
+        existing, update_data, _Service(repository, writer, uow), caller_id=caller_id
     )
 
 
@@ -205,3 +210,112 @@ async def test_other_schedule_types_are_left_alone() -> None:
 
     assert writer.created == []
     assert update["config"] == {"table_name": "deals", "operations": ["UPDATE"]}
+
+
+@pytest.mark.asyncio
+async def test_only_the_author_may_change_what_their_account_listens_for() -> None:
+    existing = _schedule({"label": "bug", "provider_trigger_id": "old"})
+    writer = _Writer(ProvisionedTrigger(provider_trigger_id="new"))
+    rows = _Rows(existing)
+
+    with pytest.raises(ScheduleAccessDeniedError):
+        await write_update_resubscribing(
+            existing,
+            {"config": {"label": "anything"}},
+            repository=rows,
+            writer=writer,
+            uow=_Uow(),
+            caller_id=uuid4(),
+        )
+
+    assert writer.created == [], "nothing is subscribed on the author's account"
+    assert rows.written is None
+
+    await write_update_resubscribing(
+        existing,
+        {"config": {"label": "urgent"}},
+        repository=rows,
+        writer=writer,
+        uow=_Uow(),
+        caller_id=existing.user_id,
+    )
+    assert writer.created[0].config == {"label": "urgent"}
+
+
+@pytest.mark.asyncio
+async def test_someone_else_may_edit_around_an_unchanged_filter() -> None:
+    existing = _schedule({"label": "bug", "provider_trigger_id": "keep"})
+    writer = _Writer(ProvisionedTrigger(provider_trigger_id="unused"))
+    rows = _Rows(existing)
+
+    await write_update_resubscribing(
+        existing,
+        {"config": {"label": "bug"}, "name": "renamed"},
+        repository=rows,
+        writer=writer,
+        uow=_Uow(),
+        caller_id=uuid4(),
+    )
+
+    assert writer.created == []
+    assert rows.written == {
+        "config": {"label": "bug", "provider_trigger_id": "keep"},
+        "name": "renamed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_schedule_cannot_stop_listening_through_its_account() -> None:
+    existing = ScheduleEntity(
+        id=uuid4(),
+        user_id=uuid4(),
+        schedule_type=ScheduleType.WEBHOOK,
+        account_id=uuid4(),
+        config={
+            "source": "mcp",
+            "event": "issue.created",
+            "arguments": {},
+            "provider_trigger_id": "sub",
+        },
+    )
+    writer = _Writer(ProvisionedTrigger(provider_trigger_id="never"))
+    rows = _Rows(existing)
+
+    with pytest.raises(ScheduleValidationError):
+        await write_update_resubscribing(
+            existing,
+            {"config": {"source": "github"}},
+            repository=rows,
+            writer=writer,
+            uow=_Uow(),
+        )
+
+    assert writer.created == []
+    assert rows.written is None, "the old subscription stays routed and deletable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["provider_trigger_id", "installation_id"])
+async def test_an_edit_cannot_type_in_a_routing_key_only_provisioning_writes(
+    key: str,
+) -> None:
+    existing = ScheduleEntity(
+        id=uuid4(),
+        user_id=uuid4(),
+        schedule_type=ScheduleType.WEBHOOK,
+        config={"source": "github", "event": "push"},
+    )
+    rows = _Rows(existing)
+    update: dict[str, object] = {
+        "config": {"source": "github", "event": "push", key: "someone-elses"}
+    }
+
+    await write_update_resubscribing(
+        existing,
+        update,
+        repository=rows,
+        writer=_Writer(ProvisionedTrigger()),
+        uow=_Uow(),
+    )
+
+    assert rows.written == {"config": {"source": "github", "event": "push"}}

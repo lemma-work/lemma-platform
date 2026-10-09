@@ -104,6 +104,10 @@ class WebhookHandler:
             # The routing key is deliberately coarse -- see `match_criteria`.
             # Schedules that scoped themselves further are filtered here.
             schedules = [s for s in schedules if normalized.refine(s.config or {})]
+        if normalized is not None and normalized.account_id is not None:
+            schedules = [
+                s for s in schedules if str(s.account_id) == normalized.account_id
+            ]
 
         if not schedules:
             return []

@@ -60,6 +60,23 @@ class TimeScheduleConfig(BaseModel):
 #: subscribed on its author's account, like a connector trigger.
 MCP_EVENT_SOURCE = "mcp"
 
+#: Config keys only provisioning writes, never an author. Each is a routing key
+#: an inbound webhook is matched on by containment across every tenant's
+#: schedules: a Composio trigger or MCP subscription id, a GitHub App
+#: installation. A schedule that could carry one it typed would receive the
+#: events of whoever owns it, so they are dropped from whatever an author sends
+#: and are written back only from the schedule's own account.
+PROVISIONED_CONFIG_KEYS = frozenset({"provider_trigger_id", "installation_id"})
+
+
+def authored_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """`config` without the keys only provisioning may write."""
+    return {
+        key: value
+        for key, value in (config or {}).items()
+        if key not in PROVISIONED_CONFIG_KEYS
+    }
+
 
 class WebhookScheduleConfig(BaseModel):
     """Configuration for webhook-based schedules."""
