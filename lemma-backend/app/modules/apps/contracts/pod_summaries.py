@@ -33,6 +33,7 @@ class PodAppSummary:
     # None where the deployment serves no app host -- see `public_app_url`.
     url: str | None
     status: str
+    public_slug: str
 
 
 async def list_app_summaries_by_pod(
@@ -71,6 +72,7 @@ async def list_app_summaries_by_pod(
                 description=description,
                 url=public_app_url(public_slug),
                 status=str(app_status),
+                public_slug=public_slug,
             )
         )
     return dict(summaries)
@@ -128,6 +130,7 @@ async def list_readable_app_summaries(
             description=description,
             url=public_app_url(public_slug),
             status=str(app_status),
+            public_slug=public_slug,
         )
         for app_id, name, description, public_slug, app_status in rows
     ]

@@ -5,6 +5,7 @@ import json
 from uuid import uuid4
 
 import pytest
+from streaq import StreaqRetry
 from unittest.mock import AsyncMock
 
 from app.core.domain.events import DomainEvent
@@ -15,7 +16,10 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     _OpenClients,
     job_context_key,
 )
-from app.core.infrastructure.jobs.streaq_runtime import load_job_observability_context
+from app.core.infrastructure.jobs.streaq_runtime import (
+    job_failure_is_terminal,
+    load_job_observability_context,
+)
 from app.core.request_context import (
     bind_job_context,
     bind_request_context,
@@ -210,3 +214,10 @@ async def test_full_correlation_journey_changes_only_boundary_identifiers() -> N
         "x-lemma-job-id": "journey-job",
     }
     assert str(event.event_id) != "journey-job"
+
+
+def test_a_job_failure_is_terminal_unless_streaq_will_retry_it() -> None:
+    # streaq retries only StreaqRetry; any other exception ends the job on the
+    # try it happened, so it must be reported as failed, not as retrying.
+    assert job_failure_is_terminal(ValueError("boom")) is True
+    assert job_failure_is_terminal(StreaqRetry(delay=10)) is False

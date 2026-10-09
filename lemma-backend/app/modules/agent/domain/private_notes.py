@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal
 
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.value_objects import JsonObject
 
 #: The message metadata key a client sets, and the run metadata key it becomes.
@@ -43,37 +43,40 @@ PRIVATE_NOTE_LABEL = (
     "act on it, but never quote or reveal it there.)"
 )
 
-#: The same, for a note in a person's own direct chat with the bot. The only
+#: The same, for a note in a member's own direct chat with the bot. The only
 #: other reader there is the person who wrote it, so there is nothing to keep
-#: from anybody -- only the fact that it was not sent.
+#: from anybody -- only the fact that it was not sent. Never a contact's chat:
+#: the person in it is the contact, and the note is the member's.
 PRIVATE_NOTE_IN_DM_LABEL = (
     "(A note to you, written in Lemma by the person in this chat. It was not "
     "sent to the chat.)"
 )
 
-#: Stamped on a note written in a direct chat, read when its label is chosen.
+#: Stamped on a note written in a member's direct chat, read when its label
+#: is chosen.
 NOTE_IN_DM_KEY = "private_note_in_dm"
 
 #: Stamped by the server -- never taken from a client -- on a message typed in
 #: Lemma into a group's conversation, saying which kind: a member's own slice of
-#: the group, or the thread where the bot answers people outside the pod. Copied
-#: onto the run the message starts.
+#: the group, or a thread where the bot answers people outside the pod -- a
+#: group's strangers, or a contact's private chat. Copied onto the run the
+#: message starts.
 WRITTEN_IN_LEMMA_KEY = "written_in_lemma"
 
 WrittenIn = Literal["group", "outsiders"]
 IN_GROUP: WrittenIn = "group"
 IN_OUTSIDERS_THREAD: WrittenIn = "outsiders"
 
-#: A note in the strangers' thread. Its writer has to be named: the brief says
-#: whoever writes in this conversation is outside the pod.
+#: A note in a thread answering people outside the pod. Its writer has to be
+#: named: the brief says whoever writes in this conversation is outside it.
 PRIVATE_NOTE_FROM_KEEPER_LABEL = (
     "(A private note to you, written in Lemma by the member who looks after "
     "this conversation -- not by anybody in the chat. Nobody in the chat has "
     "seen it: act on it, but never quote or reveal it there.)"
 )
 
-#: A reply typed in Lemma into the strangers' thread: the member's words, not
-#: the stranger's, and the one reading the answer is in the group anyway.
+#: A reply typed in Lemma into a thread answering people outside the pod: the
+#: member's words, not the stranger's or the contact's.
 WRITTEN_BY_KEEPER_LABEL = (
     "(Written in Lemma by the member who looks after this conversation -- not "
     "by anybody outside the pod. Nobody in the chat saw this message; only your "
@@ -100,18 +103,37 @@ def written_in_lemma_into(
 ) -> WrittenIn | None:
     """What a message typed in Lemma into this conversation is to be marked as.
 
-    None for anything but a group's conversation: in a direct chat the person
-    typing in Lemma is the person the bot is talking to, and a plain Lemma
-    conversation has no chat to have missed the message.
+    Any conversation answering people outside the pod is the keeper's thread,
+    a contact's private chat as much as a group's: whoever types in Lemma there
+    is the member looking after it, never the person the bot is talking to.
+    Otherwise None for anything but a group's conversation: in a member's
+    direct chat the person typing in Lemma is the person the bot is talking
+    to, and a plain Lemma conversation has no chat to have missed the message.
     """
     metadata = conversation_metadata or {}
-    if metadata.get(AUDIENCE_KEY) == OUTSIDERS:
+    if Audience.from_conversation_metadata(metadata).answers_outsiders:
         return IN_OUTSIDERS_THREAD
     if metadata.get("surface_platform") and metadata.get("conversation_kind") == (
         "CHANNEL"
     ):
         return IN_GROUP
     return None
+
+
+def note_in_member_dm(
+    conversation_metadata: Mapping[str, object] | None,
+) -> bool:
+    """Whether a note typed into this conversation is one in a member's own DM.
+
+    The only conversation whose note is labelled as written "by the person in
+    this chat". A contact's chat is a DM on the platform too, but the person
+    in it is the contact: a note there is the keeper's, and is labelled so.
+    """
+    metadata = conversation_metadata or {}
+    return (
+        metadata.get("conversation_kind") == "DM"
+        and not Audience.from_conversation_metadata(metadata).answers_outsiders
+    )
 
 
 def _written_in(metadata: Mapping[str, object] | None) -> WrittenIn | None:
@@ -179,10 +201,13 @@ def lemma_label(message_metadata: Mapping[str, object]) -> str | None:
     """
     written_in = _written_in(message_metadata)
     if is_private_note(message_metadata):
-        if message_metadata.get(NOTE_IN_DM_KEY) is True:
-            return PRIVATE_NOTE_IN_DM_LABEL
+        # The keeper's thread first: a stamp saying "a DM" never makes a note
+        # in a conversation answering somebody outside the pod read as that
+        # person's own words.
         if written_in == IN_OUTSIDERS_THREAD:
             return PRIVATE_NOTE_FROM_KEEPER_LABEL
+        if message_metadata.get(NOTE_IN_DM_KEY) is True:
+            return PRIVATE_NOTE_IN_DM_LABEL
         return PRIVATE_NOTE_LABEL
     if written_in == IN_OUTSIDERS_THREAD:
         return WRITTEN_BY_KEEPER_LABEL

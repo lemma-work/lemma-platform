@@ -45,6 +45,8 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.contracts.provisioning import surface_response
+from app.modules.agent_surfaces.contracts.provisioning import warned_surface_response
+from app.modules.agent_surfaces.services.contact_keepers import contacts_warnings
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     merge_surface_config,
     require_own_account,
@@ -205,12 +207,14 @@ async def list_surfaces(
         pod_id=pod_id,
         viewer_user_id=user.id,
     )
+    warnings = await contacts_warnings(uow, pod_id, *(row[0] for row in visible))
     items = [
         surface_response(
             surface,
             agent_name=resolved_agent_name,
             reach=reach,
             connection=connections.get(surface.id),
+            contacts_warning=warnings.get(surface.id),
         )
         for surface, resolved_agent_name, reach in visible
     ]
@@ -329,8 +333,8 @@ async def get_surface(
     connection = await connection_resolver.for_surface(
         surface, pod_id=pod_id, viewer_user_id=user.id
     )
-    return surface_response(
-        surface, agent_name=agent_name, reach=reach, connection=connection
+    return await warned_surface_response(
+        uow, surface, agent_name=agent_name, reach=reach, connection=connection
     )
 
 
@@ -425,7 +429,8 @@ async def update_surface(
     connection = await connection_resolver.for_surface(
         updated, pod_id=pod_id, viewer_user_id=user.id
     )
-    return surface_response(
+    return await warned_surface_response(
+        uow,
         updated,
         agent_name=resolved_agent_name,
         reach=reach,

@@ -14,6 +14,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `usage.me.limits.get` | GET | `/usage/me/limits` | My Limits |
 | `usage.me.stats.get` | GET | `/usage/me/stats` | My Stats |
 | `usage.me.summary.get` | GET | `/usage/me/summary` | My Summary |
+| `usage.organization.contacts_cap.get` | GET | `/usage/organizations/{organization_id}/contacts-cap` | Get Contacts Cap |
+| `usage.organization.contacts_cap.update` | PUT | `/usage/organizations/{organization_id}/contacts-cap` | Update Contacts Cap |
 | `usage.organization.events.list` | GET | `/usage/organizations/{organization_id}/events` | List Usage Events |
 | `usage.organization.limits.get` | GET | `/usage/organizations/{organization_id}/limits` | Get Usage Limits |
 | `usage.organization.me.summary.get` | GET | `/usage/organizations/{organization_id}/me` | Get My Usage |

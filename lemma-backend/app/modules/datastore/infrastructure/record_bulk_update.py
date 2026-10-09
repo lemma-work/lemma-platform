@@ -28,6 +28,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app.core.domain.events import DomainEvent
 from app.core.log.log import get_logger
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
 from app.modules.datastore.infrastructure.transactional_events import (
     ensure_datastore_event_outbox,
@@ -155,8 +156,7 @@ async def bulk_update_records(
             if ctx.enable_rls:
                 await schema_manager.set_rls_context(
                     session,
-                    user_id,
-                    is_pod_admin=not enforce_user_scope,
+                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
                 )
 
             events: list[DomainEvent] = []

@@ -26,6 +26,7 @@ from app.modules.apps.domain.entities import AppReleaseEntity
 from app.modules.apps.domain.entities import AppAssetDocument
 from app.modules.apps.domain.errors import AppAssetNotFoundError, AppNotFoundError
 from app.modules.apps.domain.ports import AppStorageFactoryPort, AppStoragePort
+from app.modules.apps.services.app_cover import AppCoverSpec
 from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
 from app.core.concurrency.offload import run_blocking
 
@@ -52,6 +53,8 @@ class _AssetReadInputs:
     app: dict[str, str] | None = None
     branding: dict[str, str] | None = None
     private: bool = False
+    # Set only for the cover path: what to draw when the build ships no cover.
+    cover: AppCoverSpec | None = None
 
 
 @dataclass(frozen=True, slots=True)

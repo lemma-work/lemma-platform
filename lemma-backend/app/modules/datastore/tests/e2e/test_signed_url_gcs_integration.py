@@ -2,7 +2,7 @@
 
 Unlike ``test_signed_url_e2e.py`` (which runs on the local filesystem backend),
 this drives the *actual* GCS object store so we exercise the real egress path:
-the file is uploaded to GCS, and ``GET /s/{code}`` streams those bytes back from
+the file is uploaded to GCS, and ``GET /public/s/{code}`` streams those bytes back from
 GCS *through the backend* — which is precisely what makes the hit cap bound
 egress (a raw object-store signed URL would bypass it).
 
@@ -15,7 +15,7 @@ NOTE on V4 signed URLs: the authenticated ``GET .../files/url`` download URL on
 GCS is a real object-signed URL, which requires a *service-account* signer. With
 plain user ADC (``authorized_user``) signing fails at the IAM ``signBlob`` step,
 so this test does not assert that path — the deployed backend (workload identity
-/ service account) covers it. The public ``/s/{code}`` path needs only read
+/ service account) covers it. The public ``/public/s/{code}`` path needs only read
 access and is what we verify here.
 """
 
@@ -81,12 +81,12 @@ class TestSignedUrlAgainstRealGcs:
 
             # Exactly max_hits fetches stream the real GCS bytes through the backend.
             for _ in range(2):
-                served = await async_client.get(f"/s/{code}")
+                served = await async_client.get(f"/public/s/{code}")
                 assert served.status_code == status.HTTP_200_OK, served.text
                 assert served.content == content
 
             # One past the cap → 410 (egress is bounded even on GCS).
-            gone = await async_client.get(f"/s/{code}")
+            gone = await async_client.get(f"/public/s/{code}")
             assert gone.status_code == status.HTTP_410_GONE
         finally:
             # Remove the objects this test wrote to the shared bucket.

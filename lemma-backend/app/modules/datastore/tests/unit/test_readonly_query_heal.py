@@ -19,6 +19,7 @@ import pytest
 from sqlalchemy.exc import DBAPIError
 
 from app.modules.datastore.domain.errors import DatastoreDomainError
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.infrastructure.readonly_query import (
     execute_readonly_query,
 )
@@ -33,8 +34,14 @@ class _DriverError(DBAPIError):
 
 
 class _Result:
+    def __init__(self, settings: tuple[str, ...] = ()):
+        self._settings = settings
+
     def scalar_one(self):
         return _PLAN
+
+    def one(self):
+        return self._settings
 
 
 class _Stream:
@@ -70,6 +77,7 @@ class _SchemaManager:
     runs: int = 0
     heals: list[str] = field(default_factory=list)
     ensured: int = 0
+    principal: RowPrincipal | None = None
 
     def get_schema_name(self, pod_id) -> str:
         return f"pod_{str(pod_id).replace('-', '_')}"
@@ -86,8 +94,8 @@ class _SchemaManager:
             self.lacks_access = False
         return self.heal_works
 
-    async def set_rls_context(self, *args, **kwargs) -> None:
-        return None
+    async def set_rls_context(self, session, principal: RowPrincipal) -> None:
+        self.principal = principal
 
     def session_factory(self):
         manager = self
@@ -99,6 +107,8 @@ class _SchemaManager:
                     if manager.refusal is not None and manager.refusals > 0:
                         manager.refusals -= 1
                         raise _DriverError(*manager.refusal)
+                if "current_setting" in str(statement) and manager.principal:
+                    return _Result(tuple(manager.principal.settings().values()))
                 return _Result()
 
             async def stream(self, statement):
@@ -120,9 +130,7 @@ async def _query(manager: _SchemaManager):
         manager,
         uuid4(),
         "SELECT * FROM widgets",
-        uuid4(),
-        enable_rls=False,
-        is_pod_admin=False,
+        RowPrincipal.for_user(uuid4()),
     )
 
 

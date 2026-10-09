@@ -15,6 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.platforms.common import text_or_none
+from app.modules.agent_surfaces.platforms.email_automated import automated_reason
 from app.modules.agent_surfaces.platforms.email_identity import (
     email_sender_authentication,
     email_thread_root,
@@ -74,6 +75,9 @@ def merge_received_email(
         fallback_email=event.sender_email,
         fallback_name=event.sender_display_name,
     )
+    automated = automated_reason(headers, identity.email or event.sender_email)
+    if automated:
+        metadata["automated"] = automated
 
     should_start = _fetched_recipients(
         received,
@@ -158,6 +162,11 @@ def _threading_from_headers(
         "in_reply_to": in_reply_to,
         "references": references + ([message_id] if message_id else []),
     }
+
+
+def _automated(raw_headers: object, sender: str) -> dict[str, str]:
+    reason = automated_reason(header_map(raw_headers), sender)
+    return {"automated": reason} if reason else {}
 
 
 class ResendInboundParser:
@@ -265,5 +274,8 @@ class ResendInboundParser:
                 # empty message.
                 "email_id": text_or_none(payload.get("email_id")),
                 "attachments": payload.get("attachments") or [],
+                # Read again once the full headers are fetched: the webhook
+                # carries none, so here it is often the sender's address alone.
+                **_automated(raw_headers, sender),
             },
         )

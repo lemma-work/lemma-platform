@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import Depends
 
@@ -8,71 +8,39 @@ from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.datastore.application.file_use_cases import FileUseCases
-from app.modules.datastore.infrastructure.repositories import (
-    DatastoreFileRepository,
-    DatastoreTableRepository,
-)
-from app.modules.datastore.infrastructure.record_repository import (
-    DatastoreRecordRepository,
-)
+from app.modules.datastore.infrastructure.repositories import DatastoreFileRepository
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.datastore.services.file_service import DatastoreFileService
 from app.modules.datastore.services.record_service import RecordService
 from app.modules.datastore.services.table_service import TableService
 from app.modules.datastore.infrastructure.storage import create_datastore_storage
 from app.core.authorization.factory import create_authorization_data_service
-from app.modules.identity.contracts.organizations import build_user_directory
 from app.modules.datastore.composition import get_datastore_composition
+from app.modules.datastore.services.wiring import (
+    build_record_service,
+    build_table_service,
+    close_schema_manager,
+    get_schema_manager,
+    reset_schema_manager,
+)
 
-_schema_manager_instance: Optional[SchemaManager] = None
-
-
-def get_schema_manager() -> SchemaManager:
-    """Get or create singleton SchemaManager."""
-    global _schema_manager_instance
-    if _schema_manager_instance is None:
-        _schema_manager_instance = SchemaManager()
-    return _schema_manager_instance
-
-
-async def close_schema_manager() -> None:
-    """Dispose SchemaManager resources (shutdown/tests)."""
-    global _schema_manager_instance
-    if _schema_manager_instance is None:
-        return
-
-    await _schema_manager_instance.close()
-    _schema_manager_instance = None
-
-
-def reset_schema_manager() -> None:
-    """Reset singleton SchemaManager instance (tests)."""
-    global _schema_manager_instance
-    _schema_manager_instance = None
+__all__ = [
+    "FileServiceDep",
+    "FileUseCasesDep",
+    "RecordServiceDep",
+    "SchemaManagerDep",
+    "TableServiceDep",
+    "build_file_service",
+    "build_file_use_cases",
+    "build_record_service",
+    "build_table_service",
+    "close_schema_manager",
+    "get_schema_manager",
+    "reset_schema_manager",
+]
 
 
 SchemaManagerDep = Annotated[SchemaManager, Depends(get_schema_manager)]
-
-
-def build_table_service(uow) -> TableService:
-    """Construct a TableService from a unit of work (single wiring source)."""
-    message_bus = get_message_bus()
-    return TableService(
-        table_repository=DatastoreTableRepository(uow, message_bus=message_bus),
-        schema_manager=get_schema_manager(),
-        authorization_service=create_authorization_data_service(uow),
-    )
-
-
-def build_record_service(uow) -> RecordService:
-    """Construct a RecordService from a unit of work (single wiring source)."""
-    return RecordService(
-        record_repository=DatastoreRecordRepository(
-            schema_manager=get_schema_manager()
-        ),
-        authorization_service=create_authorization_data_service(uow),
-        user_repository=build_user_directory(uow),
-    )
 
 
 def build_file_service(uow) -> DatastoreFileService:

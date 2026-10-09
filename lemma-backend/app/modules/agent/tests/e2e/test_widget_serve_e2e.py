@@ -87,7 +87,7 @@ async def test_widget_serve_requires_auth_and_injects_config(
     conv_id, tool_call_id = await _seed_widget(
         db_session, pod_id=pod_id, user_id=user_id
     )
-    serve_path = f"/widgets/serve/{conv_id}/{tool_call_id}"
+    serve_path = f"/public/widgets/serve/{conv_id}/{tool_call_id}"
 
     # Member session (Bearer) → served, wrapped, config-injected, with height bridge.
     authed = await authenticated_client.get(serve_path)
@@ -124,6 +124,7 @@ async def test_widget_embed_token_round_trip(
     )
     assert mint.status_code == status.HTTP_200_OK, mint.text
     serve_path = _serve_path(mint.json()["url"])
+    assert serve_path.startswith(f"/public/widgets/serve/{conv_id}/{tool_call_id}?")
     assert "token=" in serve_path
 
     # The token authenticates the iframe document load without a session cookie.
@@ -136,9 +137,43 @@ async def test_widget_embed_token_round_trip(
 
         # A tampered token is rejected.
         bad = await anon.get(
-            f"/widgets/serve/{conv_id}/{tool_call_id}?token=not-a-token"
+            f"/public/widgets/serve/{conv_id}/{tool_call_id}?token=not-a-token"
         )
         assert bad.status_code == status.HTTP_401_UNAUTHORIZED, bad.text
+
+
+@pytest.mark.asyncio
+async def test_the_old_widget_path_still_serves_until_its_alias_goes(
+    authenticated_client, test_app, widget_pod, fixed_test_user, db_session
+):
+    """Tool results saved `/widgets/serve/...` before the move to `/public/`.
+
+    The alias is the same handler, so it must answer exactly as the new path
+    does: served to the member, served on a token, refused to nobody in
+    particular.
+    """
+    pod_id = UUID(widget_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    conv_id, tool_call_id = await _seed_widget(
+        db_session, pod_id=pod_id, user_id=user_id
+    )
+    old_path = f"/widgets/serve/{conv_id}/{tool_call_id}"
+
+    authed = await authenticated_client.get(old_path)
+    assert authed.status_code == status.HTTP_200_OK, authed.text
+    assert WIDGET_CONTENT in authed.text
+
+    mint = await authenticated_client.post(
+        f"/pods/{pod_id}/widgets/{conv_id}/{tool_call_id}/embed-token"
+    )
+    token_query = urlparse(mint.json()["url"]).query
+    async with AsyncClient(
+        transport=ASGITransport(app=test_app), base_url="http://testserver"
+    ) as anon:
+        on_token = await anon.get(f"{old_path}?{token_query}")
+        assert on_token.status_code == status.HTTP_200_OK, on_token.text
+        refused = await anon.get(old_path)
+        assert refused.status_code == status.HTTP_401_UNAUTHORIZED, refused.text
 
 
 @pytest.mark.asyncio

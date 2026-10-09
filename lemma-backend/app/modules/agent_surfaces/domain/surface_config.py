@@ -8,6 +8,9 @@ to the inbound/outbound event shapes the rest of that module describes.
 from __future__ import annotations
 
 
+from enum import StrEnum
+from uuid import UUID
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -113,6 +116,34 @@ class SurfaceGroupPolicy(BaseModel):
     answers_outsiders: bool = True
 
 
+class ContactAnswer(StrEnum):
+    """Whom a bot answers in a private chat, beyond the pod's members."""
+
+    #: Members only. Anybody else is refused, as before contacts existed.
+    OFF = "off"
+    #: Members, and contacts the pod already knows. Strangers are refused.
+    KNOWN = "known"
+    #: Members and anybody: a stranger becomes a contact with their first
+    #: message.
+    ANYONE = "anyone"
+
+
+class SurfaceContactPolicy(BaseModel):
+    """How this bot treats people outside the pod who write to it privately.
+
+    Only a bot that is the pod's own -- its own bot token, its own number, its
+    own email address -- answers contacts. A stranger writing to Lemma's shared
+    bot is not writing to any pod, and keeps getting the sign-up path.
+    """
+
+    answer: ContactAnswer = ContactAnswer.OFF
+    #: The member a contact's conversations belong to, who reads them and
+    #: answers what the bot passes on. Set to whoever turns contacts on, when
+    #: nobody is; a member who leaves the pod looks after nothing, and the bot
+    #: stops answering contacts until somebody else takes them on.
+    looked_after_by: UUID | None = None
+
+
 class SurfaceConfig(BaseModel):
     """User-editable surface behavior. Exactly what the API accepts and returns.
 
@@ -126,3 +157,4 @@ class SurfaceConfig(BaseModel):
     telegram: SurfaceTelegramConfig = Field(default_factory=SurfaceTelegramConfig)
     slack: SurfaceSlackConfig = Field(default_factory=SurfaceSlackConfig)
     groups: SurfaceGroupPolicy = Field(default_factory=SurfaceGroupPolicy)
+    contacts: SurfaceContactPolicy = Field(default_factory=SurfaceContactPolicy)

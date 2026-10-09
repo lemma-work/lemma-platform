@@ -27,6 +27,7 @@ import structlog
 
 from app.core.log.log import setup_logging
 from app.modules.agent.domain.entities import Conversation, Message
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
     ConversationOpeningTexts,
@@ -40,6 +41,8 @@ from app.modules.agent.services.conversation_title_service import (
     title_matches_user_script,
 )
 from app.modules.agent.services.realtime import title_updated_payload
+from app.modules.usage.contracts.execution import current_usage_context
+from app.modules.usage.domain.accounting import CONTACT_RUN
 
 
 # --- collaborators -------------------------------------------------------
@@ -175,7 +178,7 @@ class _FakeGenerator:
         self.calls: list[dict] = []
 
     async def generate(
-        self, *, user_id, organization_id, pod_id, user_text, reply_text
+        self, *, user_id, organization_id, pod_id, user_text, reply_text, audience=None
     ) -> str | None:
         self.calls.append(
             {
@@ -184,6 +187,7 @@ class _FakeGenerator:
                 "pod_id": pod_id,
                 "user_text": user_text,
                 "reply_text": reply_text,
+                "audience": audience,
             }
         )
         if self._fails:
@@ -582,6 +586,53 @@ async def test_generator_propagates_provider_failure() -> None:
         await _ask(generator, user_text="Plan a trip to Japan")
 
     assert capture["run_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_title_for_a_contacts_conversation_is_the_contacts_spend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Counted towards the contacts cap, never the owner's own allowance."""
+    _enable_llm_titling(monkeypatch)
+    contact_id = uuid4()
+    conv = _conversation()
+    conv.metadata = Audience.contact(contact_id).to_metadata()
+    generator = _FakeGenerator()
+
+    await _service(_FakeUow(conv, []), generator=generator).generate_title_if_absent(
+        conv.id
+    )
+
+    assert generator.calls[0]["audience"] == Audience.contact(contact_id)
+
+    seen: dict[str, object] = {}
+    real, _ = _generator()
+    original = real._llm_agent
+
+    def _watching_agent(model, system_prompt=None):
+        agent = original(model, system_prompt=system_prompt)
+        run = agent.run
+
+        async def _run(*args, **kwargs):
+            seen["context"] = current_usage_context()
+            return await run(*args, **kwargs)
+
+        agent.run = _run
+        return agent
+
+    real._llm_agent = _watching_agent
+    await real.generate(
+        user_id=uuid4(),
+        organization_id=None,
+        pod_id=uuid4(),
+        user_text="hi",
+        reply_text=None,
+        audience=Audience.contact(contact_id),
+    )
+
+    context = seen["context"]
+    assert context.source_type == "conversation_title"
+    assert context.outside_audience == CONTACT_RUN
 
 
 @pytest.mark.asyncio

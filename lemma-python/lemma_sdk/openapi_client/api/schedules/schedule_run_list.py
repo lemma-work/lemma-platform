@@ -9,6 +9,7 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
 from ...models.schedule_run_list_response import ScheduleRunListResponse
+from ...models.schedule_run_status import ScheduleRunStatus
 from ...types import UNSET, Response, Unset
 
 
@@ -17,11 +18,29 @@ def _get_kwargs(
     schedule_id: UUID,
     *,
     limit: int | Unset = 100,
+    status: None | ScheduleRunStatus | Unset = UNSET,
+    skipped: bool | None | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
     params["limit"] = limit
+
+    json_status: None | str | Unset
+    if isinstance(status, Unset):
+        json_status = UNSET
+    elif isinstance(status, ScheduleRunStatus):
+        json_status = status.value
+    else:
+        json_status = status
+    params["status"] = json_status
+
+    json_skipped: bool | None | Unset
+    if isinstance(skipped, Unset):
+        json_skipped = UNSET
+    else:
+        json_skipped = skipped
+    params["skipped"] = json_skipped
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -73,6 +92,8 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    status: None | ScheduleRunStatus | Unset = UNSET,
+    skipped: bool | None | Unset = UNSET,
 ) -> Response[ErrorResponse | ScheduleRunListResponse]:
     """List Schedule Runs
 
@@ -80,6 +101,11 @@ def sync_detailed(
         pod_id (UUID):
         schedule_id (UUID):
         limit (int | Unset):  Default: 100.
+        status (None | ScheduleRunStatus | Unset): Only runs that report this status -- the
+            target's outcome once there is one.
+        skipped (bool | None | Unset): true: only events the schedule's filter skipped. false:
+            leave them out, which is what a busy webhook schedule's history usually needs. Omitted:
+            both.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -93,6 +119,8 @@ def sync_detailed(
         pod_id=pod_id,
         schedule_id=schedule_id,
         limit=limit,
+        status=status,
+        skipped=skipped,
     )
 
     response = client.get_httpx_client().request(
@@ -108,6 +136,8 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    status: None | ScheduleRunStatus | Unset = UNSET,
+    skipped: bool | None | Unset = UNSET,
 ) -> ErrorResponse | ScheduleRunListResponse | None:
     """List Schedule Runs
 
@@ -115,6 +145,11 @@ def sync(
         pod_id (UUID):
         schedule_id (UUID):
         limit (int | Unset):  Default: 100.
+        status (None | ScheduleRunStatus | Unset): Only runs that report this status -- the
+            target's outcome once there is one.
+        skipped (bool | None | Unset): true: only events the schedule's filter skipped. false:
+            leave them out, which is what a busy webhook schedule's history usually needs. Omitted:
+            both.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -129,6 +164,8 @@ def sync(
         schedule_id=schedule_id,
         client=client,
         limit=limit,
+        status=status,
+        skipped=skipped,
     ).parsed
 
 
@@ -138,6 +175,8 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    status: None | ScheduleRunStatus | Unset = UNSET,
+    skipped: bool | None | Unset = UNSET,
 ) -> Response[ErrorResponse | ScheduleRunListResponse]:
     """List Schedule Runs
 
@@ -145,6 +184,11 @@ async def asyncio_detailed(
         pod_id (UUID):
         schedule_id (UUID):
         limit (int | Unset):  Default: 100.
+        status (None | ScheduleRunStatus | Unset): Only runs that report this status -- the
+            target's outcome once there is one.
+        skipped (bool | None | Unset): true: only events the schedule's filter skipped. false:
+            leave them out, which is what a busy webhook schedule's history usually needs. Omitted:
+            both.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -158,6 +202,8 @@ async def asyncio_detailed(
         pod_id=pod_id,
         schedule_id=schedule_id,
         limit=limit,
+        status=status,
+        skipped=skipped,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -171,6 +217,8 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    status: None | ScheduleRunStatus | Unset = UNSET,
+    skipped: bool | None | Unset = UNSET,
 ) -> ErrorResponse | ScheduleRunListResponse | None:
     """List Schedule Runs
 
@@ -178,6 +226,11 @@ async def asyncio(
         pod_id (UUID):
         schedule_id (UUID):
         limit (int | Unset):  Default: 100.
+        status (None | ScheduleRunStatus | Unset): Only runs that report this status -- the
+            target's outcome once there is one.
+        skipped (bool | None | Unset): true: only events the schedule's filter skipped. false:
+            leave them out, which is what a busy webhook schedule's history usually needs. Omitted:
+            both.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -193,5 +246,7 @@ async def asyncio(
             schedule_id=schedule_id,
             client=client,
             limit=limit,
+            status=status,
+            skipped=skipped,
         )
     ).parsed

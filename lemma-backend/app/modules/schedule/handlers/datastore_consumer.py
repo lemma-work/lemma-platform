@@ -29,7 +29,7 @@ from app.core.infrastructure.db.uow_factory import (
     UnitOfWorkFactory,
 )
 from app.core.log.log import get_logger
-from app.modules.schedule.infrastructure.adapters.system_model_filter import (
+from app.modules.schedule.infrastructure.adapters.decision_filter import (
     create_schedule_processor,
 )
 

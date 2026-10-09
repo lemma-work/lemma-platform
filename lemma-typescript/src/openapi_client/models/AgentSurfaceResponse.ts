@@ -14,6 +14,7 @@ export type AgentSurfaceResponse = {
     agent_name?: (string | null);
     config: SurfaceConfigResponse;
     connection?: (SurfaceConnection | null);
+    contacts_warning?: (string | null);
     credential_mode?: SurfaceCredentialMode;
     id: string;
     name: string;

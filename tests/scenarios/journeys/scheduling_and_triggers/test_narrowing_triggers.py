@@ -23,10 +23,11 @@ pytestmark = [
 
 #: What the product calls a trigger it decided not to act on.
 #:
-#: A filtered trigger produces no *run* — there was no work — so it is recorded
-#: on the schedule as its last fire status rather than in the run history. That
-#: is where a person has to look, and asking the run list instead reports
-#: "nothing happened" for a feature working exactly as intended.
+#: A row condition that does not hold produces no *run* — nothing was judged and
+#: there was no work — so it is recorded on the schedule as its last fire status.
+#: A filter that *judged* the event and said no is recorded as a run of its own,
+#: carrying the answer that decided it, because "why was this skipped?" has an
+#: answer there worth keeping.
 SKIPPED = "FILTERED"
 #: A run that got past the condition, whatever became of it afterwards.
 ACTED_ON = {"RECEIVED", "PROCESSING", "DISPATCHED", "COMPLETED", "TARGET_FAILED"}
@@ -171,3 +172,71 @@ async def test_an_unsatisfiable_condition_is_refused(world, run):
     )
     del agent
     assert refused, refused
+
+
+@pytest.fixture
+async def judging_signups(world, run):
+    """A schedule whose filter is a judgement about the row, not a condition."""
+    alice = await world.person("daniel")
+    pod = await alice.creates_a_pod(named=run.name("pod"))
+    table = await alice.creates_a_table(
+        in_pod=pod, columns=[column("title"), column("status")]
+    )
+    agent = await alice.creates_an_agent(in_pod=pod)
+    schedule = await alice.creates_a_schedule(
+        in_pod=pod,
+        kind="DATASTORE",
+        agent=agent["name"],
+        config={"table_name": table["name"], "operations": ["INSERT"]},
+        filter_instruction="Only signups from large companies",
+    )
+    return alice, pod, table, schedule
+
+
+@scenario("A change the filter judges not worth acting on is skipped, with the answer")
+@proves("PS-SCHED-012")
+@covers("schedule.create", "schedule.run.list", "record.create")
+async def test_a_judged_skip_keeps_the_answer_that_decided_it(judging_signups):
+    """The deployment's stand-in model answers this filter no, so the row is
+    skipped -- and the skip is a run carrying that answer, kept apart from the
+    firings a person usually wants to see."""
+    alice, pod, table, schedule = judging_signups
+
+    await alice.adds_record(
+        {"title": "a signup", "status": "new"}, to_table=table["name"], in_pod=pod
+    )
+
+    skipped = await eventually(
+        lambda: alice.runs_of_schedule(schedule, in_pod=pod, skipped=True),
+        lambda runs: len(runs) == 1,
+        describe="the judged skip to be recorded as a run",
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
+    )
+    answers = skipped[0].get("llm_output") or {}
+    assert str(skipped[0].get("status")) == SKIPPED, skipped[0]
+    assert answers.get("should_proceed") is False, answers
+    assert (answers.get("_decision") or {}).get("provider"), (
+        "a skip should say which provider decided it"
+    )
+    assert await alice.runs_of_schedule(schedule, in_pod=pod, skipped=False) == [], (
+        "a skip was listed among the firings"
+    )
+    settled = await alice.opens_schedule(schedule, in_pod=pod)
+    assert str(settled.get("last_fire_status")) == SKIPPED
+
+
+@scenario("A time schedule cannot be given a condition nothing would ever check")
+@proves("PS-SCHED-012")
+@covers("schedule.create")
+async def test_a_time_schedule_refuses_a_condition(watching_for_done):
+    alice, pod, _table, schedule = watching_for_done
+
+    status = await alice.is_refused_creating_a_schedule(
+        in_pod=pod,
+        kind="TIME",
+        config={"cron": "0 9 * * *"},
+        agent=schedule.get("agent_name"),
+        filter_instruction="Only on weekdays",
+    )
+
+    assert status == 422, f"a time schedule accepted a condition ({status})"

@@ -7,6 +7,9 @@ import { listStamp } from "./stamp";
 import { readableName } from "@/library/reading";
 import { readPodRoles } from "./pod-roles";
 import { readGroup, readGroupDetail, readGroups, readTimeline } from "./groups";
+import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget } from "./contacts";
+import { readOpening } from "./public-rows";
+import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
     agentRows,
@@ -642,6 +645,93 @@ export const liveSource: PodSource = {
     async answerGroupQuestion(podId, notificationId, answer) {
         await lemma(podId).notifications.respond(notificationId, { summary: answer });
     },
+    async listContacts(podId) {
+        return everyPage(async (before) => readContacts(await lemma(podId).contacts.list(podId, { limit: 200, before })));
+    },
+    async renameContact(podId, contactId, name) {
+        return readContact(await lemma(podId).contacts.rename(podId, contactId, name));
+    },
+    async forgetContact(podId, contactId) {
+        await lemma(podId).contacts.remove(podId, contactId);
+    },
+    async exportContact(podId, contactId) {
+        return lemma(podId).contacts.export(podId, contactId);
+    },
+    async followUpContact(podId, contactId, message) {
+        const sent = await lemma(podId).contacts.followUp(podId, contactId, message);
+        return { delivered: sent.delivered, platform: sent.platform };
+    },
+    async listWidgets(podId) {
+        return ((await lemma(podId).contacts.widgets.list(podId)).items ?? []).map(readWidget);
+    },
+    async createWidget(podId, draft) {
+        const made = await lemma(podId).contacts.widgets.create(podId, {
+            name: draft.name.trim(),
+            allowed_origins: readOrigins(draft.origins),
+            answer: draft.answer as WebWidgetCreateRequest["answer"],
+        });
+        return { ...readWidget(made), signingSecret: made.signing_secret };
+    },
+    async updateWidget(podId, widgetId, change) {
+        return readWidget(await lemma(podId).contacts.widgets.update(podId, widgetId, {
+            ...(change.answer ? { answer: change.answer as WebWidgetUpdateRequest["answer"] } : {}),
+            ...(change.origins ? { allowed_origins: change.origins } : {}),
+        }));
+    },
+    async reissueWidget(podId, widgetId) {
+        return (await lemma(podId).contacts.widgets.reissue(podId, widgetId)).signing_secret;
+    },
+    async deleteWidget(podId, widgetId) {
+        await lemma(podId).contacts.widgets.remove(podId, widgetId);
+    },
+    async tableOpening(podId, table) {
+        return readOpening(await lemma(podId).tables.publicRows.get(table));
+    },
+    async openTable(podId, table, audience, columns) {
+        return readOpening(await lemma(podId).tables.publicRows.open(table, { audience: audience as OpenTableRequest["audience"], columns }));
+    },
+    async closeTable(podId, table) {
+        await lemma(podId).tables.publicRows.close(table);
+    },
+    async contactReach(podId) {
+        const client = lemma(podId);
+        const [tables, functions] = await Promise.all([
+            everyPage(async (pageToken) => {
+                const page = await client.tables.list({ limit: 100, pageToken });
+                return { items: page.items ?? [], next: page.next_page_token };
+            }),
+            everyPage(async (pageToken) => {
+                const page = await client.functions.list({ limit: 100, pageToken });
+                return { items: page.items ?? [], next: page.next_page_token };
+            }),
+        ]);
+        return {
+            tables: tables.map((table) => ({
+                name: table.name,
+                contactOwned: Boolean(table.contact_owned),
+                perPerson: Boolean(table.enable_rls),
+                contactColumns: (table as { contact_columns?: string[] }).contact_columns ?? [],
+            })),
+            functions: functions.map((fn) => ({
+                name: fn.name,
+                description: fn.description ?? null,
+                contactsInvoke: Boolean(fn.contacts_invoke),
+            })),
+        };
+    },
+    async setTableContactOwned(podId, table, on, columns) {
+        const change = { contact_owned: on, ...(on && columns ? { contact_columns: columns } : {}) };
+        await lemma(podId).tables.update(table, change as UpdateTableRequest);
+    },
+    async setFunctionContactsInvoke(podId, fn, on) {
+        await lemma(podId).functions.setContactsInvoke(fn, on);
+    },
+    async contactsCap(orgId) {
+        return readCap(await lemma().contacts.cap(orgId));
+    },
+    async setContactsCap(orgId, limit) {
+        return readCap(await lemma().contacts.setCap(orgId, limit));
+    },
     async createSurfaceAccount(orgId, entry, credentials) {
         const client = lemma();
         const install = await client.connectors.enableApp(orgId, entry.connectorId, { kind: entry.kind });
@@ -1173,7 +1263,7 @@ export const liveSource: PodSource = {
             max_hits?: number;
         };
         const rawUrl = minted.signed_url ?? "";
-        /* The code is the last segment of `{api}/s/{code}`. Taken from the URL
+        /* The code is the last segment of `{api}/public/s/{code}`. Taken from the URL
            the server returned rather than minted here, so a change of shape on
            that side cannot leave this one confidently wrong. */
         const code = rawUrl.split("/").filter(Boolean).pop() ?? "";
@@ -1494,14 +1584,14 @@ export const liveSource: PodSource = {
             : job));
     },
 
-    async listScheduleRuns(podId: string, scheduleId: string): Promise<ScheduleRun[]> {
+    async listScheduleRuns(podId: string, scheduleId: string, options: { skipped?: boolean } = {}): Promise<ScheduleRun[]> {
         /* Newest first is the server's order (`list_for_schedule` orders by
            `created_at DESC`), so nothing here sorts. Twenty is a screenful of
            history; the route's own ceiling is a thousand. */
         return readRuns(await lemma(podId).request(
             "GET",
             `/pods/${podId}/schedules/${scheduleId}/runs`,
-            { params: { limit: 20 } },
+            { params: { limit: 20, skipped: options.skipped ?? false } },
         ));
     },
 

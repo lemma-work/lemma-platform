@@ -1,7 +1,7 @@
 """Behavior of the internal function-runtime callback controller.
 
 ``test_function_runtime_auth_boundary.py`` only checks that these routes are
-wired into the global auth middleware (they are not in ``EXCLUDED_PATHS``).
+wired into the global auth middleware (no ``auth_exemptions`` group covers them).
 These tests call the router's handler functions directly -- the same pattern
 ``app/modules/agent/tests/unit/test_agent_tool_controller.py`` uses for an
 internal, delegation-authenticated controller -- with a ``SimpleNamespace``

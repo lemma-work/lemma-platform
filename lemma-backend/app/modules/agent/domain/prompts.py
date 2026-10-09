@@ -16,7 +16,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.modules.agent.domain.outsiders import OUTSIDER_TOOLSETS, answers_outsiders
+from app.modules.agent.domain.outsiders import (
+    OUTSIDER_TOOLSETS,
+    Audience,
+    run_audience,
+)
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.prompt_directories import _directory_sections
 from app.modules.agent.domain.value_objects import AgentToolset
@@ -325,7 +329,7 @@ def build_agent_instruction_parts(
 
             fragment = surface_platform_guidance(
                 surface_platform,
-                answers_outsider=bool(getattr(ctx, "answers_outsider", False)),
+                audience=run_audience(ctx),
                 in_group=is_group_conversation(ctx),
             )
             if fragment:
@@ -451,7 +455,7 @@ def _fragment_toolsets(
     conversation: Conversation,
 ) -> set[AgentToolset]:
     """Toolsets whose guidance fragment should be included for this run."""
-    if answers_outsiders(conversation):
+    if Audience.of(conversation).answers_outsiders:
         # A stranger's run is not told about a sandbox, a browser or a task
         # list it does not have -- only what `resolve_toolsets` leaves it.
         configured = (

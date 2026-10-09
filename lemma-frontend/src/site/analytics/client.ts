@@ -275,4 +275,4 @@ function forcedFeatures(): Set<string> {
 }
 
 /** Every flag the client reads, by its PostHog key. */
-export type FeatureFlag = "groups";
+export type FeatureFlag = "groups" | "contacts";

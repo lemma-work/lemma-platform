@@ -35,6 +35,7 @@ one operating loop, one coherent data model.
 | **Schedules** | Time-based (TIME cron) or event-based — DATASTORE (table row events) and WEBHOOK (connector events) | Starting agents or workflows automatically |
 | **Connectors** | Third-party apps (Gmail, Slack, …) via org auth configs, accounts, and executable operations | Acting on external systems |
 | **Surfaces** | One pod agent exposed on Slack/Teams/Telegram/WhatsApp/email | Meeting users where they already chat |
+| **People outside** | Contacts (known by their channel), web chat visitors, and tables opened to outside rows — none of them sign in | Customer support, sign-ups, intake, "where is my order" — see `references/people-outside.md` and the `lemma-form` skill |
 | **Apps** | Custom browser apps deployed into the pod — single-file HTML (no build) for one page, or Vite + lemma-sdk for multi-page apps | The product UI: dashboards, queues, detail views, workflow inboxes |
 
 **Choosing among them — six heuristics** (full text in `references/pod-model.md` → "Choosing a primitive"; `pod-design.md` turns them into decision tables):
@@ -146,5 +147,6 @@ Read what the task needs:
 - `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; connector kinds (`composio`/`http`/`sql`/`mcp`); custom connectors from an OpenAPI spec, MCP server or database; delegated execution.
 - `references/schedules-and-triggers.md` — TIME/DATASTORE/WEBHOOK triggers, event payloads, LLM event filtering.
 - `references/surfaces.md` — exposing one pod agent on Slack/Teams/Telegram/WhatsApp/email (Gmail/Outlook are connectors, not surfaces).
+- `references/people-outside.md` — contacts, contact-owned tables, functions opened to contacts, web chat, and forms as tables opened to outside rows. Build forms with the `lemma-form` skill.
 - `references/apps.md` — app architecture, SDK/auth/data wiring, scaffold/dev/deploy, and components. Pair it with `lemma-app-design` for UX/visual direction and `lemma-app-qa` for systematic release testing.
 - `references/app-recipes/*.md` — copy-paste app patterns: agent chat, RLS tables, workflow forms, file viewer, connector actions (load the one you need).

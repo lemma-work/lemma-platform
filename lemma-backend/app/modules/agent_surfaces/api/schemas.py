@@ -20,6 +20,11 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceSlackConfig,
     SurfaceTelegramConfig,
 )
+from app.modules.agent_surfaces.api.audience_schemas import (
+    SurfaceContactsConfig,
+    SurfaceGroupsConfig,
+)
+from app.modules.agent_surfaces.domain.surface_config import SurfaceContactPolicy
 from app.modules.agent_surfaces.domain.notification import (
     NotificationDeliveryStatus,
     NotificationEntity,
@@ -61,21 +66,6 @@ class SurfaceSendPolicyConfig(BaseModel):
     """Proactive-send controls. Mirrored across request and response."""
 
     allow_send: bool = False
-
-
-class SurfaceGroupsConfig(BaseModel):
-    """How the bot treats people outside the pod in its groups. Mirrored."""
-
-    answers_outsiders: bool = Field(
-        default=True,
-        description=(
-            "Answer people outside the pod in this bot's groups, from what the "
-            "pod made Public. Off, the bot answers only the pod's members, "
-            "whatever a group's own switch says."
-        ),
-    )
-
-    model_config = ConfigDict(extra="forbid")
 
 
 class SurfaceTelegramConfigInput(BaseModel):
@@ -122,6 +112,7 @@ class SurfaceBehaviorConfigInput(BaseModel):
     )
     slack: SurfaceSlackConfigInput = Field(default_factory=SurfaceSlackConfigInput)
     groups: SurfaceGroupsConfig = Field(default_factory=SurfaceGroupsConfig)
+    contacts: SurfaceContactsConfig = Field(default_factory=SurfaceContactsConfig)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -165,6 +156,7 @@ class SurfaceConfigResponse(BaseModel):
         default_factory=SurfaceSlackConfigResponse
     )
     groups: SurfaceGroupsConfig = Field(default_factory=SurfaceGroupsConfig)
+    contacts: SurfaceContactsConfig = Field(default_factory=SurfaceContactsConfig)
 
     @classmethod
     def from_domain(cls, config: SurfaceConfig) -> "SurfaceConfigResponse":
@@ -188,6 +180,10 @@ def surface_config_from_input(
         slack=SurfaceSlackConfig(app_name=config_input.slack.app_name),
         groups=SurfaceGroupPolicy(
             answers_outsiders=config_input.groups.answers_outsiders
+        ),
+        contacts=SurfaceContactPolicy(
+            answer=config_input.contacts.answer,
+            looked_after_by=config_input.contacts.looked_after_by,
         ),
     )
 
@@ -343,6 +339,8 @@ class AgentSurfaceResponse(BaseModel):
     reach: SurfaceReach | None = None
     config: SurfaceConfigResponse
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
+    #: Set while nobody in the space looks after the contacts this bot answers.
+    contacts_warning: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

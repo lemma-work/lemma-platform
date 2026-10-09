@@ -18,6 +18,7 @@
 
 import Session from "supertokens-web-js/recipe/session/index.js";
 import { ensureCookieSessionSupport } from "./supertokens.js";
+import { EmbeddedCredentials, isEmbeddedInHost } from "./embedded.js";
 import { isUnreachableStatus, probeReachable, refreshFailureKind } from "./reachability.js";
 
 export interface UserInfo {
@@ -414,6 +415,8 @@ export class AuthManager {
   private readonly apiUrl: string;
   private readonly authUrl: string;
   private injectedToken: string | null;
+  /** An app framed inside an AI tool, whose token comes from the Lemma view around it. */
+  private readonly embedded: EmbeddedCredentials | null;
   private state: AuthState = { status: "loading", user: null };
   private listeners: Set<AuthListener> = new Set();
   private authCheckPromise: Promise<AuthState> | null = null;
@@ -431,20 +434,43 @@ export class AuthManager {
     this.apiUrl = apiUrl;
     this.authUrl = authUrl;
     this.injectedToken = token?.trim() || detectInjectedToken();
+    this.embedded = !this.injectedToken && isEmbeddedInHost() ? new EmbeddedCredentials() : null;
 
-    if (!this.injectedToken) {
+    if (!this.injectedToken && !this.embedded) {
       ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
     }
   }
 
-  /** Whether requests will use an injected Bearer token (testing mode). */
+  /** Whether requests carry a Bearer token rather than the session cookie. */
   get isTokenMode(): boolean {
-    return this.injectedToken !== null;
+    return this.injectedToken !== null || this.embedded !== null;
   }
 
-  /** The current injected Bearer token, if token-mode auth is active. */
+  /** The Bearer token requests carry right now, if token-mode auth is active. */
   getBearerToken(): string | null {
-    return this.injectedToken;
+    return this.injectedToken ?? this.embedded?.current() ?? null;
+  }
+
+  /**
+   * Resolves once requests can carry credentials: at once, except in an app
+   * framed inside an AI tool, which waits for its first token from the view.
+   */
+  async ready(): Promise<void> {
+    if (this.embedded) await this.embedded.ready();
+  }
+
+  /**
+   * In a framed app, a fresh token from the view after a 401 — the one it held
+   * may have outlived itself. False anywhere else, and when none came.
+   */
+  async renewEmbeddedToken(): Promise<boolean> {
+    if (!this.embedded) return false;
+    try {
+      await this.embedded.renew();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** The current auth state. */
@@ -583,7 +609,7 @@ export class AuthManager {
    * Check whether a cookie-backed session is active without mutating auth state.
    */
   async isAuthenticatedViaCookie(): Promise<boolean> {
-    if (this.injectedToken) {
+    if (this.isTokenMode) {
       return this.isAuthenticated();
     }
 
@@ -608,6 +634,9 @@ export class AuthManager {
     if (this.injectedToken) {
       return this.injectedToken;
     }
+    if (this.embedded) {
+      return this.embedded.ready();
+    }
 
     this.assertBrowserContext();
     ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
@@ -625,6 +654,9 @@ export class AuthManager {
   async refreshAccessToken(): Promise<string> {
     if (this.injectedToken) {
       return this.injectedToken;
+    }
+    if (this.embedded) {
+      return this.embedded.renew();
     }
 
     this.assertBrowserContext();
@@ -659,13 +691,14 @@ export class AuthManager {
       setHeader(headers, "Content-Type", "application/json");
     }
 
-    if (this.injectedToken) {
-      setHeader(headers, "Authorization", `Bearer ${this.injectedToken}`);
+    const bearer = this.getBearerToken();
+    if (bearer) {
+      setHeader(headers, "Authorization", `Bearer ${bearer}`);
     }
 
     return {
       ...init,
-      credentials: this.injectedToken ? "omit" : "include",
+      credentials: this.isTokenMode ? "omit" : "include",
       headers,
     };
   }
@@ -781,11 +814,18 @@ export class AuthManager {
     // can never succeed, so every app on the pod home storms it endlessly.
     // `doesSessionExist()` reads the local front token only (no network) and
     // returns false when there's nothing to refresh, ending the loop at the source.
-    if (!this.injectedToken && typeof window !== "undefined") {
+    if (!this.isTokenMode && typeof window !== "undefined") {
       ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       const local = await this.localSession();
       if (local === "unreachable") return unreachable();
       if (local === "absent") return unauthenticated();
+    }
+    if (this.embedded) {
+      try {
+        await this.embedded.ready();
+      } catch {
+        return unauthenticated();
+      }
     }
 
     if (revision !== this.authRevision) return this.state;
@@ -843,6 +883,12 @@ export class AuthManager {
     this.authCheckPromise = null;
     if (this.injectedToken) {
       this.clearInjectedToken();
+      this.markUnauthenticated();
+      return true;
+    }
+    // A framed app holds no Lemma session to end; the view's connection is
+    // ended where it was made, in the AI tool or in Lemma's settings.
+    if (this.embedded) {
       this.markUnauthenticated();
       return true;
     }
