@@ -105,13 +105,18 @@ export function useLibraryWrites(podId: string, directory: string) {
             setProblem("That drop could not be read. Try dragging it in again.");
             return;
         }
+        /* The files first. An upload makes the folders above it (`mkdir -p`),
+           so by the time an empty folder inside a dropped folder is made, the
+           folder it sits in exists. Made the other way round, an empty folder
+           whose parent only the upload was going to create would fail and the
+           drop would carry on without it. */
+        for (const each of tree.files) await writeOne(each.file, each.directory);
         for (const folder of tree.folders) {
             /* The sample has no server to make a parent on the way to a file,
                so every folder is made there; live, only the folders an upload
                would not bring into being. */
             if (sample || !folder.holdsFile) await makeFolder(folder.path, folder.path.slice(folder.path.lastIndexOf("/") + 1));
         }
-        for (const each of tree.files) await writeOne(each.file, each.directory);
     }
 
     /** A folder, made where it is named. The path rather than the parent and
