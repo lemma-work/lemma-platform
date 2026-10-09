@@ -36,3 +36,15 @@ test("a live browser links to the address its result carries, and only that", ()
     const resource = parseDisplayResource({ type: "BROWSER" });
     assert.equal(resource && resourceLabel(resource), "Live browser");
 });
+
+test("a live browser whose address has expired stops offering it", async () => {
+    const { liveEnded } = await import("../src/thread/display-resource.ts");
+    const now = Date.parse("2026-10-09T12:00:00Z");
+    const result = (until: string) => ({ success: true, url: "https://browser.example/live", expires_at: until });
+    const live = parseDisplayResource({ type: "BROWSER" }, result("2026-10-09T12:30:00Z"))!;
+    const ended = parseDisplayResource({ type: "BROWSER" }, result("2026-10-09T11:30:00Z"))!;
+    assert.equal(resourceHref(SITE, POD, live, now), "https://browser.example/live");
+    assert.equal(resourceHref(SITE, POD, ended, now), null, "an old card is not a dead link");
+    assert.equal(liveEnded(ended, now), true);
+    assert.equal(liveEnded(parseDisplayResource({ type: "BROWSER" }, { url: "https://b.example" })!, now), false);
+});

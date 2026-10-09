@@ -3,7 +3,7 @@ import { siteUrl } from "@/session/client";
 import { FileView } from "./file-view";
 import { DataView } from "./data-view";
 import { WidgetView } from "./widget-view";
-import { resourceHref, resourceLabel, type DisplayResource } from "./display-resource";
+import { liveEnded, resourceHref, resourceLabel, type DisplayResource } from "./display-resource";
 
 const RESOURCE_ICONS = { BROWSER: GlobeIcon, WIDGET: AppsIcon, FILE: FileIcon, TABLE: TableIcon, APP: AppsIcon, AGENT: AgentIcon, FUNCTION: CodeIcon, WORKFLOW: WorkflowIcon, SCHEDULE: ClockIcon };
 
@@ -82,7 +82,12 @@ export function ResourceCard({
 
     const href = resourceHref(siteUrl(), podId, resource);
     if (!href) {
-        return <div className="resource">{common}</div>;
+        return (
+            <div className="resource">
+                {common}
+                {liveEnded(resource) && <span className="resource__go">Ended</span>}
+            </div>
+        );
     }
 
     /* A live browser is somewhere else; everything else is a place in this

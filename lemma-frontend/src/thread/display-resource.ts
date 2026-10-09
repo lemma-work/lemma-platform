@@ -22,6 +22,8 @@ export interface DisplayResource {
     /** A live browser's address, which only the tool's result carries: the
      *  sandbox mints it when the call runs, and it expires. */
     liveUrl?: string;
+    /** When that address stops working (ISO), so an old card stops offering it. */
+    liveUntil?: string;
 }
 
 const TYPES = new Set<DisplayResourceType>([
@@ -66,6 +68,7 @@ export function parseDisplayResource(args: unknown, result?: unknown): DisplayRe
         content: str(request.content),
         query: str(request.query),
         liveUrl: raw === "BROWSER" ? str(record(result).url) : undefined,
+        liveUntil: raw === "BROWSER" ? str(record(result).expires_at) : undefined,
     };
 }
 
@@ -80,12 +83,12 @@ export function resourceLabel(resource: DisplayResource): string {
  *  rather than draws. The same `/t/{pod}/…` routes the backend gives Slack and
  *  WhatsApp (`display_resource_renderer.build_display_resource_url`), so a
  *  link means the same place wherever it is followed from. */
-export function resourceHref(site: string, podId: string, resource: DisplayResource): string | null {
+export function resourceHref(site: string, podId: string, resource: DisplayResource, now = Date.now()): string | null {
     const base = site + "/t/" + encodeURIComponent(podId);
     const name = resource.name ? encodeURIComponent(resource.name) : null;
     switch (resource.type) {
         case "BROWSER":
-            return resource.liveUrl ?? null;
+            return resource.liveUrl && !liveEnded(resource, now) ? resource.liveUrl : null;
         case "FILE": {
             const segments = (resource.path ?? "").split("/").filter(Boolean).map(encodeURIComponent);
             return segments.length ? base + "/file/" + segments.join("/") : base + "/files";
@@ -103,4 +106,12 @@ export function resourceHref(site: string, podId: string, resource: DisplayResou
         case "WIDGET":
             return null;
     }
+}
+
+/** Whether a live browser's address has expired. One with no expiry given is
+ *  taken at its word. */
+export function liveEnded(resource: DisplayResource, now = Date.now()): boolean {
+    if (resource.type !== "BROWSER" || !resource.liveUntil) return false;
+    const until = Date.parse(resource.liveUntil);
+    return Number.isFinite(until) && until <= now;
 }
