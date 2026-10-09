@@ -3,7 +3,7 @@ import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type DragEve
 import {
     canSend,
     describeSize,
-    tooLarge,
+    offered,
     type Attachment,
 } from "./attachments";
 import { composerActions, type Queued } from "./queued";
@@ -136,27 +136,49 @@ export const Composer = memo(function Composer({
         return store && draftKey ? readDraft(store, draftKey) : "";
     });
 
+    /* Whether the person has written in this box since it last took on a
+       conversation's draft. It is what tells a box they emptied apart from one
+       whose conversation has not arrived yet, and the two need opposite
+       answers: only the first may delete what is stored. */
+    const edited = useRef(false);
+
     /* Written a moment after typing stops, and at once when the box empties —
        a message just sent must not come back as a draft because the page
-       closed inside that moment. A key that changes under the draft is a new
-       conversation getting its id: the draft moves with it. */
+       closed inside that moment.
+
+       A key that changes under the draft means one of two things. Words typed
+       before the conversation existed are that conversation's, so they move
+       with it and the stand-in entry goes. An untouched box under a key that
+       arrives late is the conversation the pane was opened for, resolved
+       after the box was drawn: what it kept is what belongs in the box now.
+       Writing the empty box under the new key instead — which is what this
+       did — is how opening a conversation deleted the draft it was keeping. */
     const savedUnder = useRef(draftKey ?? null);
     const latestDraft = useRef(draft);
     latestDraft.current = draft;
     useEffect(() => {
         const store = draftStore();
         if (!store) return;
-        const previous = savedUnder.current;
-        if (previous !== (draftKey ?? null)) {
-            if (previous) writeDraft(store, previous, "");
-            savedUnder.current = draftKey ?? null;
+        const here = draftKey ?? null;
+        if (savedUnder.current !== here) {
+            const moves = edited.current;
+            if (moves && savedUnder.current) writeDraft(store, savedUnder.current, "");
+            savedUnder.current = here;
+            edited.current = false;
+            if (!moves && here) {
+                const kept = readDraft(store, here);
+                if (kept !== draft) {
+                    setDraft(kept);
+                    return;
+                }
+            }
         }
-        if (!draftKey) return;
+        if (!here) return;
         if (!draft.trim()) {
-            writeDraft(store, draftKey, "");
+            if (edited.current) writeDraft(store, here, "");
             return;
         }
-        const timer = setTimeout(() => writeDraft(store, draftKey, draft), DRAFT_SAVE_MS);
+        const timer = setTimeout(() => writeDraft(store, here, draft), DRAFT_SAVE_MS);
         return () => clearTimeout(timer);
     }, [draft, draftKey]);
     useEffect(() => () => {
@@ -176,6 +198,7 @@ export const Composer = memo(function Composer({
        sending. Focus follows it so the next keystroke is theirs. */
     useEffect(() => {
         if (!fill) return;
+        edited.current = true;
         setDraft(fill.text);
         input.current?.focus();
         onFilled?.();
@@ -210,21 +233,17 @@ export const Composer = memo(function Composer({
      *  only ever a refusal that says exactly what it did. */
     function offer(files: File[]) {
         if (files.length === 0) return;
-        const big = files.filter(tooLarge);
-        const rest = files.filter((file) => !tooLarge(file));
-        setRefused(
-            big.length === 0
-                ? null
-                : big.length === 1
-                  ? big[0].name + " is too large to attach (" + describeSize(big[0].size) + ")."
-                  : big.length + " files are too large to attach.",
-        );
-        if (rest.length > 0) onAttach?.(rest);
+        const { take, refused: why } = offered(files);
+        setRefused(why);
+        if (take.length > 0) onAttach?.(take);
     }
 
     async function send() {
         const text = draft.trim();
         if (!canSend(text, held) || busy || submitting.current) return;
+        /* The box is being emptied by the send, not by the person, but the
+           draft it held is on its way out either way. */
+        edited.current = true;
         setDraft("");
         setRefused(null);
         submitting.current = true;
@@ -337,7 +356,7 @@ export const Composer = memo(function Composer({
                         aria-describedby={chosen ? hintId : undefined}
                         placeholder={placeholder}
                         value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
+                        onChange={(event) => { edited.current = true; setDraft(event.target.value); }}
                         onPaste={takesFiles ? (event) => {
                             /* A screenshot on the clipboard is a file, and
                                pasting one is how people send them. Only

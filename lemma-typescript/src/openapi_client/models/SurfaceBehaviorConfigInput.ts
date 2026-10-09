@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { SurfaceChannelRouteInput } from './SurfaceChannelRouteInput.js';
+import type { SurfaceContactsConfig } from './SurfaceContactsConfig.js';
 import type { SurfaceGroupsConfig } from './SurfaceGroupsConfig.js';
 import type { SurfaceIdentityConfigInput } from './SurfaceIdentityConfigInput.js';
 import type { SurfaceSendPolicyConfig } from './SurfaceSendPolicyConfig.js';
@@ -10,6 +11,7 @@ import type { SurfaceSlackConfigInput } from './SurfaceSlackConfigInput.js';
 import type { SurfaceTelegramConfigInput } from './SurfaceTelegramConfigInput.js';
 export type SurfaceBehaviorConfigInput = {
     channels?: Array<SurfaceChannelRouteInput>;
+    contacts?: SurfaceContactsConfig;
     /**
      * Ignored. The DM reset window is a deployment-wide setting (SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so existing pod bundles and clients keep working.
      * @deprecated

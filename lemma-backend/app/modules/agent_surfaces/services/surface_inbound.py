@@ -40,6 +40,10 @@ from app.modules.agent_surfaces.services.group_ingress import (
     own_bot_group_message,
 )
 from app.modules.agent_surfaces.services.group_names import spoken_to_by_name
+from app.modules.agent_surfaces.services.outside_the_pod import (
+    NOT_OUTSIDE,
+    answer_outside_the_pod,
+)
 from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -485,22 +489,16 @@ class SurfaceInboundMixin:
                 credentials=credentials,
                 installation_id=surface.account_id or surface.id,
             )
-        outsiders = self._outsiders()
-        group = await outsiders.group_welcoming(
-            surface=surface, parsed=parsed, sender=resolved_user
+        outside = await answer_outside_the_pod(
+            uow=self.uow,
+            router=self.router,
+            binder=self.binder,
+            surface=surface,
+            parsed=parsed,
+            sender=resolved_user,
         )
-        if group is not None:
-            route = await self.router.resolve_route(surface=surface, parsed=parsed)
-            if route is None:
-                return None
-            return await outsiders.prepare(
-                surface=surface,
-                parsed=parsed,
-                sender=resolved_user,
-                group=group,
-                route=route,
-                binder=self.binder,
-            )
+        if outside is not NOT_OUTSIDE:
+            return outside
         user_id = resolved_user.internal_user_id
         refusal = await self._sender_refusal(
             surface=surface,

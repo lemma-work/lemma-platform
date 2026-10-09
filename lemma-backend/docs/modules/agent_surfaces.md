@@ -36,6 +36,9 @@ Resend address.
 | `surface_whatsapp_numbers` | The deployment's WhatsApp numbers, one row each and each independent: its own WABA, access token, verify token and Flow ids, every one falling back to settings when absent so a single-number deployment declares nothing. `role` separates the one `SHARED` line everybody rides from the `ALLOCATABLE` pool; `status` separates "stop handing this out" from "we no longer own it". Who holds a number is not stored here — it is `agent_surfaces.surface_identity_id`, so there is no second copy to disagree |
 | `notifications` | Something the pod needs a person to see: recipient, actor, origin, body, optional background instruction, and open/expiry state. It lives in this module because delivery is surface work; the agent and workflow modules reach it through ports in `app/composition` |
 | `agent_surface_groups` | A group chat a surface's bot is in, one row per (surface, chat): its title, whether the bot answers people outside the pod there, and `owner_user_id`, the member who answers for them. No owner means outsiders are not answered. A WhatsApp group the bot asked Meta to create exists here before its chat id does: `external_channel_id` is null and `request_id` set until the confirmation webhook fills in the id and `invite_link` |
+| `agent_surface_web_widgets` | A pod's chat on other people's web pages, each answering as one of its agents, and the door a form page adds rows through. `public_key` (unique, readable by anybody) names the widget; `signing_secret` (encrypted) signs host tokens on the customer's server; `allowed_origins`, `answer` (`off`/`known`/`anyone`) and `looked_after_by` as for a bot's contacts. See `services/web_chat.py`. A form is any page that adds a row to a table the pod opened to visitors (`datastore_public_rows`): `GET /public/web/{key}/table` says what to ask, `POST /public/web/{key}/rows` adds the row, and `/public/web/{key}/page?table=` is the form Lemma hosts, with the chat beside it. On a web visitor's run the agent's `fill_form` tool fills that form's fields; it never sends it. Answers reach the page live on `GET /public/web/{key}/stream`, one JSON object per line after an `open` handshake, at most two per session, translated by `agent/contracts/visitor_stream.py`: the answer's text as it is written, `typing`, the finished message and `done` -- never thinking, tool traffic or a private note's run |
+| `visitor_sessions` (contacts' table) | One visitor's hold on one widget, found by a secret stored only as its digest and traded at `POST /public/web/{key}/session` for a 15-minute `visitor-access` token sent as `Authorization: Bearer` (`api/public_dependencies.py`). `strength` is `ANONYMOUS`, `CODE` or `HOST`; anonymous sessions end 90 days after they began, a contact's 30 days after last use, and a `HOST` session never refreshes without a fresh host token. Reissuing a widget's secret revokes its host sessions; forgetting a contact revokes theirs. Cascades from its conversation. CORS for `/public/web/*` is answered from the widget's own origins, never with credentials (`api/public_cors.py`), and nothing there is served unless `PUBLIC_WEB_ENABLED` is on |
+| `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions, spent codes and anonymous web conversations idle for 90 days, hourly |
 | `agent_surface_group_messages` | What the bot heard in a group and what it said there, kept only where the platform keeps no readable history (Telegram, WhatsApp). Always read newest-first and bounded |
 
 Conversation metadata records surface, platform, external user/channel/thread,
@@ -397,6 +400,18 @@ Webhook security handles Slack signatures, Teams/Telegram/WhatsApp verification,
 email provider metadata, timestamp windows, and challenge responses. Identity
 policy controls whether unknown external senders are rejected, linked, or
 represented as contacts. Redis dedup guards repeat provider deliveries.
+
+The contact path (`services/contacts.py`) never answers mail a machine sent
+(`platforms/email_automated.py`, plus the pod's own addresses), and treats a
+message that is only "STOP" as an unsubscribe. What it says or notes without a
+model -- a refusal, a parked-mail note, "a person will reply" -- is windowed in
+Redis by `services/contact_windows.py`, failing closed. Before a run for
+somebody outside the pod starts, `services/outside_cap.py` asks whether the
+organization's contacts cap is reached or a member has the conversation; if so
+the message is kept, no run starts, the member is told, and the person hears
+once a day that a person will reply. `SurfaceTurnStarter` calls it for chat and
+email surfaces, before the typing indicator and any file handling. Writing first to a
+contact takes `contact.message`.
 
 A contact shared during Telegram signup is matched by `onboarding_contact`: a
 verified profile number first, then -- only with

@@ -1,5 +1,5 @@
 /** The app host's sign-in page: trade the API session for this host's app cookie. */
-import { AuthManager, buildAuthUrl } from "./auth.js";
+import { AuthManager, buildAuthUrl, dropUpdateMarker, isHalfCleared } from "./auth.js";
 import { ApiError, HttpClient } from "./http.js";
 import { HostRefusedError, askHostForAppAccess, isEmbeddedInHost } from "./embedded.js";
 import Session from "supertokens-web-js/recipe/session/index.js";
@@ -44,6 +44,12 @@ function signInUrlForApp(authUrl: string, redirectUri: string): string {
 }
 
 async function refreshMainSession(): Promise<boolean> {
+  // A host that kept the update marker from an ended session answers "no"
+  // here without asking, though the person may have signed in since: opening
+  // a private app the next morning, its cookie and the API token both lapsed,
+  // sent a signed-in person to sign in. Only reached once the ticket request
+  // was refused, so a good token never pays for the question.
+  if (isHalfCleared()) dropUpdateMarker();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error("The session service did not answer")), 10_000);

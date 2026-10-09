@@ -29,6 +29,10 @@ export type CreateScheduleRequest = {
      */
     filter_output_schema?: (Record<string, any> | null);
     /**
+     * DATASTORE schedules only: also fire on rows people outside the pod added to an open table. Off by default. When it fires, the run is told the row's content came from outside and is untrusted.
+     */
+    include_outside_rows?: boolean;
+    /**
      * What the target should do when this fires, in your own words. Reaches an agent as the run's conversation instructions, layered after the agent's own. Required when targeting the default assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides whether to fire.
      */
     instruction?: (string | null);

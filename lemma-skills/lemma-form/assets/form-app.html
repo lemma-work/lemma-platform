@@ -1,0 +1,157 @@
+<!doctype html>
+<!--
+  A form app for a table opened to people outside the pod.
+
+  Replace:
+    PUBLIC_KEY   the pod web widget's public key (pk_...), from pod.web_widgets.list()
+    signups      the table's name, everywhere it appears
+    the fields   one per OPEN column; `name` is the column name exactly
+
+  The table decides what may be written. Inputs named after a closed column are
+  ignored by the server, so keep this list to the open columns.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workshop sign-up</title>
+<style>
+  :root {
+    --accent: #5a3fd4;
+    --bg: #f6f4f1; --card: #fff; --ink: #1d1b18; --ink-2: #6f6a62; --line: #e7e2da;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141312; --card: #1d1c1a; --ink: #f2f0ec; --ink-2: #a29d95; --line: #34312d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 56px 16px 80px; }
+  .card { background: var(--card); border-radius: 18px; padding: 32px 28px;
+          box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 10px 32px rgba(0,0,0,.07); }
+  h1 { font-size: 26px; font-weight: 500; letter-spacing: -.01em; margin: 0 0 6px; }
+  .intro { color: var(--ink-2); margin: 0 0 24px; }
+  label { display: block; font-size: 14px; font-weight: 500; margin: 0 0 6px; }
+  .field { margin-bottom: 18px; }
+  .optional { color: var(--ink-2); font-weight: 400; }
+  input, select, textarea { width: 100%; font: inherit; color: inherit; background: var(--card);
+         border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; outline: none;
+         transition: border-color .15s, box-shadow .15s; }
+  textarea { min-height: 110px; resize: vertical; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent);
+         box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .filled { animation: glow 1.4s ease; }
+  @keyframes glow { 0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); } }
+  button[type=submit] { width: 100%; border: 0; border-radius: 12px; padding: 13px; margin-top: 6px;
+         background: var(--accent); color: #fff; font: inherit; font-weight: 500; cursor: pointer; }
+  button[disabled] { opacity: .6; }
+  .problem { color: #e5484d; font-size: 13.5px; min-height: 20px; margin: 4px 0 0; }
+  .done { text-align: center; padding: 24px 0 8px; display: none; }
+  .done.on { display: block; }
+  .ask { display: block; margin: 18px auto 0; background: none; border: 0; color: var(--ink-2);
+         font: inherit; font-size: 13.5px; text-decoration: underline; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>Workshop sign-up</h1>
+    <p class="intro">Saturday 12 October, 10am at the studio. Bring a laptop.</p>
+
+    <form id="form" method="post" data-lemma-table="signups" novalidate>
+      <div class="field">
+        <label for="full_name">Your name</label>
+        <input id="full_name" name="full_name" required autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" required autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="company">Company <span class="optional">(optional)</span></label>
+        <input id="company" name="company" autocomplete="organization">
+      </div>
+      <div class="field">
+        <label for="track">Which track? <span class="optional">(optional)</span></label>
+        <select id="track" name="track">
+          <option value="">Choose…</option>
+          <option>Design</option>
+          <option>Engineering</option>
+        </select>
+      </div>
+      <p class="problem" id="problem" role="alert"></p>
+      <button type="submit">Send</button>
+    </form>
+
+    <div class="done" id="done">
+      <h1>You're in.</h1>
+      <p class="intro">We'll email the details on Friday.</p>
+    </div>
+    <button class="ask" type="button" id="ask">Questions? Ask us — or have us fill this in.</button>
+  </div>
+</main>
+
+<script>
+  /* The pod's web chat, from the API this app is served by. Loading it binds
+     the form above: Send adds a row, and the chat can fill the fields. */
+  (function () {
+    var cfg = window.__LEMMA_CONFIG__ || {};
+    var api = (cfg.apiUrl || window.location.origin).replace(/\/$/, "");
+    var tag = document.createElement("script");
+    tag.src = api + "/public/web/widget.js";
+    tag.setAttribute("data-lemma-key", "PUBLIC_KEY");
+    tag.async = true;
+    document.body.appendChild(tag);
+  })();
+
+  var form = document.getElementById("form");
+  var problem = document.getElementById("problem");
+  var send = form.querySelector("button[type=submit]");
+
+  form.addEventListener("submit", function (event) {
+    problem.textContent = "";
+    var missing = Array.prototype.find.call(form.elements, function (el) {
+      return el.required && !String(el.value).trim();
+    });
+    if (missing || !form.checkValidity()) {
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      problem.textContent = "Please fill in " + (missing ? missing.labels[0].textContent : "every field correctly") + ".";
+      (missing || form.querySelector(":invalid")).focus();
+      return;
+    }
+    send.disabled = true;
+    send.textContent = "Sending…";
+  }, true);
+
+  form.addEventListener("lemma:added", function () {
+    form.style.display = "none";
+    document.getElementById("done").classList.add("on");
+  });
+
+  form.addEventListener("lemma:error", function (event) {
+    send.disabled = false;
+    send.textContent = "Send";
+    var detail = event.detail || {};
+    problem.textContent = detail.code === "needs_contact"
+      ? "Confirm your email in the chat first, then send again."
+      : detail.message || "That didn't go through. Try again.";
+    if (detail.code === "needs_contact" && window.Lemma) window.Lemma.openChat();
+  });
+
+  /* The chat filled some fields: show which. */
+  window.addEventListener("lemma:fill", function (event) {
+    Object.keys(event.detail.values || {}).forEach(function (name) {
+      var el = form.elements.namedItem(name);
+      if (!el) return;
+      el.classList.remove("filled"); void el.offsetWidth; el.classList.add("filled");
+    });
+  });
+
+  document.getElementById("ask").addEventListener("click", function () {
+    if (window.Lemma) window.Lemma.openChat();
+  });
+</script>
+</body>
+</html>

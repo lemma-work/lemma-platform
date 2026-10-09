@@ -427,11 +427,10 @@ def test_a_per_number_callback_stays_unauthenticated():
     webhook that Meta reports as failing for no reason anybody can see from the
     logs.
     """
-    from app.core.security import EXCLUDED_PATHS
+    from app.core.auth_exemptions import exemption_of
 
-    assert f"/surfaces/webhooks/whatsapp/numbers/{_POOLED_NUMBER_ID}".startswith(
-        EXCLUDED_PATHS
-    )
+    path = f"/surfaces/webhooks/whatsapp/numbers/{_POOLED_NUMBER_ID}"
+    assert exemption_of(path, "POST") == "self-authenticated"
 
 
 async def test_a_non_ascii_verify_token_is_a_403_and_not_a_500(monkeypatch):

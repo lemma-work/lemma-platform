@@ -93,6 +93,8 @@ TABLE_JSON = _fill_enums("""{
   "primary_key_column": "id",   // an auto UUID "id" is added; never declare id/created_at/updated_at/user_id
   "enable_rls": __RLS__,           // true = per-user private rows (default); false = shared team data
   "visibility": "POD",          // one of: __VISIBILITY__
+  // "contact_owned": true,     // rows about the pod's contacts: adds contact_id; each contact reads only their own. Needs enable_rls: false
+  // "contact_columns": ["title", "status"],  // with contact_owned: the columns a contact may read of their own rows (required)
   "columns": [
     { "name": "title", "type": "TEXT", "required": true, "max_length": 240 },
     { "name": "status", "type": "ENUM", "required": true, "default": "open",
@@ -237,6 +239,9 @@ SCHEDULE_JSON = """{
   // work afterwards. Optional; omit to fire every time.
   // "filter_instruction": "Only when the row's status is 'urgent'.",
   // "filter_output_schema": { "type": "object" },  // shape the filter must answer in
+  // DATASTORE only: also fire on rows people outside the pod added through a
+  // table opened to them. Off by default; their content is untrusted.
+  // "include_outside_rows": false,
   // WEBHOOK only — the connector account and trigger this listens on.
   // "account_id": "TODO-connector-account-uuid",
   // "connector_trigger_id": "TODO-connector-trigger-uuid",
@@ -919,6 +924,11 @@ def _decision_misroute_issues(nodes: list, edges: list) -> list[str]:
             continue
         nid = node.get("id")
         cfg = node.get("config") or {}
+        if isinstance(cfg.get("question"), dict):
+            # A decision that asks a question routes on its answer, and the
+            # server refuses to save one with an answer or an unsure result
+            # that has nowhere to go -- so none of the rule footguns apply.
+            continue
         rules = cfg.get("rules") or []
         rule_targets = {
             str(r.get("next_node_id"))
@@ -971,6 +981,25 @@ def _decision_misroute_issues(nodes: list, edges: list) -> list[str]:
                 "the intended else; an unhandled case will land here without warning."
             )
     return issues
+
+
+def _question_targets(nodes: list) -> set[str]:
+    """Nodes a DECISION's question routes to: `config.question.routes` values
+    and `unsure_next_node_id`. They are reached through the answer, not an edge,
+    so they are not entry nodes."""
+    targets: set[str] = set()
+    for node in nodes:
+        question = (node.get("config") or {}).get("question")
+        if str(node.get("type") or "").upper() != "DECISION" or not isinstance(
+            question, dict
+        ):
+            continue
+        routes = question.get("routes")
+        if isinstance(routes, dict):
+            targets.update(str(target) for target in routes.values() if target)
+        if question.get("unsure_next_node_id"):
+            targets.add(str(question["unsure_next_node_id"]))
+    return targets
 
 
 def _iter_expressions(node: object):
@@ -1031,6 +1060,7 @@ def validate_workflow(payload: dict) -> list[str]:
             issues.append(f"edge target '{dst}' is not a node id.")
         targeted.add(dst)
 
+    targeted.update(_question_targets(nodes))
     entries = [i for i in id_set if i not in targeted]
     if len(entries) == 0:
         issues.append("no entry node (every node has an incoming edge — cycle?).")

@@ -261,6 +261,108 @@ async def test_a_navigation_through_the_install_worker_can_sign_in(
     assert opened.status_code == 200 and CONTENT in opened.text
 
 
+MARKER = "st-last-access-token-update"
+PAGE = {"Accept": "text/html,application/xhtml+xml", "Sec-Fetch-Mode": "navigate"}
+
+
+def expired_marker(response: Response) -> bool:
+    expired = [
+        c for c in response.headers.get_list("set-cookie") if c.startswith(MARKER)
+    ]
+    # SameSite=None and Secure, or a frame on another site refuses it.
+    attributes = ("Max-Age=0", "Path=/", "SameSite=none", "Secure")
+    return len(expired) == 1 and all(part in expired[0] for part in attributes)
+
+
+async def test_a_page_load_drops_the_session_marker_a_failed_refresh_left(
+    browser, hosted_app, authenticated_client
+):
+    """The marker alone made the app's SDK say "signed out" without asking.
+
+    The portal saw the live session and sent the person straight back, so
+    every sign-in ended where it started. A page load from this site with the
+    marker and no front token is answered with the marker expired -- the top
+    window back from the portal, the workspace's frame, and a revalidation.
+    """
+    archive = io.BytesIO(build_dist_archive(CONTENT))
+    with ZipFile(archive, "a") as bundle:
+        bundle.writestr("reports.html", "<html><body>PRIVATE_REPORT</body></html>")
+    await _upload(
+        authenticated_client, hosted_app.pod_id, hosted_app.name, archive.getvalue()
+    )
+    await establish(browser, authenticated_client, hosted_app.origin)
+    host = hosted_app.origin.removeprefix("https://")
+
+    async def load(path: str, headers: dict[str, str]) -> Response:
+        # An expiry also clears the client's copy, so each load starts stale.
+        browser.cookies.set(MARKER, "1791545000000", domain=host)
+        return await browser.get(hosted_app.origin + path, headers=headers)
+
+    back = await load(
+        "/", PAGE | {"Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "same-site"}
+    )
+    assert back.status_code == 200 and CONTENT in back.text
+    assert expired_marker(back)
+    assert back.headers["cache-control"] == "private, no-cache"
+
+    framed = PAGE | {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-site"}
+    assert expired_marker(await load("/", framed))
+    assert expired_marker(await load("/reports.html", framed))
+    revalidated = await load("/", framed | {"If-None-Match": back.headers["etag"]})
+    assert revalidated.status_code == 304 and expired_marker(revalidated)
+
+    # Apps on a registrable domain of their own (self-hosting allows it): the
+    # workspace's frame is cross-site, and its Referer names the workspace.
+    workspace = framed | {
+        "Sec-Fetch-Site": "cross-site",
+        "Referer": settings.frontend_url + "/pod/p1",
+    }
+    assert expired_marker(await load("/", workspace))
+
+
+@pytest.mark.parametrize(
+    ("headers", "front_token"),
+    [
+        # Signed in: the front token is there, and the marker is its partner.
+        (PAGE | {"Sec-Fetch-Site": "same-site"}, True),
+        # Code asking for HTML is still not a page load.
+        (
+            {
+                "Accept": "text/html",
+                "Sec-Fetch-Mode": "no-cors",
+                "Sec-Fetch-Dest": "script",
+            },
+            False,
+        ),
+        # Typed, bookmarked or from a search: not the loop, so no refused refresh.
+        (PAGE | {"Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "none"}, False),
+        (PAGE | {"Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "cross-site"}, False),
+        (
+            PAGE
+            | {
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Site": "cross-site",
+                "Referer": "https://search.example/?q=app",
+            },
+            False,
+        ),
+    ],
+    ids=["signed-in", "script", "typed", "cross-site", "from-a-search"],
+)
+async def test_the_session_marker_is_left_alone_outside_the_loop(
+    browser, hosted_app, authenticated_client, headers, front_token
+):
+    await establish(browser, authenticated_client, hosted_app.origin)
+    host = hosted_app.origin.removeprefix("https://")
+    browser.cookies.set(MARKER, "1791545000000", domain=host)
+    if front_token:
+        browser.cookies.set("sFrontToken", "front", domain=host)
+
+    response = await browser.get(hosted_app.origin + "/", headers=headers)
+    assert response.status_code == 200
+    assert MARKER not in response.headers.get("set-cookie", "")
+
+
 async def test_private_missing_document_navigation_offers_workspace_recovery(
     browser, hosted_app, authenticated_client
 ):
@@ -427,6 +529,38 @@ async def test_sign_out_and_account_disable_end_access(
 
     await revoke_session(claims.session_handle)
     assert_gate(await browser.get(hosted_app.origin + "/assets/app.js"))
+
+
+async def test_a_public_apps_other_pages_revalidate(
+    browser, hosted_app, authenticated_client
+):
+    """A bundler names its scripts by their content, never a page.
+
+    `reports.html` keeps its name across releases, so an immutable copy kept
+    the last release's page for a year and never asked the server again.
+    """
+    archive = io.BytesIO(build_dist_archive(CONTENT))
+    with ZipFile(archive, "a") as bundle:
+        bundle.writestr("reports.html", "<html><body>PUBLIC_REPORT</body></html>")
+    await _upload(
+        authenticated_client, hosted_app.pod_id, hosted_app.name, archive.getvalue()
+    )
+    path = f"/pods/{hosted_app.pod_id}/apps/{hosted_app.name}"
+    public = await authenticated_client.patch(path, json={"visibility": "PUBLIC"})
+    assert public.status_code == 200, public.text
+
+    page = await browser.get(hosted_app.origin + "/reports.html")
+    assert page.status_code == 200 and "PUBLIC_REPORT" in page.text
+    assert page.headers["cache-control"] == "public, no-cache"
+    again = await browser.get(
+        hosted_app.origin + "/reports.html",
+        headers={"If-None-Match": page.headers["etag"]},
+    )
+    assert again.status_code == 304
+    assert again.headers["cache-control"] == "public, no-cache"
+
+    script = await browser.get(hosted_app.origin + "/assets/app.js")
+    assert script.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
 async def test_public_to_private_stops_anonymous_and_conditional_reads(

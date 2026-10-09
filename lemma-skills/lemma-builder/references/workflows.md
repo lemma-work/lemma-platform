@@ -241,6 +241,66 @@ edge.condition == 'approved'        # edge conditions are not evaluated
 
 Truthiness: `null`, `false`, `""`, `[]`, `{}` are falsy; everything else (including `` `0` ``) is truthy. Missing paths are falsy. Conditions are compile-checked at graph save, so typos in syntax are caught before any run.
 
+#### Branching on a judgement: `question`
+
+When the branch depends on *reading* something — is this email a refund
+request, how urgent is this ticket — give the DECISION a `question` instead of
+`rules`. It asks one closed question about some evidence (the same contract as
+`pod.decisions.make`) and routes on the answer. No AGENT node, no prompt to
+parse. A node has `rules` **or** a `question`, never both.
+
+```json
+{
+  "id": "triage",
+  "type": "DECISION",
+  "label": "What is it about?",
+  "config": {
+    "question": {
+      "instruction": "Triage incoming support email for the billing team.",
+      "evidence": { "type": "expression", "value": "start.payload.email" },
+      "answer": {
+        "type": "string",
+        "oneOf": [
+          { "const": "billing", "description": "Charges, invoices, refunds" },
+          { "const": "bug", "description": "Something in the product is broken" },
+          { "const": "other", "description": "Anything else" }
+        ],
+        "description": "What is this support email about?"
+      },
+      "examples": [{ "evidence": "I was charged twice", "answer": "billing" }],
+      "routes": { "billing": "refund_flow", "bug": "file_bug" },
+      "unsure_next_node_id": "ask_a_person",
+      "min_confidence": 0.7
+    }
+  }
+}
+```
+
+- `instruction` is trusted; `evidence` is an input binding (expression or
+  literal) and is never followed as instructions. Send the part that matters —
+  evidence over 64 KiB fails the run.
+- `answer` is **one** question: a choice (`enum`, or `oneOf` with
+  descriptions), yes or no (`{"type": "boolean"}`), or a scale
+  (`{"type": "integer", "minimum": 1, "maximum": 5}`). Its `description` is the
+  question. A multi-choice cannot be routed and is refused.
+- `routes` keys are the answer written as a string: the option for a choice,
+  `"true"`/`"false"` for yes or no, `"3"` for a scale level.
+- **Unsure** — the evidence did not support an answer, or `confidence` is below
+  `min_confidence` (ignored when the provider reports no confidence, as a
+  language model does) — goes to `unsure_next_node_id`.
+- Anything without a route goes to the **default edge** (the first outgoing
+  edge). Save refuses a question where some answer, or unsure, has neither.
+- The run waits on a `DECISION` wait while it is asked (it stays `RUNNING`).
+  The node's output is `{answer, confidence, provider, model, route}` —
+  downstream nodes read `triage.answer`; `route` is the node it went to.
+- **It never guesses a branch.** A provider that does not answer is retried
+  with backoff for a few minutes, then the run fails saying why. A spent usage
+  limit, an invalid question or too much evidence fails it at once.
+
+Use `rules` when the branch is a fact already in the context
+(``manager_review.approved == `true` ``); use a `question` when someone — or
+something — would have to read the evidence to know.
+
 ### LOOP — iterate an array
 
 ```json
@@ -292,6 +352,7 @@ Common paths: `start.payload.<field>` (triggered runs), `<form_node_id>.<field>`
 - **Approval gate**: `FUNCTION prepare → FORM approve → DECISION → FUNCTION commit / END`. The classic; humans approve what code prepared.
 - **Agent-assisted review**: `FORM intake → AGENT analyze → FORM reviewer_decision (sees agent output) → FUNCTION save`. The agent does the heavy reading; the human decides.
 - **Escalate on low confidence**: ``AGENT classify → DECISION (classify.confidence >= `0.8`?) → auto path / FORM human_classify``. Humans handle only the uncertain tail.
+- **Triage by judgement**: `DECISION (question: what is this about?) → FUNCTION per answer`, with `unsure_next_node_id` pointing at a FORM. One closed question replaces an AGENT node whose only job was to pick a branch.
 - **Exception routing**: `FUNCTION validate → DECISION → FORM fix_data → FUNCTION retry`. Failures become assigned work instead of dead runs.
 - **Timed follow-up**: `FORM decision → WAIT_UNTIL → AGENT draft_follow_up → FORM send_review`.
 - **Batch with human sampling**: schedule starts workflow → `FUNCTION load_batch → LOOP → AGENT process`, decision inside the loop assigns FORMs only for flagged items.
@@ -363,14 +424,14 @@ lemma workflows runs cancel <run-id>          # kill a stuck/unwanted run
 
 Workflow definition commands: `lemma workflows list | get | create | update | update-graph | delete`. Run commands live under `lemma workflows runs <verb>`; `run` (create + auto-submit to the entry form) stays top-level like `agents run` / `functions run`.
 
-Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLED`. What a `WAITING` run is waiting on is `active_wait.wait_type` (`HUMAN`, `AGENT`, `FUNCTION`, `TIME`).
+Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLED`. What a run is waiting on is `active_wait.wait_type` (`HUMAN`, `AGENT`, `FUNCTION`, `TIME`, `DECISION`); only `HUMAN` makes it `WAITING`, the others keep it `RUNNING`.
 
 Debugging a run, in order:
 
 1. `runs get` → check `status`, `current_node_id`, `failed_node_id`, `error`. Missing-path failures name the exact expression and input.
 2. Read `step_history` — every executed node with status, output, error, timestamps. This shows exactly which mapping or condition misbehaved.
-3. A run stuck in `WAITING`: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time. Forms are completed via the app/frontend or `runs submit-form --data`.
-4. Wrong branch taken: read the DECISION node's output in `step_history` (`matched_condition` shows which rule fired, `null` means the default edge) and re-check rule conditions against the context — remember literals need backticks (`` == `true` ``, `` > `0` ``).
+3. A run stuck in `WAITING`: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time, `DECISION` the question and evidence being asked (`payload`). Forms are completed via the app/frontend or `runs submit-form --data`.
+4. Wrong branch taken: read the DECISION node's output in `step_history` (`matched_condition` shows which rule fired, `null` means the default edge) and re-check rule conditions against the context — remember literals need backticks (`` == `true` ``, `` > `0` ``). For a `question`, the output's `answer` and `route` say what was answered and where it went; tighten the `instruction`, the option descriptions or the `examples` rather than the routes.
 
 ## Limits & Gotchas
 
@@ -387,7 +448,7 @@ Debugging a run, in order:
 
 - Run with a realistic form payload; confirm `COMPLETED` and inspect `step_history` for every expected node.
 - For each FORM: confirm the wait appears in the assignee's `lemma workflows runs waiting` queue, submit as that member, confirm other members get 403.
-- For each DECISION: drive both branches with test payloads; don't infer routing from edge labels.
+- For each DECISION: drive both branches with test payloads; don't infer routing from edge labels. For a `question`, include evidence it should be unsure about and check it lands on `unsure_next_node_id`.
 - For `FUNCTION`/`AGENT` nodes: confirm each callee is granted its tables/files/connectors (no `MISSING_WORKLOAD_RESOURCE_GRANT`), and that RLS reads match the run owner's seat. Run it once as the **lowest-privileged member who will really start it** — that is the seat `DELEGATION_EXCEEDS_INVOKER` shows up in, and never the builder's own.
 - Confirm final table/file state matches the business outcome, not just the run status.
 

@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 171 |
+| `covered` | 172 |
 | `gap` | 2 |
 | `manual` | 23 |
-| `planned` | 11 |
+| `planned` | 18 |
 | `withdrawn` | 0 |
-| **total** | **207** |
+| **total** | **215** |
 
-Scenario tests declaring a promise: 428.
+Scenario tests declaring a promise: 432.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 244 | 277 |
+| OpenAPI operations | 244 | 304 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -98,6 +98,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-FLOW-012` A workflow can ask a person and wait for the answer | `covered` | `test_a_waiting_run_is_held`, `test_a_person_who_was_not_asked_cannot_answer`, `test_waiting_runs_are_listed`, `test_answering_a_run_that_is_not_waiting_is_refused` |
 | `PS-FLOW-013` A person can stop a run | `covered` | `test_cancelling_a_live_run_stops_it`, `test_cancelling_a_finished_run_is_refused` |
 | `PS-FLOW-014` A workflow run carries the authority of whoever started it | `covered` | `test_a_step_beyond_the_runs_authority_is_refused_readably` |
+| `PS-FLOW-015` A workflow can branch on a judgement | `covered` | `test_a_run_takes_the_branch_its_answer_names`, `test_an_unrouted_answer_is_refused_at_save` |
 | `PS-FLOW-020` A person follows a run as it goes | `covered` | `test_a_run_can_be_watched` |
 | `PS-FUNC-020` A closed question about some evidence gets one allowed answer per question | `covered` | `test_every_question_gets_an_allowed_answer`, `test_an_open_question_is_refused`, `test_an_outsider_is_refused` |
 
@@ -219,7 +220,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire`, `test_the_schedule_outlives_its_deleted_target` |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
-| `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused` |
+| `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused`, `test_a_judged_skip_keeps_the_answer_that_decided_it`, `test_a_time_schedule_refuses_a_condition` |
 | `PS-SCHED-020` Work fires once, however many times the trigger arrives | `covered` | `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
@@ -295,6 +296,13 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-042` A member adds the pod's Telegram bot to a group from Lemma | `planned` | — |
 | `PS-SURF-043` A Slack channel shared with another company answers that company for the pod | `planned` | — |
 | `PS-SURF-044` People in a group ask the bot by the name they see | `planned` | — |
+| `PS-SURF-045` A stranger writing to the pod's own bot is answered as a contact | `planned` | — |
+| `PS-SURF-046` Email nobody vouched for is never answered | `planned` | — |
+| `PS-SURF-048` A contact sees what is theirs, and only that | `planned` | — |
+| `PS-SURF-049` A web widget answers visitors on the pod's behalf | `planned` | — |
+| `PS-SURF-050` A member writes first to a contact only where the contact wants it | `planned` | — |
+| `PS-SURF-051` People outside the pod add rows to a table it opened to them | `planned` | — |
+| `PS-SURF-047` Contacts cost the organization, never a member | `planned` | — |
 
 ## [Working with data](journeys/working-with-data.md)
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { AgentSurfaceResponse } from "lemma-sdk";
-import { surfaceDraft, surfacePatch, surfaceStatus } from "../src/data/surface-settings.ts";
+import { isOwnBot, surfaceDraft, surfacePatch, surfaceStatus } from "../src/data/surface-settings.ts";
 import { readConnectable } from "../src/data/connectable.ts";
 import { fields, payload, problems } from "../src/connect/schema.ts";
 
@@ -89,4 +89,20 @@ test("header channels belong only to the pod responder, while profiles use exact
     assert.deepEqual(surfacesForAgent(entries).map(row => row.id), ["pod-email"]);
     assert.deepEqual(surfacesForAgent(entries, "review_bot").map(row => row.id), ["other"]);
     assert.deepEqual(surfacesForAgent(entries, "review-bot").map(row => row.id), ["collision"]);
+});
+
+test("a bot's contacts setting is sent only when it changed, and only where contacts can write", () => {
+    const whatsapp = { ...surface, platform: "WHATSAPP", account_id: "account-1", config: { ...surface.config, contacts: { answer: "off" } } } as AgentSurfaceResponse;
+    const draft = surfaceDraft(whatsapp);
+    assert.equal(draft.contactsAnswer, "off");
+    assert.equal(Object.hasOwn(surfacePatch("WHATSAPP", draft).config!, "contacts"), false, "unchanged is left to the API");
+    draft.contactsAnswer = "anyone";
+    assert.deepEqual(surfacePatch("WHATSAPP", draft).config?.contacts, { answer: "anyone" });
+    assert.equal(Object.hasOwn(surfacePatch("SLACK", draft).config!, "contacts"), false, "Slack has no contacts");
+});
+
+test("only the space's own bot answers contacts", () => {
+    assert.equal(isOwnBot({ ...surface, platform: "RESEND" } as AgentSurfaceResponse), true, "an address is always the space's own");
+    assert.equal(isOwnBot({ ...surface, platform: "WHATSAPP", account_id: null, credential_mode: "SYSTEM" } as AgentSurfaceResponse), false);
+    assert.equal(isOwnBot({ ...surface, platform: "TELEGRAM", credential_mode: "CUSTOM" } as AgentSurfaceResponse), true);
 });

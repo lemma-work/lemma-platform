@@ -368,3 +368,49 @@ def test_schedules_update_refuses_to_do_nothing(monkeypatch):
 
     assert result.exit_code != 0
     assert "Nothing to update" in result.output
+
+
+def test_schedule_runs_list_passes_status_and_skipped(monkeypatch):
+    captured = {}
+
+    class FakeSchedules:
+        def runs(self, schedule, **kwargs):
+            captured["schedule"] = schedule
+            captured["kwargs"] = kwargs
+            return {"items": [], "limit": 5}
+
+    fake_run = _make_fake_client_and_run(FakeSchedules(), captured)
+    monkeypatch.setattr(schedules, "run_with_client", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "schedules",
+            "runs",
+            "list",
+            "inbox",
+            "--status",
+            "dead_lettered",
+            "--no-skipped",
+            "--limit",
+            "5",
+            "--pod",
+            "pod-1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["schedule"] == "inbox"
+    assert captured["kwargs"] == {
+        "limit": 5,
+        "status": "DEAD_LETTERED",
+        "skipped": False,
+    }
+
+
+def test_schedule_runs_list_refuses_an_unknown_status(monkeypatch):
+    result = runner.invoke(
+        app, ["schedules", "runs", "list", "inbox", "--status", "lost", "--pod", "p"]
+    )
+
+    assert result.exit_code == 2

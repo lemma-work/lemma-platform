@@ -11,6 +11,7 @@ those places.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -21,11 +22,16 @@ from app.modules.agent.domain.context import ApprovedExecution
 from app.modules.agent.domain.outsiders import (
     AUDIENCE_KEY,
     OUTSIDERS,
-    answers_outsiders,
+    Audience,
     with_audience_kept,
 )
 from app.modules.agent.domain.surface_prompts import surface_platform_guidance
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentRunStatus, AgentToolset
+from app.modules.agent.services.run_finalizer import RunFinalizer
+from app.modules.agent.services.run_identity import RunIdentity
+from app.modules.agent.services.run_usage_recorder import usage_source_for
+from app.modules.usage.contracts import AgentRunUsage
+from app.modules.usage.domain.accounting import CONTACT_RUN, OUTSIDER_RUN
 from app.modules.agent.infrastructure.harnesses.channel_context import (
     channel_context_block as _channel_context_block,
 )
@@ -62,9 +68,9 @@ def _pod_assistant():
 
 
 def test_the_marker_is_read_off_the_conversation():
-    assert answers_outsiders(_conversation(for_outsiders=True))
-    assert not answers_outsiders(_conversation(for_outsiders=False))
-    assert not answers_outsiders(None)
+    assert Audience.of(_conversation(for_outsiders=True)).answers_outsiders
+    assert not Audience.of(_conversation(for_outsiders=False)).answers_outsiders
+    assert not Audience.of(None).answers_outsiders
 
 
 def test_the_pod_assistant_keeps_only_what_is_safe_under_a_stranger():
@@ -109,7 +115,7 @@ def _deps(*, answers_outsider: bool, approved: bool = False) -> BaseAgentContext
         org_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=conversation_id,
-        answers_outsider=answers_outsider,
+        audience=Audience.outsiders() if answers_outsider else Audience.member(),
         approved_execution=(
             ApprovedExecution(
                 approver_user_id=owner,
@@ -146,8 +152,48 @@ async def test_not_even_an_approval_lends_a_stranger_the_owners_authority():
     assert ctx.user_id is None
 
 
+async def test_a_contacts_tool_call_authorizes_as_that_contact():
+    contact_id = uuid4()
+    deps = _deps(answers_outsider=True).model_copy(
+        update={"audience": Audience.contact(contact_id)}
+    )
+
+    ctx = await tool_authorization_context(SimpleNamespace(session=None), deps)
+
+    assert ctx.actor_type is ActorType.CONTACT
+    assert ctx.contact_id == contact_id
+    assert ctx.user_id is None
+    assert ctx.pod_id == deps.pod_id
+
+
+async def test_an_outside_runs_usage_is_finished_as_the_outside_run():
+    """The terminal write used to say ``agent_run`` whatever the run answered,
+    which put a contact's spend on the allowance of the member looking after
+    them."""
+    recorder = SimpleNamespace(record=AsyncMock(), release=AsyncMock())
+    run = RunIdentity(
+        conversation_id=uuid4(),
+        agent_run_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        usage_source=usage_source_for(Audience.contact(uuid4())),
+    )
+
+    await RunFinalizer(None, recorder).publish_usage(
+        run=run,
+        status=AgentRunStatus.COMPLETED,
+        usage_data=AgentRunUsage(model_name="m", input_tokens=10),
+    )
+
+    context = recorder.record.await_args.kwargs["ctx"]
+    assert context.source_type == CONTACT_RUN
+    assert context.outside_audience == CONTACT_RUN
+    assert usage_source_for(Audience.member()) == "agent_run"
+    assert usage_source_for(Audience.outsiders()) == OUTSIDER_RUN
+
+
 def test_the_prompt_says_who_it_is_speaking_to_only_when_it_is_a_stranger():
-    with_stranger = surface_platform_guidance("TELEGRAM", answers_outsider=True)
+    with_stranger = surface_platform_guidance("TELEGRAM", audience=Audience.outsiders())
     with_member = surface_platform_guidance("TELEGRAM")
 
     assert "Speaking for the pod to somebody outside it" in with_stranger
@@ -209,8 +255,8 @@ def test_what_a_stranger_passes_on_is_always_a_question():
         _passes_a_question_on,
     )
 
-    assert _passes_a_question_on(SimpleNamespace(answers_outsider=True)) is True
-    assert _passes_a_question_on(SimpleNamespace(answers_outsider=False)) is False
+    assert _passes_a_question_on(SimpleNamespace(audience=Audience.outsiders())) is True
+    assert _passes_a_question_on(SimpleNamespace(audience=Audience.member())) is False
 
 
 def test_passing_a_question_on_is_in_view_rather_than_behind_a_search():

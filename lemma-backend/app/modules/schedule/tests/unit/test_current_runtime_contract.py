@@ -42,7 +42,7 @@ REMOVED_PATHS = (
     "composition/schedule_run_recovery.py",
     "composition/workflow_agent.py",
     # The filter is schedule's own adapter now
-    # (`infrastructure/adapters/system_model_filter.py`) and the README half is
+    # (`infrastructure/adapters/decision_filter.py`) and the README half is
     # `agent/contracts/model_runtime.py`. Both were re-exports that made agent
     # service module paths part of another module's build.
     "composition/schedule_filter.py",

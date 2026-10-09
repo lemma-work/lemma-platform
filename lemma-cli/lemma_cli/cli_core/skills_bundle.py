@@ -24,6 +24,7 @@ CURATED_SKILLS: tuple[str, ...] = (
     "lemma-builder",
     "lemma-data-analysis",
     "lemma-evals",
+    "lemma-form",
     "lemma-research",
     "lemma-skill-creator",
     "lemma-user",

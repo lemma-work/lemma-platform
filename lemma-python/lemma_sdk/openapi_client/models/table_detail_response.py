@@ -36,6 +36,8 @@ class TableDetailResponse:
         primary_key_column (str):
         updated_at (datetime.datetime):
         allowed_actions (list[str] | Unset):
+        contact_columns (list[str] | Unset):
+        contact_owned (bool | Unset):  Default: False.
         visibility (str | Unset):  Default: 'POD'.
     """
 
@@ -49,6 +51,8 @@ class TableDetailResponse:
     primary_key_column: str
     updated_at: datetime.datetime
     allowed_actions: list[str] | Unset = UNSET
+    contact_columns: list[str] | Unset = UNSET
+    contact_owned: bool | Unset = False
     visibility: str | Unset = "POD"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -86,6 +90,12 @@ class TableDetailResponse:
         if not isinstance(self.allowed_actions, Unset):
             allowed_actions = self.allowed_actions
 
+        contact_columns: list[str] | Unset = UNSET
+        if not isinstance(self.contact_columns, Unset):
+            contact_columns = self.contact_columns
+
+        contact_owned = self.contact_owned
+
         visibility = self.visibility
 
         field_dict: dict[str, Any] = {}
@@ -105,6 +115,10 @@ class TableDetailResponse:
         )
         if allowed_actions is not UNSET:
             field_dict["allowed_actions"] = allowed_actions
+        if contact_columns is not UNSET:
+            field_dict["contact_columns"] = contact_columns
+        if contact_owned is not UNSET:
+            field_dict["contact_owned"] = contact_owned
         if visibility is not UNSET:
             field_dict["visibility"] = visibility
 
@@ -156,6 +170,10 @@ class TableDetailResponse:
 
         allowed_actions = cast(list[str], d.pop("allowed_actions", UNSET))
 
+        contact_columns = cast(list[str], d.pop("contact_columns", UNSET))
+
+        contact_owned = d.pop("contact_owned", UNSET)
+
         visibility = d.pop("visibility", UNSET)
 
         table_detail_response = cls(
@@ -169,6 +187,8 @@ class TableDetailResponse:
             primary_key_column=primary_key_column,
             updated_at=updated_at,
             allowed_actions=allowed_actions,
+            contact_columns=contact_columns,
+            contact_owned=contact_owned,
             visibility=visibility,
         )
 

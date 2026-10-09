@@ -62,8 +62,10 @@ from app.modules.agent.services.widget_token import (
     widget_serve_path,
 )
 
-# Self-validating serve route (session-or-token); excluded from global verify_auth.
-serve_router = APIRouter(prefix="/widgets", tags=["Widgets"], redirect_slashes=False)
+# Self-validating serve route (session-or-token), under `/public/` so the global
+# verify_auth lets it through. No prefix, because it also answers on its old
+# path: see `LEGACY_ALIASES` in `app.core.auth_exemptions`.
+serve_router = APIRouter(tags=["Widgets"], redirect_slashes=False)
 
 # Authenticated, pod-scoped mint route.
 router = APIRouter(
@@ -197,9 +199,16 @@ async def _require_conversation_owner(
 
 
 @serve_router.get(
-    "/serve/{conversation_id}/{tool_call_id}",
+    "/public/widgets/serve/{conversation_id}/{tool_call_id}",
     operation_id="widget.serve",
     summary="Serve Conversation Widget HTML",
+    include_in_schema=False,
+)
+# The old path, for the token-less URLs tool results already saved into
+# conversation history. Same handler, so the two cannot drift until it goes.
+@serve_router.get(
+    "/widgets/serve/{conversation_id}/{tool_call_id}",
+    operation_id="widget.serve_legacy",
     include_in_schema=False,
 )
 async def serve_widget(

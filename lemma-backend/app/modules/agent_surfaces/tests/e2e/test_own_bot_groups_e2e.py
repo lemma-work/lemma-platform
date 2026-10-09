@@ -205,7 +205,7 @@ async def test_an_own_whatsapp_number_confirms_logs_and_answers_its_groups(
         script=[script_text("Lead times are two weeks.")],
     )
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is False
+    assert context.audience.answers_outsiders is False
 
 
 async def test_an_own_telegram_bot_greets_once_and_answers_only_when_asked(
@@ -286,7 +286,7 @@ async def test_an_own_telegram_bot_greets_once_and_answers_only_when_asked(
         script=[script_text("Friday.")],
     )
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is True
+    assert context.audience.answers_outsiders is True
     group = await SurfaceGroupRepository(db_session).get(
         surface_id=surface_id, external_channel_id=str(TELEGRAM_GROUP)
     )

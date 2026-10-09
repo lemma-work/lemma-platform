@@ -23,6 +23,7 @@ class StreaqScheduleFilterTaskQueue(ScheduleFilterTaskQueue):
         payload: Dict[str, Any],
         metadata: Dict[str, Any],
         source_event_id: str,
+        user_id: UUID | None = None,
     ) -> None:
         await self._job_queue.enqueue(
             "handle_llm_filter_task",
@@ -30,5 +31,6 @@ class StreaqScheduleFilterTaskQueue(ScheduleFilterTaskQueue):
             payload=payload,
             metadata=metadata,
             source_event_id=source_event_id,
+            user_id=str(user_id) if user_id is not None else None,
             _job_id=f"schedule-filter:{schedule_id}:{source_event_id}",
         )

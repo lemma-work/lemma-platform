@@ -51,6 +51,20 @@ def test_asset_response_static_is_immutable():
     assert "immutable" in resp.headers["cache-control"]
 
 
+def test_asset_response_html_page_revalidates():
+    """A bundler hashes script names, never a page's: `report.html` is reused."""
+    for not_modified in (False, True):
+        resp = build_asset_response(
+            content=None if not_modified else b"<html></html>",
+            media_type="text/html",
+            etag='"r7"',
+            is_entrypoint=False,
+            not_modified=not_modified,
+        )
+        assert resp.headers["cache-control"] == "public, no-cache"
+        assert resp.headers["etag"] == '"r7"'
+
+
 def test_asset_response_not_modified_returns_304():
     resp = build_asset_response(
         content=None,

@@ -2,9 +2,12 @@
 
 use super::*;
 
-pub(crate) fn secret_environment() -> [(&'static str, &'static str); 20] {
+pub(crate) fn secret_environment() -> [(&'static str, &'static str); 21] {
     [
         ("integrations.deepgram_api_key", "DEEPGRAM_API_KEY"),
+        // Answers the backend's decisions, a live call's routing among them.
+        // Storing it also sets DECISION_PROVIDER (`backend_environment`).
+        ("integrations.typesafe_api_key", "TYPESAFE_API_KEY"),
         ("integrations.brave_search_api_key", "BRAVE_SEARCH_API_KEY"),
         ("integrations.composio_api_key", "COMPOSIO_API_KEY"),
         (
@@ -47,14 +50,12 @@ pub(crate) fn secret_environment() -> [(&'static str, &'static str); 20] {
     ]
 }
 
-/// Secrets the frontend's own server reads, never the backend: live voice
-/// calls run through the workspace server's voice gateway (Gemini Live) and
-/// its call router (TypeSafe), not through the API.
-pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 2] {
-    [
-        ("integrations.gemini_api_key", "GEMINI_API_KEY"),
-        ("integrations.typesafe_api_key", "TYPESAFE_API_KEY"),
-    ]
+/// Secrets the frontend's own server reads, never the backend: a live call's
+/// voice runs through the workspace server's voice gateway (Gemini Live), not
+/// through the API. Routing what the caller says is a backend decision, so the
+/// TypeSafe key is the backend's (`secret_environment`).
+pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 1] {
+    [("integrations.gemini_api_key", "GEMINI_API_KEY")]
 }
 
 /// The models the backend's side jobs run on, all on the system profile.
@@ -66,7 +67,9 @@ pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 2]
 /// Titles use the fast model, or the default when there is none, because the
 /// backend makes no LLM titles at all while `CONVERSATION_TITLE_MODEL` is
 /// unset. Summaries fall back to the run's own model by themselves, so they
-/// are named only when a fast model is.
+/// are named only when a fast model is. So are decisions (`DECISION_MODEL`):
+/// they too use the default model unless told otherwise, and are short closed
+/// questions a fast model answers as well, and sooner.
 pub(crate) fn ai_side_job_environment(ai: &AiProfile) -> Vec<(&'static str, String)> {
     let mut environment = Vec::new();
     if ai.protocol == "unconfigured" || ai.default_model.is_empty() {
@@ -91,7 +94,8 @@ pub(crate) fn ai_side_job_environment(ai: &AiProfile) -> Vec<(&'static str, Stri
         fast.clone().unwrap_or_else(|| ai.default_model.clone()),
     ));
     if let Some(model) = fast {
-        environment.push(("HISTORY_SUMMARIZATION_MODEL", model));
+        environment.push(("HISTORY_SUMMARIZATION_MODEL", model.clone()));
+        environment.push(("DECISION_MODEL", model));
     }
     environment
 }
@@ -178,7 +182,7 @@ pub(crate) fn current_unix_ms() -> io::Result<u64> {
 
 impl OperatorConfigStore {
     /// What the frontend is started with on top of the host pack's
-    /// environment: only the voice-call keys, when stored.
+    /// environment: only the voice-call key, when stored.
     pub fn frontend_environment(&self) -> io::Result<HashMap<String, String>> {
         let install_id = self
             .config
@@ -336,6 +340,7 @@ impl OperatorConfigStore {
         let brave_key = has("BRAVE_SEARCH_API_KEY");
         let resend_key = has("RESEND_API_KEY");
         let smtp_password = has("SMTP_PASSWORD");
+        let typesafe_key = has("TYPESAFE_API_KEY");
         // This Mac has no public address for Slack's or Telegram's webhooks
         // unless it is shared publicly, so a bot that is set up at all listens
         // the way that needs none. The switches stay for an install that set
@@ -349,6 +354,13 @@ impl OperatorConfigStore {
         );
         if brave_key {
             environment.insert("WEB_SEARCH_PROVIDER".into(), "brave".into());
+        }
+        // A stored TypeSafe key is what this install answers decisions with: a
+        // live call is routed in about a third of a second rather than the
+        // seconds a language model takes. Without one, decisions stay on the
+        // AI model (the fast one, when there is one: `ai_side_job_environment`).
+        if typesafe_key {
+            environment.insert("DECISION_PROVIDER".into(), "typesafe".into());
         }
         for (key, value) in email_environment(&config.email, resend_key, smtp_password) {
             environment.insert(key.into(), value);

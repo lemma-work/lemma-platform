@@ -57,8 +57,12 @@ class FunctionContext(BaseModel):
 
     pod_id: UUID
     function_id: str
-    user_id: UUID
+    #: The member the run acts for. ``None`` when the function runs for one of
+    #: the pod's contacts, as its own workload with no member behind it.
+    user_id: UUID | None = None
     user_email: str | None = None
+    #: The contact the run serves, when a contact's conversation called it.
+    contact_id: UUID | None = None
     config: Any = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
     _pod: Any = PrivateAttr(default=None)
