@@ -48,6 +48,12 @@ test("returns older than the window do not count", () => {
     assert.equal(isLoop(returns, APP, NOW), false);
 });
 
+test("returns stamped after now, by a clock since set back, do not count", () => {
+    const returns = returnsAt(NOW + 5_000, NOW + 10_000);
+    assert.equal(isLoop(returns, APP, NOW), false);
+    assert.deepEqual(withReturn(returns, APP, NOW), { [APP]: [NOW] });
+});
+
 test("one app looping does not stop a sign-in to another", () => {
     const returns = returnsAt(NOW - 2, NOW - 1);
     assert.equal(isLoop(returns, APP, NOW), true);

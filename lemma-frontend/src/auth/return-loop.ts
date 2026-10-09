@@ -36,15 +36,21 @@ export function appOrigin(destination: string, here: string): string | null {
     }
 }
 
+/** The returns made in the window before `now`. One stamped after `now` is
+ *  from a clock that has since been set back, not a return in the last minute. */
+function recent(times: number[], now: number): number[] {
+    return times.filter((at) => at <= now && now - at < WINDOW_MS);
+}
+
 export function isLoop(returns: Returns, origin: string, now: number): boolean {
-    return (returns[origin] ?? []).filter((at) => now - at < WINDOW_MS).length >= RETURNS_BEFORE_LOOP;
+    return recent(returns[origin] ?? [], now).length >= RETURNS_BEFORE_LOOP;
 }
 
 /** The record with this return added and everything outside the window dropped. */
 export function withReturn(returns: Returns, origin: string, now: number): Returns {
     const next: Returns = {};
     for (const [key, times] of Object.entries(returns)) {
-        const kept = times.filter((at) => now - at < WINDOW_MS);
+        const kept = recent(times, now);
         if (kept.length > 0) next[key] = kept;
     }
     next[origin] = [...(next[origin] ?? []), now];
