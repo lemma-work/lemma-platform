@@ -12,6 +12,7 @@ from collections.abc import Mapping
 
 from app.modules.agent.domain.surface_prompts import (
     audience_notice,
+    group_participants_notice,
     withheld_background_note,
 )
 
@@ -60,6 +61,16 @@ def channel_context_block(metadata: Mapping[str, object]) -> str | None:
         "you):\n" + "\n".join(context_lines)
     )
     return f"{block}\n{note}" if note else block
+
+
+def participants_block(metadata: Mapping[str, object]) -> str | None:
+    """Who else is in this group, and which of them hold access to this pod.
+
+    Only a member's run is handed one (``agent_surfaces.services.group_log``):
+    it acts with the member's access and its answer is posted where everybody in
+    the group reads it, so it is the run that has to know who else is reading.
+    """
+    return group_participants_notice(metadata.get("channel_participants"))
 
 
 def audience_block(metadata: Mapping[str, object]) -> str | None:

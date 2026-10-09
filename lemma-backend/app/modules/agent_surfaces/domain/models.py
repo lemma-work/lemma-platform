@@ -72,6 +72,23 @@ class SurfaceContextMessage(BaseModel):
     outside_pod: bool = False
 
 
+class SurfaceGroupParticipant(BaseModel):
+    """Somebody the pod knows is in a group, and whether they are in the pod.
+
+    A member's turn in a group runs with the member's own access and posts where
+    everybody in the group reads it, so who else is there -- and which of them
+    hold no access to the pod at all -- is what decides how it answers. The
+    pod's own log is the only thing that knows: it names everyone who has spoken
+    in the group, and pod membership tells the two kinds apart.
+    """
+
+    name: str
+    #: A member of this pod, so the run may speak from the access they hold.
+    #: False for somebody the pod does not know, who reads only what the pod has
+    #: made Public.
+    in_pod: bool = False
+
+
 class SurfaceDisplayAction(BaseModel):
     label: str
     url: str

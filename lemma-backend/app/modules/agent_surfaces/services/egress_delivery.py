@@ -37,6 +37,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
+from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
@@ -221,6 +222,41 @@ class SurfaceDelivery:
             credentials=await self.egress_credentials(surface, event=parsed_event),
             conversation_user_id=conversation.user_id,
         )
+
+    async def private_thread_for(
+        self, target: SurfaceEgressTarget
+    ) -> AgentSurfaceConversationLink | None:
+        """This person's own chat with the bot on this surface, if they have one.
+
+        A group thread is where they last spoke, not somewhere private to reach
+        them, and ``find_latest_dm_link_for_person`` answers with a private
+        thread or with nothing -- so somebody whose only thread is a group is
+        unreachable this way rather than reachable in front of everybody.
+
+        The conversation's pod is checked as well as its surface's: a personal
+        DM arrives through a company's installation and is answered in the
+        person's own pod, and a word meant for one pod's member must not land in
+        another pod's conversation. The shared outsiders' key is not a platform
+        identity at all, so there is nothing to look up for it.
+        """
+        external_user_id = target.link.external_user_id
+        if not external_user_id or external_user_id == OUTSIDERS_LINK_USER:
+            return None
+        private = (
+            await self.conversation_link_repository.find_latest_dm_link_for_person(
+                platform=target.surface.surface_type.value,
+                external_user_id=external_user_id,
+                surface_ids=[target.surface.id],
+            )
+        )
+        if private is None:
+            return None
+        conversation = await agent_conversations.surface_conversation(
+            self.uow, private.conversation_id
+        )
+        if conversation is None or conversation.pod_id != target.pod_id:
+            return None
+        return private
 
     async def _answers_lemma_message(self, link: AgentSurfaceConversationLink) -> bool:
         """Whether what goes out now answers a message typed in Lemma.

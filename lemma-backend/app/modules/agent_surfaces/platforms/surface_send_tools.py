@@ -33,11 +33,13 @@ def build_surface_send_toolset(
         ctx: RunContext[ConversationContext],
         message: str,
     ) -> SurfaceSendMessageResult:
-        """Send a message to the current user on this surface right now.
+        """Send a private message to the current user on this surface right now.
 
         Use to reach the person you're working for mid-task (a heads-up, an
-        interim result) rather than waiting for your final reply. Delivered to
-        the current conversation's user only.
+        interim result) rather than waiting for your final reply. It reaches
+        that person alone and never the group: in a group chat it goes to their
+        own chat with you, and if they have never had one it is not sent at all
+        -- put anything for everybody in your reply instead.
         """
         conversation_id = getattr(ctx.deps, "conversation_id", None)
         if conversation_id is None:
@@ -60,9 +62,20 @@ def build_surface_send_toolset(
             return SurfaceSendMessageResult(
                 success=False, message="Could not deliver the message."
             )
+        if sent:
+            return SurfaceSendMessageResult(success=True, message=None)
+        if getattr(ctx.deps, "surface_conversation_kind", None) == "CHANNEL":
+            return SurfaceSendMessageResult(
+                success=False,
+                message=(
+                    "Nobody was reached. This is a group chat, so the message "
+                    "was not posted in it: it can only go to this person's own "
+                    "chat with you, and they do not have one on this platform. "
+                    "Say it in your reply if everybody may read it."
+                ),
+            )
         return SurfaceSendMessageResult(
-            success=sent,
-            message=None if sent else "No reachable surface for this conversation.",
+            success=False, message="No reachable surface for this conversation."
         )
 
     return FunctionToolset[ConversationContext](tools=[surface_send_message])

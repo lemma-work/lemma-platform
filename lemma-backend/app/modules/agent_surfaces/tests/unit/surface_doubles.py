@@ -80,6 +80,10 @@ def conversation_operations(monkeypatch):
         "surface_agent_identity": AsyncMock(return_value=None),
         "conversation_metadata_value": AsyncMock(return_value=None),
         "set_conversation_metadata_value": AsyncMock(),
+        # Nobody typed into Lemma: the ordinary answer for an egress target
+        # resolved for a channel. The real one reads the conversation's latest
+        # run, which these doubles have no rows for.
+        "lemma_message_run_started_at": AsyncMock(return_value=None),
     }
     for name, double in doubles.items():
         monkeypatch.setattr(f"{_CONVERSATIONS}.{name}", double)

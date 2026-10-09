@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceReplyContext,
 )
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.agent_surfaces.domain.models import SurfaceGroupParticipant
 from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
     get_surface_event_dedup_store,
@@ -76,6 +77,7 @@ from app.modules.agent_surfaces.services.group_log import (
     for_member_run,
     group_background,
     keeps_group_log,
+    participants_in_lines,
 )
 from app.modules.agent_surfaces.services.group_audience import (
     Audience,
@@ -108,6 +110,8 @@ class _RunBackground:
     lines: list[dict[str, object]]
     withheld: int = 0
     audience: Audience | None = None
+    #: Everyone the pod knows is in the group, and whether they are in the pod.
+    participants: tuple[SurfaceGroupParticipant, ...] = ()
 
 
 class SurfaceTurnStarter:
@@ -197,6 +201,11 @@ class SurfaceTurnStarter:
                 metadata["channel_context"] = background.lines
             if background.withheld:
                 metadata["channel_context_withheld"] = background.withheld
+            if background.participants:
+                metadata["channel_participants"] = [
+                    participant.model_dump(mode="json")
+                    for participant in background.participants
+                ]
             if background.audience is not None:
                 metadata["outside_audience"] = background.audience.to_metadata()
         elif not context.audience.answers_outsiders:
@@ -341,12 +350,20 @@ class SurfaceTurnStarter:
         if logged is not None:
             lines = [line.model_dump(mode="json") for line in logged.lines]
             withheld, outside = logged.withheld, list(logged.outside_authors)
+            participants = logged.participants
         else:
             lines = await fetch_channel_context(
                 adapter=adapter, context=context, credentials=credentials
             )
             outside = outside_names(lines)
             withheld = 0
+            # A stranger's run acts as nobody, so it is not handed a roster of
+            # who holds access to this pod -- only a member's run is.
+            participants = (
+                ()
+                if context.audience.answers_outsiders
+                else participants_in_lines(lines)
+            )
             if not context.audience.answers_outsiders:
                 lines, withheld = for_member_run(lines)
         # The message being answered was logged on its way in and is already
@@ -364,7 +381,12 @@ class SurfaceTurnStarter:
                 outside_authors=outside,
             )
         )
-        return _RunBackground(lines=lines, withheld=withheld, audience=audience)
+        return _RunBackground(
+            lines=lines,
+            withheld=withheld,
+            audience=audience,
+            participants=participants,
+        )
 
     async def _group_background(
         self, context: SurfaceChatContext

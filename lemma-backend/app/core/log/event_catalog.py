@@ -380,6 +380,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.pending_envelope.hold_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent_surfaces.pending_envelope.read_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent_surfaces.pending_envelope.release_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
+    'agent_surfaces.private_message.no_private_thread.observed': EventSpec('info', frozenset({'conversation_id', 'platform'})),
     'agent_surfaces.progress_observer.clear_progress_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent_surfaces.progress_observer.final_answer_not_delivered.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent_surfaces.progress_observer.final_answer_unsent.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
