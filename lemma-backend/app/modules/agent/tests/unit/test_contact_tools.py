@@ -25,13 +25,19 @@ pytestmark = pytest.mark.unit
 
 POD = uuid4()
 CONTACT = uuid4()
+CONVERSATION = uuid4()
 
 
 def _ctx(*, contact_id=CONTACT):
     audience = (
         Audience.contact(contact_id) if contact_id is not None else Audience.outsiders()
     )
-    return SimpleNamespace(deps=SimpleNamespace(audience=audience, pod_id=POD))
+    return SimpleNamespace(
+        deps=SimpleNamespace(
+            audience=audience, pod_id=POD, conversation_id=CONVERSATION
+        ),
+        tool_call_id="call-1",
+    )
 
 
 def _run(completed: bool, output=None) -> ContactFunctionOutcome:
@@ -92,20 +98,34 @@ async def test_a_table_that_is_not_contact_owned_reads_as_missing():
     assert result == {"success": False, "error": "Table 'members' not found"}
 
 
-async def test_a_function_is_told_the_runs_contact_whatever_the_model_says():
+async def test_a_function_call_is_keyed_to_its_conversation_and_tool_call():
+    # That the function is then told this run's contact, whatever the model
+    # put in the input, is proved through the real ``run_function_for_contact``
+    # in function/tests/e2e/test_contact_function_runs_e2e.py.
     calls = _Calls(run=_run(True, {"ticket": "T-9"}))
-    somebody_else = str(uuid4())
 
     result = await _tools(calls)["contact_function"](
-        _ctx(),
-        ContactFunctionRequest(
-            name="create_ticket", input={"subject": "Late", "contact_id": somebody_else}
-        ),
+        _ctx(), ContactFunctionRequest(name="create_ticket", input={"subject": "x"})
     )
 
     assert result == {"success": True, "output": {"ticket": "T-9"}}
     assert calls.runs[0]["contact_id"] == CONTACT
-    assert calls.runs[0]["name"] == "create_ticket"
+    assert calls.runs[0]["idempotency_key"] == f"{CONVERSATION}:call-1"
+
+
+async def test_a_function_still_running_at_the_deadline_is_not_called_a_failure():
+    calls = _Calls(
+        run=ContactFunctionOutcome(
+            completed=False, status="RUNNING", still_running=True
+        )
+    )
+
+    result = await _tools(calls)["contact_function"](
+        _ctx(), ContactFunctionRequest(name="create_ticket")
+    )
+
+    assert result["success"] is False
+    assert "do not tell them it failed" in result["error"]
 
 
 async def test_a_function_that_did_not_finish_is_reported_not_guessed():

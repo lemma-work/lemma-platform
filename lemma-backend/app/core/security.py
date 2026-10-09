@@ -21,6 +21,10 @@ from app.core.authorization.delegation import (
     parse_delegation_claims,
 )
 from app.core.authorization.delegation_revocation import is_delegation_revoked
+from app.core.authorization.function_run import (
+    admit_function_run,
+    function_run_bearer,
+)
 from app.core.log.log import get_logger
 from app.core.domain.entity import AuthenticatedPrincipal
 from app.core.auth_state_cache import (
@@ -233,6 +237,13 @@ async def verify_auth(connection: HTTPConnection):
         if is_self_authenticated_websocket(connection.url.path):
             return
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # A person-less function run's own token, which SuperTokens would only
+    # call malformed (``core/authorization/function_run``).
+    run_token = function_run_bearer(connection)
+    if run_token is not None:
+        await admit_function_run(connection, run_token)
+        return
 
     try:
         # Session verification

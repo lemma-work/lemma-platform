@@ -45,7 +45,24 @@ CONTACT_TOOLSET_ID = "contact"
 _NOT_A_CONTACT = "This conversation is not with a contact."
 
 
+_STILL_RUNNING = (
+    "That is taking longer than expected and has not finished. It may still "
+    "have gone through, so do not tell them it failed and do not try it again; "
+    "tell them it is in hand, and pass it on with message_user if it matters."
+)
+
 _JSON_SCALARS = (str, int, float, bool, list, dict)
+
+
+def _call_key(ctx: RunContext[BaseAgentContext]) -> str | None:
+    """One key per tool call, so a replayed turn does not run it twice.
+
+    Scoped to the conversation: a tool call id is only unique within the
+    messages it belongs to.
+    """
+    if not ctx.tool_call_id:
+        return None
+    return f"{getattr(ctx.deps, 'conversation_id', None)}:{ctx.tool_call_id}"
 
 
 def _plain(value: object) -> object:
@@ -75,6 +92,7 @@ class RunContactFunction(Protocol):
         name: str,
         contact_id: UUID,
         input_data: dict[str, object],
+        idempotency_key: str | None,
     ) -> ContactFunctionOutcome: ...
 
 
@@ -143,9 +161,12 @@ def build_contact_toolset(
                 name=request.name,
                 contact_id=contact_id,
                 input_data=dict(request.input),
+                idempotency_key=_call_key(ctx),
             )
         except ContactFunctionUnavailable as exc:
             return {"success": False, "error": str(exc)}
+        if outcome.still_running:
+            return {"success": False, "error": _STILL_RUNNING}
         if not outcome.completed:
             logger.info(
                 "agent.contact_tools.function_not_completed.observed",
