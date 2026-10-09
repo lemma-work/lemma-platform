@@ -416,7 +416,8 @@ async def test_a_contacts_turn_runs_in_their_own_conversation_as_nobody(pod):
         contact_id
     )
     assert context is not None
-    assert context.answers_outsider is True
+    assert context.audience.is_contact is True
+    assert context.audience.contact_id == contact_id
     assert context.user_id == pod.owner
     assert context.message_metadata.sender_display_name == "Dana"
 

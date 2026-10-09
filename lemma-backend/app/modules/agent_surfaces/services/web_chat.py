@@ -31,6 +31,11 @@ from app.modules.agent_surfaces.domain.web_widgets import (
     WidgetAnswer,
     refused,
 )
+from app.modules.agent_surfaces.services.outside_cap import (
+    first_word_today,
+    hand_to_a_person,
+    held_for_a_person,
+)
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.visitor_access import Visitor
 from app.modules.agent_surfaces.services.widget_directory import widget_by_key
@@ -109,17 +114,86 @@ class WebChat:
             if owner is None or await pod_member_id(uow, widget.pod_id, owner) is None:
                 raise refused("Nobody is answering this chat", 503, "unattended")
             session = await self._visitor_session(uow, visitor)
-            await self._start_visitor_turn(
-                uow, widget, session, owner=owner, text=message
+            conversation_id = await self._visitor_conversation(
+                uow, widget, session, owner=owner
             )
+            held = await held_for_a_person(
+                uow, pod_id=widget.pod_id, conversation_id=conversation_id
+            )
+            if not held:
+                await self._start_visitor_turn(
+                    uow, widget, session, conversation_id, owner=owner, text=message
+                )
             await touch_visitor_session(uow, session.id)
             await uow.commit()
+        if held:
+            await self._hold_for_a_person(
+                widget, session, conversation_id, owner=owner, text=message
+            )
+
+    async def _hold_for_a_person(
+        self,
+        widget: WebWidget,
+        session: VisitorSession,
+        conversation_id: UUID,
+        *,
+        owner: UUID,
+        text: str,
+    ) -> None:
+        """Keep the message for the member, and tell the visitor once a day.
+
+        A member has the conversation, or the organization's contacts cap is
+        reached: no run starts. The visitor reads the "a person will reply"
+        line in the chat itself, so nothing else has to send it.
+        """
+        tell = await first_word_today(conversation_id)
+        async with self.uow_factory() as uow:
+            await hand_to_a_person(
+                uow,
+                pod_id=widget.pod_id,
+                conversation_id=conversation_id,
+                owner_id=owner,
+                text=text,
+                metadata={
+                    "source": "web_widget",
+                    "sender_display_name": await self._display_name(uow, session)
+                    or "Visitor",
+                },
+                tell=tell,
+            )
+            await uow.commit()
+
+    async def _visitor_conversation(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        widget: WebWidget,
+        session: VisitorSession,
+        *,
+        owner: UUID,
+    ) -> UUID:
+        """The visitor's conversation, opened as the member on their first word."""
+        if session.conversation_id is not None:
+            return session.conversation_id
+        agent_name = await agent_name_for_id(uow.session, widget.agent_id)
+        name = await self._display_name(uow, session)
+        context_token = set_current_context(
+            await create_authorization_data_service(uow).build_user_context(
+                user_id=owner, pod_id=widget.pod_id
+            )
+        )
+        try:
+            return await self._open_visitor_conversation(
+                uow, widget, session, owner=owner, agent_name=agent_name, name=name
+            )
+        finally:
+            reset_current_context(context_token)
 
     async def _start_visitor_turn(
         self,
         uow: SqlAlchemyUnitOfWork,
         widget: WebWidget,
         session: VisitorSession,
+        conversation_id: UUID,
         *,
         owner: UUID,
         text: str,
@@ -131,12 +205,6 @@ class WebChat:
         )
         context_token = set_current_context(auth_ctx)
         try:
-            conversation_id = (
-                session.conversation_id
-                or await self._open_visitor_conversation(
-                    uow, widget, session, owner=owner, agent_name=agent_name, name=name
-                )
-            )
             await agent_conversations.start_surface_turn(
                 uow,
                 conversation_id=conversation_id,

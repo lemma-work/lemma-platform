@@ -24,10 +24,6 @@ from app.modules.contacts.domain.entities import (
     IdentityKind,
     IdentityStrength,
 )
-from app.modules.contacts.contracts.visitor_sessions import (
-    forget_session_liveness,
-    revoke_visitor_sessions,
-)
 from app.modules.contacts.infrastructure.repository import (
     MAX_PAGE,
     ContactCursor,

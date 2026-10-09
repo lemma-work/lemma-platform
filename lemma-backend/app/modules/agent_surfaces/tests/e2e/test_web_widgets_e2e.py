@@ -884,3 +884,49 @@ async def test_with_bot_protection_on_a_new_chat_takes_a_proof_of_work(
         headers=_as(visitor),
     )
     assert refused.status_code == 400
+
+
+async def test_past_the_contacts_cap_a_visitor_is_told_a_person_will_reply(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_org,
+):
+    """The cap holds the web chat as it holds every other door: no run starts,
+    the message is kept for the member, and the visitor reads why, once."""
+    from app.modules.agent.infrastructure.models import AgentRunModel
+
+    pod_id = test_pod["id"]
+    widget = await _widget(authenticated_client, pod_id)
+    key = widget["public_key"]
+    capped = await authenticated_client.put(
+        f"/usage/organizations/{fixed_test_org['id']}/contacts-cap",
+        json={"monthly_limit_usd": 0},
+    )
+    assert capped.status_code == 200, capped.text
+    visitor = await _session(authenticated_client, key)
+
+    for text in ("Is the shop open?", "Hello?"):
+        with suppress_agent_run_enqueue():
+            sent = await authenticated_client.post(
+                f"/public/web/{key}/messages", json={"text": text}, headers=_as(visitor)
+            )
+        assert sent.status_code == 202, sent.text
+
+    conversation_id = await _conversation_of(db_session, visitor)
+    assert conversation_id is not None
+    runs = (
+        await db_session.scalars(
+            select(AgentRunModel.id).where(
+                AgentRunModel.conversation_id == conversation_id
+            )
+        )
+    ).all()
+    assert runs == []
+    history = await authenticated_client.get(
+        f"/public/web/{key}/history", headers=_as(visitor)
+    )
+    assert history.status_code == 200, history.text
+    said = [m["text"] for m in history.json()["messages"]]
+    assert "Is the shop open?" in said and "Hello?" in said
+    assert sum("will reply here" in text for text in said) == 1

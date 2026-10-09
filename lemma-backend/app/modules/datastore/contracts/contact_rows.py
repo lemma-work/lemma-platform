@@ -44,7 +44,6 @@ __all__ = [
     "contact_owned_tables",
     "delete_contact_rows",
     "export_contact_rows",
-    "is_contact_owned",
     "rows_for_contact",
 ]
 

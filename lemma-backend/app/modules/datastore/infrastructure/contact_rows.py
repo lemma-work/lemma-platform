@@ -182,10 +182,7 @@ async def delete_rows_of_contact(
     table = sanitize_identifier(table_name)
     async with schema.session_factory() as session:
         async with session.begin():
-            await session.execute(
-                text(f"SELECT set_config('{_SETTING}', :contact, true)"),
-                {"contact": str(contact_id)},
-            )
+            await schema.set_rls_context(session, RowPrincipal.contact(contact_id))
             result = await session.execute(
                 text(
                     f'DELETE FROM "{schema_name}"."{table}" '
@@ -220,14 +217,8 @@ async def read_rows_of_contact_after(
     after = "" if after_key is None else f'AND "{key}"::text > :after '
     async with schema.session_factory() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
-        await session.execute(
-            text(
-                "SELECT set_config('app.current_user_id', :nobody, true), "
-                "set_config('app.current_user_is_pod_admin', 'false', true), "
-                f"set_config('{_SETTING}', :contact, true)"
-            ),
-            {"nobody": str(_NOBODY), "contact": str(contact_id)},
-        )
+        principal = RowPrincipal.contact(contact_id)
+        await schema.set_rls_context(session, principal)
         await session.execute(text(f'SET LOCAL ROLE "{query_role}"'))
         parameters: dict[str, object] = {
             "contact": contact_id,
@@ -243,4 +234,6 @@ async def read_rows_of_contact_after(
             ),
             parameters,
         )
-        return [dict(row._mapping) for row in result]
+        rows = [dict(row._mapping) for row in result]
+        await verify_rls_context(session, principal)
+        return rows

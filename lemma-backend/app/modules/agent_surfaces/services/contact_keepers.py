@@ -136,7 +136,7 @@ async def owned_or_moved(
     """
     if conversation.user_id == user_id:
         return True
-    if contact_id is None or conversation.contact_id != contact_id:
+    if contact_id is None or conversation.audience.contact_id != contact_id:
         return False
     moved = await move_contact_conversation(
         uow,

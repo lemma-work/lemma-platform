@@ -59,9 +59,9 @@ from app.modules.agent_surfaces.infrastructure.models import (
 from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
     NotificationRepository,
 )
-from app.modules.agent_surfaces.infrastructure.web_widget_models import (
-    WebCodeModel,
-    WebSessionModel,
+from app.modules.contacts.infrastructure.visitor_sessions import (
+    VisitorCodeModel,
+    VisitorSessionModel,
 )
 from app.modules.agent_surfaces.events import handlers
 from app.modules.agent_surfaces.services.contact_keepers import UNATTENDED_WARNING
@@ -146,6 +146,7 @@ async def _contact_owned_orders(client: AsyncClient, pod_id: str) -> None:
             "primary_key_column": "id",
             "enable_rls": False,
             "contact_owned": True,
+            "contact_columns": ["item"],
             "columns": [
                 {"name": "id", "type": "UUID", "required": True, "auto": True},
                 {"name": "item", "type": "TEXT", "required": True},
@@ -225,17 +226,20 @@ async def test_forgetting_a_contact_takes_everything_the_pod_held_about_them(
     )
     assert widget.status_code == 201, widget.text
     now = datetime.now(timezone.utc)
-    session_row = WebSessionModel(
+    session_row = VisitorSessionModel(
+        pod_id=UUID(pod_id),
         widget_id=UUID(widget.json()["id"]),
-        token_hash=uuid4().hex,
+        secret_hash=uuid4().hex,
         contact_id=UUID(dana),
+        strength="CODE",
         last_seen_at=now,
+        expires_at=now + timedelta(days=30),
     )
     db_session.add(session_row)
     await db_session.flush()
     session_id = session_row.id
     db_session.add(
-        WebCodeModel(
+        VisitorCodeModel(
             session_id=session_id,
             email=CUSTOMER,
             code_hash=uuid4().hex,
@@ -292,10 +296,10 @@ async def test_forgetting_a_contact_takes_everything_the_pod_held_about_them(
         )
     ) is None
     assert await db_session.get(ConversationModel, context.conversation_id) is None
-    assert await db_session.get(WebSessionModel, session_id) is None
+    assert await db_session.get(VisitorSessionModel, session_id) is None
     assert (
         await db_session.scalar(
-            select(WebCodeModel.id).where(WebCodeModel.session_id == session_id)
+            select(VisitorCodeModel.id).where(VisitorCodeModel.session_id == session_id)
         )
     ) is None
     assert (
