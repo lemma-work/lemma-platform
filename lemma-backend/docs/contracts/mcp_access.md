@@ -14,6 +14,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `mcp_access.grants.list` | GET | `/oauth/grants` | MCP clients you have connected |
 | `mcp_access.grants.revoke` | DELETE | `/oauth/grants/{grant_id}` | Disconnect an MCP client |
 | `mcp_access.grants.subscription.delete` | DELETE | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}` | Stop telling a connected app about an event |
+| `mcp_access.grants.subscription.resume` | POST | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume` | Let a connected app be told about an event again |
 
 <!-- /generated:operations -->
 
