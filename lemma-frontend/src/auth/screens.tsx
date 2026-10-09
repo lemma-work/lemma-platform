@@ -5,9 +5,11 @@ import { LoadingIndicator } from "@/ui/loading";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { EmailPassword, ThirdParty } from "./supertokens";
 import { authFailure, isExistingAccount, sayProblem, type Attempt } from "./errors";
-import { PORTAL_PATH, siteOrigin } from "./config";
+import { DEFAULT_LANDING, PORTAL_PATH, siteOrigin } from "./config";
 import { authLink, rememberDestination, pendingDestination, destinationFrom, asksForDestination } from "./redirects";
 import { accountAccess, completeAuth, completionDestination } from "./completion";
+import { forgetReturns, noteReturn, wouldLoop } from "./return-loop";
+import { captureSignInLoop } from "@/site/analytics/client";
 import { continueWithProvider } from "./provider-login";
 import { heldCliRequest } from "./cli-login";
 import { heldConsentRequest } from "./mcp-consent";
@@ -290,6 +292,35 @@ function Refused() {
     );
 }
 
+/** Stopped instead of sending a signed-in person back to an app a third time.
+ *
+ *  Trying again is the first action because the cause is often a state the app
+ *  repairs once on its next load. The footnote is the fix that works when it
+ *  does not: everything the app keeps about the session lives on its own host,
+ *  so clearing that host's data is the reset. */
+function ReturnLoop({ destination }: { destination: string }) {
+    const host = new URL(destination, siteOrigin()).host;
+    return (
+        <Screen
+            title={host + " is not picking up your sign-in"}
+            lead="You are signed in, but this app keeps sending you back here. We have stopped the loop."
+            footer={<>Still stuck? Clear this browser{"’"}s site data for {host}, then open it again.</>}
+        >
+            <div className="screen__actions">
+                <button className="btn btn--primary" onClick={() => {
+                    forgetReturns(destination);
+                    window.location.replace(destination);
+                }}>
+                    Try again
+                </button>
+                <button className="btn" onClick={() => window.location.assign(DEFAULT_LANDING)}>
+                    Open your workspace
+                </button>
+            </div>
+        </Screen>
+    );
+}
+
 /* ── the providers ──────────────────────────────────────────────────── */
 
 /** Google and Microsoft, which are the two the backend can register — see
@@ -363,6 +394,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
     const [hasAccount, setHasAccount] = useState(false);
     const [busy, setBusy] = useState(false);
     const [authenticated, setAuthenticated] = useState(false);
+    const [loopingTo, setLoopingTo] = useState<string | null>(null);
     const configured = useConfiguredProviders();
     /* Whether the cast may look. False only while the password field has the
        caret — not while it merely holds a value, because a filled password on
@@ -377,9 +409,15 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
         let live = true;
         rememberDestination(pendingDestination(window.location.search));
         void accountAccess().then(access => {
-            if (live && !attempted.current && access !== "signed-out") {
-                window.location.replace(completionDestination(access, window.location.search));
+            if (!live || attempted.current || access === "signed-out") return;
+            const destination = completionDestination(access, window.location.search);
+            if (access === "ready" && wouldLoop(destination)) {
+                setLoopingTo(destination);
+                captureSignInLoop();
+                return;
             }
+            if (access === "ready") noteReturn(destination);
+            window.location.replace(destination);
         }).catch(error => { if (live && !attempted.current) setSaid(sayProblem(error)); });
         return () => { live = false; };
     }, []);
@@ -431,6 +469,8 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
             setSaid(sayProblem(error));
         }
     }, [email, password, signingIn, go, attempt, authenticated]);
+
+    if (loopingTo) return <ReturnLoop destination={loopingTo} />;
 
     return (
         <Screen
