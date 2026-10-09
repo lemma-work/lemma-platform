@@ -57,8 +57,8 @@ export class McpAccessService {
     }
     /**
      * Stop telling a connected app about an event
-     * The app keeps its connection and stops receiving this event. It may
-     * subscribe again; ending the connection is what stops it for good.
+     * The app keeps its connection and stops receiving this event. It stays
+     * stopped -- the app's refresh is refused -- until it is resumed.
      * @param grantId
      * @param subscriptionId
      * @returns void
@@ -71,6 +71,31 @@ export class McpAccessService {
         return __request(OpenAPI, {
             method: 'DELETE',
             url: '/oauth/grants/{grant_id}/subscriptions/{subscription_id}',
+            path: {
+                'grant_id': grantId,
+                'subscription_id': subscriptionId,
+            },
+            errors: {
+                404: `No such subscription`,
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Let a connected app be told about an event again
+     * Lifts a Stop. Delivery starts again when the app next refreshes.
+     * @param grantId
+     * @param subscriptionId
+     * @returns void
+     * @throws ApiError
+     */
+    public static mcpAccessGrantsSubscriptionResume(
+        grantId: string,
+        subscriptionId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume',
             path: {
                 'grant_id': grantId,
                 'subscription_id': subscriptionId,

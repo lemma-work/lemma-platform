@@ -28,16 +28,23 @@ from uuid import UUID
 class Scope(StrEnum):
     """What a grant lets a client do in its pod.
 
-    Two, because the tools split cleanly in two: those that only read and those
-    that write. A finer set would ask a person to reason about tools they have
-    never seen, on a consent screen they will read once.
+    The tools split cleanly in two: those that only read and those that write.
+    A finer set would ask a person to reason about tools they have never seen,
+    on a consent screen they will read once.
+
+    Events are the third, and not a kind of reading. A read happens while the
+    person uses the app; a subscription sends rows to a server the app chose,
+    as they are added, for as long as it keeps refreshing -- including while
+    the person is away. So it is asked for by name and agreed to separately,
+    and a connection made before it existed does not have it.
     """
 
     READ = "pod:read"
     WRITE = "pod:write"
+    EVENTS = "pod:events"
 
 
-ALL_SCOPES: tuple[Scope, ...] = (Scope.READ, Scope.WRITE)
+ALL_SCOPES: tuple[Scope, ...] = (Scope.READ, Scope.WRITE, Scope.EVENTS)
 
 
 def parse_scopes(raw: list[str] | None) -> frozenset[Scope]:

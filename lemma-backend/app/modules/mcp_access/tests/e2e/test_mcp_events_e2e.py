@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import contextvars
 import json
 import os
 import socket
@@ -61,6 +62,8 @@ class _Receiver:
         self.verifications: list[dict] = []
         self.events: list[dict] = []
         self.bad_signatures = 0
+        #: Answer every event with a 500, as a receiver that has gone would.
+        self.failing = False
 
     async def hook(self, request: Request) -> JSONResponse:
         body = await request.body()
@@ -78,6 +81,8 @@ class _Receiver:
         if payload.get("type") == "verification":
             self.verifications.append(payload)
             return JSONResponse({"challenge": payload["challenge"]})
+        if self.failing:
+            return JSONResponse({"error": "down"}, status_code=500)
         payload["_headers"] = {
             "webhook-id": request.headers.get("webhook-id"),
             "subscription": request.headers.get("x-mcp-subscription-id"),
@@ -181,7 +186,13 @@ async def test_a_client_subscribes_and_a_new_row_reaches_it_signed(
 ):
     pod_id = test_pod["id"]
     await mcp_client.register()
-    tokens = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    tokens = await _connect(
+        mcp_client,
+        authenticated_client,
+        pod_id,
+        "pod:read pod:events",
+        answer={"allow": True, "events": True},
+    )
     token = tokens["access_token"]
 
     discovered = await _rpc(mcp_client, pod_id, token, "server/discover")
@@ -263,7 +274,13 @@ async def test_a_table_the_person_cannot_read_is_refused(
 ):
     pod_id = test_pod["id"]
     await mcp_client.register()
-    tokens = await _connect(mcp_client, authenticated_client, pod_id, "pod:read")
+    tokens = await _connect(
+        mcp_client,
+        authenticated_client,
+        pod_id,
+        "pod:read pod:events",
+        answer={"allow": True, "events": True},
+    )
     refused = await _rpc(
         mcp_client,
         pod_id,
@@ -305,8 +322,274 @@ async def test_a_table_the_person_cannot_read_is_refused(
     assert gone["result"] == {} or "_meta" in gone["result"], "idempotent"
 
 
+async def test_a_connection_not_allowed_events_cannot_subscribe(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    """The app asked for events and the person left the box unticked: it can
+    read, and it is never sent a row."""
+    pod_id = test_pod["id"]
+    await mcp_client.register()
+    tokens = await _connect(
+        mcp_client,
+        authenticated_client,
+        pod_id,
+        "pod:read pod:events",
+        answer={"allow": True},
+    )
+    assert "pod:events" not in tokens["scope"].split()
+    table, _ = await _table_with_a_row(authenticated_client, pod_id)
+
+    refused = await _rpc(
+        mcp_client,
+        pod_id,
+        tokens["access_token"],
+        "events/subscribe",
+        {
+            "name": "record.created",
+            "arguments": {"table": table},
+            "delivery": {"mode": "webhook", "url": receiver.url, "secret": SECRET},
+        },
+    )
+
+    assert refused["error"]["code"] == -32012, refused
+    assert refused["error"]["data"] == {"scope": "pod:events"}
+    assert receiver.verifications == []
+
+
 def _session_factory():
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 
     return SessionUnitOfWorkFactory(async_session_maker)
+
+
+async def _subscribed(mcp_client, authenticated_client, pod_id, receiver):
+    """A connection allowed events, subscribed to a new table's rows."""
+    await mcp_client.register()
+    tokens = await _connect(
+        mcp_client,
+        authenticated_client,
+        pod_id,
+        "pod:read pod:events",
+        answer={"allow": True, "events": True},
+    )
+    table, record_id = await _table_with_a_row(authenticated_client, pod_id)
+    params = {
+        "name": "record.created",
+        "arguments": {"table": table},
+        "delivery": {"mode": "webhook", "url": receiver.url, "secret": SECRET},
+    }
+    subscribed = await _rpc(
+        mcp_client, pod_id, tokens["access_token"], "events/subscribe", params
+    )
+    assert "result" in subscribed, subscribed
+    return tokens["access_token"], params, subscribed["result"]["id"], table, record_id
+
+
+def _job_for(subscription_id: str, pod_id: str, table: str, record_id: str):
+    return DeliveryJob(
+        subscription_id=subscription_id,
+        pod_id=UUID(pod_id),
+        table=table,
+        record_id=record_id,
+        event_id=f"evt_{uuid4().hex}",
+        occurred_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+async def _listening(person, pod_id: str) -> list[dict]:
+    listed = await person.get("/oauth/grants", params={"pod_id": pod_id})
+    assert listed.status_code == 200, listed.text
+    return [item for app in listed.json()["items"] for item in app["listens_to"]]
+
+
+async def test_stop_holds_against_the_apps_refresh_until_resumed(
+    mcp_client, authenticated_client, async_client_for_stranger, test_pod, receiver
+):
+    pod_id = test_pod["id"]
+    token, params, sub_id, table, record_id = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    grant_id = (await authenticated_client.get("/oauth/grants")).json()["items"][0][
+        "grant_id"
+    ]
+    stop_url = f"/oauth/grants/{grant_id}/subscriptions/{sub_id}"
+
+    not_theirs = await async_client_for_stranger.delete(stop_url)
+    assert not_theirs.status_code == 404, "someone else's is not theirs to stop"
+
+    stopped = await authenticated_client.delete(stop_url)
+    assert stopped.status_code == 204, stopped.text
+    [shown] = await _listening(authenticated_client, pod_id)
+    assert shown["id"] == sub_id and shown["stopped_at"]
+
+    refused = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+    assert refused["error"]["code"] == -32012, refused
+    assert refused["error"]["data"] == {"reason": "stopped"}
+
+    # Unsubscribing and subscribing again does not clear the person's Stop.
+    unsub = {key: params[key] for key in ("name", "arguments")}
+    unsub["delivery"] = {"mode": "webhook", "url": receiver.url}
+    await _rpc(mcp_client, pod_id, token, "events/unsubscribe", unsub)
+    again = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+    assert again["error"]["code"] == -32012, again
+
+    delivery = EventDelivery(
+        SqlDeliveryLedger(_session_factory()), read_record=read_record_for
+    )
+    job = _job_for(sub_id, pod_id, table, record_id)
+    assert await delivery.deliver(job) is Outcome.DROPPED
+    assert receiver.events == []
+
+    resumed = await authenticated_client.post(stop_url + "/resume")
+    assert resumed.status_code == 204, resumed.text
+    renewed = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+    assert renewed["result"]["id"] == sub_id
+    assert await delivery.deliver(job) is Outcome.SENT
+    assert len(receiver.events) == 1
+
+
+async def test_a_receiver_that_keeps_failing_is_paused_until_the_app_refreshes(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    from app.modules.mcp_access.infrastructure.subscription_repository import (
+        PAUSE_AFTER_FAILURES,
+    )
+
+    pod_id = test_pod["id"]
+    token, params, sub_id, table, record_id = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    delivery = EventDelivery(
+        SqlDeliveryLedger(_session_factory()), read_record=read_record_for
+    )
+    receiver.failing = True
+    for _ in range(PAUSE_AFTER_FAILURES):
+        job = _job_for(sub_id, pod_id, table, record_id)
+        assert await delivery.deliver(job) is Outcome.RETRY
+
+    paused = _job_for(sub_id, pod_id, table, record_id)
+    assert await delivery.deliver(paused) is Outcome.DROPPED, "nothing more is sent"
+    [shown] = await _listening(authenticated_client, pod_id)
+    assert shown["paused_at"] and shown["last_error"] == "http_500"
+
+    receiver.failing = False
+    refreshed = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+    assert "result" in refreshed, refreshed
+    assert await delivery.deliver(paused) is Outcome.SENT
+    [shown] = await _listening(authenticated_client, pod_id)
+    assert shown["paused_at"] is None and shown["last_error"] is None
+
+
+async def test_a_new_row_goes_from_the_stream_to_the_receiver(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    """The path a real insert takes: the stream event fans out to one job per
+    subscription on that table, and the job delivers within its rate."""
+    from app.modules.mcp_access.events.event_deliveries import (
+        TASK,
+        deliver_within_rate,
+        fan_out_record_event,
+    )
+    from app.modules.mcp_access.infrastructure.rate_limit import RateLimiter
+
+    pod_id = test_pod["id"]
+    _, _, sub_id, table, record_id = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+
+    class _Queue:
+        def __init__(self) -> None:
+            self.jobs: list[dict] = []
+
+        async def enqueue(self, job_name: str, **kwargs):
+            self.jobs.append({"name": job_name, **kwargs})
+
+    queue = _Queue()
+    event = {
+        "event_type": "datastore.record.insert",
+        "event_id": f"evt_{uuid4().hex}",
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "pod_id": pod_id,
+        "table_name": table,
+        "record_id": record_id,
+    }
+    now = datetime.now(timezone.utc)
+    assert (
+        await fan_out_record_event(
+            event, uow_factory=_session_factory(), queue=queue, now=now
+        )
+        == 1
+    )
+    other_table = {**event, "table_name": "somewhere_else"}
+    assert (
+        await fan_out_record_event(
+            other_table, uow_factory=_session_factory(), queue=queue, now=now
+        )
+        == 0
+    )
+
+    [job] = queue.jobs
+    assert job["name"] == TASK and job["subscription_id"] == sub_id
+    # Run as a worker runs it: in a context no request ever touched, so
+    # nothing a test request left behind can stand in for the person's.
+    delivered = asyncio.get_running_loop().create_task(
+        deliver_within_rate(
+            DeliveryJob(
+                subscription_id=job["subscription_id"],
+                pod_id=UUID(job["pod_id"]),
+                table=job["table"],
+                record_id=job["record_id"],
+                event_id=job["event_id"],
+                occurred_at=job["occurred_at"],
+            ),
+            deferrals=0,
+            delivery=EventDelivery(
+                SqlDeliveryLedger(_session_factory()), read_record=read_record_for
+            ),
+            limiter=RateLimiter(),
+            queue=queue,
+            now=now,
+        ),
+        context=contextvars.Context(),
+    )
+    assert await delivered is Outcome.SENT
+    [sent] = receiver.events
+    assert sent["eventId"] == event["event_id"]
+    assert sent["data"]["record"]["company"] == "Northwind"
+
+
+async def test_the_sweep_removes_what_can_never_deliver_again(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    from datetime import timedelta
+
+    from sqlalchemy import update
+
+    from app.modules.mcp_access.infrastructure.models import McpEventSubscription
+    from app.modules.mcp_access.infrastructure.subscription_repository import (
+        EventSubscriptionRepository,
+    )
+
+    pod_id = test_pod["id"]
+    _, _, sub_id, _, _ = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    now = datetime.now(timezone.utc)
+    async with _session_factory()() as uow:
+        await uow.session.execute(
+            update(McpEventSubscription)
+            .where(McpEventSubscription.public_id == sub_id)
+            .values(refresh_before=now - timedelta(days=8))
+        )
+        await uow.commit()
+
+    assert await _listening(authenticated_client, pod_id) == [], (
+        "a lapsed subscription is not shown as listening"
+    )
+    async with _session_factory()() as uow:
+        repository = EventSubscriptionRepository(uow)
+        assert await repository.sweep(lapsed_before=now - timedelta(days=7), batch=50)
+        await uow.commit()
+    async with _session_factory()() as uow:
+        assert await EventSubscriptionRepository(uow).get(sub_id) is None

@@ -208,6 +208,11 @@ export type EventSubscription = {
     arguments: Record<string, unknown>;
     last_delivery_at: string | null;
     last_error: string | null;
+    refresh_before?: string;
+    /** The person pressed Stop; the app's refresh is refused until Resume. */
+    stopped_at?: string | null;
+    /** Delivery gave up on a callback that kept failing, until the app refreshes. */
+    paused_at?: string | null;
 };
 
 /** A subscription in a person's words: what it is told about. */
@@ -217,19 +222,34 @@ export function listeningLine(subscription: EventSubscription): string {
     return subscription.name;
 }
 
-/** Stops one event reaching the app; the connection itself stays. A 404 is
- *  already-stopped, and the caller reloads the list either way. */
-export async function stopListening(
+/** How a subscription stands, after what it is told about: stopped by a
+ *  person, paused on a failing callback, or how its last delivery went. */
+export function listeningStatus(subscription: EventSubscription, ago: (iso: string) => string): string {
+    if (subscription.stopped_at) return "stopped " + ago(subscription.stopped_at) + "; the app is refused until you resume it";
+    if (subscription.paused_at) return "paused: its address kept failing, until the app checks in again";
+    if (subscription.last_error) return "last delivery failed";
+    return subscription.last_delivery_at ? "last sent " + ago(subscription.last_delivery_at) : "nothing sent yet";
+}
+
+/** Stops one event reaching the app, or resumes it; the connection itself
+ *  stays. A stopped subscription holds against the app's own refresh until
+ *  resumed. A 404 is said, not swallowed: it is gone, or not this person's. */
+export async function setListening(
     apiUrl: string,
     grantId: string,
     subscriptionId: string,
+    listen: boolean,
     fetcher: typeof fetch = fetch,
 ): Promise<void> {
-    const response = await fetcher(
-        apiUrl + "/oauth/grants/" + encodeURIComponent(grantId) + "/subscriptions/" + encodeURIComponent(subscriptionId),
-        { method: "DELETE", credentials: "include" },
-    );
-    if (!response.ok && response.status !== 404) throw new Error("It could not be stopped (" + response.status + ").");
+    const base = apiUrl + "/oauth/grants/" + encodeURIComponent(grantId) + "/subscriptions/" + encodeURIComponent(subscriptionId);
+    const response = await fetcher(listen ? base + "/resume" : base, {
+        method: listen ? "POST" : "DELETE",
+        credentials: "include",
+    });
+    if (response.status === 404) throw new Error("That subscription is gone, or is not yours to change.");
+    if (!response.ok) {
+        throw new Error("It could not be " + (listen ? "resumed" : "stopped") + " (" + response.status + ").");
+    }
 }
 
 /** Where an app's metadata document is served — the one checked fact about
@@ -246,7 +266,8 @@ export function verifiedHost(client: Pick<ConnectedClient, "client_id">): string
 
 /** "Read and write", "Read only": what a person agreed to, in their words. */
 export function accessLabel(scopes: string[]): string {
-    return scopes.includes("pod:write") ? "Read and write" : "Read only";
+    const access = scopes.includes("pod:write") ? "Read and write" : "Read only";
+    return scopes.includes("pod:events") ? access + ", told about new rows" : access;
 }
 
 /** The connections to show: everyone's, for the space's admins, who answer

@@ -25,7 +25,7 @@ from fastmcp.server.middleware.middleware import CallNext, Middleware, Middlewar
 from mcp.shared.exceptions import MCPError
 import mcp_types as mt
 from mcp_types import RequestParams
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
 
 from app.modules.mcp_access.contracts import McpPrincipal
 from app.modules.mcp_access.contracts.events import (
@@ -44,7 +44,7 @@ class _Delivery(BaseModel):
 
     mode: str = "webhook"
     url: str
-    secret: str | None = None
+    secret: SecretStr | None = None
 
 
 class ListEventsParams(RequestParams):
@@ -119,7 +119,7 @@ class PodEventsExtension(ServerExtension):
                     arguments=params.arguments,
                     mode=params.delivery.mode,
                     url=params.delivery.url,
-                    secret=params.delivery.secret or "",
+                    secret=params.delivery.secret or SecretStr(""),
                     ttl_ms=params.ttl_ms,
                 ),
             )

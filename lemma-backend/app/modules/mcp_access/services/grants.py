@@ -21,6 +21,7 @@ from app.modules.mcp_access.domain.entities import ConnectedApp
 from app.modules.mcp_access.infrastructure.repositories import McpAccessRepository
 from app.modules.mcp_access.infrastructure.subscription_repository import (
     EventSubscriptionRepository,
+    StoredSubscription,
 )
 
 logger = get_logger(__name__)
@@ -63,11 +64,47 @@ class GrantService:
                 user_id=None if everyone else user_id, pod_id=pod_id, limit=MAX_LISTED
             )
 
+    async def subscriptions(self, grant_ids: list[UUID]) -> list[StoredSubscription]:
+        """What these connections listen to -- the grants a caller of `list`
+        was already allowed to see."""
+        async with self._uow_factory() as uow:
+            return await EventSubscriptionRepository(uow).for_grants(
+                grant_ids, now=self._now()
+            )
+
     async def stop_listening(
         self, *, user_id: UUID, grant_id: UUID, subscription_id: str
     ) -> bool:
-        """End one event subscription, by whoever may end the connection it
-        belongs to. False for "no such", "already ended" and "not yours"."""
+        """Stop one event subscription, by whoever may end the connection it
+        belongs to. Kept as a tombstone: the app's next refresh is refused
+        until `resume_listening`, rather than quietly re-creating it. False for
+        "no such" and "not yours"."""
+        return await self._set_stopped(
+            user_id=user_id,
+            grant_id=grant_id,
+            subscription_id=subscription_id,
+            stopped_at=self._now(),
+        )
+
+    async def resume_listening(
+        self, *, user_id: UUID, grant_id: UUID, subscription_id: str
+    ) -> bool:
+        """Lift a Stop. Delivery starts again at the app's next refresh."""
+        return await self._set_stopped(
+            user_id=user_id,
+            grant_id=grant_id,
+            subscription_id=subscription_id,
+            stopped_at=None,
+        )
+
+    async def _set_stopped(
+        self,
+        *,
+        user_id: UUID,
+        grant_id: UUID,
+        subscription_id: str,
+        stopped_at: datetime | None,
+    ) -> bool:
         async with self._uow_factory() as uow:
             owner = await McpAccessRepository(uow).grant_owner(grant_id)
             if owner is None:
@@ -77,11 +114,11 @@ class GrantService:
                 uow, user_id, pod_id
             ):
                 return False
-            stopped = await EventSubscriptionRepository(uow).remove_for_grant(
-                grant_id=grant_id, public_id=subscription_id
+            changed = await EventSubscriptionRepository(uow).set_stopped_for_grant(
+                grant_id=grant_id, public_id=subscription_id, stopped_at=stopped_at
             )
             await uow.commit()
-        return stopped
+        return changed
 
     async def revoke(self, *, user_id: UUID, grant_id: UUID) -> bool:
         """End one of the person's own connections, or -- as a pod admin --

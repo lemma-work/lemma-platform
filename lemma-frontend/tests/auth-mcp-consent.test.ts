@@ -26,7 +26,7 @@ test("the answer goes to the API and the browser goes where the API says", async
     assert.equal(next, "https://claude.ai/api/mcp/auth_callback?code=c&state=s");
     assert.ok(sent);
     assert.equal((sent as { url: string }).url, "https://api.example.test/oauth/consent/consent-request-id-000123");
-    assert.deepEqual((sent as { body: unknown }).body, { allow: true, read_only: false });
+    assert.deepEqual((sent as { body: unknown }).body, { allow: true, read_only: false, events: false });
 });
 
 test("a refusal from the API is said in its own words", async () => {
@@ -74,7 +74,10 @@ test("allowing reading only is sent with the answer", async () => {
         return new Response(JSON.stringify({ redirect_to: "https://claude.ai/cb?code=c" }), { status: 200 });
     }) as unknown as typeof fetch;
     await answerConsentRequest("consent-request-id-000123", { allow: true, readOnly: true }, fetcher);
-    assert.deepEqual(body, { allow: true, read_only: true });
+    assert.deepEqual(body, { allow: true, read_only: true, events: false });
+
+    await answerConsentRequest("consent-request-id-000123", { allow: true, events: true }, fetcher);
+    assert.deepEqual(body, { allow: true, read_only: false, events: true }, "events are agreed to by name");
 });
 
 test("an app's own scheme is named as an app, not as the host its URI spells", () => {

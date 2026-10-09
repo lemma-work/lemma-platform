@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     text,
@@ -135,6 +136,10 @@ class McpEventSubscription(UUIDAuditBase):
     refused at delivery the moment the grant is revoked. The client's signing
     secret is stored encrypted; it is what makes a delivery believable to the
     receiver, and it is never shown back.
+
+    `stopped_at` is the person's Stop, kept as a tombstone so the client's next
+    refresh is refused instead of re-creating it. `paused_at` is delivery
+    giving up on a receiver that kept failing, until the client refreshes.
     """
 
     __tablename__ = "mcp_event_subscriptions"
@@ -175,3 +180,12 @@ class McpEventSubscription(UUIDAuditBase):
         DateTime(timezone=True), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )

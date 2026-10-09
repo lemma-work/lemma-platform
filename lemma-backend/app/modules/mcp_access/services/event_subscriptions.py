@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 
-from pydantic import JsonValue
+from pydantic import JsonValue, SecretStr
 
 from app.core.crypto.factory import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -40,6 +40,7 @@ from app.modules.mcp_access.domain.events import (
 )
 from app.modules.mcp_access.infrastructure.subscription_repository import (
     EventSubscriptionRepository,
+    StoredSubscription,
 )
 from app.modules.mcp_access.infrastructure.webhook_sender import (
     SendResult,
@@ -70,7 +71,7 @@ class SubscribeRequest:
     arguments: dict[str, JsonValue]
     mode: str
     url: str
-    secret: str
+    secret: SecretStr
     ttl_ms: int | None = None
 
 
@@ -99,6 +100,21 @@ def _require_reader(principal: McpPrincipal | None) -> McpPrincipal:
     return principal
 
 
+def _require_listener(principal: McpPrincipal | None) -> McpPrincipal:
+    """Subscribing sends rows out as they are added, so it needs the person's
+    separate yes (`pod:events`), not only read access. A connection made
+    before that existed is told to reconnect, which asks."""
+    reader = _require_reader(principal)
+    if not reader.allows(Scope.EVENTS):
+        raise EventSubscriptionError(
+            FORBIDDEN,
+            "This connection was not allowed to be told about new rows. "
+            "Reconnect the app and allow it on the consent screen.",
+            {"scope": Scope.EVENTS.value},
+        )
+    return reader
+
+
 def _table_argument(arguments: dict[str, JsonValue]) -> str:
     table = arguments.get("table")
     if not isinstance(table, str) or not table.strip() or set(arguments) - {"table"}:
@@ -125,7 +141,7 @@ class EventSubscriptions:
     async def subscribe(
         self, principal: McpPrincipal | None, request: SubscribeRequest
     ) -> dict[str, JsonValue]:
-        reader = _require_reader(principal)
+        reader = _require_listener(principal)
         await self._validate(reader, request)
         _, arguments_key = canonical_arguments(request.arguments)
         public_id = subscription_id(
@@ -135,20 +151,23 @@ class EventSubscriptions:
         async with self._uow_factory() as uow:
             repository = EventSubscriptionRepository(uow)
             existing = await repository.get(public_id)
-            if existing is None and (
-                await repository.count_for_grant(reader.grant_id)
-                >= MAX_SUBSCRIPTIONS_PER_GRANT
-            ):
-                raise EventSubscriptionError(
-                    RESOURCE_EXHAUSTED,
-                    "This connection already has as many subscriptions as it may.",
-                    {"limit": "subscriptions_per_connection"},
-                )
+            _refuse_if_stopped(existing)
+            if existing is None:
+                await self._refuse_past_cap(repository, reader, now)
             verified = await repository.url_verified(reader.grant_id, request.url)
         if not verified:
             await self._verify_callback(request, public_id)
         async with self._uow_factory() as uow:
-            stored = await EventSubscriptionRepository(uow).upsert(
+            repository = EventSubscriptionRepository(uow)
+            # Again, under the connection's lock: two subscribes racing past
+            # the first check must not both land over the cap, and a Stop
+            # pressed while the callback was being verified still holds.
+            await repository.lock_grant(reader.grant_id)
+            existing = await repository.get(public_id)
+            _refuse_if_stopped(existing)
+            if existing is None:
+                await self._refuse_past_cap(repository, reader, now)
+            stored = await repository.upsert(
                 public_id=public_id,
                 grant_id=reader.grant_id,
                 user_id=reader.user_id,
@@ -157,7 +176,9 @@ class EventSubscriptions:
                 arguments=dict(request.arguments),
                 arguments_key=arguments_key,
                 url=request.url,
-                secret_ciphertext=str(get_secret_cipher().encrypt_str(request.secret)),
+                secret_ciphertext=str(
+                    get_secret_cipher().encrypt_str(request.secret.get_secret_value())
+                ),
                 refresh_before=now + granted_ttl(request.ttl_ms),
                 verified_at=now,
                 now=now,
@@ -189,11 +210,27 @@ class EventSubscriptions:
         reader = _require_reader(principal)
         _, arguments_key = canonical_arguments(arguments)
         async with self._uow_factory() as uow:
-            await EventSubscriptionRepository(uow).remove(
+            await EventSubscriptionRepository(uow).remove_unless_stopped(
                 subscription_id(reader.grant_id, url, name, arguments_key)
             )
             await uow.commit()
         return {}
+
+    async def _refuse_past_cap(
+        self,
+        repository: EventSubscriptionRepository,
+        reader: McpPrincipal,
+        now: datetime,
+    ) -> None:
+        if (
+            await repository.count_for_grant(reader.grant_id, now=now)
+            >= MAX_SUBSCRIPTIONS_PER_GRANT
+        ):
+            raise EventSubscriptionError(
+                RESOURCE_EXHAUSTED,
+                "This connection already has as many subscriptions as it may.",
+                {"limit": "subscriptions_per_connection"},
+            )
 
     async def _validate(self, reader: McpPrincipal, request: SubscribeRequest) -> None:
         if request.mode != "webhook":
@@ -204,7 +241,7 @@ class EventSubscriptions:
             raise EventSubscriptionError(
                 NOT_FOUND, "No such event.", {"kind": "event", "name": request.name}
             )
-        if not valid_secret(request.secret):
+        if not valid_secret(request.secret.get_secret_value()):
             raise EventSubscriptionError(
                 INVALID_PARAMS,
                 "delivery.secret must be whsec_ and the base64 of 24 to 64 bytes.",
@@ -243,6 +280,18 @@ class EventSubscriptions:
                 "The callback did not verify.",
                 {"reason": reason},
             )
+
+
+def _refuse_if_stopped(existing: StoredSubscription | None) -> None:
+    """The person pressed Stop: the client's refresh is refused until they
+    resume it, rather than quietly re-creating what they ended."""
+    if existing is not None and existing.stopped_at is not None:
+        raise EventSubscriptionError(
+            FORBIDDEN,
+            "The person stopped this subscription. It stays stopped until they "
+            "resume it in the space's settings.",
+            {"reason": "stopped"},
+        )
 
 
 def _verification_failure(result: SendResult, challenge: str) -> str | None:

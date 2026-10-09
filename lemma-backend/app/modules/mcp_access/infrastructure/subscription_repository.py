@@ -6,17 +6,27 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.mcp_access.infrastructure.models import (
     McpEventSubscription,
     McpOAuthGrant,
 )
 
+logger = get_logger(__name__)
+
 #: One row event never fans out to more deliveries than this.
 MAX_DELIVERIES_PER_EVENT = 200
+
+#: At most this many subscriptions are listed for a page of connections.
+MAX_LISTED = 500
+
+#: Deliveries the receiver did not take in a row before delivery pauses. The
+#: client's next refresh -- proof it is still there -- resumes it.
+PAUSE_AFTER_FAILURES = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +43,9 @@ class StoredSubscription:
     verified_at: datetime | None
     last_delivery_at: datetime | None
     last_error: str | None
+    stopped_at: datetime | None = None
+    paused_at: datetime | None = None
+    failures: int = 0
 
 
 def _stored(row: McpEventSubscription) -> StoredSubscription:
@@ -49,6 +62,18 @@ def _stored(row: McpEventSubscription) -> StoredSubscription:
         verified_at=row.verified_at,
         last_delivery_at=row.last_delivery_at,
         last_error=row.last_error,
+        stopped_at=row.stopped_at,
+        paused_at=row.paused_at,
+        failures=row.failures or 0,
+    )
+
+
+def _delivering(now: datetime):
+    """Live, not stopped by the person, not paused by failures."""
+    return (
+        McpEventSubscription.refresh_before > now,
+        McpEventSubscription.stopped_at.is_(None),
+        McpEventSubscription.paused_at.is_(None),
     )
 
 
@@ -75,7 +100,10 @@ class EventSubscriptionRepository:
         """Create the subscription, or refresh the one with this identity.
 
         A refresh may bring a new secret (the draft's rotation): it replaces
-        the stored one, and the old one signs nothing further.
+        the stored one, and the old one signs nothing further. A refresh is
+        also the client showing it is still there, so it lifts a pause that
+        failed deliveries set. It never lifts the person's Stop: a stopped
+        subscription is refused before it gets here.
         """
         values = {
             "public_id": public_id,
@@ -103,6 +131,8 @@ class EventSubscriptionRepository:
                     "verified_at": func.coalesce(
                         McpEventSubscription.verified_at, verified_at
                     ),
+                    "paused_at": None,
+                    "failures": 0,
                     "updated_at": now,
                 },
             )
@@ -129,12 +159,39 @@ class EventSubscriptionRepository:
         )
         return removed.scalar_one_or_none() is not None
 
-    async def count_for_grant(self, grant_id: UUID) -> int:
+    async def remove_unless_stopped(self, public_id: str) -> None:
+        """The client's `events/unsubscribe`. A stopped row is the person's
+        tombstone, so the client cannot clear it by unsubscribing and
+        subscribing again."""
+        await self._session.execute(
+            delete(McpEventSubscription).where(
+                McpEventSubscription.public_id == public_id,
+                McpEventSubscription.stopped_at.is_(None),
+            )
+        )
+
+    async def lock_grant(self, grant_id: UUID) -> None:
+        """Serialize subscribing on one connection, so the cap is counted and
+        the row written as one step."""
+        await self._session.execute(
+            select(McpOAuthGrant.id)
+            .where(McpOAuthGrant.id == grant_id)
+            .with_for_update()
+        )
+
+    async def count_for_grant(self, grant_id: UUID, *, now: datetime) -> int:
+        """Live subscriptions: a lapsed one costs nothing and the client may
+        have moved on from it, and a stopped one is the person's, not the
+        client's."""
         return int(
             await self._session.scalar(
                 select(func.count())
                 .select_from(McpEventSubscription)
-                .where(McpEventSubscription.grant_id == grant_id)
+                .where(
+                    McpEventSubscription.grant_id == grant_id,
+                    McpEventSubscription.refresh_before > now,
+                    McpEventSubscription.stopped_at.is_(None),
+                )
             )
             or 0
         )
@@ -161,10 +218,7 @@ class EventSubscriptionRepository:
             await self._session.scalar(
                 select(
                     select(1)
-                    .where(
-                        McpEventSubscription.pod_id == pod_id,
-                        McpEventSubscription.refresh_before > now,
-                    )
+                    .where(McpEventSubscription.pod_id == pod_id, *_delivering(now))
                     .exists()
                 )
             )
@@ -173,73 +227,119 @@ class EventSubscriptionRepository:
     async def live_for(
         self, *, pod_id: UUID, name: str, table: str, now: datetime
     ) -> list[StoredSubscription]:
-        rows = (
-            await self._session.execute(
-                select(McpEventSubscription)
-                .where(
-                    McpEventSubscription.pod_id == pod_id,
-                    McpEventSubscription.name == name,
-                    McpEventSubscription.refresh_before > now,
-                    McpEventSubscription.verified_at.is_not(None),
-                    func.jsonb_extract_path_text(
-                        McpEventSubscription.arguments, "table"
+        rows = list(
+            (
+                await self._session.execute(
+                    select(McpEventSubscription)
+                    .where(
+                        McpEventSubscription.pod_id == pod_id,
+                        McpEventSubscription.name == name,
+                        McpEventSubscription.verified_at.is_not(None),
+                        func.jsonb_extract_path_text(
+                            McpEventSubscription.arguments, "table"
+                        )
+                        == table,
+                        *_delivering(now),
                     )
-                    == table,
+                    .order_by(McpEventSubscription.created_at)
+                    .limit(MAX_DELIVERIES_PER_EVENT)
                 )
-                .limit(MAX_DELIVERIES_PER_EVENT)
+            ).scalars()
+        )
+        if len(rows) == MAX_DELIVERIES_PER_EVENT:
+            logger.warning(
+                "mcp_access.subscriptions.fan_out_saturated.degraded",
+                pod_id=str(pod_id),
+                limit=MAX_DELIVERIES_PER_EVENT,
             )
-        ).scalars()
         return [_stored(row) for row in rows]
 
     async def record_delivery(
         self, public_id: str, *, now: datetime, error: str | None
     ) -> None:
-        values: dict[str, object] = {"last_error": error[:500] if error else None}
+        """A delivery's outcome. Failures in a row are counted, and past
+        `PAUSE_AFTER_FAILURES` delivery pauses rather than retrying into a
+        receiver that has gone."""
         if error is None:
-            values["last_delivery_at"] = now
+            values: dict[str, object] = {
+                "last_error": None,
+                "last_delivery_at": now,
+                "failures": 0,
+            }
+        else:
+            failures = McpEventSubscription.failures + 1
+            values = {
+                "last_error": error[:500],
+                "failures": failures,
+                "paused_at": case(
+                    (failures >= PAUSE_AFTER_FAILURES, now),
+                    else_=McpEventSubscription.paused_at,
+                ),
+            }
         await self._session.execute(
             update(McpEventSubscription)
             .where(McpEventSubscription.public_id == public_id)
             .values(**values)
         )
 
-    async def for_grants(self, grant_ids: list[UUID]) -> list[StoredSubscription]:
-        """What these connections listen to, for the list a person reads."""
+    async def for_grants(
+        self, grant_ids: list[UUID], *, now: datetime
+    ) -> list[StoredSubscription]:
+        """What these connections listen to, for the list a person reads: the
+        live ones and the ones the person stopped -- not those the client let
+        lapse, which are no longer anything."""
         if not grant_ids:
             return []
         rows = (
             await self._session.execute(
                 select(McpEventSubscription)
-                .where(McpEventSubscription.grant_id.in_(grant_ids))
+                .where(
+                    McpEventSubscription.grant_id.in_(grant_ids),
+                    or_(
+                        McpEventSubscription.refresh_before > now,
+                        McpEventSubscription.stopped_at.is_not(None),
+                    ),
+                )
                 .order_by(McpEventSubscription.created_at)
-                .limit(MAX_DELIVERIES_PER_EVENT)
+                .limit(MAX_LISTED)
             )
         ).scalars()
         return [_stored(row) for row in rows]
 
-    async def remove_for_grant(self, *, grant_id: UUID, public_id: str) -> bool:
-        removed = await self._session.execute(
-            delete(McpEventSubscription)
+    async def set_stopped_for_grant(
+        self, *, grant_id: UUID, public_id: str, stopped_at: datetime | None
+    ) -> bool:
+        """Stop (a time) or resume (None) one of a connection's subscriptions."""
+        changed = await self._session.execute(
+            update(McpEventSubscription)
             .where(
                 McpEventSubscription.grant_id == grant_id,
                 McpEventSubscription.public_id == public_id,
             )
+            .values(stopped_at=stopped_at, paused_at=None, failures=0)
             .returning(McpEventSubscription.id)
         )
-        return removed.scalar_one_or_none() is not None
+        return changed.scalar_one_or_none() is not None
 
-    async def for_user(self, user_id: UUID) -> list[StoredSubscription]:
-        """What the person's live connections listen to, for Settings."""
-        rows = (
-            await self._session.execute(
-                select(McpEventSubscription)
-                .join(McpOAuthGrant, McpOAuthGrant.id == McpEventSubscription.grant_id)
-                .where(
-                    McpEventSubscription.user_id == user_id,
-                    McpOAuthGrant.revoked_at.is_(None),
+    async def sweep(self, *, lapsed_before: datetime, batch: int) -> int:
+        """Delete what can never deliver again: subscriptions the client let
+        lapse long ago, and every subscription of a revoked connection (revoke
+        keeps the grant row, so its `CASCADE` never fires)."""
+        revoked = select(McpOAuthGrant.id).where(McpOAuthGrant.revoked_at.is_not(None))
+        doomed = (
+            select(McpEventSubscription.id)
+            .where(
+                or_(
+                    McpEventSubscription.grant_id.in_(revoked),
+                    (McpEventSubscription.refresh_before < lapsed_before)
+                    & McpEventSubscription.stopped_at.is_(None),
                 )
-                .order_by(McpEventSubscription.created_at)
-                .limit(MAX_DELIVERIES_PER_EVENT)
             )
-        ).scalars()
-        return [_stored(row) for row in rows]
+            .limit(batch)
+        )
+        removed = await self._session.execute(
+            delete(McpEventSubscription)
+            .where(McpEventSubscription.id.in_(doomed))
+            .returning(McpEventSubscription.id)
+        )
+        return len(removed.scalars().all())

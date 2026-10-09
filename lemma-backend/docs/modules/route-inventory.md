@@ -274,6 +274,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}` | `mcp_access.grants.subscription.delete` | Stop telling a connected app about an event |
 | GET | `/oauth/grants` | `mcp_access.grants.list` | MCP clients you have connected |
 | GET | `/oauth/mcp-endpoint/{pod_id}` | `mcp_access.endpoint.get` | The MCP URL for a pod |
+| POST | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume` | `mcp_access.grants.subscription.resume` | Let a connected app be told about an event again |
 
 ## pod
 

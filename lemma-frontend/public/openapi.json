@@ -6489,10 +6489,36 @@
             "title": "Name",
             "type": "string"
           },
+          "paused_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When delivery gave up on a callback that kept failing. The app's next refresh resumes it.",
+            "title": "Paused At"
+          },
           "refresh_before": {
             "format": "date-time",
             "title": "Refresh Before",
             "type": "string"
+          },
+          "stopped_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the person pressed Stop. The app's refresh is refused until it is resumed.",
+            "title": "Stopped At"
           }
         },
         "required": [
@@ -15301,10 +15327,11 @@
         "type": "object"
       },
       "Scope": {
-        "description": "What a grant lets a client do in its pod.\n\nTwo, because the tools split cleanly in two: those that only read and those\nthat write. A finer set would ask a person to reason about tools they have\nnever seen, on a consent screen they will read once.",
+        "description": "What a grant lets a client do in its pod.\n\nThe tools split cleanly in two: those that only read and those that write.\nA finer set would ask a person to reason about tools they have never seen,\non a consent screen they will read once.\n\nEvents are the third, and not a kind of reading. A read happens while the\nperson uses the app; a subscription sends rows to a server the app chose,\nas they are added, for as long as it keeps refreshing -- including while\nthe person is away. So it is asked for by name and agreed to separately,\nand a connection made before it existed does not have it.",
         "enum": [
           "pod:read",
-          "pod:write"
+          "pod:write",
+          "pod:events"
         ],
         "title": "Scope",
         "type": "string"
@@ -22310,7 +22337,7 @@
     },
     "/oauth/grants/{grant_id}/subscriptions/{subscription_id}": {
       "delete": {
-        "description": "The app keeps its connection and stops receiving this event. It may\nsubscribe again; ending the connection is what stops it for good.",
+        "description": "The app keeps its connection and stops receiving this event. It stays\nstopped -- the app's refresh is refused -- until it is resumed.",
         "operationId": "mcp_access.grants.subscription.delete",
         "parameters": [
           {
@@ -22371,6 +22398,72 @@
           "resource": "mcp_access.grants.subscription",
           "result": "void",
           "verb": "delete"
+        }
+      }
+    },
+    "/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume": {
+      "post": {
+        "description": "Lifts a Stop. Delivery starts again when the app next refreshes.",
+        "operationId": "mcp_access.grants.subscription.resume",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such subscription"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Let a connected app be told about an event again",
+        "tags": [
+          "MCP Access"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "mcp_access.grants.subscription"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "mcp_access.grants.subscription",
+          "result": "void",
+          "verb": "resume"
         }
       }
     },

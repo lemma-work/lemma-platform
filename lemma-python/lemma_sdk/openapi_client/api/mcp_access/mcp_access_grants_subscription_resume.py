@@ -17,8 +17,8 @@ def _get_kwargs(
 ) -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
-        "method": "delete",
-        "url": "/oauth/grants/{grant_id}/subscriptions/{subscription_id}".format(
+        "method": "post",
+        "url": "/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume".format(
             grant_id=quote(str(grant_id), safe=""),
             subscription_id=quote(str(subscription_id), safe=""),
         ),
@@ -67,10 +67,9 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
-    """Stop telling a connected app about an event
+    """Let a connected app be told about an event again
 
-     The app keeps its connection and stops receiving this event. It stays
-    stopped -- the app's refresh is refused -- until it is resumed.
+     Lifts a Stop. Delivery starts again when the app next refreshes.
 
     Args:
         grant_id (UUID):
@@ -102,10 +101,9 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
-    """Stop telling a connected app about an event
+    """Let a connected app be told about an event again
 
-     The app keeps its connection and stops receiving this event. It stays
-    stopped -- the app's refresh is refused -- until it is resumed.
+     Lifts a Stop. Delivery starts again when the app next refreshes.
 
     Args:
         grant_id (UUID):
@@ -132,10 +130,9 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
-    """Stop telling a connected app about an event
+    """Let a connected app be told about an event again
 
-     The app keeps its connection and stops receiving this event. It stays
-    stopped -- the app's refresh is refused -- until it is resumed.
+     Lifts a Stop. Delivery starts again when the app next refreshes.
 
     Args:
         grant_id (UUID):
@@ -165,10 +162,9 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
-    """Stop telling a connected app about an event
+    """Let a connected app be told about an event again
 
-     The app keeps its connection and stops receiving this event. It stays
-    stopped -- the app's refresh is refused -- until it is resumed.
+     Lifts a Stop. Delivery starts again when the app next refreshes.
 
     Args:
         grant_id (UUID):

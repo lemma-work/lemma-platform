@@ -17,6 +17,8 @@ from enum import Enum
 from typing import Protocol
 from uuid import UUID
 
+from pydantic import SecretStr
+
 from app.core.crypto.factory import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -126,14 +128,21 @@ class SqlDeliveryLedger:
         async with self._uow_factory() as uow:
             subscriptions = EventSubscriptionRepository(uow)
             subscription = await subscriptions.get(job.subscription_id)
-            if subscription is None or subscription.refresh_before <= now:
+            if (
+                subscription is None
+                or subscription.refresh_before <= now
+                or subscription.stopped_at is not None
+                or subscription.paused_at is not None
+            ):
                 return None
             scopes = await McpAccessRepository(uow).live_grant_scopes(
                 subscription.grant_id
             )
-            if scopes is None or Scope.READ not in parse_scopes(scopes):
-                # The connection ended or lost read access: the subscription
-                # ends with it, rather than lingering until its refresh lapses.
+            granted = parse_scopes(scopes)
+            if scopes is None or not {Scope.READ, Scope.EVENTS} <= granted:
+                # The connection ended or lost what subscribing needs: the
+                # subscription ends with it, rather than lingering until its
+                # refresh lapses.
                 await subscriptions.remove(subscription.public_id)
                 await uow.commit()
                 return None
@@ -185,7 +194,7 @@ class EventDelivery:
             return Outcome.DROPPED
         result = await self._send(
             url=subscription.url,
-            secret=secret,
+            secret=SecretStr(secret),
             message_id=job.event_id,
             subscription_id=subscription.public_id,
             body=occurrence_body(job, record),

@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass
 
 import httpx
+from pydantic import SecretStr
 
 from app.core.net.http_client import get_shared_http_client
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url, request_guarded
@@ -36,7 +37,7 @@ class SendResult:
 async def send_signed(
     *,
     url: str,
-    secret: str,
+    secret: SecretStr,
     message_id: str,
     subscription_id: str,
     body: bytes,
@@ -51,7 +52,7 @@ async def send_signed(
         "webhook-id": message_id,
         "webhook-timestamp": str(timestamp),
         "webhook-signature": standard_webhook_signature(
-            secret, message_id, timestamp, body
+            secret.get_secret_value(), message_id, timestamp, body
         ),
         "X-MCP-Subscription-Id": subscription_id,
     }

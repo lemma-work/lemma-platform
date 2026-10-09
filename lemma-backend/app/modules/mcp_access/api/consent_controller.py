@@ -18,7 +18,7 @@ from app.core.api.schemas import ErrorResponse
 from app.modules.mcp_access.domain.entities import ConnectedApp, Scope
 from app.modules.mcp_access.domain.resources import pod_resource_url
 from app.modules.mcp_access.infrastructure.subscription_repository import (
-    EventSubscriptionRepository,
+    StoredSubscription,
 )
 from app.modules.mcp_access.services.grants import GrantService
 from app.modules.mcp_access.services.wiring import consent_service, issuer
@@ -63,6 +63,13 @@ class ConsentAnswerRequest(BaseModel):
         default=False,
         description="Allow reading only, whatever the client asked for.",
     )
+    events: bool = Field(
+        default=False,
+        description=(
+            "Also let the app be told when rows are added to tables the person "
+            "can read (`pod:events`). Granted only if the app asked for it."
+        ),
+    )
 
 
 class ConsentAnswerResponse(BaseModel):
@@ -80,6 +87,16 @@ class EventSubscriptionResponse(BaseModel):
     last_delivery_at: datetime | None
     last_error: str | None
     refresh_before: datetime
+    stopped_at: datetime | None = Field(
+        default=None,
+        description="When the person pressed Stop. The app's refresh is refused "
+        "until it is resumed.",
+    )
+    paused_at: datetime | None = Field(
+        default=None,
+        description="When delivery gave up on a callback that kept failing. "
+        "The app's next refresh resumes it.",
+    )
 
 
 class ConnectedClientResponse(BaseModel):
@@ -160,6 +177,7 @@ async def answer_consent_request(
         user_id=user.id,
         allow=body.allow,
         read_only=body.read_only,
+        events=body.events,
     )
     return ConsentAnswerResponse(redirect_to=redirect_to)
 
@@ -178,10 +196,9 @@ async def list_grants(
         description="Every member's connections to pod_id. Pod admins only.",
     ),
 ) -> ConnectedClientsResponse:
-    apps = await GrantService(get_uow_factory()).list(
-        user_id=user.id, pod_id=pod_id, everyone=everyone
-    )
-    listening = await _subscriptions_of([app.grant_id for app in apps])
+    grants = GrantService(get_uow_factory())
+    apps = await grants.list(user_id=user.id, pod_id=pod_id, everyone=everyone)
+    listening = _by_grant(await grants.subscriptions([app.grant_id for app in apps]))
     return ConnectedClientsResponse(
         items=[
             _connected(app).model_copy(
@@ -192,11 +209,9 @@ async def list_grants(
     )
 
 
-async def _subscriptions_of(
-    grant_ids: list[UUID],
+def _by_grant(
+    stored: list[StoredSubscription],
 ) -> dict[UUID, list[EventSubscriptionResponse]]:
-    async with get_uow_factory()() as uow:
-        stored = await EventSubscriptionRepository(uow).for_grants(grant_ids)
     found: dict[UUID, list[EventSubscriptionResponse]] = {}
     for item in stored:
         found.setdefault(item.grant_id, []).append(
@@ -207,6 +222,8 @@ async def _subscriptions_of(
                 last_delivery_at=item.last_delivery_at,
                 last_error=item.last_error,
                 refresh_before=item.refresh_before,
+                stopped_at=item.stopped_at,
+                paused_at=item.paused_at,
             )
         )
     return found
@@ -222,9 +239,28 @@ async def _subscriptions_of(
 async def stop_subscription(
     grant_id: UUID, subscription_id: str, user: CurrentUser
 ) -> None:
-    """The app keeps its connection and stops receiving this event. It may
-    subscribe again; ending the connection is what stops it for good."""
+    """The app keeps its connection and stops receiving this event. It stays
+    stopped -- the app's refresh is refused -- until it is resumed."""
     if not await GrantService(get_uow_factory()).stop_listening(
+        user_id=user.id, grant_id=grant_id, subscription_id=subscription_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No such subscription"
+        )
+
+
+@router.post(
+    "/grants/{grant_id}/subscriptions/{subscription_id}/resume",
+    status_code=status.HTTP_204_NO_CONTENT,
+    operation_id="mcp_access.grants.subscription.resume",
+    summary="Let a connected app be told about an event again",
+    responses={404: {"model": ErrorResponse, "description": "No such subscription"}},
+)
+async def resume_subscription(
+    grant_id: UUID, subscription_id: str, user: CurrentUser
+) -> None:
+    """Lifts a Stop. Delivery starts again when the app next refreshes."""
+    if not await GrantService(get_uow_factory()).resume_listening(
         user_id=user.id, grant_id=grant_id, subscription_id=subscription_id
     ):
         raise HTTPException(

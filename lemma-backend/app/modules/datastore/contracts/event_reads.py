@@ -12,6 +12,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.domain.errors import DomainError
 from app.modules.datastore.api.dependencies import (
     build_record_service,
@@ -34,6 +35,10 @@ async def read_record_as(
     user_id: UUID,
     ctx: Context,
 ) -> dict[str, object] | None:
+    # The record service reads the person's context from the ambient slot a
+    # request fills. A delivery runs in a worker, with no request, so it is
+    # bound here for the read and put back after.
+    token = set_current_context(ctx)
     try:
         table = await build_table_service(uow).get_table(pod_id, table_name, ctx)
         record = await build_record_service(uow).get_record(
@@ -49,6 +54,8 @@ async def read_record_as(
         if exc.status_code in (401, 403, 404):
             return None
         raise
+    finally:
+        reset_current_context(token)
     if record is None:
         return None
     return dict(record.data)

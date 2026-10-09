@@ -10,6 +10,12 @@ sees, derived from the identity. The client's signing secret is stored
 encrypted. `CASCADE` on the grant: a connection removed takes its
 subscriptions with it, and delivery refuses one whose grant is revoked.
 
+`stopped_at` is the person pressing Stop: the row stays, as a tombstone, so the
+client's next refresh is refused rather than quietly re-creating it, until the
+person resumes it. `failures` counts deliveries the receiver did not take in a
+row, and `paused_at` is set once there are too many: delivery stops until the
+client's next refresh shows it is still there.
+
 New and empty; nothing is backfilled.
 
 Revision ID: 0047_mcp_event_subscriptions
@@ -60,6 +66,9 @@ def upgrade() -> None:
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_delivery_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
+        sa.Column("stopped_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("paused_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("failures", sa.Integer(), nullable=False, server_default="0"),
     )
     op.create_index(
         "uq_mcp_event_subscriptions_identity",

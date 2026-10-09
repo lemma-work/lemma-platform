@@ -14,1068 +14,3249 @@ class EventSpec:
 
 EVENT_CATALOG: dict[str, EventSpec] = {
     "logging.contract.violation": EventSpec("error"),
-    'agent.agent_host.final_answer_read_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.agent_host_legacy.pairing_refused': EventSpec('info', frozenset()),
-    'agent.agent_host_legacy.upgrade_required': EventSpec('info', frozenset({'host_id'})),
-    'agent.agent_host_link.announce_skipped.degraded': EventSpec('warning', frozenset({'host_id'})),
-    'agent.agent_host_link.connected': EventSpec('info', frozenset({'connection_id', 'host_id', 'host_release'})),
-    'agent.agent_host_link.control_deadlock_retried.degraded': EventSpec('warning', frozenset({'host_id'})),
-    'agent.agent_host_link.disconnected': EventSpec('info', frozenset({'close_code', 'close_reason', 'connection_id', 'host_id', 'peer_closed'})),
-    'agent.agent_host_link.drained': EventSpec('info', frozenset({'link_count', 'still_open'})),
-    'agent.agent_host_link.host_reported_error': EventSpec('warning', frozenset({'error_code', 'error_message', 'host_id'})),
-    'agent.agent_host_link.interaction_push_lost.degraded': EventSpec('warning', frozenset({'conversation_id', 'tool_call_id'})),
-    'agent.agent_host_link.notices_lost.degraded': EventSpec('warning', frozenset({'host_id'})),
-    'agent.agent_host_link.op_answered.diagnostic': EventSpec('debug', frozenset({'host_id', 'method', 'ok'})),
-    'agent.agent_host_link.op_claim_unavailable.degraded': EventSpec('warning', frozenset({'op_id'})),
-    'agent.agent_host_link.op_notice_unreadable': EventSpec('warning', frozenset({'host_id'})),
-    'agent.agent_host_link.op_relay.failed': EventSpec('error', frozenset()),
-    'agent.agent_host_link.ownership_check_skipped.degraded': EventSpec('warning', frozenset({'host_id'})),
-    'agent.agent_host_link.push_skipped.degraded': EventSpec('warning', frozenset({'host_id'})),
-    'agent.agent_host_link.request.failed': EventSpec('error', frozenset({'connection_id', 'frame_type', 'host_id'})),
-    'agent.agent_host_link.request_unavailable.degraded': EventSpec('warning', frozenset({'frame_type', 'host_id'})),
-    'agent.agent_host_link.subscription_unavailable.degraded': EventSpec('warning', frozenset({'host_id'})),
-    'agent.agent_host_link.superseded': EventSpec('info', frozenset({'connection_id', 'host_id', 'link_generation', 'superseded_by', 'superseded_by_generation'})),
-    'agent.agent_host_link.task.failed': EventSpec('error', frozenset({'connection_id', 'host_id', 'link_task'})),
-    'agent.agent_host_link.tool_call.failed': EventSpec('error', frozenset()),
-    'agent.agent_host_link.tool_call_unavailable.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent.agent_host_link.tool_call_unrecorded.degraded': EventSpec('warning', frozenset()),
-    'agent.agent_host_ops.request_unavailable.degraded': EventSpec('warning', frozenset({'host_id', 'method'})),
-    'agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
-    'agent.agent_runner_service.agent_run_finalization_run_s.failed': EventSpec('error', frozenset({'agent_run_id'})),
-    'agent.agent_runner_service.agent_run_observer_failure_delivery.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
-    'agent.agent_runner_service.agent_run_observer_finish_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
-    'agent.agent_runner_service.agent_run_observer_run_s.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
-    'agent.agent_runner_service.agent_run_observer_start_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
-    'agent.agent_runner_service.agent_run_quota_exhausted.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.agent_runner_service.agent_run_s.failed': EventSpec('error', frozenset()),
-    'agent.agent_runner_service.finalize_agent_run_run_s.propagated': EventSpec('debug', frozenset({'agent_run_id'})),
-    'agent.approval.executed': EventSpec('info', frozenset({'agent_id', 'conversation_id', 'outcome', 'tool_name', 'user_id'})),
-    'agent.contact_tools.function_not_completed.observed': EventSpec('info', frozenset({'function_name', 'status'})),
-    'agent.context_brief.file_inventory_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
-    'agent.context_brief.member_directory_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
-    'agent.context_budget.invalid_declared_window.degraded': EventSpec('warning', frozenset({'configured_value'})),
-    'agent.context_budget.invalid_env_window.degraded': EventSpec('warning', frozenset({'configured_value'})),
-    'agent.context_budget.invalid_model_window.degraded': EventSpec('warning', frozenset({'configured_value', 'model_name'})),
-    'agent.conversation_approvals.approved_tool_never_confirmed.failed': EventSpec('error', frozenset({'approval_id', 'conversation_id'})),
-    'agent.conversation_approvals.pause_without_run_skipped.degraded': EventSpec('warning', frozenset({'conversation_id', 'tool_call_id', 'tool_name'})),
-    'agent.conversation_controller.agent_realtime_subscription.failed': EventSpec('error', frozenset({'agent_run_id', 'conversation_id'})),
-    'agent.conversation_mcp.runtime_resolve_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.conversation_mcp_service.conversation_mcp_tool_r_returning.degraded': EventSpec('warning', frozenset()),
-    'agent.conversation_mcp_service.pod_membership_missing.denied': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent.conversation_mcp_service.run_not_in_conversation.denied': EventSpec('warning', frozenset({'agent_run_id', 'conversation_id'})),
-    'agent.conversation_mcp_service.session_lookup.failed': EventSpec('error', frozenset()),
-    'agent.conversation_repository.conversation_status_reconciled.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent.conversation_status_repair.stranded_conversations_settled.degraded': EventSpec('warning', frozenset({'count'})),
-    'agent.conversation_title.generation.failed': EventSpec('error', frozenset({'conversation_id'})),
-    'agent.conversation_title.language_mismatch.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent.conversation_title.llm_call.failed': EventSpec('error', frozenset({'conversation_id'})),
-    'agent.executor.approved_tool_r_returning_result.degraded': EventSpec('warning', frozenset()),
-    'agent.final_answer.persist_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.final_answer.schema_violation_accepted.diagnostic': EventSpec('debug', frozenset()),
-    'agent.final_answer.unusable_output_schema.degraded': EventSpec('warning', frozenset()),
-    'agent.graceful_toolset.tool_cancelled_mid_flight.degraded': EventSpec('warning', frozenset({'elapsed_seconds', 'tool_name'})),
-    'agent.graceful_toolset.tool_r_returning_model_instead.degraded': EventSpec('warning', frozenset()),
-    'agent.handlers.cleanup_agent_host_retained_state_cron.failed': EventSpec('error', frozenset()),
-    'agent.handlers.publishing_reconciled_run_realtime_update.failed': EventSpec('error', frozenset({'agent_run_id'})),
-    'agent.handlers.reconcile_agent_host_dispatch_cron.failed': EventSpec('error', frozenset()),
-    'agent.handlers.reconcile_orphaned_agent_runs_cron.failed': EventSpec('error', frozenset()),
-    'agent.handlers.reconciled_d_orphaned_agent_run.diagnostic': EventSpec('debug', frozenset({'count'})),
-    'agent.harnesses.agent_host.credential_expiry_unknown.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.harnesses.agent_host.credential_refresh_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'error_type'})),
-    'agent.harnesses.agent_host.event_stream_read.degraded': EventSpec('warning', frozenset({'agent_run_id', 'attempt', 'error_type'})),
-    'agent.harnesses.agent_host.malformed_event.degraded': EventSpec('warning', frozenset({'agent_host_sequence', 'agent_run_id', 'error', 'payload_model', 'tool_call_id'})),
-    'agent.harnesses.agent_host.steer_forward_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.harnesses.agent_host.steer_forwarded.observed': EventSpec('info', frozenset({'agent_run_id', 'message_count'})),
-    'agent.harnesses.agent_host.steer_result_unreadable.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.harnesses.agent_host.steer_settle_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.harnesses.agent_host.steer_settled.observed': EventSpec('info', frozenset({'agent_run_id', 'delivered', 'detail', 'matched'})),
-    'agent.harnesses.agent_host.unpaired_tool_result.degraded': EventSpec('warning', frozenset({'agent_host_sequence', 'agent_run_id', 'tool_call_id'})),
-    'agent.history.compacted.observed': EventSpec('info', frozenset({'folded_pin_count', 'kept_count', 'pinned_count', 'size_after', 'size_before', 'summarized_count'})),
-    'agent.history.summarization_failed.degraded': EventSpec('warning', frozenset({'transcript_length'})),
-    'agent.history.token_ceiling_enforced.degraded': EventSpec('warning', frozenset({'dropped_count', 'size_after', 'size_before'})),
-    'agent.history.token_ceiling_unenforceable.failed': EventSpec('error', frozenset({'ceiling', 'dropped_count', 'size_after', 'size_before'})),
-    'agent.history.usage_not_metered.degraded': EventSpec('warning', frozenset()),
-    'agent.host_execution.chosen': EventSpec('info', frozenset({'agent_run_id', 'conversation_id', 'host_id'})),
-    'agent.host_execution.open_failed.degraded': EventSpec('warning', frozenset({'conversation_id', 'host_id'})),
-    'agent.infrastructure.agent_host_channels.poke_skipped.degraded': EventSpec('warning', frozenset({'host_id'})),
-    'agent.infrastructure.agent_host_command_remint.reaimed': EventSpec('info', frozenset({'agent_run_id', 'attempt', 'current_revision', 'dropped_selections', 'harness_key', 'host_id', 'model_cleared', 'previous_revision'})),
-    'agent.infrastructure.agent_host_command_remint.refused': EventSpec('warning', frozenset({'agent_run_id', 'attempt', 'harness_key', 'host_id', 'refusal'})),
-    'agent.infrastructure.agent_host_dispatch_repository.control_update_dropped': EventSpec('warning', frozenset({'agent_run_id', 'error_type', 'host_id', 'update_kind'})),
-    'agent.infrastructure.agent_host_dispatch_repository.control_updates_applied': EventSpec('debug', frozenset({'acknowledged', 'applied', 'host_id'})),
-    'agent.infrastructure.agent_host_event_intake.stream_resynced': EventSpec('warning', frozenset({'agent_run_id', 'from_sequence'})),
-    'agent.infrastructure.agent_host_event_stream.delete_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.infrastructure.agent_host_event_stream.entry_dropped': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.mcp_pausing_calls.recorded': EventSpec('debug', frozenset({'conversation_id', 'tool_name'})),
-    'agent.memory.derivation_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.memory.folder_provisioning_denied.observed': EventSpec('warning', frozenset()),
-    'agent.message_replies.delivered': EventSpec('debug', frozenset({'conversation_id', 'started_new_run'})),
-    'agent.mock_model.mock_llm_structured_output_required.diagnostic': EventSpec('debug', frozenset()),
-    'agent.model_stream_budget.stream_abandoned.degraded': EventSpec('warning', frozenset({'elapsed_seconds', 'first_chunk', 'reason', 'url'})),
-    'agent.module.system_lemma_models_will_be.observed': EventSpec('debug', frozenset()),
-    'agent.module.system_models_cannot_back_a_spend_limit.degraded': EventSpec('warning', frozenset({'policy', 'unpriced_count', 'unpriced_models'})),
-    'agent.outsider_tool_gate.withheld.degraded': EventSpec('warning', frozenset({'tool_name'})),
-    'agent.outsiders.unflagged_link.error': EventSpec('error', frozenset({'conversation_id'})),
-    'agent.pending_user_messages.announce_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.pending_user_messages.claim_failed.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.pending_user_messages.steered_into_run.observed': EventSpec('info', frozenset({'agent_run_id', 'message_count'})),
-    'agent.pod_mcp_service.external_tool.called': EventSpec('info', frozenset({'client_id', 'client_name', 'grant_id', 'outcome', 'tool', 'user_id'})),
-    'agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded': EventSpec('warning', frozenset()),
-    'agent.pod_mcp_service.session_lookup.failed': EventSpec('error', frozenset()),
-    'agent.pydantic_ai.agent_input_required_kind_call.observed': EventSpec('debug', frozenset({'tool_call_id'})),
-    'agent.pydantic_ai.agent_run_ended_after_repeated.degraded': EventSpec('warning', frozenset()),
-    'agent.pydantic_ai.agent_run_hit_usage_limit.degraded': EventSpec('warning', frozenset()),
-    'agent.pydantic_ai.driver_cancelled_mid_run.failed': EventSpec('error', frozenset({'agent_run_id', 'consumer_cancelling', 'driver_cancelling'})),
-    'agent.pydantic_ai.dropping_non_object_tool_args.diagnostic': EventSpec('debug', frozenset()),
-    'agent.pydantic_ai.dropping_unattached_replayed_thought.diagnostic': EventSpec('debug', frozenset({'dropped_count'})),
-    'agent.pydantic_ai.ignoring_malformed_tool_args_json.diagnostic': EventSpec('debug', frozenset()),
-    'agent.pydantic_ai.ignoring_tool_args_that_did.diagnostic': EventSpec('debug', frozenset()),
-    'agent.pydantic_ai.model_request_status_model.failed': EventSpec('error', frozenset({'agent_run_id', 'model_name', 'provider_error_code', 'provider_error_kind', 'status_code'})),
-    'agent.pydantic_ai.model_stream_retry.degraded': EventSpec('warning', frozenset({'attempt', 'error_type', 'max_attempts'})),
-    'agent.pydantic_ai.pydanticai_harness_type.failed': EventSpec('error', frozenset()),
-    'agent.pydantic_ai.skipping_malformed_tool_call_persistence.diagnostic': EventSpec('debug', frozenset({'tool_call_id'})),
-    'agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic': EventSpec('debug', frozenset({'tool_call_id'})),
-    'agent.pydantic_ai.skipping_tool_result_malformed_call.diagnostic': EventSpec('debug', frozenset({'tool_call_id'})),
-    'agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic': EventSpec('debug', frozenset()),
-    'agent.pydantic_ai.stream_teardown.failed': EventSpec('error', frozenset({'agent_run_id'})),
-    'agent.pydantic_ai_streaming.stop_check.failed': EventSpec('error', frozenset({'agent_run_id'})),
-    'agent.queued_followup.start_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'conversation_id'})),
-    'agent.realtime.publishing_agent_realtime_event.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'error_type'})),
-    'agent.respond_to_notification.outside_relay_needs_approval.observed': EventSpec('info', frozenset({'notification_id'})),
-    'agent.run.attached_document_unavailable.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent.run.context_brief_unavailable.degraded': EventSpec('warning', frozenset({'agent_id', 'conversation_id'})),
-    'agent.run.inline_reasoning_reclassified.diagnostic': EventSpec('debug', frozenset({'answer_survived', 'thought_count'})),
-    'agent.run_budget.approaching.observed': EventSpec('info', frozenset({'agent_run_id', 'dimension'})),
-    'agent.run_budget.exhausted.observed': EventSpec('info', frozenset({'agent_run_id', 'dimension'})),
-    'agent.run_event_pump.stream_ended_without_a_terminal_event.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
-    'agent.run_finalizer.usage_reservation_release.failed': EventSpec('error', frozenset({'agent_run_id'})),
-    'agent.runtime_model_factory.provider_client_close_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.runtime_profile.archived_lookup_failed.degraded': EventSpec('warning', frozenset({'profile_id'})),
-    'agent.runtime_profile.connection_check_failed.observed': EventSpec('info', frozenset({'profile_id', 'protocol'})),
-    'agent.runtime_profile.harness_vision_lookup_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.runtime_profile.model_names_not_configured.observed': EventSpec('info', frozenset({'operator_hint'})),
-    'agent.runtime_profile.model_not_configured.observed': EventSpec('info', frozenset({'operator_hint'})),
-    'agent.runtime_profile.model_substituted.degraded': EventSpec('warning', frozenset({'profile_id', 'requested_model_name', 'selected_model_name'})),
-    'agent.runtime_profile.unreadable.skipped': EventSpec('warning', frozenset({'error', 'organization_id', 'profile_id'})),
-    'agent.runtime_profile_service.system_profile_unconfigured.degraded': EventSpec('error', frozenset()),
-    'agent.self_brief.reads_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
-    'agent.skills.load_failed.degraded': EventSpec('warning', frozenset({'skill_name'})),
-    'agent.skills.resource_load_failed.degraded': EventSpec('warning', frozenset({'skill_name'})),
-    'agent.speech.listen_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.speech.provider_broke_its_contract': EventSpec('error', frozenset({'error_type', 'message'})),
-    'agent.speech.provider_unavailable': EventSpec('warning', frozenset({'error_type'})),
-    'agent.speech.say_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.speech.transcript_reuse_lookup_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent.speech.transcript_reused.observed': EventSpec('info', frozenset({'conversation_id'})),
-    'agent.speech.voice_catalogue_cache_unreadable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent.speech.voice_catalogue_cache_unwritable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent.speech.voice_catalogue_unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent.speech.voice_note_not_delivered.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent.streaming.subscription_close_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.summarization_model.resolution_failed.observed': EventSpec('warning', frozenset({'model_name'})),
-    'agent.surface_context.non_text_metadata_dropped.degraded': EventSpec('warning', frozenset({'conversation_id', 'metadata_fields'})),
-    'agent.tools.image_payload.downscale_skipped.diagnostic': EventSpec('debug', frozenset({'error_type'})),
-    'agent.usage.implausible_provider_count.degraded': EventSpec('warning', frozenset({'reported_value', 'usage_field'})),
-    'agent.usage.missing_provider_count.degraded': EventSpec('warning', frozenset({'request_count', 'usage_field'})),
-    'agent.vision_service.description_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.wait.already_claimed': EventSpec('debug', frozenset({'wait_id'})),
-    'agent.wait.child_finished': EventSpec('debug', frozenset({'conversation_id', 'wait_id'})),
-    'agent.wait.child_finished_resolve_failed.degraded': EventSpec('warning', frozenset({'agent_run_id', 'conversation_id'})),
-    'agent.wait.reconcile_abandoned': EventSpec('error', frozenset({'attempt', 'conversation_id', 'wait_id'})),
-    'agent.wait.reconcile_failed': EventSpec('error', frozenset({'attempt', 'wait_id'})),
-    'agent.wait.reconcile_fired_lost_timer': EventSpec('warning', frozenset({'conversation_id', 'wait_id'})),
-    'agent.wait.suspended': EventSpec('debug', frozenset({'conversation_id', 'wait_type'})),
-    'agent.wait.woke': EventSpec('debug', frozenset({'conversation_id', 'wait_type', 'woke_because'})),
-    'agent.web_fetch.batch_deadline_reached.degraded': EventSpec('warning', frozenset({'captured', 'requested'})),
-    'agent.web_fetch.failed.degraded': EventSpec('warning', frozenset()),
-    'agent.web_fetch.http_path_crashed.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent.web_fetch.http_path_failed.degraded': EventSpec('warning', frozenset({'error_type', 'signal', 'status', 'vendor'})),
-    'agent.web_fetch.session_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent.web_fetch.url_refused.refused': EventSpec('warning', frozenset({'reason'})),
-    'agent.web_fetch.workspace_write_failed.degraded': EventSpec('warning', frozenset({'characters'})),
-    'agent.web_search.failed.degraded': EventSpec('warning', frozenset()),
-    'agent.widget.viewer_id_unparsable.degraded': EventSpec('warning', frozenset()),
-    'agent.widget.viewer_session_unreadable.degraded': EventSpec('warning', frozenset()),
-    'agent.workspace_cli.github_credential_bridge_failed.degraded': EventSpec('warning', frozenset()),
-    'agent.workspace_cli.github_project_clone_failed.diagnostic': EventSpec('debug', frozenset({'exit_code', 'repo'})),
-    'agent.workspace_cli.workspace_cli_list_processes_s.degraded': EventSpec('warning', frozenset()),
-    'agent.workspace_cli.workspace_cli_s_s.diagnostic': EventSpec('debug', frozenset({'operation'})),
-    'agent_host.artifact.persist_failed': EventSpec('error', frozenset({'agent_run_id', 'event_sequence', 'harness_key'})),
-    'agent_surfaces.adapter.teams_fetch_email_bf_connector.observed': EventSpec('debug', frozenset()),
-    'agent_surfaces.adapter.teams_fetch_sender_profile_could.diagnostic': EventSpec('debug', frozenset({'tenant_id'})),
-    'agent_surfaces.adapter.teams_fetch_sender_profile_graph.diagnostic': EventSpec('debug', frozenset({'status', 'tenant_id'})),
-    'agent_surfaces.adapter.teams_fetch_sender_profile_missing.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.adapter.teams_inbound_dm_event_has.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.adapter.teams_inbound_event_already_includes.observed': EventSpec('debug', frozenset({'count'})),
-    'agent_surfaces.adapter.teams_inbound_event_cannot_be.diagnostic': EventSpec('debug', frozenset({'channel_id', 'team_id', 'tenant_id'})),
-    'agent_surfaces.adapter.teams_inbound_event_enriched_graph.observed': EventSpec('debug', frozenset({'count'})),
-    'agent_surfaces.adapter.teams_inbound_event_enrichment_could.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.adapter.teams_inbound_event_enrichment_found.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic': EventSpec('debug', frozenset({'team_id', 'tenant_id'})),
-    'agent_surfaces.adapter.teams_interaction_acknowledgement_best.observed': EventSpec('debug', frozenset()),
-    'agent_surfaces.adapter.teams_message_partially_delivered.degraded': EventSpec('warning', frozenset({'sent_chunks', 'total_chunks'})),
-    'agent_surfaces.adapter.teams_typing_indicator_best_effort.observed': EventSpec('debug', frozenset()),
-    'agent_surfaces.available_surfaces_builder.pool_lookup_failed.diagnostic': EventSpec('debug', frozenset({'platform'})),
-    'agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic': EventSpec('debug', frozenset({'connector_id'})),
-    'agent_surfaces.available_surfaces_builder.system_claim_lookup_failed.diagnostic': EventSpec('debug', frozenset({'platform'})),
-    'agent_surfaces.chat_onboarding.answer_rejected.observed': EventSpec('info', frozenset({'platform', 'reason', 'step'})),
-    'agent_surfaces.chat_onboarding.email_unavailable.observed': EventSpec('info', frozenset({'platform', 'step'})),
-    'agent_surfaces.chat_onboarding.signup_refused.failed': EventSpec('error', frozenset({'platform', 'reason', 'step'})),
-    'agent_surfaces.client.teams_could_not_resolve_team.diagnostic': EventSpec('debug', frozenset({'raw_team_id', 'status'})),
-    'agent_surfaces.client.teams_graph_team_resolution_missing.diagnostic': EventSpec('debug', frozenset({'raw_team_id'})),
-    'agent_surfaces.client.teams_team_details_raw_team.diagnostic': EventSpec('debug', frozenset({'raw_team_id'})),
-    'agent_surfaces.client.teams_team_id_resolution_s.diagnostic': EventSpec('debug', frozenset({'raw_team_id'})),
-    'agent_surfaces.client.teams_token_acquisition_no_access.diagnostic': EventSpec('debug', frozenset({'tenant_id'})),
-    'agent_surfaces.client.teams_token_acquisition_skipped_microsoft.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.client.teams_token_acquisition_tenant_s.diagnostic': EventSpec('debug', frozenset({'error_code', 'status', 'tenant_id'})),
-    'agent_surfaces.config.surface_webhook_verification_disabled.degraded': EventSpec('warning', frozenset({'environment'})),
-    'agent_surfaces.config.surface_webhook_verification_flag_ignored.degraded': EventSpec('warning', frozenset({'environment'})),
-    'agent_surfaces.consent.cache_read_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
-    'agent_surfaces.consent.graph_probe_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
-    'agent_surfaces.consent.token_request_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
-    'agent_surfaces.contact_follow_ups.send_failed.degraded': EventSpec('warning', frozenset({'error_type', 'platform'})),
-    'agent_surfaces.contact_follow_ups.sent.observed': EventSpec('info', frozenset({'delivered', 'platform'})),
-    'agent_surfaces.contact_keepers.contact_conversation_moved.observed': EventSpec('info', frozenset({'conversation_id'})),
-    'agent_surfaces.contact_keepers.keeper_left.observed': EventSpec('info', frozenset({'admins_told', 'pod_id', 'surfaces'})),
-    'agent_surfaces.contact_limits.exceeded.observed': EventSpec('info', frozenset({'per_person', 'surface_id'})),
-    'agent_surfaces.contact_limits.new_contacts_exceeded.observed': EventSpec('info', frozenset({'surface_id'})),
-    'agent_surfaces.contact_limits.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent_surfaces.contact_windows.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent_surfaces.contacts.contact_opened.observed': EventSpec('info', frozenset({'contact_id', 'surface_id'})),
-    'agent_surfaces.contacts.handle_unusable.observed': EventSpec('info', frozenset({'kind', 'platform'})),
-    'agent_surfaces.contacts.machine_mail_ignored.observed': EventSpec('info', frozenset({'reason', 'surface_id'})),
-    'agent_surfaces.contacts.nobody_looks_after.observed': EventSpec('info', frozenset({'surface_id'})),
-    'agent_surfaces.contacts.stranger_refused.observed': EventSpec('info', frozenset({'surface_id'})),
-    'agent_surfaces.contacts.unsubscribed_by_message.observed': EventSpec('info', frozenset({'known', 'surface_id'})),
-    'agent_surfaces.contacts.unverified_email_parked.observed': EventSpec('info', frozenset({'surface_id'})),
-    'agent_surfaces.conversation_binder.reset_held_for_notification.observed': EventSpec('info', frozenset({'conversation_id', 'surface_id'})),
-    'agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic': EventSpec('debug', frozenset({'account_id'})),
-    'agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.credential_resolver.pooled_number_missing.degraded': EventSpec('warning', frozenset({'phone_number_id', 'surface_id'})),
-    'agent_surfaces.credential_uniqueness.several_surfaces_share_one_bot.degraded': EventSpec('warning', frozenset({'answered_by', 'external_workspace_id', 'platform', 'surface_identity_id', 'surface_ids'})),
-    'agent_surfaces.delivery.native_attachment_unavailable.diagnostic': EventSpec('debug', frozenset({'platform'})),
-    'agent_surfaces.delivery.native_choices_unavailable.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.delivery.native_decision_unavailable.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.delivery.native_resource_unavailable.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.delivery.native_voice_unavailable.diagnostic': EventSpec('debug', frozenset({'platform'})),
-    'agent_surfaces.delivery.one_reply_reached_nobody.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.delivery.part_reached_nobody.degraded': EventSpec('warning', frozenset({'part', 'platform'})),
-    'agent_surfaces.display_resource_content.enrichment_skipped.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'path', 'step'})),
-    'agent_surfaces.display_resource_content.pod_file_unreadable.degraded': EventSpec('warning', frozenset({'conversation_id', 'path'})),
-    'agent_surfaces.egress.approval_not_delivered.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.ask_user_not_delivered.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.ask_user_render_skipped.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.conversation_missing_for_link.degraded': EventSpec('warning', frozenset({'conversation_id', 'platform', 'surface_id'})),
-    'agent_surfaces.egress.envelope_degraded.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'parts', 'platform'})),
-    'agent_surfaces.egress.envelope_reached_nobody.failed': EventSpec('error', frozenset({'conversation_id', 'platform'})),
-    'agent_surfaces.egress.link_has_no_inbound_event.degraded': EventSpec('warning', frozenset({'conversation_id', 'platform', 'surface_id'})),
-    'agent_surfaces.egress.no_adapter_for_platform.degraded': EventSpec('warning', frozenset({'conversation_id', 'surface_id', 'surface_type'})),
-    'agent_surfaces.egress.progress_append_failed.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.progress_clear_failed.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.progress_finish_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.progress_no_target.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.progress_typing_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.progress_update_failed.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.prompt_reached_nobody.failed': EventSpec('error', frozenset({'conversation_id', 'parts', 'platform'})),
-    'agent_surfaces.egress.sign_in_not_delivered.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.skipped_no_conversation.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.egress.stored_inbound_event_unreadable.degraded': EventSpec('warning', frozenset({'conversation_id', 'platform', 'surface_id'})),
-    'agent_surfaces.egress.surface_cannot_answer.degraded': EventSpec('warning', frozenset({'conversation_id', 'platform', 'reason', 'surface_id', 'surface_status'})),
-    'agent_surfaces.egress.voice_note_not_fetched.degraded': EventSpec('warning', frozenset({'conversation_id', 'path'})),
-    'agent_surfaces.email_surface_provisioning.address_taken.degraded': EventSpec('warning', frozenset({'agent_id', 'attempt', 'pod_id'})),
-    'agent_surfaces.email_surface_provisioning.address_unavailable.degraded': EventSpec('warning', frozenset({'agent_id', 'pod_id'})),
-    'agent_surfaces.email_surface_provisioning.failed.degraded': EventSpec('warning', frozenset({'agent_id', 'failure_code', 'failure_type', 'pod_id'})),
-    'agent_surfaces.event_receiver_service.could_not_load_telegram_polling.degraded': EventSpec('warning', frozenset()),
-    'agent_surfaces.event_receiver_service.could_not_publish_surface_receiver.observed': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.could_not_store_telegram_polling.degraded': EventSpec('warning', frozenset()),
-    'agent_surfaces.event_receiver_service.native_receiver_skipped_surface_s.diagnostic': EventSpec('debug', frozenset({'account_id'})),
-    'agent_surfaces.event_receiver_service.native_receiver_upstream_conflict.degraded': EventSpec('warning', frozenset({'cooldown_seconds', 'credential_label', 'platform'})),
-    'agent_surfaces.event_receiver_service.native_surface_receiver_stopped_platform.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.native_surface_receiver_wakeup_listener.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.slack_native_receiver_missing_app.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.slack_native_receiver_skipped_surface.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.slack_socket_envelope_ignored.observed': EventSpec('debug', frozenset({'envelope_type'})),
-    'agent_surfaces.event_receiver_service.slack_socket_publish_failed.failed': EventSpec('warning', frozenset({'envelope_type'})),
-    'agent_surfaces.event_receiver_service.telegram_native_receiver_missing_bot.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.telegram_native_receiver_skipped_surface.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.telegram_polling_getupdates_read_timeout.timeout': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.telegram_polling_hit_409_after.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed': EventSpec('debug', frozenset({'update_id'})),
-    'agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.event_receiver_service.telegram_system_surface_exists_but.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.events.handlers.onboarding_route_unavailable': EventSpec('info', frozenset({'reason'})),
-    'agent_surfaces.fallback_reply.surface_fallback_no_credentials.degraded': EventSpec('warning', frozenset({'platform', 'surface_id'})),
-    'agent_surfaces.fallback_reply.surface_fallback_send_failed.degraded': EventSpec('warning', frozenset({'platform', 'reply_kind', 'surface_id'})),
-    'agent_surfaces.fallback_reply.surface_fallback_within_window.observed': EventSpec('debug', frozenset({'platform', 'reply_kind'})),
-    'agent_surfaces.fallback_reply_service.agent_surface_ignored_duplicate_unrouted.observed': EventSpec('debug', frozenset({'external_channel_id'})),
-    'agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed': EventSpec('debug', frozenset({'reply_kind'})),
-    'agent_surfaces.file_ingest.attachment_download_failed.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.file_ingest.attachment_name_unavailable.degraded': EventSpec('warning', frozenset({'attempts', 'platform'})),
-    'agent_surfaces.file_ingest.attachment_over_cap': EventSpec('info', frozenset({'cap_bytes', 'platform'})),
-    'agent_surfaces.file_ingest.attachment_over_cap_after_read.degraded': EventSpec('warning', frozenset({'cap_bytes', 'platform', 'size_bytes'})),
-    'agent_surfaces.file_ingest.attachment_store_failed.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.group_audience.outsiders_present.observed': EventSpec('info', frozenset({'count', 'platform'})),
-    'agent_surfaces.group_hello.send_failed.observed': EventSpec('info', frozenset({'surface_id'})),
-    'agent_surfaces.group_registry.group_adopted.observed': EventSpec('info', frozenset({'group_id', 'owner_set', 'surface_id'})),
-    'agent_surfaces.group_updates.creation_refused.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.group_updates.invite_link_lookup.observed': EventSpec('info', frozenset()),
-    'agent_surfaces.handlers.surface_message_not_enqueued.failed': EventSpec('error', frozenset({'source', 'surface_id'})),
-    'agent_surfaces.identity.ambiguous_mobile_match': EventSpec('error', frozenset({'candidate_count', 'verification_state'})),
-    'agent_surfaces.identity.email_sender_failed_authentication.degraded': EventSpec('warning', frozenset({'platform', 'sender_email'})),
-    'agent_surfaces.identity.email_sender_unauthenticated.degraded': EventSpec('warning', frozenset({'platform', 'resolved', 'sender_email'})),
-    'agent_surfaces.identity.unverified_phone_match_used.observed': EventSpec('warning', frozenset()),
-    'agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic': EventSpec('debug', frozenset({'default_id', 'user_id'})),
-    'agent_surfaces.ingress_service.agent_surface_dropped_event_after.observed': EventSpec('debug', frozenset({'surface_type'})),
-    'agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed': EventSpec('debug', frozenset({'external_channel_id', 'surface_type'})),
-    'agent_surfaces.ingress_service.agent_surface_ignored_webhook_because.observed': EventSpec('debug', frozenset({'source'})),
-    'agent_surfaces.ingress_service.agent_surface_prepared_inbound_event.observed': EventSpec('debug', frozenset({'attachment_count', 'surface_type'})),
-    'agent_surfaces.ingress_service.agent_surface_resolved_user_not.observed': EventSpec('debug', frozenset({'internal_user_id', 'pod_id', 'surface_type'})),
-    'agent_surfaces.ingress_service.attachment_ingest_failed.degraded': EventSpec('warning', frozenset({'error_type', 'surface_id'})),
-    'agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic': EventSpec('debug', frozenset({'user_id'})),
-    'agent_surfaces.ingress_service.inbound_enrichment_failed.degraded': EventSpec('warning', frozenset({'failure_type', 'provider_error', 'status_code', 'surface_type'})),
-    'agent_surfaces.ingress_service.inbound_message_empty.degraded': EventSpec('warning', frozenset({'conversation_id', 'platform'})),
-    'agent_surfaces.ingress_service.interaction_submitter_refused.degraded': EventSpec('warning', frozenset({'conversation_id', 'external_user_id'})),
-    'agent_surfaces.ingress_service.surface_channel_context_fetch_platform.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.ingress_service.surface_channel_setup_handling.diagnostic': EventSpec('debug', frozenset({'surface_id'})),
-    'agent_surfaces.ingress_service.surface_home_apps.diagnostic': EventSpec('debug', frozenset({'surface_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_claim_release_failed.degraded': EventSpec('warning', frozenset({'surface_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_dropped_invalid_conversation.diagnostic': EventSpec('debug', frozenset({'callback_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_dropped_no_matching.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_dropped_surface_missing.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'surface_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_dropped_unparseable_callback.diagnostic': EventSpec('debug', frozenset({'callback_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_failed.degraded': EventSpec('warning', frozenset({'action', 'conversation_id', 'platform'})),
-    'agent_surfaces.ingress_service.surface_interaction_failure_unacknowledged.degraded': EventSpec('warning', frozenset({'surface_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_ignored_replay_duplicate.observed': EventSpec('debug', frozenset({'conversation_id', 'dedup_id'})),
-    'agent_surfaces.ingress_service.surface_interaction_out_of_scope.degraded': EventSpec('warning', frozenset({'conversation_id', 'surface_id'})),
-    'agent_surfaces.ingress_service.surface_lifecycle_handling.diagnostic': EventSpec('debug', frozenset({'surface_id'})),
-    'agent_surfaces.ingress_service.surface_thread_title_set.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.ingress_service.typed_reply_decision_not_recorded.failed': EventSpec('error', frozenset({'conversation_id'})),
-    'agent_surfaces.ingress_service.typed_reply_lookup_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.ingress_service.webhook_carried_several_messages.observed': EventSpec('info', frozenset({'message_count', 'source'})),
-    'agent_surfaces.notification_channels.provision_failed.degraded': EventSpec('warning', frozenset({'failure_type', 'pod_id'})),
-    'agent_surfaces.notification_controller.delegated_outside_answer.refused': EventSpec('info', frozenset({'notification_id'})),
-    'agent_surfaces.notification_egress.cold_open_unsupported.observed': EventSpec('info', frozenset({'notification_id', 'platform'})),
-    'agent_surfaces.notification_egress.link_repoint_lost_race.observed': EventSpec('info', frozenset({'link_id', 'notification_id'})),
-    'agent_surfaces.notification_rate_limiter.email_exceeded.degraded': EventSpec('warning', frozenset({'limit', 'pod_id'})),
-    'agent_surfaces.notification_rate_limiter.exceeded.degraded': EventSpec('warning', frozenset({'limit', 'pod_id', 'recipient_user_id'})),
-    'agent_surfaces.notification_rate_limiter.unavailable.degraded': EventSpec('warning', frozenset({'error'})),
-    'agent_surfaces.notification_service.channel_send_failed.degraded': EventSpec('warning', frozenset({'error', 'notification_id', 'platform'})),
-    'agent_surfaces.notification_service.duplicate_suppressed.observed': EventSpec('info', frozenset({'notification_id', 'pod_id'})),
-    'agent_surfaces.notification_service.undeliverable.observed': EventSpec('info', frozenset({'notification_id', 'reason'})),
-    'agent_surfaces.notifications.expired.observed': EventSpec('info', frozenset({'count'})),
-    'agent_surfaces.notifications.open_lookup_degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.onboarding.modal_click_refused': EventSpec('info', frozenset({'reason'})),
-    'agent_surfaces.onboarding.modal_deadline_exceeded': EventSpec('warning', frozenset()),
-    'agent_surfaces.onboarding.modal_unavailable': EventSpec('warning', frozenset({'error_type', 'installation_id'})),
-    'agent_surfaces.onboarding_cleanup.failed': EventSpec('warning', frozenset()),
-    'agent_surfaces.outside_cap.reply_not_sent.degraded': EventSpec('warning', frozenset({'platform'})),
-    'agent_surfaces.outside_cap.turn_held.observed': EventSpec('info', frozenset({'conversation_id', 'pod_id', 'told'})),
-    'agent_surfaces.outsider_limits.exceeded.observed': EventSpec('info', frozenset({'group_id', 'per_group', 'per_person'})),
-    'agent_surfaces.outsider_limits.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent_surfaces.parser.slack_parser_normalize_context_message.propagated': EventSpec('debug', frozenset()),
-    'agent_surfaces.parser.slack_parser_normalize_inbound_event.propagated': EventSpec('debug', frozenset()),
-    'agent_surfaces.pending_envelope.discard_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.pending_envelope.display_paths_overflowed.degraded': EventSpec('warning', frozenset({'conversation_id', 'limit'})),
-    'agent_surfaces.pending_envelope.hold_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.pending_envelope.read_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.pending_envelope.release_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.progress_observer.clear_progress_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.progress_observer.final_answer_not_delivered.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.progress_observer.final_answer_unsent.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.progress_observer.finish_stream_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.progress_observer.run_error_not_delivered.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.progress_observer.surface_progress_typing_loop_stopped.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.progress_observer.waiting_prompt_failed.degraded': EventSpec('warning', frozenset({'conversation_id', 'kind'})),
-    'agent_surfaces.progress_observer.waiting_prompt_fallback_failed.degraded': EventSpec('warning', frozenset({'conversation_id', 'kind'})),
-    'agent_surfaces.progress_observer.waiting_prompt_not_delivered.degraded': EventSpec('warning', frozenset({'conversation_id', 'kind', 'tool_call_id'})),
-    'agent_surfaces.resend.inbound_fetch_skipped.degraded': EventSpec('warning', frozenset({'failure_type', 'provider_error', 'status_code', 'thread_id'})),
-    'agent_surfaces.resend.inbound_missing_email_id.degraded': EventSpec('warning', frozenset({'thread_id'})),
-    'agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.degraded': EventSpec('warning', frozenset()),
-    'agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.degraded': EventSpec('warning', frozenset()),
-    'agent_surfaces.resend_polling_receiver.resend_email_has_no_identifier.degraded': EventSpec('warning', frozenset({'surface_id'})),
-    'agent_surfaces.resend_polling_receiver.resend_native_receiver_missing_key.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.resend_polling_receiver.resend_native_receiver_skipped_surface.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.resend_polling_receiver.resend_polling_no_surface_for_address.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.resend_polling_receiver.resend_polling_receiver_error.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.resend_polling_receiver.resend_system_surface_exists_but.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.getme_while_resolving_bot_info.observed': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_add_processing_indicator_channel.propagated': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_append_stream_text.diagnostic': EventSpec('debug', frozenset({'error_code'})),
-    'agent_surfaces.service.slack_channel_setup_prompt.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_end_progress_delete_channel.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_fetch_sender_profile_skipped.diagnostic': EventSpec('debug', frozenset({'user_id'})),
-    'agent_surfaces.service.slack_fetch_sender_profile_user.propagated': EventSpec('debug', frozenset({'user_id'})),
-    'agent_surfaces.service.slack_finish_progress_stop_stream.degraded': EventSpec('warning', frozenset({'error_code'})),
-    'agent_surfaces.service.slack_get_recent_channel_messages.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.service.slack_get_recent_channel_messages.propagated': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.service.slack_get_user_display_name.observed': EventSpec('debug', frozenset({'user_id'})),
-    'agent_surfaces.service.slack_interaction_acknowledgement_best.observed': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_list_channels_private_unavailable.diagnostic': EventSpec('debug', frozenset({'error_code'})),
-    'agent_surfaces.service.slack_open_setup_modal.diagnostic': EventSpec('debug', frozenset({'error_code'})),
-    'agent_surfaces.service.slack_processing_reaction_not_removed.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_publish_home_view.diagnostic': EventSpec('debug', frozenset({'error_code'})),
-    'agent_surfaces.service.slack_reaction_indicator_skipped_channel.diagnostic': EventSpec('debug', frozenset({'error_code'})),
-    'agent_surfaces.service.slack_search_current_channel_channel.propagated': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.service.slack_search_current_channel_missing.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.service.slack_send_display_resource_channel.propagated': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_send_message_channel_s.propagated': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_set_thread_title.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.slack_starter_prompt.diagnostic': EventSpec('debug', frozenset({'error_code'})),
-    'agent_surfaces.service.slack_typing_indicator_unsupported_channel.diagnostic': EventSpec('debug', frozenset({'error_code'})),
-    'agent_surfaces.service.teams_download_file_could_not.diagnostic': EventSpec('debug', frozenset({'status'})),
-    'agent_surfaces.service.teams_download_file_redirects.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.teams_download_file_s_fetch.diagnostic': EventSpec('debug', frozenset({'status'})),
-    'agent_surfaces.service.teams_download_plan_could_not.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.teams_download_plan_missing_bot.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.teams_download_plan_missing_graph.diagnostic': EventSpec('debug', frozenset({'tenant_id'})),
-    'agent_surfaces.service.teams_download_plan_missing_tenant.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.service.teams_fetch_recent_context_channel.diagnostic': EventSpec('debug', frozenset({'channel_id'})),
-    'agent_surfaces.service.teams_get_recent_channel_messages.diagnostic': EventSpec('debug', frozenset({'status', 'tenant_id'})),
-    'agent_surfaces.service.teams_get_recent_channel_messages.propagated': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.service.telegram_progress_message_cleanup_best.observed': EventSpec('debug', frozenset({'chat_id'})),
-    'agent_surfaces.service.whatsapp_display_phone_lookup_phone.observed': EventSpec('info', frozenset({'phone_number_id'})),
-    'agent_surfaces.service.whatsapp_display_resource_cta_rejected.degraded': EventSpec('warning', frozenset({'status_code'})),
-    'agent_surfaces.service.whatsapp_interaction_acknowledgement_failed.degraded': EventSpec('warning', frozenset()),
-    'agent_surfaces.service.whatsapp_mark_read_typing_best.observed': EventSpec('info', frozenset()),
-    'agent_surfaces.service.whatsapp_message_partially_delivered.degraded': EventSpec('warning', frozenset({'sent_parts', 'total_parts'})),
-    'agent_surfaces.service.whatsapp_questions_partially_delivered.degraded': EventSpec('warning', frozenset({'sent_questions', 'total_questions'})),
-    'agent_surfaces.service.whatsapp_reaction_indicator_best_effort.observed': EventSpec('info', frozenset()),
-    'agent_surfaces.surface_connection_resolver.connection_lookup_failed.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
-    'agent_surfaces.surface_display_delivery.display_resource_delivery_failed.degraded': EventSpec('warning', frozenset({'conversation_id', 'tool_call_id'})),
-    'agent_surfaces.surface_display_delivery.surface_message_delivery_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.surface_display_delivery.voice_note_delivery_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.surface_reach_resolver.credentials_unavailable': EventSpec('warning', frozenset({'surface_type'})),
-    'agent_surfaces.surface_reach_resolver.surface_reach_account_fallback_surface.observed': EventSpec('debug', frozenset()),
-    'agent_surfaces.surface_reach_resolver.surface_reach_live_handle_surface.observed': EventSpec('debug', frozenset({'surface_type'})),
-    'agent_surfaces.surface_reach_resolver.surface_reach_write_through_surface.observed': EventSpec('debug', frozenset()),
-    'agent_surfaces.surface_row.retired_value_skipped.degraded': EventSpec('warning', frozenset({'column', 'surface_id', 'value'})),
-    'agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic': EventSpec('debug', frozenset()),
-    'agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic': EventSpec('debug', frozenset({'account_id'})),
-    'agent_surfaces.tasks.sweep_web_visitors.observed': EventSpec('info', frozenset({'codes', 'conversations', 'sessions'})),
-    'agent_surfaces.telegram.callback_acknowledgement_best_effort': EventSpec('debug', frozenset()),
-    'agent_surfaces.telegram.callback_keyboard_cleanup_best_effort': EventSpec('debug', frozenset()),
-    'agent_surfaces.telegram.empty_message_not_sent': EventSpec('warning', frozenset({'has_reply_markup'})),
-    'agent_surfaces.telegram.media_type_rejected.degraded': EventSpec('warning', frozenset({'method', 'mime_type'})),
-    'agent_surfaces.telegram.message_partially_delivered.degraded': EventSpec('warning', frozenset({'sent_chunks', 'total_chunks'})),
-    'agent_surfaces.telegram.mini_app_sync_failed.degraded': EventSpec('warning', frozenset({'surface_id'})),
-    'agent_surfaces.telegram.questions_partially_delivered.degraded': EventSpec('warning', frozenset({'sent_questions', 'total_questions'})),
-    'agent_surfaces.telegram_command.reply_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'agent_surfaces.telegram_group_join.adopted.observed': EventSpec('info', frozenset({'group_id', 'surface_id'})),
-    'agent_surfaces.telegram_group_join.hello_failed.observed': EventSpec('info', frozenset({'surface_id'})),
-    'agent_surfaces.telegram_group_links.redeem_unavailable.degraded': EventSpec('warning', frozenset()),
-    'agent_surfaces.telegram_manager.bot_branding_best_effort': EventSpec('debug', frozenset({'method'})),
-    'agent_surfaces.telegram_manager.bot_profile_photo_best_effort': EventSpec('debug', frozenset()),
-    'agent_surfaces.telegram_manager.managed_bot_provisioning_failed': EventSpec('error', frozenset()),
-    'agent_surfaces.telegram_manager.polling_receiver_failed': EventSpec('error', frozenset()),
-    'agent_surfaces.telegram_manager.webhook_registration_failed': EventSpec('error', frozenset()),
-    'agent_surfaces.telegram_manager.webhook_secret_missing': EventSpec('warning', frozenset()),
-    'agent_surfaces.web_limits.exceeded.observed': EventSpec('info', frozenset({'window'})),
-    'agent_surfaces.web_limits.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent_surfaces.webhook_controller.whatsapp_number_mismatch.denied': EventSpec('warning', frozenset({'addressed_phone_number_ids', 'phone_number_id'})),
-    'agent_surfaces.webhook_controller.whatsapp_number_signature_rejected.denied': EventSpec('warning', frozenset({'phone_number_id', 'reason', 'verified_with'})),
-    'agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic': EventSpec('debug', frozenset({'account_id'})),
-    'agent_surfaces.whatsapp_contract.number_ownership_unreadable.degraded': EventSpec('warning', frozenset()),
-    'agent_surfaces.whatsapp_contract.shared_number_unreadable.degraded': EventSpec('warning', frozenset()),
-    'agent_surfaces.whatsapp_surface_provisioning.number_allocated': EventSpec('info', frozenset({'organization_id', 'phone_number_id', 'pod_id'})),
-    'agent_surfaces.widget_directory.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'analytics.actor.unattributed': EventSpec('warning', frozenset({'actor_type', 'analytic_event'})),
-    'analytics.app_session.cache_unavailable': EventSpec('debug', frozenset()),
-    'analytics.app_session.record_failed': EventSpec('debug', frozenset()),
-    'analytics.buffer.overflowed': EventSpec('warning', frozenset({'count'})),
-    'analytics.contract.violation': EventSpec('warning', frozenset({'analytic_event', 'origin', 'reason'})),
-    'analytics.delivery.failed': EventSpec('warning', frozenset({'count', 'error_type', 'status'})),
-    'analytics.flush.failed': EventSpec('warning', frozenset({'error_type'})),
-    'analytics.pod_delivered.cache_unavailable': EventSpec('debug', frozenset()),
-    'analytics.shutdown.drain_timed_out': EventSpec('warning', frozenset({'count'})),
-    'api.warm_import.failed': EventSpec('warning', frozenset({'target'})),
-    'api.warm_import.ready': EventSpec('debug', frozenset({'target'})),
-    'app.health_ready.probe_failed.failed': EventSpec('error', frozenset()),
-    'apps.app_asset_resolver.branding_entitlement.diagnostic': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
-    'apps.app_release_retention.releases_pruned': EventSpec('info', frozenset({'app_id', 'pruned_count'})),
-    'apps.app_release_service.release_promoted': EventSpec('info', frozenset({'app_id', 'pod_id', 'release_number', 'version'})),
-    'apps.app_service.app_html_lint.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
-    'apps.app_storage_phase.app_storage_cleanup_s_s.diagnostic': EventSpec('debug', frozenset({'app_id'})),
-    'apps.app_use_cases.release_retention.degraded': EventSpec('warning', frozenset({'pod_id'})),
-    'apps.tasks.sweep_app_releases.failed': EventSpec('error', frozenset()),
-    'apps.tasks.sweep_app_releases.observed': EventSpec('info', frozenset({'examined', 'failed', 'pruned_apps', 'pruned_releases', 'truncated'})),
-    'apps.tasks.sweep_app_releases.skipped': EventSpec('warning', frozenset({'app_id'})),
-    'authorization.resource_names.dangling_grants_skipped': EventSpec('debug', frozenset({'pod_id'})),
-    'background_task.failed': EventSpec('error', frozenset({'error_type', 'task_name'})),
-    'concurrency.offload.configured_offload_thread_pool.observed': EventSpec('debug', frozenset()),
-    'concurrency.offload.could_not_configure_offload_thread.diagnostic': EventSpec('debug', frozenset()),
-    'connector.operation.timeout': EventSpec('warning', frozenset({'connector_id', 'operation_name'})),
-    'connector_catalog.app.synced': EventSpec('debug', frozenset({'connector_id'})),
-    'connector_catalog.composio.disabled': EventSpec('debug', frozenset()),
-    'connector_catalog.composio.duplicate_field.observed': EventSpec('warning', frozenset({'field_name'})),
-    'connector_catalog.composio_batch.started': EventSpec('debug', frozenset({'connector_id'})),
-    'connector_catalog.composio_retirement.applied': EventSpec('debug', frozenset({'connector_id'})),
-    'connector_catalog.composio_retirement.installs_disabled': EventSpec('warning', frozenset({'connector_id', 'count'})),
-    'connector_catalog.composio_retirement.no_native_capability': EventSpec('warning', frozenset({'connector_id'})),
-    'connector_catalog.composio_retirement.rows_deleted': EventSpec('debug', frozenset({'connector_id', 'count', 'table'})),
-    'connector_catalog.composio_retirements.applied': EventSpec('info', frozenset({'count'})),
-    'connector_catalog.config.missing': EventSpec('warning', frozenset({'config_name'})),
-    'connector_catalog.connector.creating': EventSpec('debug', frozenset({'connector_id'})),
-    'connector_catalog.connector.deactivated': EventSpec('debug', frozenset({'connector_id'})),
-    'connector_catalog.connector.renamed': EventSpec('debug', frozenset({'new_connector_id', 'old_connector_id'})),
-    'connector_catalog.connector.updating': EventSpec('debug', frozenset({'connector_id'})),
-    'connector_catalog.dry_run.completed': EventSpec('info', frozenset({'composio_app_count', 'composio_operation_count', 'composio_trigger_count', 'native_app_count', 'native_operation_count', 'native_trigger_count'})),
-    'connector_catalog.import.completed': EventSpec('info', frozenset({'composio_app_count', 'composio_operation_count', 'composio_trigger_count', 'native_app_count', 'native_operation_count', 'native_trigger_count'})),
-    'connector_catalog.native_batch.started': EventSpec('debug', frozenset({'connector_id'})),
-    'connector_catalog.rename.rows_repointed': EventSpec('debug', frozenset({'count', 'new_connector_id', 'old_connector_id', 'table'})),
-    'connector_catalog.rename.target_missing': EventSpec('warning', frozenset({'new_connector_id', 'old_connector_id'})),
-    'connector_catalog.renames.applied': EventSpec('debug', frozenset({'count'})),
-    'connector_catalog.skill.failed': EventSpec('warning', frozenset({'connector_id', 'error_type', 'provider'})),
-    'connector_catalog.skill.generated': EventSpec('debug', frozenset({'connector_id', 'provider'})),
-    'connector_catalog.skill_batch.completed': EventSpec('debug', frozenset({'count', 'total_count'})),
-    'connector_catalog.skills.completed': EventSpec('info', frozenset({'app_count'})),
-    'connector_catalog.skills.started': EventSpec('debug', frozenset({'app_count'})),
-    'connector_catalog.static_operations.synced': EventSpec('info', frozenset({'connector_id', 'count'})),
-    'connector_catalog.toolkit.skipped': EventSpec('debug', frozenset({'error_type', 'toolkit_id'})),
-    'connector_catalog.toolkits.selected': EventSpec('debug', frozenset({'managed_by', 'toolkit_count'})),
-    'connector_catalog.unmanaged_composio_default.installs_disabled': EventSpec('warning', frozenset({'accounts_flagged', 'connector_id', 'count'})),
-    'connectors.account_identity.telegram_getme_while_resolving_account.diagnostic': EventSpec('debug', frozenset()),
-    'connectors.account_revocation.skipped_without_install': EventSpec('info', frozenset({'connector_id'})),
-    'connectors.breaker.opened.degraded': EventSpec('warning', frozenset({'connector_id', 'cooldown_seconds', 'failures', 'operation_name', 'organization_id'})),
-    'connectors.breaker.recovered': EventSpec('info', frozenset({'connector_id', 'operation_name', 'organization_id'})),
-    'connectors.breaker.rejected.degraded': EventSpec('warning', frozenset({'connector_id', 'cooldown_seconds', 'operation_name', 'organization_id'})),
-    'connectors.breaker.unavailable.degraded': EventSpec('warning', frozenset({'scope'})),
-    'connectors.catalog_row.invalid.skipped': EventSpec('warning', frozenset({'invalid_fields', 'kind', 'row_id', 'table'})),
-    'connectors.composio_auth_provider.callback_account_mismatch': EventSpec('warning', frozenset()),
-    'connectors.composio_auth_provider.fetch_token_info_google_api.diagnostic': EventSpec('debug', frozenset({'status'})),
-    'connectors.composio_auth_provider.google_token_expiration_lookup.degraded': EventSpec('warning', frozenset()),
-    'connectors.composio_auth_provider.set_token_expiration.observed': EventSpec('debug', frozenset()),
-    'connectors.connect_request_controller.install_chained.diagnostic': EventSpec('info', frozenset()),
-    'connectors.connect_request_controller.install_return.diagnostic': EventSpec('info', frozenset()),
-    'connectors.connect_request_controller.state.observed': EventSpec('debug', frozenset()),
-    'connectors.connector_operation_search.install_failed.diagnostic': EventSpec('debug', frozenset({'auth_config'})),
-    'connectors.connector_service.account_profile_operation.degraded': EventSpec('warning', frozenset({'connector_id', 'operation_name'})),
-    'connectors.connector_service.auth_config_operation_discovery.failed': EventSpec('warning', frozenset({'auth_config_id', 'error_type'})),
-    'connectors.connector_service.auth_config_updated': EventSpec('info', frozenset({'accounts_marked_for_reauth', 'auth_config_id', 'operations_discovered', 'operations_discovery_status', 'organization_id'})),
-    'connectors.connector_service.credential_refresh_rejected.degraded': EventSpec('warning', frozenset({'account_id', 'connector_id', 'error_type'})),
-    'connectors.connector_service.discovery_credentials.skipped': EventSpec('info', frozenset({'auth_config_id', 'error_type'})),
-    'connectors.connector_service.exchange_connector_authorization_code.propagated': EventSpec('debug', frozenset({'error_type'})),
-    'connectors.connector_service.get_connector_authorization_url.propagated': EventSpec('warning', frozenset({'connector_id', 'error_type'})),
-    'connectors.connector_service.revoke.failed': EventSpec('error', frozenset()),
-    'connectors.discovery.mcp_events.none_offered': EventSpec('info', frozenset({'code'})),
-    'connectors.github_app.installation_token_refused': EventSpec('warning', frozenset({'upstream_status'})),
-    'connectors.github_installation.choice_required.diagnostic': EventSpec('info', frozenset({'count'})),
-    'connectors.github_installation.claim_rejected.denied': EventSpec('warning', frozenset({'status_code'})),
-    'connectors.github_installation.lookup_failed.degraded': EventSpec('warning', frozenset()),
-    'connectors.github_installation.verify_failed.degraded': EventSpec('warning', frozenset({'status_code'})),
-    'connectors.github_presenter.fell_back_to_user_token': EventSpec('info', frozenset({'connector_id'})),
-    'connectors.github_reconciler.cache_unavailable.degraded': EventSpec('warning', frozenset()),
-    'connectors.github_reconciler.installation_bound.diagnostic': EventSpec('info', frozenset({'account_id'})),
-    'connectors.github_reconciler.no_token.degraded': EventSpec('warning', frozenset({'account_id'})),
-    'connectors.install_provisioning.account_operation_discovery.degraded': EventSpec('warning', frozenset({'auth_config_id'})),
-    'connectors.install_update.renegotiating_mcp_authorization': EventSpec('info', frozenset({'replacing_registered_client'})),
-    'connectors.lemma_auth_provider.access_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
-    'connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
-    'connectors.mcp_events.renew_budget_spent.degraded': EventSpec('warning', frozenset({'left_count', 'renewed_count'})),
-    'connectors.mcp_events.renewed': EventSpec('info', frozenset({'renewed_count'})),
-    'connectors.mcp_events.target_unavailable': EventSpec('info', frozenset({'error_type', 'subscription_id'})),
-    'connectors.mcp_events.unsubscribe.degraded': EventSpec('warning', frozenset({'code', 'subscription_id'})),
-    'connectors.mcp_executor.calling_mcp_tool.observed': EventSpec('debug', frozenset({'connector_id', 'tool_name'})),
-    'connectors.mcp_oauth.registered': EventSpec('info', frozenset({'issuer'})),
-    'connectors.mcp_oauth.registration_refused_unsafe_url': EventSpec('warning', frozenset({'issuer'})),
-    'connectors.mcp_oauth.registration_skipped': EventSpec('info', frozenset({'error_type'})),
-    'connectors.oauth_callback.followup_account_foreign.denied': EventSpec('warning', frozenset({'connector_id'})),
-    'connectors.oauth_callback.followup_identity_absent.denied': EventSpec('warning', frozenset({'connector_id'})),
-    'connectors.oauth_callback.followup_identity_mismatch.denied': EventSpec('warning', frozenset({'connector_id'})),
-    'connectors.oauth_callback.installation_recorded.diagnostic': EventSpec('info', frozenset({'connector_id'})),
-    'connectors.openapi_http_executor.calling_http_operation.observed': EventSpec('debug', frozenset({'connector_id', 'http_method', 'mode', 'operation_name'})),
-    'connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic': EventSpec('debug', frozenset({'error_type'})),
-    'connectors.webhook_sources.mcp.heard.degraded': EventSpec('warning', frozenset({'subscription_id'})),
-    'contacts.forget.contact_forgotten.observed': EventSpec('info', frozenset({'contact_id', 'conversations', 'forgotten_by_user_id', 'notifications', 'pod_id', 'rows', 'senders', 'web_sessions'})),
-    'contacts.visitor_sessions.liveness_unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'crypto.keys.published_local_encryption_key.degraded': EventSpec('warning', frozenset({'environment'})),
-    'crypto.keys.unparsable_secret_encryption_keyset.failed': EventSpec('error', frozenset()),
-    'crypto.rotation.column_reencrypted': EventSpec('debug', frozenset({'column', 'migrated', 'scanned'})),
-    'datastore.access.files_withheld': EventSpec('warning', frozenset({'actor_type', 'total_candidates', 'withheld_count'})),
-    'datastore.access.files_withheld.expected': EventSpec('info', frozenset({'actor_type', 'total_candidates', 'withheld_count'})),
-    'datastore.authorization.authorization_check_document_admin_user.diagnostic': EventSpec('debug', frozenset({'pod_id', 'user_id'})),
-    'datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic': EventSpec('debug', frozenset({'pod_id', 'user_id'})),
-    'datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.config.setting_renamed': EventSpec('warning', frozenset({'new_name', 'old_name'})),
-    'datastore.docling_processor.docling_pdf_page_count_probe.observed': EventSpec('debug', frozenset()),
-    'datastore.docling_processor.docling_poll_hiccup_s_retrying.observed': EventSpec('debug', frozenset()),
-    'datastore.file_processing_service.datastore_completion_persisted_s_file.observed': EventSpec('debug', frozenset({'count', 'extraction_seconds', 'file_id', 'indexing_seconds', 'page_count', 'projection_seconds'})),
-    'datastore.file_processing_service.datastore_persisted_s_file_s.observed': EventSpec('debug', frozenset({'file_id'})),
-    'datastore.file_processing_service.extraction_unavailable_claim_released.degraded': EventSpec('warning', frozenset({'facility', 'file_id', 'released'})),
-    'datastore.file_processing_service.file_s_d_bytes_exceeds.diagnostic': EventSpec('debug', frozenset({'file_id', 'max_file_bytes', 'size_bytes'})),
-    'datastore.file_processing_service.file_s_not_found_processing.diagnostic': EventSpec('debug', frozenset({'file_id'})),
-    'datastore.file_processing_service.removing_search_projection_s.diagnostic': EventSpec('debug', frozenset({'file_id'})),
-    'datastore.file_processing_service.search_processing_s.propagated': EventSpec('debug', frozenset({'file_id'})),
-    'datastore.file_recovery_service.dispatch_deferred_extractor_down.degraded': EventSpec('info', frozenset({'cooldown_seconds'})),
-    'datastore.file_recovery_service.dispatch_deferred_model_unavailable.degraded': EventSpec('info', frozenset({'cooldown_seconds'})),
-    'datastore.handlers.cleanup_deleted_datastore_paths_pod.propagated': EventSpec('debug', frozenset()),
-    'datastore.handlers.datastore_file_recovery_terminally_d.degraded': EventSpec('warning', frozenset({'terminal_count'})),
-    'datastore.handlers.dispatched_pending_datastore_files.observed': EventSpec('debug', frozenset({'enqueued_count', 'pod_count'})),
-    'datastore.handlers.finished_cleanup_deleted_datastore_paths.observed': EventSpec('debug', frozenset()),
-    'datastore.handlers.no_stale_datastore_files_re.observed': EventSpec('debug', frozenset()),
-    'datastore.handlers.pending_file_dispatch_cron.failed': EventSpec('error', frozenset()),
-    'datastore.handlers.process_datastore_file_task_s.propagated': EventSpec('debug', frozenset()),
-    'datastore.handlers.stuck_file_recovery_cron_s.failed': EventSpec('error', frozenset()),
-    'datastore.indexing_availability.indexing_facility_absent.degraded': EventSpec('warning', frozenset({'facility', 'pod_id'})),
-    'datastore.kreuzberg_helper.chunking_request_text_chunker_s.diagnostic': EventSpec('debug', frozenset({'chunker_type'})),
-    'datastore.kreuzberg_helper.kreuzberg_enhanced_extraction_s_retrying.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.kreuzberg_helper.kreuzberg_extract_connection_s_attempt.diagnostic': EventSpec('debug', frozenset({'max_attempts'})),
-    'datastore.kreuzberg_helper.pdfium_ocr_probe_defaulting_native.observed': EventSpec('debug', frozenset()),
-    'datastore.module.local_embedding_model_degraded.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'datastore.module.local_embedding_model_ready.observed': EventSpec('debug', frozenset()),
-    'datastore.module.preloading_local_embedding_model.observed': EventSpec('debug', frozenset()),
-    'datastore.orphan_schemas.drop.degraded': EventSpec('warning', frozenset({'schema_name'})),
-    'datastore.orphan_schemas.dropped': EventSpec('info', frozenset({'schema_name'})),
-    'datastore.orphan_schemas.reaped': EventSpec('info', frozenset({'dropped_count', 'failed_count', 'retention_days', 'scanned_count'})),
-    'datastore.postgres_search_service.add_file_search_s.propagated': EventSpec('debug', frozenset()),
-    'datastore.postgres_search_service.datastore_indexing_stages_file_s.observed': EventSpec('debug', frozenset({'count', 'embedding_seconds', 'file_id', 'persistence_seconds', 'schema_seconds'})),
-    'datastore.postgres_search_service.legacy_index_drop.degraded': EventSpec('warning', frozenset({'index_name', 'schema_name'})),
-    'datastore.postgres_search_service.no_chunks_s.diagnostic': EventSpec('debug', frozenset({'file_id'})),
-    'datastore.postgres_search_service.vector_index_build.degraded': EventSpec('warning', frozenset({'schema_name'})),
-    'datastore.projection.delete_derived_child_artifacts_s.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.projection.delete_file_s_s.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.projection.remove_indexed_chunks_s_s.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.public_rows.closed': EventSpec('info', frozenset({'pod_id', 'table_id', 'user_id'})),
-    'datastore.public_rows.opened': EventSpec('info', frozenset({'audience', 'column_count', 'pod_id', 'table_id', 'user_id'})),
-    'datastore.query_role.ensure.degraded': EventSpec('warning', frozenset({'role'})),
-    'datastore.query_role.grant.contended': EventSpec('debug', frozenset({'attempt', 'schema_name'})),
-    'datastore.query_role.heal.degraded': EventSpec('warning', frozenset({'schema_name'})),
-    'datastore.query_role.schema_healed': EventSpec('info', frozenset({'schema_name'})),
-    'datastore.reader.load_child_manifest_s.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.record.bulk_delete.propagated': EventSpec('debug', frozenset()),
-    'datastore.record.bulk_update.propagated': EventSpec('debug', frozenset()),
-    'datastore.record.bulk_write.propagated': EventSpec('debug', frozenset()),
-    'datastore.record.create.propagated': EventSpec('debug', frozenset()),
-    'datastore.record.index.degraded': EventSpec('warning', frozenset({'schema_name', 'table_name'})),
-    'datastore.record.list.propagated': EventSpec('debug', frozenset()),
-    'datastore.record.query.propagated': EventSpec('debug', frozenset()),
-    'datastore.record.query.rls_context_tampered.degraded': EventSpec('warning', frozenset()),
-    'datastore.record.query_plan.propagated': EventSpec('debug', frozenset()),
-    'datastore.record.query_plan_left_the_pod_schema.degraded': EventSpec('warning', frozenset({'foreign_schema_count', 'schema_name'})),
-    'datastore.reindex_queue.pod_admission_deferred_to_dispatcher.observed': EventSpec('debug', frozenset({'pod_id'})),
-    'datastore.renderer.load_cached_page_image_will.observed': EventSpec('debug', frozenset()),
-    'datastore.reranker.local_reranker_keeping_first_stage.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.reranker.openai_compat_reranker_keeping_first.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.reranker.openai_compat_reranking_requires_lemma.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.schema_manager.dropped_schema_pod.observed': EventSpec('debug', frozenset({'pod_id'})),
-    'datastore.search.readable_set_enumerated': EventSpec('warning', frozenset({'candidates', 'pod_id', 'post_filtered', 'requested'})),
-    'datastore.signed_url.cache_population_failed.observed': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
-    'datastore.signed_url.purged_expired_link_rows.observed': EventSpec('info', frozenset({'count'})),
-    'datastore.signed_url.rehydrated_link_from_record.observed': EventSpec('debug', frozenset({'pod_id'})),
-    'datastore.signed_url.revocation_cache_invalidation_failed.observed': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
-    'datastore.storage.copying_datastore_prefix_s.propagated': EventSpec('debug', frozenset()),
-    'datastore.storage.deleting_datastore_file_s.propagated': EventSpec('debug', frozenset()),
-    'datastore.storage.deleting_datastore_prefix_s.propagated': EventSpec('debug', frozenset()),
-    'datastore.storage_phase.carrying_child_artifacts_s.diagnostic': EventSpec('debug', frozenset({'file_id'})),
-    'datastore.storage_phase.deleted_file_search_purge.failed': EventSpec('error', frozenset({'file_count'})),
-    'datastore.storage_phase.rolling_back_staged_move_s.diagnostic': EventSpec('debug', frozenset()),
-    'datastore.storage_phase.search_index_purge_unsearchable.degraded': EventSpec('warning', frozenset({'file_id'})),
-    'datastore.storage_phase.staged_object_delete.degraded': EventSpec('warning', frozenset()),
-    'datastore.storage_phase.uncommitted_object_delete.degraded': EventSpec('warning', frozenset()),
-    'datastore.table_service.metadata_undo_failed.degraded': EventSpec('warning', frozenset({'change', 'pod_id', 'table_name'})),
-    'datastore.table_service.table_undo_failed.degraded': EventSpec('warning', frozenset({'pod_id', 'table_name'})),
-    'datastore.transaction_writer.delete_user_markdown_s_s.diagnostic': EventSpec('debug', frozenset()),
-    'db.session.pool_utilization_probe_failed': EventSpec('warning', frozenset({'error_type'})),
-    'decisions.decision_service.decided.observed': EventSpec('info', frozenset({'duration_ms', 'input_tokens', 'model', 'priority', 'provider', 'questions', 'source_type', 'unsure'})),
-    'decisions.decision_service.provider_answer_invalid.degraded': EventSpec('error', frozenset({'problems', 'provider'})),
-    'decisions.rate_limit.unavailable.degraded': EventSpec('warning', frozenset()),
-    'decisions.registry.typesafe_unconfigured.degraded': EventSpec('warning', frozenset()),
-    'decisions.typesafe_provider.answer_unreadable.degraded': EventSpec('warning', frozenset()),
-    'decisions.typesafe_provider.key_refused.degraded': EventSpec('error', frozenset({'status_code'})),
-    'decisions.typesafe_provider.refused.degraded': EventSpec('warning', frozenset({'status_code'})),
-    'decisions.typesafe_provider.unreachable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'dependency.degraded': EventSpec('warning', frozenset({'dependency', 'error_type', 'failure_count', 'incident_duration_ms'})),
-    'dependency.recovered': EventSpec('info', frozenset({'dependency', 'failure_count', 'incident_duration_ms'})),
-    'email.send.failed': EventSpec('error', frozenset()),
-    'embeddings.local_embedder.backend_import_failed.degraded': EventSpec('warning', frozenset()),
-    'embeddings.local_embedder.model_load_failed.degraded': EventSpec('warning', frozenset({'error_type', 'model_name'})),
-    'embeddings.provider.retrying.degraded': EventSpec('warning', frozenset({'attempt', 'delay_seconds', 'error_type', 'max_attempts'})),
-    'events.consumer.handler_timed_out.failed': EventSpec('error', frozenset({'message_id', 'original_stream', 'timeout_seconds'})),
-    'events.consumer.stray_cancellation.failed': EventSpec('error', frozenset({'message_id', 'original_stream'})),
-    'events.quarantine.counter_unavailable': EventSpec('debug', frozenset()),
-    'events.quarantine.dead_letter_write_failed': EventSpec('error', frozenset({'error_type', 'message_id', 'original_stream'})),
-    'events.quarantine.message_dead_lettered': EventSpec('warning', frozenset({'consumer_groups', 'dead_letter_stream', 'error_message', 'error_type', 'message_id', 'original_stream'})),
-    'function.contact_access.changed.observed': EventSpec('info', frozenset({'contacts_invoke', 'function_id', 'pod_id', 'user_id'})),
-    'function.contact_calls.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'function.contact_functions.daily_limit_reached.observed': EventSpec('info', frozenset({'actor', 'function_name'})),
-    'function.contact_functions.deadline_passed.observed': EventSpec('info', frozenset({'actor', 'run_id'})),
-    'function.contact_functions.run_started.observed': EventSpec('info', frozenset({'actor', 'function_name', 'pod_id', 'run_id'})),
-    'function.dispatcher.runtime_cancellation.failed': EventSpec('warning', frozenset({'run_id'})),
-    'function.function_dispatcher.execution_failed': EventSpec('warning', frozenset({'error', 'error_type', 'run_id'})),
-    'function.function_revision_retention.revisions_pruned': EventSpec('info', frozenset({'function_id', 'pruned_count'})),
-    'function.function_revision_service.revision_promoted': EventSpec('info', frozenset({'function_id', 'pod_id', 'revision_number', 'schema_changed'})),
-    'function.function_runtime_gateway.artifact_generation_recovered': EventSpec('info', frozenset({'candidate_count', 'function_id', 'revision_hash'})),
-    'function.handlers.cron.failed': EventSpec('error', frozenset({'task_name'})),
-    'function.handlers.function_run_job.propagated': EventSpec('debug', frozenset({'run_id'})),
-    'function.handlers.prune_function_runs.observed': EventSpec('debug', frozenset({'deleted_count'})),
-    'function.handlers.run_reconcile_enqueue_failed.degraded': EventSpec('warning', frozenset({'error_type', 'run_id'})),
-    'function.handlers.sweep_function_revisions.observed': EventSpec('info', frozenset({'examined', 'failed', 'pruned_functions', 'pruned_revisions', 'truncated'})),
-    'function.handlers.sweep_function_revisions.skipped': EventSpec('warning', frozenset({'function_id'})),
-    'function.preflight.underivable_input_schema': EventSpec('warning', frozenset({'function_id'})),
-    'function.runtime.endpoint_acquired': EventSpec('info', frozenset({'cold', 'elapsed_ms', 'mode', 'pod_id'})),
-    'function.runtime.quarantine_failed': EventSpec('warning', frozenset({'pod_id'})),
-    'function.runtime.reresolved_after_refused_connection': EventSpec('info', frozenset({'pod_id', 'run_id'})),
-    'function.runtime.sandbox_quarantined': EventSpec('info', frozenset({'pod_id'})),
-    'function.session_token.shorter_than_window': EventSpec('warning', frozenset({'expires_at', 'function_id', 'pod_id', 'required_until'})),
-    'function.use_cases.legacy_revision_backfilled': EventSpec('info', frozenset({'function_id', 'pod_id', 'revision_hash'})),
-    'function.use_cases.revision_retention.degraded': EventSpec('warning', frozenset({'function_id'})),
-    'function.use_cases.run_enqueue_deferred.degraded': EventSpec('warning', frozenset({'error_type', 'run_id'})),
-    'http.request.completed': EventSpec('debug', frozenset({'duration_ms', 'method', 'route', 'status_code'})),
-    'http.request.failed': EventSpec('error', frozenset({'duration_ms', 'error_code', 'error_type', 'method', 'path', 'route', 'status_code'})),
-    'http.request.local_completed': EventSpec('info', frozenset({'duration_ms', 'method', 'route', 'status_code'})),
-    'http.request.rate_limited': EventSpec('warning', frozenset({'duration_ms', 'method', 'route', 'status_code'})),
-    'http.request.slow': EventSpec('warning', frozenset({'duration_ms', 'latency_kind', 'method', 'path', 'route', 'status_code'})),
-    'icon.icon_service.delete_icon_asset.diagnostic': EventSpec('debug', frozenset()),
-    'icon.icon_service.ignoring_malformed_managed_icon_url.diagnostic': EventSpec('debug', frozenset()),
-    'identity.auth_abuse.counter_clear_failed': EventSpec('warning', frozenset()),
-    'identity.auth_abuse.rate_limit_unavailable': EventSpec('error', frozenset()),
-    'identity.email.not_sent': EventSpec('warning', frozenset({'kind', 'reason'})),
-    'identity.email_delivery.test_failed': EventSpec('warning', frozenset()),
-    'identity.email_delivery.test_sent': EventSpec('info', frozenset()),
-    'identity.email_login.abandon_ignored': EventSpec('info', frozenset()),
-    'identity.email_login.continue_resolved': EventSpec('info', frozenset({'method'})),
-    'identity.email_verification.invalid_local_user_id': EventSpec('warning', frozenset()),
-    'identity.email_verification.local_user_missing': EventSpec('warning', frozenset()),
-    'identity.first_workspace.invitation_accepted': EventSpec('info', frozenset({'invitation_id', 'user_id'})),
-    'identity.first_workspace.invitation_skipped': EventSpec('warning', frozenset({'error_type', 'invitation_id'})),
-    'identity.jwks_guard.install_failed.degraded': EventSpec('warning', frozenset()),
-    'identity.jwks_guard.unknown_kid_cache_full.degraded': EventSpec('warning', frozenset()),
-    'identity.mobile_verification.whatsapp.feedback_send_failed': EventSpec('warning', frozenset({'error_type', 'outcome'})),
-    'identity.mobile_verification.whatsapp.ineligible_user': EventSpec('info', frozenset()),
-    'identity.mobile_verification.whatsapp.invalid_sender': EventSpec('info', frozenset()),
-    'identity.mobile_verification.whatsapp.number_lookup_failed': EventSpec('info', frozenset()),
-    'identity.mobile_verification.whatsapp.owner_conflict': EventSpec('info', frozenset()),
-    'identity.mobile_verification.whatsapp.rejected': EventSpec('info', frozenset({'reason'})),
-    'identity.mobile_verification.whatsapp.started': EventSpec('info', frozenset({'user_id'})),
-    'identity.mobile_verification.whatsapp.succeeded': EventSpec('info', frozenset({'user_id'})),
-    'identity.querier_client.install_failed.degraded': EventSpec('warning', frozenset()),
-    'identity.session.access_token_expiry_implausible.degraded': EventSpec('warning', frozenset({'expired_by_seconds'})),
-    'identity.session.access_token_stale.observed': EventSpec('debug', frozenset({'expired_by_seconds'})),
-    'identity.signup.admitted': EventSpec('info', frozenset({'admission'})),
-    'identity.signup.refused': EventSpec('info', frozenset({'code', 'signup_mode'})),
-    'infrastructure.admin.outbox_event_replay_requested.observed': EventSpec('debug', frozenset({'event_id'})),
-    'infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic': EventSpec('debug', frozenset()),
-    'infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic': EventSpec('debug', frozenset({'error_type'})),
-    'infrastructure.consumer_groups.initial_ensure.failed': EventSpec('error', frozenset()),
-    'infrastructure.consumer_groups.reconcile.failed': EventSpec('error', frozenset()),
-    'infrastructure.inbox.delivery_held_for_reclaim.observed': EventSpec('debug', frozenset({'consumer', 'event_id', 'event_type'})),
-    'infrastructure.inbox.event_delivery_dead_lettered.failed': EventSpec('error', frozenset({'attempt', 'consumer', 'error_type', 'event_id', 'event_type'})),
-    'infrastructure.inbox.terminal_event_validation.degraded': EventSpec('warning', frozenset({'consumer', 'event_id', 'event_type'})),
-    'infrastructure.job_liveness.publish_failed.degraded': EventSpec('warning', frozenset({'job_id'})),
-    'infrastructure.job_liveness.read_failed.degraded': EventSpec('warning', frozenset({'job_id'})),
-    'infrastructure.message_bus.cancelled_broker_stop.degraded': EventSpec('warning', frozenset()),
-    'infrastructure.message_bus.partial_broker_stop.degraded': EventSpec('warning', frozenset()),
-    'infrastructure.message_bus.timed_out_closing_faststream_redis.timeout': EventSpec('warning', frozenset()),
-    'infrastructure.outbox.paused_for_redis_memory.degraded': EventSpec('warning', frozenset()),
-    'infrastructure.outbox.resumed_after_redis_memory_pressure': EventSpec('info', frozenset({'paused_seconds'})),
-    'infrastructure.outbox_wake.listener_connected.observed': EventSpec('debug', frozenset({'label'})),
-    'infrastructure.publisher.staged_event_transactional_outbox.observed': EventSpec('debug', frozenset({'event_id', 'event_type'})),
-    'infrastructure.redis_client.close_failed.degraded': EventSpec('warning', frozenset()),
-    'infrastructure.stream_subscriber.consumer_group_ensure.failed': EventSpec('error', frozenset({'error_type', 'group_count', 'groups'})),
-    'infrastructure.stream_subscriber.created_consumer_groups.observed': EventSpec('debug', frozenset({'group_count', 'groups'})),
-    'infrastructure.stream_subscriber.recreated_missing_consumer_groups.degraded': EventSpec('warning', frozenset({'group_count', 'groups'})),
-    'infrastructure.streaq_job_queue.clients_lost.failed': EventSpec('error', frozenset()),
-    'infrastructure.streaq_job_queue.ignoring_streaq_queue_shutdown_context.diagnostic': EventSpec('debug', frozenset()),
-    'infrastructure.streaq_job_queue.job_context_read_failed.degraded': EventSpec('warning', frozenset({'job_id'})),
-    'infrastructure.streaq_runtime.background_task_shutdown.degraded': EventSpec('warning', frozenset({'task'})),
-    'infrastructure.streaq_runtime.lane_shutdown_timed_out.degraded': EventSpec('warning', frozenset({'lanes', 'timeout_seconds'})),
-    'infrastructure.streaq_runtime.pending_task_dump.diagnostic': EventSpec('warning', frozenset({'frames', 'task_name'})),
-    'infrastructure.streaq_runtime.worker_shutdown_step.diagnostic': EventSpec('debug', frozenset({'step'})),
-    'infrastructure.streaq_runtime.worker_shutdown_step_failed.degraded': EventSpec('warning', frozenset({'step'})),
-    'infrastructure.streaq_runtime.worker_shutdown_step_timed_out.degraded': EventSpec('warning', frozenset({'step', 'timeout_seconds'})),
-    'infrastructure.tasks.pruned_durable_event_delivery_records.observed': EventSpec('debug', frozenset({'deleted_count'})),
-    'infrastructure.uow.staged_domain_events_transactional_outbox.observed': EventSpec('debug', frozenset({'event_count'})),
-    'mcp_access.client.registered': EventSpec('info', frozenset({'client_id', 'client_name'})),
-    'mcp_access.client_assertion.replayed': EventSpec('warning', frozenset()),
-    'mcp_access.client_document.no_safe_redirect': EventSpec('warning', frozenset({'client_id'})),
-    'mcp_access.client_document.unusable': EventSpec('warning', frozenset({'client_id'})),
-    'mcp_access.consent.denied': EventSpec('info', frozenset({'client_id', 'pod_id'})),
-    'mcp_access.event_delivery.attempted': EventSpec('info', frozenset({'outcome', 'subscription_id'})),
-    'mcp_access.grant.created': EventSpec('info', frozenset({'client_id', 'grant_id', 'pod_id', 'scopes'})),
-    'mcp_access.grant.revoked': EventSpec('info', frozenset({'by_admin', 'by_user_id', 'grant_id', 'pod_id'})),
-    'mcp_access.grant.revoked_by_client': EventSpec('info', frozenset({'client_id', 'grant_id'})),
-    'mcp_access.grants.ended_with_pod': EventSpec('info', frozenset({'count', 'pod_id'})),
-    'mcp_access.rate_limit.unavailable.degraded': EventSpec('warning', frozenset()),
-    'mcp_access.refresh_token.replayed': EventSpec('warning', frozenset({'client_id', 'grant_id'})),
-    'mcp_access.refresh_token.retried': EventSpec('info', frozenset({'client_id', 'grant_id'})),
-    'mcp_access.tasks.sweep_grants.observed': EventSpec('info', frozenset({'ended'})),
-    'net.impersonating_client.fetch_completed.observed': EventSpec('debug', frozenset({'bytes', 'status_code'})),
-    'observability.telemetry.setup_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'observability.telemetry.shutdown_step_failed.degraded': EventSpec('warning', frozenset({'error_type', 'step'})),
-    'observability.worker_liveness.publish_failed.degraded': EventSpec('warning', frozenset()),
-    'observability.worker_liveness.read_failed.degraded': EventSpec('warning', frozenset()),
-    'observability.worker_liveness.read_timed_out.degraded': EventSpec('warning', frozenset({'timeout_seconds'})),
-    'pod.member_event.creation_failed': EventSpec('debug', frozenset()),
-    'pod.pod_handlers.no_pod_admins_notify_pod.observed': EventSpec('debug', frozenset({'pod_id'})),
-    'pod.pod_handlers.pod_not_found_skipping_notification.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
-    'pod.pod_handlers.requester_not_found_skipping_notification.diagnostic': EventSpec('debug', frozenset()),
-    'pod.pod_member_service.could_not_find_user_details.diagnostic': EventSpec('debug', frozenset({'organization_member_id'})),
-    'pod.pod_member_service.fetch_user_info_event_emission.diagnostic': EventSpec('debug', frozenset()),
-    'pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic': EventSpec('debug', frozenset()),
-    'pod_bundle.applier.file_metadata_unreadable.degraded': EventSpec('warning', frozenset({'metadata_file'})),
-    'pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic': EventSpec('debug', frozenset({'raw_type'})),
-    'pod_bundle.applier.skipping_grant_without_resource_name.diagnostic': EventSpec('debug', frozenset()),
-    'pod_bundle.exporter.skipping_file_export_pod_s.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
-    'pod_bundle.exporter.skipping_grant_export_s_s.diagnostic': EventSpec('debug', frozenset({'grantee_id', 'grantee_type'})),
-    'pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
-    'pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
-    'pod_bundle.handlers.clean_staging_cancelled_import.diagnostic': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic': EventSpec('debug', frozenset({'pod_id', 'user_id'})),
-    'pod_bundle.handlers.delete_staged_import_s_s.diagnostic': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.handlers.github_import_s_retryable_s.propagated': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.handlers.github_import_s_terminal_s.degraded': EventSpec('warning', frozenset({'import_id'})),
-    'pod_bundle.handlers.import_s_step_s_s.diagnostic': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.handlers.persist_state_export_s_s.diagnostic': EventSpec('debug', frozenset({'export_id'})),
-    'pod_bundle.handlers.persist_state_import_s_s.diagnostic': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.handlers.pod_bundle_apply_s_retryable.propagated': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.handlers.pod_bundle_apply_s_terminal.degraded': EventSpec('warning', frozenset({'import_id'})),
-    'pod_bundle.handlers.pod_bundle_export_s_retryable.propagated': EventSpec('debug', frozenset({'export_id'})),
-    'pod_bundle.handlers.pod_bundle_export_s_terminal.degraded': EventSpec('warning', frozenset({'export_id'})),
-    'pod_bundle.handlers.pod_bundle_plan_s_retryable.propagated': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.handlers.pod_bundle_plan_s_terminal.degraded': EventSpec('warning', frozenset({'import_id'})),
-    'pod_bundle.handlers.url_import_s_retryable_s.propagated': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.handlers.url_import_s_terminal_s.degraded': EventSpec('warning', frozenset({'import_id'})),
-    'pod_bundle.import_use_cases.clean_staging_idle_cancelled_import.diagnostic': EventSpec('debug', frozenset({'import_id'})),
-    'pod_bundle.plan_builder.surface_snapshot_unavailable.degraded': EventSpec('warning', frozenset({'pod_id'})),
-    'pod_bundle.publish_lock.release.diagnostic': EventSpec('debug', frozenset({'account_id', 'repo_name'})),
-    'pod_bundle.publish_task.pod_publish_s_retryable_s.propagated': EventSpec('debug', frozenset({'publish_id'})),
-    'pod_bundle.publish_task.pod_publish_s_terminal_s.degraded': EventSpec('warning', frozenset({'publish_id'})),
-    'pod_bundle.publish_task.publish_failure_report.failed': EventSpec('error', frozenset({'publish_id'})),
-    'pod_bundle.rate_limiter.bundle_rate_limit_counter_unavailable.degraded': EventSpec('warning', frozenset({'operation', 'user_id'})),
-    'pod_bundle.realtime.publishing_pod_bundle_realtime_event.diagnostic': EventSpec('debug', frozenset({'job_id'})),
-    'pod_bundle.state_store.inspect_legacy_pod_bundle_cache.diagnostic': EventSpec('debug', frozenset({'job_id', 'job_kind'})),
-    'pod_bundle.state_store.mirror_recovered_pod_bundle_job.diagnostic': EventSpec('debug', frozenset({'job_id', 'job_kind'})),
-    'pod_bundle.state_store.refresh_pod_bundle_state_cache.diagnostic': EventSpec('debug', frozenset({'job_id', 'job_kind', 'status'})),
-    'pod_bundle.sweep.archive_delete_failed.degraded': EventSpec('warning', frozenset({'job_id', 'job_kind'})),
-    'pod_bundle.sweep.archive_listing_unavailable.degraded': EventSpec('warning', frozenset({'job_kind'})),
-    'pod_bundle.sweep.swept': EventSpec('debug', frozenset({'purged', 'reclaimed', 'recovered'})),
-    'pubsub.message.binary_parse_failed': EventSpec('debug', frozenset()),
-    'pubsub.message.dropped': EventSpec('warning', frozenset()),
-    'redis.memory.critical': EventSpec('error', frozenset({'max_bytes', 'ratio', 'used_bytes'})),
-    'redis.memory.pressure.degraded': EventSpec('warning', frozenset({'max_bytes', 'ratio', 'used_bytes'})),
-    'redis.stream.abandoned_consumer_group.degraded': EventSpec('warning', frozenset({'destroyed', 'group', 'last_delivered_age_seconds', 'stream_name'})),
-    'redis.stream.abandoned_consumer_group_destroy.degraded': EventSpec('warning', frozenset({'group', 'stream_name'})),
-    'redis.stream.abandoned_consumer_group_revived.degraded': EventSpec('warning', frozenset({'group', 'reason', 'stream_name'})),
-    'redis.stream.abandoned_consumer_groups_detected.observed': EventSpec('info', frozenset({'destroyed', 'group_count'})),
-    'redis.stream.budget_trimmed.observed': EventSpec('info', frozenset({'reclaimed_bytes', 'streams'})),
-    'redis.stream.gap_record.failed': EventSpec('error', frozenset({'after_ms', 'group', 'stream_name', 'until_ms'})),
-    'redis.stream.gap_replayed': EventSpec('info', frozenset({'after_ms', 'group', 'stream_name', 'until_ms'})),
-    'redis.stream.gap_unreadable.degraded': EventSpec('warning', frozenset({'gap_key'})),
-    'redis.stream.gap_unrecoverable': EventSpec('error', frozenset({'after_ms', 'group', 'stream_name', 'until_ms'})),
-    'redis.stream.group_claim.degraded': EventSpec('warning', frozenset({'group_count'})),
-    'redis.stream.group_claim_read.degraded': EventSpec('warning', frozenset()),
-    'redis.stream.group_stalled': EventSpec('error', frozenset({'group', 'stall_seconds', 'stream_name'})),
-    'redis.stream.over_budget.degraded': EventSpec('warning', frozenset({'budget_bytes', 'memory_bytes', 'reason', 'stream_name'})),
-    'redis.stream.over_budget.failed': EventSpec('error', frozenset({'budget_bytes', 'memory_bytes'})),
-    'redis.stream.retired': EventSpec('info', frozenset({'streams'})),
-    'redis.stream.snapshot': EventSpec('info', frozenset({'active_consumers', 'caught_up', 'consumers', 'delayed', 'group', 'last_delivered_age_seconds', 'length', 'maxlen', 'memory_bytes', 'oldest_pending_ms', 'pending', 'reported_lag', 'stream_name'})),
-    'redis.stream.snapshot_cycle': EventSpec('info', frozenset({'reported', 'streams'})),
-    'redis.stream.trim_degraded.degraded': EventSpec('warning', frozenset({'group', 'group_declared', 'hard_maxlen', 'maxlen', 'reason', 'stream_name', 'suppressed_since_last'})),
-    'redis.stream.unread_trimmed': EventSpec('error', frozenset({'after_ms', 'group', 'stream_name', 'until_ms'})),
-    'release.identity.malformed': EventSpec('warning', frozenset({'deployment_environment'})),
-    'release.identity.missing': EventSpec('warning', frozenset({'deployment_environment'})),
-    'runtime.connection_scope.armed': EventSpec('info', frozenset({'service', 'threshold_ms'})),
-    'runtime.connection_scope.degraded': EventSpec('warning', frozenset({'gap_ms', 'held_ms', 'in_transaction', 'querying_ms', 'stack_frames', 'statements', 'threshold_ms'})),
-    'runtime.connectors.composio_trigger_creation.diagnostic': EventSpec('debug', frozenset({'error_type'})),
-    'runtime.connectors.composio_trigger_deletion.diagnostic': EventSpec('debug', frozenset({'error_type'})),
-    'runtime.heartbeat.write_failed': EventSpec('debug', frozenset({'error_type', 'service'})),
-    'runtime.lifecycle_task.shutdown_failed.degraded': EventSpec('warning', frozenset({'task'})),
-    'runtime.loop_lag.degraded': EventSpec('warning', frozenset({'breach_count', 'lag_ms', 'service', 'threshold_ms', 'unhealthy'})),
-    'runtime.loop_lag.recovered': EventSpec('info', frozenset({'breach_count', 'degraded_duration_ms', 'max_lag_ms', 'service'})),
-    'runtime.loop_stall.degraded': EventSpec('warning', frozenset({'other_thread_frames', 'service', 'stack_frames', 'stalled_ms', 'threshold_ms'})),
-    'runtime.memory.allocator': EventSpec('info', frozenset({'allocator', 'service'})),
-    'runtime.memory.degraded': EventSpec('warning', frozenset({'baseline_mib', 'bounded_collections', 'compiled_caches', 'growth_mib', 'parked_mcp_tasks', 'rss_mib', 'service', 'stack_frames', 'threshold_mib', 'total_tasks'})),
-    'runtime.memory.dump': EventSpec('info', frozenset({'service', 'snapshot'})),
-    'runtime.memory.recovered': EventSpec('info', frozenset({'degraded_duration_ms', 'peak_rss_mib', 'service'})),
-    'runtime.memory.snapshot': EventSpec('info', frozenset({'bounded_collections', 'compiled_caches', 'rss_mib', 'service'})),
-    'runtime.memory.unavailable.diagnostic': EventSpec('debug', frozenset({'service'})),
-    'sandbox_health.probe.docker_socket_missing.failed': EventSpec('error', frozenset({'provider', 'socket_path'})),
-    'sandbox_health.probe.provider_unavailable.failed': EventSpec('error', frozenset({'provider'})),
-    'schedule.agent_outcome.recorded': EventSpec('debug', frozenset({'conversation_id'})),
-    'schedule.breaker.tripped': EventSpec('warning', frozenset({'consecutive_failures', 'schedule_id'})),
-    'schedule.breakers.reconcile_skipped': EventSpec('warning', frozenset()),
-    'schedule.breakers.reconciled': EventSpec('warning', frozenset({'deactivated_count'})),
-    'schedule.cleanup.primary_failed': EventSpec('debug', frozenset({'pod_id'})),
-    'schedule.datastore_consumer.fired_s_datastore_schedules.observed': EventSpec('debug', frozenset({'count'})),
-    'schedule.datastore_consumer.unroutable_pod_id.degraded': EventSpec('warning', frozenset({'event_type'})),
-    'schedule.datastore_event_handler.active_schedule_lookup.degraded': EventSpec('warning', frozenset({'pod_id'})),
-    'schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic': EventSpec('debug', frozenset({'count', 'pod_id', 'record_id'})),
-    'schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated': EventSpec('debug', frozenset({'record_id'})),
-    'schedule.datastore_event_handler.truncated_payload.degraded': EventSpec('warning', frozenset({'record_id', 'schedule_id', 'table_name'})),
-    'schedule.datastore_event_handler.unparsable_config.diagnostic': EventSpec('debug', frozenset({'schedule_id'})),
-    'schedule.decision_filter.fields_not_asked.observed': EventSpec('info', frozenset({'fields', 'schedule_id'})),
-    'schedule.due_claimer.claimed.observed': EventSpec('debug', frozenset({'claimed_count'})),
-    'schedule.due_claimer.cursors_backfilled': EventSpec('info', frozenset({'retired_count', 'scheduled_count'})),
-    'schedule.event.staged': EventSpec('debug', frozenset({'schedule_id', 'source_event_id'})),
-    'schedule.filter.dead_lettered.degraded': EventSpec('warning', frozenset({'counted', 'error_type', 'pod_id', 'schedule_id'})),
-    'schedule.fire.latency_ms': EventSpec('debug', frozenset({'latency_ms', 'schedule_id'})),
-    'schedule.fire_telemetry.failed': EventSpec('debug', frozenset({'schedule_id'})),
-    'schedule.poller.started': EventSpec('info', frozenset({'interval_ms', 'service'})),
-    'schedule.poller.stopped': EventSpec('info', frozenset({'service'})),
-    'schedule.poller.tick_failed.degraded': EventSpec('warning', frozenset()),
-    'schedule.repository.config_match_saturated.degraded': EventSpec('warning', frozenset({'limit', 'schedule_type'})),
-    'schedule.runs.pruned': EventSpec('info', frozenset({'deleted_count'})),
-    'schedule.runs.recovered': EventSpec('warning', frozenset({'dead_lettered', 'reconciled', 'redelivered', 'still_running'})),
-    'schedule.schedule_consumer.filter_skipped.diagnostic': EventSpec('debug', frozenset({'found', 'judged', 'schedule_id'})),
-    'schedule.schedule_event_publisher.staged_schedule_event_schedule_s.observed': EventSpec('debug', frozenset({'source_event_id'})),
-    'schedule.schedule_notification_consumer.scheduledeactivated_s_has_no_notification.diagnostic': EventSpec('debug', frozenset({'schedule_id'})),
-    'schedule.schedule_processor.s_filtered_out_llm.observed': EventSpec('debug', frozenset()),
-    'schedule.schedule_service.create_external_schedule_s.propagated': EventSpec('debug', frozenset()),
-    'schedule.schedule_service.delete_external_schedule_s.propagated': EventSpec('debug', frozenset({'schedule_id'})),
-    'schedule.target_outcome.unmapped': EventSpec('error', frozenset({'target_kind', 'target_status'})),
-    'schedule.time_job.removed': EventSpec('debug', frozenset({'schedule_id'})),
-    'schedule.trigger_resubscription.drop.degraded': EventSpec('warning', frozenset({'schedule_id'})),
-    'schedule.webhook_controller.rejecting_oversized_delivery.degraded': EventSpec('warning', frozenset({'size', 'source'})),
-    'schedule.webhook_controller.rejecting_unknown_webhook_source_s.degraded': EventSpec('warning', frozenset({'source'})),
-    'schedule.webhook_controller.source_verifier_raised.degraded': EventSpec('warning', frozenset({'source'})),
-    'schedule.webhook_controller.verified_whatsapp_webhook.observed': EventSpec('debug', frozenset()),
-    'schedule.webhook_handler.quarantined_webhook_without_stable_provider.degraded': EventSpec('warning', frozenset()),
-    'schedule.webhook_handler.s_has_filter_instruction_offloading.observed': EventSpec('debug', frozenset()),
-    'schedule.webhook_schedule_matcher.composio_webhook_missing_provider_id.diagnostic': EventSpec('debug', frozenset()),
-    'schedule.webhook_sources.github.delivery_without_installation.degraded': EventSpec('warning', frozenset({'github_event'})),
-    'schedule.webhook_sources.github.installation_retired.degraded': EventSpec('warning', frozenset({'accounts', 'action', 'schedules'})),
-    'schedule.webhook_sources.github.no_webhook_secret_configured.degraded': EventSpec('warning', frozenset()),
-    'schedule.workflow_outcome.recorded': EventSpec('debug', frozenset({'run_id'})),
-    'security.auth_dependency.unexpected_failure.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'service.started': EventSpec('info', frozenset({'gc_frozen_objects', 'startup_ms'})),
-    'service.startup.slow_step.degraded': EventSpec('warning', frozenset({'budget_ms', 'duration_ms', 'service', 'step'})),
-    'service.startup.step': EventSpec('info', frozenset({'duration_ms', 'ok', 'service', 'step'})),
-    'service.stopped': EventSpec('info', frozenset()),
-    'surface.cleanup.failed': EventSpec('error', frozenset({'failure_count', 'pod_id'})),
-    'surface.cleanup.surface_failed.degraded': EventSpec('warning', frozenset({'pod_id', 'surface_id'})),
-    'surface.slack.parse_channel_setup_failed': EventSpec('debug', frozenset()),
-    'surface.slack.parse_failed': EventSpec('debug', frozenset()),
-    'surface.slack.parse_lifecycle_failed': EventSpec('debug', frozenset()),
-    'surface.teams.authentication_failed': EventSpec('error', frozenset({'app_id', 'error_code', 'status', 'tenant_id'})),
-    'surface.tool.failed': EventSpec('debug', frozenset({'tool'})),
-    'surface.whatsapp.media_type_rejected.degraded': EventSpec('warning', frozenset({'mime_type', 'send_type', 'status_code'})),
-    'surface.whatsapp.media_upload_rejected.degraded': EventSpec('warning', frozenset({'mime_type', 'status_code'})),
-    'usage.contacts_cap.changed.observed': EventSpec('info', frozenset({'changed_by_user_id', 'monthly_limit_usd', 'organization_id', 'previous_limit_usd', 'previous_was_default'})),
-    'usage.limit_overrides.not_a_list': EventSpec('warning', frozenset({'detail'})),
-    'usage.limit_overrides.unparseable': EventSpec('warning', frozenset({'detail'})),
-    'usage.pricing.invalid_system_model_usage_metadata.failed': EventSpec('error', frozenset({'error_type'})),
-    'usage.pricing.usage_pricing_not_registered_recording.observed': EventSpec('debug', frozenset()),
-    'usage.request_accounting_gateway.request_not_priceable.degraded': EventSpec('warning', frozenset({'model', 'provider', 'rate_card_enforceable', 'refused', 'request_shape_priceable'})),
-    'web_login.list.no_browser_capability.degraded': EventSpec('warning', frozenset()),
-    'web_login.list.relay_unavailable.degraded': EventSpec('warning', frozenset({'detail', 'error_type', 'wake'})),
-    'web_login.sign_in.browser_not_ready.degraded': EventSpec('warning', frozenset()),
-    'web_login.sign_in.browser_unreachable.degraded': EventSpec('warning', frozenset({'origin'})),
-    'web_login.sign_in.conversation_gone.degraded': EventSpec('warning', frozenset({'conversation_id'})),
-    'web_login.sign_in.mark_failed.degraded': EventSpec('warning', frozenset({'origin', 'site'})),
-    'web_search.request.failed': EventSpec('debug', frozenset()),
-    'worker.context.persist_failed': EventSpec('debug', frozenset({'error_type', 'job_id', 'task_name'})),
-    'worker.crons.prune_failed.degraded': EventSpec('warning', frozenset({'queue'})),
-    'worker.crons.prune_skipped_empty_registry.degraded': EventSpec('warning', frozenset({'queue'})),
-    'worker.crons.pruned': EventSpec('info', frozenset({'queue', 'tasks'})),
-    'worker.heartbeat': EventSpec('info', frozenset()),
-    'worker.job.failed': EventSpec('error', frozenset({'attempt', 'duration_ms', 'error_type', 'retryable'})),
-    'worker.job.retrying': EventSpec('debug', frozenset({'attempt', 'error_type', 'retryable'})),
-    'worker.lane.dead': EventSpec('error', frozenset({'error_type', 'group', 'lane_kind', 'lane_name', 'reason', 'stream_name'})),
-    'worker.lanes.starting': EventSpec('info', frozenset({'lanes'})),
-    'worker.startup.failed': EventSpec('error', frozenset()),
-    'workflow.cancel.underlying_work_stop_failed': EventSpec('warning', frozenset({'run_id', 'wait_type'})),
-    'workflow.decision_queue.enqueue_deferred.degraded': EventSpec('warning', frozenset({'external_ref'})),
-    'workflow.decision_queue.job_status_unknown.degraded': EventSpec('warning', frozenset({'external_ref'})),
-    'workflow.decision_resume.lost_decision_requeued.degraded': EventSpec('warning', frozenset({'requeues', 'run_id', 'wait_id'})),
-    'workflow.decision_resume.unqueued_decision_queued.degraded': EventSpec('warning', frozenset({'requeues', 'run_id', 'wait_id'})),
-    'workflow.fail.stale_event': EventSpec('debug', frozenset({'wait_type'})),
-    'workflow.form.invalid_schema': EventSpec('warning', frozenset({'node_id'})),
-    'workflow.handlers.ignoring_agentruncompleted_non_workflow_conversation.observed': EventSpec('debug', frozenset({'conversation_id'})),
-    'workflow.handlers.job_resuming_workflow_run_waiting.observed': EventSpec('debug', frozenset({'agent_conversation_id', 'function_run_id'})),
-    'workflow.handlers.prune_workflow_run_waits.observed': EventSpec('debug', frozenset({'deleted_count'})),
-    'workflow.notifications.assignee_unresolved.degraded': EventSpec('warning', frozenset({'node_id', 'run_id'})),
-    'workflow.notifications.cancel_failed.degraded': EventSpec('warning', frozenset({'error', 'run_id'})),
-    'workflow.notifications.form_close_failed.degraded': EventSpec('warning', frozenset({'error', 'node_id', 'run_id'})),
-    'workflow.notifications.form_notify_failed.degraded': EventSpec('warning', frozenset({'error', 'node_id', 'run_id'})),
-    'workflow.reconcile.failed': EventSpec('error', frozenset({'run_id', 'wait_id'})),
-    'workflow.reconcile.firing_lost_timer': EventSpec('warning', frozenset({'run_id', 'wait_id'})),
-    'workflow.reconcile.recovered': EventSpec('debug', frozenset({'count'})),
-    'workflow.reconcile.resuming_lost_completion': EventSpec('warning', frozenset({'conversation_id', 'function_run_id', 'run_id'})),
-    'workflow.reconcile.time_wait_bad_scheduled_at': EventSpec('warning', frozenset({'wait_id'})),
-    'workflow.reconcile.wait_expired': EventSpec('warning', frozenset({'run_id', 'wait_id', 'wait_type'})),
-    'workflow.resume.stale_event': EventSpec('debug', frozenset({'run_status', 'wait_type'})),
-    'workflow.run.announce_failed': EventSpec('debug', frozenset()),
-    'workflow.run.cancelled': EventSpec('debug', frozenset({'run_id'})),
-    'workflow.run.completed': EventSpec('debug', frozenset({'run_id'})),
-    'workflow.run.failed': EventSpec('warning', frozenset({'failed_node_id', 'run_id'})),
-    'workflow.run.publish_failed': EventSpec('debug', frozenset({'run_id'})),
-    'workflow.run.stream_failed': EventSpec('error', frozenset({'run_id'})),
-    'workflow.run.stream_teardown_failed': EventSpec('debug', frozenset({'run_id'})),
-    'workflow.run_resume_service.no_active_workflow_wait_agent.observed': EventSpec('debug', frozenset({'conversation_id'})),
-    'workflow.run_resume_service.no_active_workflow_wait_function.observed': EventSpec('debug', frozenset({'function_run_id'})),
-    'workflow.schedule_start_service.no_target_schedule.observed': EventSpec('debug', frozenset({'schedule_id'})),
-    'workflow.schedule_start_service.start_agent_schedule.propagated': EventSpec('debug', frozenset({'agent_id', 'schedule_id'})),
-    'workflow.schedule_start_service.wait_fire_no_ref.observed': EventSpec('debug', frozenset()),
-    'workflow.schedule_start_service.wait_fire_stale.observed': EventSpec('debug', frozenset()),
-    'workflow.schedule_start_service.waking_workflow_run_scheduler.observed': EventSpec('debug', frozenset({'run_id'})),
-    'workflow.step.started': EventSpec('debug', frozenset({'flow_id', 'node_id', 'node_type', 'run_id'})),
-    'workflow.step.suspended': EventSpec('debug', frozenset({'node_id', 'run_id', 'wait_type'})),
-    'workspace.agent_host_provider.reopened': EventSpec('info', frozenset({'method', 'sandbox_id'})),
-    'workspace.browser_proxy.delivery_failed.degraded': EventSpec('warning', frozenset({'user_id'})),
-    'workspace.browser_view.accept_before_close_failed.observed': EventSpec('debug', frozenset({'doing', 'error_type'})),
-    'workspace.browser_view.browser_start_failed.degraded': EventSpec('warning', frozenset({'reason'})),
-    'workspace.browser_view.close_not_delivered.observed': EventSpec('debug', frozenset({'close_code', 'doing', 'error_type'})),
-    'workspace.browser_view.origin_refused.denied': EventSpec('warning', frozenset({'origin_hint'})),
-    'workspace.browser_view.public_sandbox_refused.denied': EventSpec('warning', frozenset()),
-    'workspace.browser_view.relay_absent.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'workspace.browser_view.relay_not_served.degraded': EventSpec('warning', frozenset({'reason'})),
-    'workspace.browser_view.resize_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'workspace.browser_view.resize_had_no_effect.degraded': EventSpec('warning', frozenset({'height', 'width'})),
-    'workspace.browser_view.resize_no_relay.degraded': EventSpec('warning', frozenset({'error_type', 'height', 'width'})),
-    'workspace.browser_view.resize_unsupported.degraded': EventSpec('warning', frozenset({'height', 'width'})),
-    'workspace.browser_view.sandbox_refused.degraded': EventSpec('warning', frozenset({'error_type', 'reason'})),
-    'workspace.browser_view.sandbox_unavailable.degraded': EventSpec('warning', frozenset({'reason'})),
-    'workspace.browser_view.session_unreadable.degraded': EventSpec('warning', frozenset()),
-    'workspace.browser_view.status_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'workspace.browser_view.unsupported.denied': EventSpec('warning', frozenset()),
-    'workspace.browser_view.upstream.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'workspace.e2b.drift_tolerated': EventSpec('info', frozenset({'configured', 'drifted', 'recorded', 'sandbox_id'})),
-    'workspace.e2b.path_not_resolved.degraded': EventSpec('warning', frozenset({'error_type', 'path'})),
-    'workspace.e2b.size_template_missing.degraded': EventSpec('warning', frozenset({'sandbox_id', 'size'})),
-    'workspace.files.not_ready.degraded': EventSpec('warning', frozenset()),
-    'workspace.files.read_failed.degraded': EventSpec('warning', frozenset()),
-    'workspace.files.runtime_unauthorized.failed': EventSpec('warning', frozenset()),
-    'workspace.files.session_close.degraded': EventSpec('warning', frozenset()),
-    'workspace.host_workspace.opened': EventSpec('info', frozenset({'bound_folder', 'host_id', 'sandbox_id'})),
-    'workspace.local_sandbox_client.adopted_sandbox_not_serving': EventSpec('warning', frozenset({'error_type', 'kind', 'sandbox_id'})),
-    'workspace.mime_type.unknown': EventSpec('debug', frozenset()),
-    'workspace.port_proxy.upstream_websocket.degraded': EventSpec('warning', frozenset()),
-    'workspace.process_probe.unreadable': EventSpec('debug', frozenset({'error_type', 'process_id'})),
-    'workspace.provider_factory.metadata_namespace_derived': EventSpec('info', frozenset({'environment', 'namespace'})),
-    'workspace.release.browser_close_failed': EventSpec('warning', frozenset({'detail', 'provider_id'})),
-    'workspace.runtime_bundle.absent': EventSpec('info', frozenset()),
-    'workspace.runtime_bundle.install_failed.degraded': EventSpec('warning', frozenset({'error_type', 'user_id', 'version'})),
-    'workspace.runtime_bundle.installed': EventSpec('info', frozenset({'component_version', 'user_id', 'version'})),
-    'workspace.runtime_bundle.loaded': EventSpec('info', frozenset({'component_version', 'size_bytes', 'source', 'version'})),
-    'workspace.runtime_bundle.unusable.degraded': EventSpec('warning', frozenset({'directory', 'error_type'})),
-    'workspace.runtime_restart.deferred_busy': EventSpec('info', frozenset({'running_version', 'user_id', 'version'})),
-    'workspace.runtime_restart.restart_failed.degraded': EventSpec('warning', frozenset({'user_id', 'version'})),
-    'workspace.runtime_restart.restarting': EventSpec('info', frozenset({'running_version', 'user_id', 'version'})),
-    'workspace.runtime_restart.state_unavailable.degraded': EventSpec('warning', frozenset({'user_id'})),
-    'workspace.runtime_restart.still_stale.failed': EventSpec('error', frozenset({'running_version', 'user_id', 'version'})),
-    'workspace.sandbox_progress.clear_failed.degraded': EventSpec('warning', frozenset({'sandbox_id'})),
-    'workspace.sandbox_progress.read_failed.degraded': EventSpec('warning', frozenset({'sandbox_id'})),
-    'workspace.sandbox_progress.record_failed.degraded': EventSpec('warning', frozenset({'sandbox_id'})),
-    'workspace.sandbox_service.directory_ensure_exhausted.degraded': EventSpec('warning', frozenset({'attempts', 'path', 'reason', 'user_id'})),
-    'workspace.sandbox_service.directory_ensure_refused.degraded': EventSpec('warning', frozenset({'error_type', 'path', 'reconciling', 'user_id'})),
-    'workspace.sandbox_service.ensure_retrying': EventSpec('info', frozenset({'attempt', 'reason', 'retry_after_ms', 'sandbox_id'})),
-    'workspace.sandbox_service.provisioning_claim_expired': EventSpec('info', frozenset({'sandbox_id'})),
-    'workspace.sandbox_service.workspace_storage_recreated': EventSpec('info', frozenset({'sandbox_id'})),
-    'workspace.sandbox_session.output_cursor_read_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
-    'workspace.sandbox_session.output_cursor_write_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
-    'workspace.sandbox_session.python_session_delete.degraded': EventSpec('warning', frozenset({'sandbox_id', 'session_id'})),
-    'workspace.sandbox_sweeper.idle_release_failed': EventSpec('warning', frozenset({'error_type', 'sandbox_id'})),
-    'workspace.sandbox_sweeper.orphan_destroy_failed': EventSpec('warning', frozenset({'error_type', 'sandbox_id'})),
-    'workspace.sandbox_sweeper.orphan_destroy_ineffective': EventSpec('warning', frozenset({'reason', 'sandbox_id'})),
-    'workspace.sandbox_sweeper.orphan_reclaimed': EventSpec('info', frozenset({'reason', 'sandbox_id'})),
-    'workspace.sandbox_sweeper.reclaimed_orphaned_objects.observed': EventSpec('info', frozenset({'reclaimed_count'})),
-    'workspace.sandbox_sweeper.released_idle_sandbox.observed': EventSpec('info', frozenset({'idle_after_seconds', 'sandbox_id'})),
-    'workspace.sandbox_sweeper.released_idle_sandboxes.observed': EventSpec('info', frozenset({'released_count'})),
-    'workspace.sandbox_sweeper.released_unreachable_sandbox.observed': EventSpec('info', frozenset({'error_type', 'idle_after_seconds', 'sandbox_id'})),
-    'workspace.sandbox_sweeper.unattributed_objects': EventSpec('info', frozenset({'count', 'sample'})),
-    'workspace.status.unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'workspace.ws_bridge.origin_pattern_invalid.denied': EventSpec('warning', frozenset()),
+    "agent.agent_host.final_answer_read_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.agent_host_legacy.pairing_refused": EventSpec("info", frozenset()),
+    "agent.agent_host_legacy.upgrade_required": EventSpec(
+        "info", frozenset({"host_id"})
+    ),
+    "agent.agent_host_link.announce_skipped.degraded": EventSpec(
+        "warning", frozenset({"host_id"})
+    ),
+    "agent.agent_host_link.connected": EventSpec(
+        "info", frozenset({"connection_id", "host_id", "host_release"})
+    ),
+    "agent.agent_host_link.control_deadlock_retried.degraded": EventSpec(
+        "warning", frozenset({"host_id"})
+    ),
+    "agent.agent_host_link.disconnected": EventSpec(
+        "info",
+        frozenset(
+            {"close_code", "close_reason", "connection_id", "host_id", "peer_closed"}
+        ),
+    ),
+    "agent.agent_host_link.drained": EventSpec(
+        "info", frozenset({"link_count", "still_open"})
+    ),
+    "agent.agent_host_link.host_reported_error": EventSpec(
+        "warning", frozenset({"error_code", "error_message", "host_id"})
+    ),
+    "agent.agent_host_link.interaction_push_lost.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "tool_call_id"})
+    ),
+    "agent.agent_host_link.notices_lost.degraded": EventSpec(
+        "warning", frozenset({"host_id"})
+    ),
+    "agent.agent_host_link.op_answered.diagnostic": EventSpec(
+        "debug", frozenset({"host_id", "method", "ok"})
+    ),
+    "agent.agent_host_link.op_claim_unavailable.degraded": EventSpec(
+        "warning", frozenset({"op_id"})
+    ),
+    "agent.agent_host_link.op_notice_unreadable": EventSpec(
+        "warning", frozenset({"host_id"})
+    ),
+    "agent.agent_host_link.op_relay.failed": EventSpec("error", frozenset()),
+    "agent.agent_host_link.ownership_check_skipped.degraded": EventSpec(
+        "warning", frozenset({"host_id"})
+    ),
+    "agent.agent_host_link.push_skipped.degraded": EventSpec(
+        "warning", frozenset({"host_id"})
+    ),
+    "agent.agent_host_link.request.failed": EventSpec(
+        "error", frozenset({"connection_id", "frame_type", "host_id"})
+    ),
+    "agent.agent_host_link.request_unavailable.degraded": EventSpec(
+        "warning", frozenset({"frame_type", "host_id"})
+    ),
+    "agent.agent_host_link.subscription_unavailable.degraded": EventSpec(
+        "warning", frozenset({"host_id"})
+    ),
+    "agent.agent_host_link.superseded": EventSpec(
+        "info",
+        frozenset(
+            {
+                "connection_id",
+                "host_id",
+                "link_generation",
+                "superseded_by",
+                "superseded_by_generation",
+            }
+        ),
+    ),
+    "agent.agent_host_link.task.failed": EventSpec(
+        "error", frozenset({"connection_id", "host_id", "link_task"})
+    ),
+    "agent.agent_host_link.tool_call.failed": EventSpec("error", frozenset()),
+    "agent.agent_host_link.tool_call_unavailable.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent.agent_host_link.tool_call_unrecorded.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.agent_host_ops.request_unavailable.degraded": EventSpec(
+        "warning", frozenset({"host_id", "method"})
+    ),
+    "agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic": EventSpec(
+        "debug", frozenset({"agent_run_id"})
+    ),
+    "agent.agent_runner_service.agent_run_finalization_run_s.failed": EventSpec(
+        "error", frozenset({"agent_run_id"})
+    ),
+    "agent.agent_runner_service.agent_run_observer_failure_delivery.diagnostic": EventSpec(
+        "debug", frozenset({"agent_run_id"})
+    ),
+    "agent.agent_runner_service.agent_run_observer_finish_run.diagnostic": EventSpec(
+        "debug", frozenset({"agent_run_id"})
+    ),
+    "agent.agent_runner_service.agent_run_observer_run_s.diagnostic": EventSpec(
+        "debug", frozenset({"agent_run_id"})
+    ),
+    "agent.agent_runner_service.agent_run_observer_start_run.diagnostic": EventSpec(
+        "debug", frozenset({"agent_run_id"})
+    ),
+    "agent.agent_runner_service.agent_run_quota_exhausted.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.agent_runner_service.agent_run_s.failed": EventSpec("error", frozenset()),
+    "agent.agent_runner_service.finalize_agent_run_run_s.propagated": EventSpec(
+        "debug", frozenset({"agent_run_id"})
+    ),
+    "agent.approval.executed": EventSpec(
+        "info",
+        frozenset({"agent_id", "conversation_id", "outcome", "tool_name", "user_id"}),
+    ),
+    "agent.contact_tools.function_not_completed.observed": EventSpec(
+        "info", frozenset({"function_name", "status"})
+    ),
+    "agent.context_brief.file_inventory_unavailable.degraded": EventSpec(
+        "warning", frozenset({"pod_id"})
+    ),
+    "agent.context_brief.member_directory_unavailable.degraded": EventSpec(
+        "warning", frozenset({"pod_id"})
+    ),
+    "agent.context_budget.invalid_declared_window.degraded": EventSpec(
+        "warning", frozenset({"configured_value"})
+    ),
+    "agent.context_budget.invalid_env_window.degraded": EventSpec(
+        "warning", frozenset({"configured_value"})
+    ),
+    "agent.context_budget.invalid_model_window.degraded": EventSpec(
+        "warning", frozenset({"configured_value", "model_name"})
+    ),
+    "agent.conversation_approvals.approved_tool_never_confirmed.failed": EventSpec(
+        "error", frozenset({"approval_id", "conversation_id"})
+    ),
+    "agent.conversation_approvals.pause_without_run_skipped.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "tool_call_id", "tool_name"})
+    ),
+    "agent.conversation_controller.agent_realtime_subscription.failed": EventSpec(
+        "error", frozenset({"agent_run_id", "conversation_id"})
+    ),
+    "agent.conversation_mcp.runtime_resolve_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.conversation_mcp_service.conversation_mcp_tool_r_returning.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.conversation_mcp_service.pod_membership_missing.denied": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent.conversation_mcp_service.run_not_in_conversation.denied": EventSpec(
+        "warning", frozenset({"agent_run_id", "conversation_id"})
+    ),
+    "agent.conversation_mcp_service.session_lookup.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "agent.conversation_repository.conversation_status_reconciled.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent.conversation_status_repair.stranded_conversations_settled.degraded": EventSpec(
+        "warning", frozenset({"count"})
+    ),
+    "agent.conversation_title.generation.failed": EventSpec(
+        "error", frozenset({"conversation_id"})
+    ),
+    "agent.conversation_title.language_mismatch.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent.conversation_title.llm_call.failed": EventSpec(
+        "error", frozenset({"conversation_id"})
+    ),
+    "agent.executor.approved_tool_r_returning_result.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.final_answer.persist_failed.degraded": EventSpec("warning", frozenset()),
+    "agent.final_answer.schema_violation_accepted.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent.final_answer.unusable_output_schema.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.graceful_toolset.tool_cancelled_mid_flight.degraded": EventSpec(
+        "warning", frozenset({"elapsed_seconds", "tool_name"})
+    ),
+    "agent.graceful_toolset.tool_r_returning_model_instead.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.handlers.cleanup_agent_host_retained_state_cron.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "agent.handlers.publishing_reconciled_run_realtime_update.failed": EventSpec(
+        "error", frozenset({"agent_run_id"})
+    ),
+    "agent.handlers.reconcile_agent_host_dispatch_cron.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "agent.handlers.reconcile_orphaned_agent_runs_cron.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "agent.handlers.reconciled_d_orphaned_agent_run.diagnostic": EventSpec(
+        "debug", frozenset({"count"})
+    ),
+    "agent.harnesses.agent_host.credential_expiry_unknown.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.harnesses.agent_host.credential_refresh_failed.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id", "error_type"})
+    ),
+    "agent.harnesses.agent_host.event_stream_read.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id", "attempt", "error_type"})
+    ),
+    "agent.harnesses.agent_host.malformed_event.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "agent_host_sequence",
+                "agent_run_id",
+                "error",
+                "payload_model",
+                "tool_call_id",
+            }
+        ),
+    ),
+    "agent.harnesses.agent_host.steer_forward_failed.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.harnesses.agent_host.steer_forwarded.observed": EventSpec(
+        "info", frozenset({"agent_run_id", "message_count"})
+    ),
+    "agent.harnesses.agent_host.steer_result_unreadable.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.harnesses.agent_host.steer_settle_failed.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.harnesses.agent_host.steer_settled.observed": EventSpec(
+        "info", frozenset({"agent_run_id", "delivered", "detail", "matched"})
+    ),
+    "agent.harnesses.agent_host.unpaired_tool_result.degraded": EventSpec(
+        "warning", frozenset({"agent_host_sequence", "agent_run_id", "tool_call_id"})
+    ),
+    "agent.history.compacted.observed": EventSpec(
+        "info",
+        frozenset(
+            {
+                "folded_pin_count",
+                "kept_count",
+                "pinned_count",
+                "size_after",
+                "size_before",
+                "summarized_count",
+            }
+        ),
+    ),
+    "agent.history.summarization_failed.degraded": EventSpec(
+        "warning", frozenset({"transcript_length"})
+    ),
+    "agent.history.token_ceiling_enforced.degraded": EventSpec(
+        "warning", frozenset({"dropped_count", "size_after", "size_before"})
+    ),
+    "agent.history.token_ceiling_unenforceable.failed": EventSpec(
+        "error", frozenset({"ceiling", "dropped_count", "size_after", "size_before"})
+    ),
+    "agent.history.usage_not_metered.degraded": EventSpec("warning", frozenset()),
+    "agent.host_execution.chosen": EventSpec(
+        "info", frozenset({"agent_run_id", "conversation_id", "host_id"})
+    ),
+    "agent.host_execution.open_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "host_id"})
+    ),
+    "agent.infrastructure.agent_host_channels.poke_skipped.degraded": EventSpec(
+        "warning", frozenset({"host_id"})
+    ),
+    "agent.infrastructure.agent_host_command_remint.reaimed": EventSpec(
+        "info",
+        frozenset(
+            {
+                "agent_run_id",
+                "attempt",
+                "current_revision",
+                "dropped_selections",
+                "harness_key",
+                "host_id",
+                "model_cleared",
+                "previous_revision",
+            }
+        ),
+    ),
+    "agent.infrastructure.agent_host_command_remint.refused": EventSpec(
+        "warning",
+        frozenset({"agent_run_id", "attempt", "harness_key", "host_id", "refusal"}),
+    ),
+    "agent.infrastructure.agent_host_dispatch_repository.control_update_dropped": EventSpec(
+        "warning", frozenset({"agent_run_id", "error_type", "host_id", "update_kind"})
+    ),
+    "agent.infrastructure.agent_host_dispatch_repository.control_updates_applied": EventSpec(
+        "debug", frozenset({"acknowledged", "applied", "host_id"})
+    ),
+    "agent.infrastructure.agent_host_event_intake.stream_resynced": EventSpec(
+        "warning", frozenset({"agent_run_id", "from_sequence"})
+    ),
+    "agent.infrastructure.agent_host_event_stream.delete_failed.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.infrastructure.agent_host_event_stream.entry_dropped": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.mcp_pausing_calls.recorded": EventSpec(
+        "debug", frozenset({"conversation_id", "tool_name"})
+    ),
+    "agent.memory.derivation_failed.degraded": EventSpec("warning", frozenset()),
+    "agent.memory.folder_provisioning_denied.observed": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.message_replies.delivered": EventSpec(
+        "debug", frozenset({"conversation_id", "started_new_run"})
+    ),
+    "agent.mock_model.mock_llm_structured_output_required.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent.model_stream_budget.stream_abandoned.degraded": EventSpec(
+        "warning", frozenset({"elapsed_seconds", "first_chunk", "reason", "url"})
+    ),
+    "agent.module.system_lemma_models_will_be.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent.module.system_models_cannot_back_a_spend_limit.degraded": EventSpec(
+        "warning", frozenset({"policy", "unpriced_count", "unpriced_models"})
+    ),
+    "agent.outsider_tool_gate.withheld.degraded": EventSpec(
+        "warning", frozenset({"tool_name"})
+    ),
+    "agent.outsiders.unflagged_link.error": EventSpec(
+        "error", frozenset({"conversation_id"})
+    ),
+    "agent.pending_user_messages.announce_failed.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.pending_user_messages.claim_failed.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.pending_user_messages.steered_into_run.observed": EventSpec(
+        "info", frozenset({"agent_run_id", "message_count"})
+    ),
+    "agent.pod_mcp_service.external_tool.called": EventSpec(
+        "info",
+        frozenset(
+            {"client_id", "client_name", "grant_id", "outcome", "tool", "user_id"}
+        ),
+    ),
+    "agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.pod_mcp_service.session_lookup.failed": EventSpec("error", frozenset()),
+    "agent.pydantic_ai.agent_input_required_kind_call.observed": EventSpec(
+        "debug", frozenset({"tool_call_id"})
+    ),
+    "agent.pydantic_ai.agent_run_ended_after_repeated.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.pydantic_ai.agent_run_hit_usage_limit.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.pydantic_ai.driver_cancelled_mid_run.failed": EventSpec(
+        "error", frozenset({"agent_run_id", "consumer_cancelling", "driver_cancelling"})
+    ),
+    "agent.pydantic_ai.dropping_non_object_tool_args.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent.pydantic_ai.dropping_unattached_replayed_thought.diagnostic": EventSpec(
+        "debug", frozenset({"dropped_count"})
+    ),
+    "agent.pydantic_ai.ignoring_malformed_tool_args_json.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent.pydantic_ai.ignoring_tool_args_that_did.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent.pydantic_ai.model_request_status_model.failed": EventSpec(
+        "error",
+        frozenset(
+            {
+                "agent_run_id",
+                "model_name",
+                "provider_error_code",
+                "provider_error_kind",
+                "status_code",
+            }
+        ),
+    ),
+    "agent.pydantic_ai.model_stream_retry.degraded": EventSpec(
+        "warning", frozenset({"attempt", "error_type", "max_attempts"})
+    ),
+    "agent.pydantic_ai.pydanticai_harness_type.failed": EventSpec("error", frozenset()),
+    "agent.pydantic_ai.skipping_malformed_tool_call_persistence.diagnostic": EventSpec(
+        "debug", frozenset({"tool_call_id"})
+    ),
+    "agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic": EventSpec(
+        "debug", frozenset({"tool_call_id"})
+    ),
+    "agent.pydantic_ai.skipping_tool_result_malformed_call.diagnostic": EventSpec(
+        "debug", frozenset({"tool_call_id"})
+    ),
+    "agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent.pydantic_ai.stream_teardown.failed": EventSpec(
+        "error", frozenset({"agent_run_id"})
+    ),
+    "agent.pydantic_ai_streaming.stop_check.failed": EventSpec(
+        "error", frozenset({"agent_run_id"})
+    ),
+    "agent.queued_followup.start_failed.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id", "conversation_id"})
+    ),
+    "agent.realtime.publishing_agent_realtime_event.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id", "error_type"})
+    ),
+    "agent.respond_to_notification.outside_relay_needs_approval.observed": EventSpec(
+        "info", frozenset({"notification_id"})
+    ),
+    "agent.run.attached_document_unavailable.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent.run.context_brief_unavailable.degraded": EventSpec(
+        "warning", frozenset({"agent_id", "conversation_id"})
+    ),
+    "agent.run.inline_reasoning_reclassified.diagnostic": EventSpec(
+        "debug", frozenset({"answer_survived", "thought_count"})
+    ),
+    "agent.run_budget.approaching.observed": EventSpec(
+        "info", frozenset({"agent_run_id", "dimension"})
+    ),
+    "agent.run_budget.exhausted.observed": EventSpec(
+        "info", frozenset({"agent_run_id", "dimension"})
+    ),
+    "agent.run_event_pump.stream_ended_without_a_terminal_event.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id"})
+    ),
+    "agent.run_finalizer.usage_reservation_release.failed": EventSpec(
+        "error", frozenset({"agent_run_id"})
+    ),
+    "agent.runtime_model_factory.provider_client_close_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.runtime_profile.archived_lookup_failed.degraded": EventSpec(
+        "warning", frozenset({"profile_id"})
+    ),
+    "agent.runtime_profile.connection_check_failed.observed": EventSpec(
+        "info", frozenset({"profile_id", "protocol"})
+    ),
+    "agent.runtime_profile.harness_vision_lookup_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.runtime_profile.model_names_not_configured.observed": EventSpec(
+        "info", frozenset({"operator_hint"})
+    ),
+    "agent.runtime_profile.model_not_configured.observed": EventSpec(
+        "info", frozenset({"operator_hint"})
+    ),
+    "agent.runtime_profile.model_substituted.degraded": EventSpec(
+        "warning",
+        frozenset({"profile_id", "requested_model_name", "selected_model_name"}),
+    ),
+    "agent.runtime_profile.unreadable.skipped": EventSpec(
+        "warning", frozenset({"error", "organization_id", "profile_id"})
+    ),
+    "agent.runtime_profile_service.system_profile_unconfigured.degraded": EventSpec(
+        "error", frozenset()
+    ),
+    "agent.self_brief.reads_unavailable.degraded": EventSpec(
+        "warning", frozenset({"pod_id"})
+    ),
+    "agent.skills.load_failed.degraded": EventSpec(
+        "warning", frozenset({"skill_name"})
+    ),
+    "agent.skills.resource_load_failed.degraded": EventSpec(
+        "warning", frozenset({"skill_name"})
+    ),
+    "agent.speech.listen_failed.degraded": EventSpec("warning", frozenset()),
+    "agent.speech.provider_broke_its_contract": EventSpec(
+        "error", frozenset({"error_type", "message"})
+    ),
+    "agent.speech.provider_unavailable": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent.speech.say_failed.degraded": EventSpec("warning", frozenset()),
+    "agent.speech.transcript_reuse_lookup_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent.speech.transcript_reused.observed": EventSpec(
+        "info", frozenset({"conversation_id"})
+    ),
+    "agent.speech.voice_catalogue_cache_unreadable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent.speech.voice_catalogue_cache_unwritable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent.speech.voice_catalogue_unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent.speech.voice_note_not_delivered.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent.streaming.subscription_close_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.summarization_model.resolution_failed.observed": EventSpec(
+        "warning", frozenset({"model_name"})
+    ),
+    "agent.surface_context.non_text_metadata_dropped.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "metadata_fields"})
+    ),
+    "agent.tools.image_payload.downscale_skipped.diagnostic": EventSpec(
+        "debug", frozenset({"error_type"})
+    ),
+    "agent.usage.implausible_provider_count.degraded": EventSpec(
+        "warning", frozenset({"reported_value", "usage_field"})
+    ),
+    "agent.usage.missing_provider_count.degraded": EventSpec(
+        "warning", frozenset({"request_count", "usage_field"})
+    ),
+    "agent.vision_service.description_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.wait.already_claimed": EventSpec("debug", frozenset({"wait_id"})),
+    "agent.wait.child_finished": EventSpec(
+        "debug", frozenset({"conversation_id", "wait_id"})
+    ),
+    "agent.wait.child_finished_resolve_failed.degraded": EventSpec(
+        "warning", frozenset({"agent_run_id", "conversation_id"})
+    ),
+    "agent.wait.reconcile_abandoned": EventSpec(
+        "error", frozenset({"attempt", "conversation_id", "wait_id"})
+    ),
+    "agent.wait.reconcile_failed": EventSpec(
+        "error", frozenset({"attempt", "wait_id"})
+    ),
+    "agent.wait.reconcile_fired_lost_timer": EventSpec(
+        "warning", frozenset({"conversation_id", "wait_id"})
+    ),
+    "agent.wait.suspended": EventSpec(
+        "debug", frozenset({"conversation_id", "wait_type"})
+    ),
+    "agent.wait.woke": EventSpec(
+        "debug", frozenset({"conversation_id", "wait_type", "woke_because"})
+    ),
+    "agent.web_fetch.batch_deadline_reached.degraded": EventSpec(
+        "warning", frozenset({"captured", "requested"})
+    ),
+    "agent.web_fetch.failed.degraded": EventSpec("warning", frozenset()),
+    "agent.web_fetch.http_path_crashed.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent.web_fetch.http_path_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type", "signal", "status", "vendor"})
+    ),
+    "agent.web_fetch.session_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent.web_fetch.url_refused.refused": EventSpec("warning", frozenset({"reason"})),
+    "agent.web_fetch.workspace_write_failed.degraded": EventSpec(
+        "warning", frozenset({"characters"})
+    ),
+    "agent.web_search.failed.degraded": EventSpec("warning", frozenset()),
+    "agent.widget.viewer_id_unparsable.degraded": EventSpec("warning", frozenset()),
+    "agent.widget.viewer_session_unreadable.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.workspace_cli.github_credential_bridge_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.workspace_cli.github_project_clone_failed.diagnostic": EventSpec(
+        "debug", frozenset({"exit_code", "repo"})
+    ),
+    "agent.workspace_cli.workspace_cli_list_processes_s.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent.workspace_cli.workspace_cli_s_s.diagnostic": EventSpec(
+        "debug", frozenset({"operation"})
+    ),
+    "agent_host.artifact.persist_failed": EventSpec(
+        "error", frozenset({"agent_run_id", "event_sequence", "harness_key"})
+    ),
+    "agent_surfaces.adapter.teams_fetch_email_bf_connector.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.adapter.teams_fetch_sender_profile_could.diagnostic": EventSpec(
+        "debug", frozenset({"tenant_id"})
+    ),
+    "agent_surfaces.adapter.teams_fetch_sender_profile_graph.diagnostic": EventSpec(
+        "debug", frozenset({"status", "tenant_id"})
+    ),
+    "agent_surfaces.adapter.teams_fetch_sender_profile_missing.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.adapter.teams_inbound_dm_event_has.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.adapter.teams_inbound_event_already_includes.observed": EventSpec(
+        "debug", frozenset({"count"})
+    ),
+    "agent_surfaces.adapter.teams_inbound_event_cannot_be.diagnostic": EventSpec(
+        "debug", frozenset({"channel_id", "team_id", "tenant_id"})
+    ),
+    "agent_surfaces.adapter.teams_inbound_event_enriched_graph.observed": EventSpec(
+        "debug", frozenset({"count"})
+    ),
+    "agent_surfaces.adapter.teams_inbound_event_enrichment_could.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.adapter.teams_inbound_event_enrichment_found.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic": EventSpec(
+        "debug", frozenset({"team_id", "tenant_id"})
+    ),
+    "agent_surfaces.adapter.teams_interaction_acknowledgement_best.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.adapter.teams_message_partially_delivered.degraded": EventSpec(
+        "warning", frozenset({"sent_chunks", "total_chunks"})
+    ),
+    "agent_surfaces.adapter.teams_typing_indicator_best_effort.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.available_surfaces_builder.pool_lookup_failed.diagnostic": EventSpec(
+        "debug", frozenset({"platform"})
+    ),
+    "agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic": EventSpec(
+        "debug", frozenset({"connector_id"})
+    ),
+    "agent_surfaces.available_surfaces_builder.system_claim_lookup_failed.diagnostic": EventSpec(
+        "debug", frozenset({"platform"})
+    ),
+    "agent_surfaces.chat_onboarding.answer_rejected.observed": EventSpec(
+        "info", frozenset({"platform", "reason", "step"})
+    ),
+    "agent_surfaces.chat_onboarding.email_unavailable.observed": EventSpec(
+        "info", frozenset({"platform", "step"})
+    ),
+    "agent_surfaces.chat_onboarding.signup_refused.failed": EventSpec(
+        "error", frozenset({"platform", "reason", "step"})
+    ),
+    "agent_surfaces.client.teams_could_not_resolve_team.diagnostic": EventSpec(
+        "debug", frozenset({"raw_team_id", "status"})
+    ),
+    "agent_surfaces.client.teams_graph_team_resolution_missing.diagnostic": EventSpec(
+        "debug", frozenset({"raw_team_id"})
+    ),
+    "agent_surfaces.client.teams_team_details_raw_team.diagnostic": EventSpec(
+        "debug", frozenset({"raw_team_id"})
+    ),
+    "agent_surfaces.client.teams_team_id_resolution_s.diagnostic": EventSpec(
+        "debug", frozenset({"raw_team_id"})
+    ),
+    "agent_surfaces.client.teams_token_acquisition_no_access.diagnostic": EventSpec(
+        "debug", frozenset({"tenant_id"})
+    ),
+    "agent_surfaces.client.teams_token_acquisition_skipped_microsoft.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.client.teams_token_acquisition_tenant_s.diagnostic": EventSpec(
+        "debug", frozenset({"error_code", "status", "tenant_id"})
+    ),
+    "agent_surfaces.config.surface_webhook_verification_disabled.degraded": EventSpec(
+        "warning", frozenset({"environment"})
+    ),
+    "agent_surfaces.config.surface_webhook_verification_flag_ignored.degraded": EventSpec(
+        "warning", frozenset({"environment"})
+    ),
+    "agent_surfaces.consent.cache_read_failed.degraded": EventSpec(
+        "warning", frozenset({"tenant_id"})
+    ),
+    "agent_surfaces.consent.graph_probe_failed.degraded": EventSpec(
+        "warning", frozenset({"tenant_id"})
+    ),
+    "agent_surfaces.consent.token_request_failed.degraded": EventSpec(
+        "warning", frozenset({"tenant_id"})
+    ),
+    "agent_surfaces.contact_follow_ups.send_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type", "platform"})
+    ),
+    "agent_surfaces.contact_follow_ups.sent.observed": EventSpec(
+        "info", frozenset({"delivered", "platform"})
+    ),
+    "agent_surfaces.contact_keepers.contact_conversation_moved.observed": EventSpec(
+        "info", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.contact_keepers.keeper_left.observed": EventSpec(
+        "info", frozenset({"admins_told", "pod_id", "surfaces"})
+    ),
+    "agent_surfaces.contact_limits.exceeded.observed": EventSpec(
+        "info", frozenset({"per_person", "surface_id"})
+    ),
+    "agent_surfaces.contact_limits.new_contacts_exceeded.observed": EventSpec(
+        "info", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.contact_limits.unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent_surfaces.contact_windows.unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent_surfaces.contacts.contact_opened.observed": EventSpec(
+        "info", frozenset({"contact_id", "surface_id"})
+    ),
+    "agent_surfaces.contacts.handle_unusable.observed": EventSpec(
+        "info", frozenset({"kind", "platform"})
+    ),
+    "agent_surfaces.contacts.machine_mail_ignored.observed": EventSpec(
+        "info", frozenset({"reason", "surface_id"})
+    ),
+    "agent_surfaces.contacts.nobody_looks_after.observed": EventSpec(
+        "info", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.contacts.stranger_refused.observed": EventSpec(
+        "info", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.contacts.unsubscribed_by_message.observed": EventSpec(
+        "info", frozenset({"known", "surface_id"})
+    ),
+    "agent_surfaces.contacts.unverified_email_parked.observed": EventSpec(
+        "info", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.conversation_binder.reset_held_for_notification.observed": EventSpec(
+        "info", frozenset({"conversation_id", "surface_id"})
+    ),
+    "agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic": EventSpec(
+        "debug", frozenset({"account_id"})
+    ),
+    "agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.credential_resolver.pooled_number_missing.degraded": EventSpec(
+        "warning", frozenset({"phone_number_id", "surface_id"})
+    ),
+    "agent_surfaces.credential_uniqueness.several_surfaces_share_one_bot.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "answered_by",
+                "external_workspace_id",
+                "platform",
+                "surface_identity_id",
+                "surface_ids",
+            }
+        ),
+    ),
+    "agent_surfaces.delivery.native_attachment_unavailable.diagnostic": EventSpec(
+        "debug", frozenset({"platform"})
+    ),
+    "agent_surfaces.delivery.native_choices_unavailable.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent_surfaces.delivery.native_decision_unavailable.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent_surfaces.delivery.native_resource_unavailable.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent_surfaces.delivery.native_voice_unavailable.diagnostic": EventSpec(
+        "debug", frozenset({"platform"})
+    ),
+    "agent_surfaces.delivery.one_reply_reached_nobody.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent_surfaces.delivery.part_reached_nobody.degraded": EventSpec(
+        "warning", frozenset({"part", "platform"})
+    ),
+    "agent_surfaces.display_resource_content.enrichment_skipped.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id", "path", "step"})
+    ),
+    "agent_surfaces.display_resource_content.pod_file_unreadable.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "path"})
+    ),
+    "agent_surfaces.egress.approval_not_delivered.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.ask_user_not_delivered.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.ask_user_render_skipped.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.conversation_missing_for_link.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "platform", "surface_id"})
+    ),
+    "agent_surfaces.egress.envelope_degraded.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id", "parts", "platform"})
+    ),
+    "agent_surfaces.egress.envelope_reached_nobody.failed": EventSpec(
+        "error", frozenset({"conversation_id", "platform"})
+    ),
+    "agent_surfaces.egress.link_has_no_inbound_event.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "platform", "surface_id"})
+    ),
+    "agent_surfaces.egress.no_adapter_for_platform.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "surface_id", "surface_type"})
+    ),
+    "agent_surfaces.egress.progress_append_failed.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.progress_clear_failed.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.progress_finish_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.progress_no_target.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.progress_typing_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.progress_update_failed.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.prompt_reached_nobody.failed": EventSpec(
+        "error", frozenset({"conversation_id", "parts", "platform"})
+    ),
+    "agent_surfaces.egress.sign_in_not_delivered.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.skipped_no_conversation.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.egress.stored_inbound_event_unreadable.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "platform", "surface_id"})
+    ),
+    "agent_surfaces.egress.surface_cannot_answer.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {"conversation_id", "platform", "reason", "surface_id", "surface_status"}
+        ),
+    ),
+    "agent_surfaces.egress.voice_note_not_fetched.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "path"})
+    ),
+    "agent_surfaces.email_surface_provisioning.address_taken.degraded": EventSpec(
+        "warning", frozenset({"agent_id", "attempt", "pod_id"})
+    ),
+    "agent_surfaces.email_surface_provisioning.address_unavailable.degraded": EventSpec(
+        "warning", frozenset({"agent_id", "pod_id"})
+    ),
+    "agent_surfaces.email_surface_provisioning.failed.degraded": EventSpec(
+        "warning", frozenset({"agent_id", "failure_code", "failure_type", "pod_id"})
+    ),
+    "agent_surfaces.event_receiver_service.could_not_load_telegram_polling.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.could_not_publish_surface_receiver.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.could_not_store_telegram_polling.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.native_receiver_skipped_surface_s.diagnostic": EventSpec(
+        "debug", frozenset({"account_id"})
+    ),
+    "agent_surfaces.event_receiver_service.native_receiver_upstream_conflict.degraded": EventSpec(
+        "warning", frozenset({"cooldown_seconds", "credential_label", "platform"})
+    ),
+    "agent_surfaces.event_receiver_service.native_surface_receiver_stopped_platform.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.native_surface_receiver_wakeup_listener.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.slack_native_receiver_missing_app.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.slack_native_receiver_skipped_surface.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.slack_socket_envelope_ignored.observed": EventSpec(
+        "debug", frozenset({"envelope_type"})
+    ),
+    "agent_surfaces.event_receiver_service.slack_socket_publish_failed.failed": EventSpec(
+        "warning", frozenset({"envelope_type"})
+    ),
+    "agent_surfaces.event_receiver_service.telegram_native_receiver_missing_bot.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.telegram_native_receiver_skipped_surface.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.telegram_polling_getupdates_read_timeout.timeout": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.telegram_polling_hit_409_after.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed": EventSpec(
+        "debug", frozenset({"update_id"})
+    ),
+    "agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.event_receiver_service.telegram_system_surface_exists_but.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.events.handlers.onboarding_route_unavailable": EventSpec(
+        "info", frozenset({"reason"})
+    ),
+    "agent_surfaces.fallback_reply.surface_fallback_no_credentials.degraded": EventSpec(
+        "warning", frozenset({"platform", "surface_id"})
+    ),
+    "agent_surfaces.fallback_reply.surface_fallback_send_failed.degraded": EventSpec(
+        "warning", frozenset({"platform", "reply_kind", "surface_id"})
+    ),
+    "agent_surfaces.fallback_reply.surface_fallback_within_window.observed": EventSpec(
+        "debug", frozenset({"platform", "reply_kind"})
+    ),
+    "agent_surfaces.fallback_reply_service.agent_surface_ignored_duplicate_unrouted.observed": EventSpec(
+        "debug", frozenset({"external_channel_id"})
+    ),
+    "agent_surfaces.fallback_reply_service.agent_surface_prepared_unrouted_fallback.observed": EventSpec(
+        "debug", frozenset({"reply_kind"})
+    ),
+    "agent_surfaces.file_ingest.attachment_download_failed.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent_surfaces.file_ingest.attachment_name_unavailable.degraded": EventSpec(
+        "warning", frozenset({"attempts", "platform"})
+    ),
+    "agent_surfaces.file_ingest.attachment_over_cap": EventSpec(
+        "info", frozenset({"cap_bytes", "platform"})
+    ),
+    "agent_surfaces.file_ingest.attachment_over_cap_after_read.degraded": EventSpec(
+        "warning", frozenset({"cap_bytes", "platform", "size_bytes"})
+    ),
+    "agent_surfaces.file_ingest.attachment_store_failed.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent_surfaces.group_audience.outsiders_present.observed": EventSpec(
+        "info", frozenset({"count", "platform"})
+    ),
+    "agent_surfaces.group_hello.send_failed.observed": EventSpec(
+        "info", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.group_registry.group_adopted.observed": EventSpec(
+        "info", frozenset({"group_id", "owner_set", "surface_id"})
+    ),
+    "agent_surfaces.group_updates.creation_refused.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent_surfaces.group_updates.invite_link_lookup.observed": EventSpec(
+        "info", frozenset()
+    ),
+    "agent_surfaces.handlers.surface_message_not_enqueued.failed": EventSpec(
+        "error", frozenset({"source", "surface_id"})
+    ),
+    "agent_surfaces.identity.ambiguous_mobile_match": EventSpec(
+        "error", frozenset({"candidate_count", "verification_state"})
+    ),
+    "agent_surfaces.identity.email_sender_failed_authentication.degraded": EventSpec(
+        "warning", frozenset({"platform", "sender_email"})
+    ),
+    "agent_surfaces.identity.email_sender_unauthenticated.degraded": EventSpec(
+        "warning", frozenset({"platform", "resolved", "sender_email"})
+    ),
+    "agent_surfaces.identity.unverified_phone_match_used.observed": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic": EventSpec(
+        "debug", frozenset({"default_id", "user_id"})
+    ),
+    "agent_surfaces.ingress_service.agent_surface_dropped_event_after.observed": EventSpec(
+        "debug", frozenset({"surface_type"})
+    ),
+    "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed": EventSpec(
+        "debug", frozenset({"external_channel_id", "surface_type"})
+    ),
+    "agent_surfaces.ingress_service.agent_surface_ignored_webhook_because.observed": EventSpec(
+        "debug", frozenset({"source"})
+    ),
+    "agent_surfaces.ingress_service.agent_surface_prepared_inbound_event.observed": EventSpec(
+        "debug", frozenset({"attachment_count", "surface_type"})
+    ),
+    "agent_surfaces.ingress_service.agent_surface_resolved_user_not.observed": EventSpec(
+        "debug", frozenset({"internal_user_id", "pod_id", "surface_type"})
+    ),
+    "agent_surfaces.ingress_service.attachment_ingest_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type", "surface_id"})
+    ),
+    "agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic": EventSpec(
+        "debug", frozenset({"user_id"})
+    ),
+    "agent_surfaces.ingress_service.inbound_enrichment_failed.degraded": EventSpec(
+        "warning",
+        frozenset({"failure_type", "provider_error", "status_code", "surface_type"}),
+    ),
+    "agent_surfaces.ingress_service.inbound_message_empty.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "platform"})
+    ),
+    "agent_surfaces.ingress_service.interaction_submitter_refused.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "external_user_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_channel_context_fetch_platform.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_channel_setup_handling.diagnostic": EventSpec(
+        "debug", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_home_apps.diagnostic": EventSpec(
+        "debug", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_claim_release_failed.degraded": EventSpec(
+        "warning", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_dropped_invalid_conversation.diagnostic": EventSpec(
+        "debug", frozenset({"callback_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_dropped_no_matching.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_dropped_surface_missing.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id", "surface_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_dropped_unparseable_callback.diagnostic": EventSpec(
+        "debug", frozenset({"callback_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_failed.degraded": EventSpec(
+        "warning", frozenset({"action", "conversation_id", "platform"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_failure_unacknowledged.degraded": EventSpec(
+        "warning", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_ignored_replay_duplicate.observed": EventSpec(
+        "debug", frozenset({"conversation_id", "dedup_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_interaction_out_of_scope.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "surface_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_lifecycle_handling.diagnostic": EventSpec(
+        "debug", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.ingress_service.surface_thread_title_set.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.ingress_service.typed_reply_decision_not_recorded.failed": EventSpec(
+        "error", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.ingress_service.typed_reply_lookup_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.ingress_service.webhook_carried_several_messages.observed": EventSpec(
+        "info", frozenset({"message_count", "source"})
+    ),
+    "agent_surfaces.notification_channels.provision_failed.degraded": EventSpec(
+        "warning", frozenset({"failure_type", "pod_id"})
+    ),
+    "agent_surfaces.notification_controller.delegated_outside_answer.refused": EventSpec(
+        "info", frozenset({"notification_id"})
+    ),
+    "agent_surfaces.notification_egress.cold_open_unsupported.observed": EventSpec(
+        "info", frozenset({"notification_id", "platform"})
+    ),
+    "agent_surfaces.notification_egress.link_repoint_lost_race.observed": EventSpec(
+        "info", frozenset({"link_id", "notification_id"})
+    ),
+    "agent_surfaces.notification_rate_limiter.email_exceeded.degraded": EventSpec(
+        "warning", frozenset({"limit", "pod_id"})
+    ),
+    "agent_surfaces.notification_rate_limiter.exceeded.degraded": EventSpec(
+        "warning", frozenset({"limit", "pod_id", "recipient_user_id"})
+    ),
+    "agent_surfaces.notification_rate_limiter.unavailable.degraded": EventSpec(
+        "warning", frozenset({"error"})
+    ),
+    "agent_surfaces.notification_service.channel_send_failed.degraded": EventSpec(
+        "warning", frozenset({"error", "notification_id", "platform"})
+    ),
+    "agent_surfaces.notification_service.duplicate_suppressed.observed": EventSpec(
+        "info", frozenset({"notification_id", "pod_id"})
+    ),
+    "agent_surfaces.notification_service.undeliverable.observed": EventSpec(
+        "info", frozenset({"notification_id", "reason"})
+    ),
+    "agent_surfaces.notifications.expired.observed": EventSpec(
+        "info", frozenset({"count"})
+    ),
+    "agent_surfaces.notifications.open_lookup_degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.onboarding.modal_click_refused": EventSpec(
+        "info", frozenset({"reason"})
+    ),
+    "agent_surfaces.onboarding.modal_deadline_exceeded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.onboarding.modal_unavailable": EventSpec(
+        "warning", frozenset({"error_type", "installation_id"})
+    ),
+    "agent_surfaces.onboarding_cleanup.failed": EventSpec("warning", frozenset()),
+    "agent_surfaces.outside_cap.reply_not_sent.degraded": EventSpec(
+        "warning", frozenset({"platform"})
+    ),
+    "agent_surfaces.outside_cap.turn_held.observed": EventSpec(
+        "info", frozenset({"conversation_id", "pod_id", "told"})
+    ),
+    "agent_surfaces.outsider_limits.exceeded.observed": EventSpec(
+        "info", frozenset({"group_id", "per_group", "per_person"})
+    ),
+    "agent_surfaces.outsider_limits.unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent_surfaces.parser.slack_parser_normalize_context_message.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.parser.slack_parser_normalize_inbound_event.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.pending_envelope.discard_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.pending_envelope.display_paths_overflowed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "limit"})
+    ),
+    "agent_surfaces.pending_envelope.hold_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.pending_envelope.read_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.pending_envelope.release_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.progress_observer.clear_progress_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.progress_observer.final_answer_not_delivered.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.progress_observer.final_answer_unsent.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.progress_observer.finish_stream_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.progress_observer.run_error_not_delivered.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.progress_observer.surface_progress_typing_loop_stopped.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.progress_observer.surface_token_flush_conversation.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.progress_observer.waiting_prompt_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "kind"})
+    ),
+    "agent_surfaces.progress_observer.waiting_prompt_fallback_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "kind"})
+    ),
+    "agent_surfaces.progress_observer.waiting_prompt_not_delivered.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "kind", "tool_call_id"})
+    ),
+    "agent_surfaces.resend.inbound_fetch_skipped.degraded": EventSpec(
+        "warning",
+        frozenset({"failure_type", "provider_error", "status_code", "thread_id"}),
+    ),
+    "agent_surfaces.resend.inbound_missing_email_id.degraded": EventSpec(
+        "warning", frozenset({"thread_id"})
+    ),
+    "agent_surfaces.resend_polling_receiver.could_not_load_resend_cursor.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.resend_polling_receiver.could_not_store_resend_cursor.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.resend_polling_receiver.resend_email_has_no_identifier.degraded": EventSpec(
+        "warning", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.resend_polling_receiver.resend_native_receiver_missing_key.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.resend_polling_receiver.resend_native_receiver_skipped_surface.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.resend_polling_receiver.resend_polling_no_surface_for_address.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.resend_polling_receiver.resend_polling_receiver_error.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.resend_polling_receiver.resend_system_surface_exists_but.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.getme_while_resolving_bot_info.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_add_processing_indicator_channel.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_append_stream_text.diagnostic": EventSpec(
+        "debug", frozenset({"error_code"})
+    ),
+    "agent_surfaces.service.slack_channel_setup_prompt.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_end_progress_delete_channel.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_fetch_sender_profile_skipped.diagnostic": EventSpec(
+        "debug", frozenset({"user_id"})
+    ),
+    "agent_surfaces.service.slack_fetch_sender_profile_user.propagated": EventSpec(
+        "debug", frozenset({"user_id"})
+    ),
+    "agent_surfaces.service.slack_finish_progress_stop_stream.degraded": EventSpec(
+        "warning", frozenset({"error_code"})
+    ),
+    "agent_surfaces.service.slack_get_recent_channel_messages.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.service.slack_get_recent_channel_messages.propagated": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.service.slack_get_user_display_name.observed": EventSpec(
+        "debug", frozenset({"user_id"})
+    ),
+    "agent_surfaces.service.slack_interaction_acknowledgement_best.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_list_channels_private_unavailable.diagnostic": EventSpec(
+        "debug", frozenset({"error_code"})
+    ),
+    "agent_surfaces.service.slack_open_setup_modal.diagnostic": EventSpec(
+        "debug", frozenset({"error_code"})
+    ),
+    "agent_surfaces.service.slack_processing_reaction_not_removed.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_publish_home_view.diagnostic": EventSpec(
+        "debug", frozenset({"error_code"})
+    ),
+    "agent_surfaces.service.slack_reaction_indicator_skipped_channel.diagnostic": EventSpec(
+        "debug", frozenset({"error_code"})
+    ),
+    "agent_surfaces.service.slack_search_current_channel_channel.propagated": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.service.slack_search_current_channel_missing.diagnostic": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.service.slack_send_display_resource_channel.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_send_message_channel_s.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_set_thread_title.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.slack_starter_prompt.diagnostic": EventSpec(
+        "debug", frozenset({"error_code"})
+    ),
+    "agent_surfaces.service.slack_typing_indicator_unsupported_channel.diagnostic": EventSpec(
+        "debug", frozenset({"error_code"})
+    ),
+    "agent_surfaces.service.teams_download_file_could_not.diagnostic": EventSpec(
+        "debug", frozenset({"status"})
+    ),
+    "agent_surfaces.service.teams_download_file_redirects.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.teams_download_file_s_fetch.diagnostic": EventSpec(
+        "debug", frozenset({"status"})
+    ),
+    "agent_surfaces.service.teams_download_plan_could_not.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.teams_download_plan_missing_bot.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.teams_download_plan_missing_graph.diagnostic": EventSpec(
+        "debug", frozenset({"tenant_id"})
+    ),
+    "agent_surfaces.service.teams_download_plan_missing_tenant.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.service.teams_fetch_recent_context_channel.diagnostic": EventSpec(
+        "debug", frozenset({"channel_id"})
+    ),
+    "agent_surfaces.service.teams_get_recent_channel_messages.diagnostic": EventSpec(
+        "debug", frozenset({"status", "tenant_id"})
+    ),
+    "agent_surfaces.service.teams_get_recent_channel_messages.propagated": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.service.telegram_progress_message_cleanup_best.observed": EventSpec(
+        "debug", frozenset({"chat_id"})
+    ),
+    "agent_surfaces.service.whatsapp_display_phone_lookup_phone.observed": EventSpec(
+        "info", frozenset({"phone_number_id"})
+    ),
+    "agent_surfaces.service.whatsapp_display_resource_cta_rejected.degraded": EventSpec(
+        "warning", frozenset({"status_code"})
+    ),
+    "agent_surfaces.service.whatsapp_interaction_acknowledgement_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.service.whatsapp_mark_read_typing_best.observed": EventSpec(
+        "info", frozenset()
+    ),
+    "agent_surfaces.service.whatsapp_message_partially_delivered.degraded": EventSpec(
+        "warning", frozenset({"sent_parts", "total_parts"})
+    ),
+    "agent_surfaces.service.whatsapp_questions_partially_delivered.degraded": EventSpec(
+        "warning", frozenset({"sent_questions", "total_questions"})
+    ),
+    "agent_surfaces.service.whatsapp_reaction_indicator_best_effort.observed": EventSpec(
+        "info", frozenset()
+    ),
+    "agent_surfaces.surface_connection_resolver.connection_lookup_failed.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "agent_surfaces.surface_display_delivery.display_resource_delivery_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id", "tool_call_id"})
+    ),
+    "agent_surfaces.surface_display_delivery.surface_message_delivery_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.surface_display_delivery.voice_note_delivery_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.surface_reach_resolver.credentials_unavailable": EventSpec(
+        "warning", frozenset({"surface_type"})
+    ),
+    "agent_surfaces.surface_reach_resolver.surface_reach_account_fallback_surface.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.surface_reach_resolver.surface_reach_live_handle_surface.observed": EventSpec(
+        "debug", frozenset({"surface_type"})
+    ),
+    "agent_surfaces.surface_reach_resolver.surface_reach_write_through_surface.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.surface_row.retired_value_skipped.degraded": EventSpec(
+        "warning", frozenset({"column", "surface_id", "value"})
+    ),
+    "agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic": EventSpec(
+        "debug", frozenset({"account_id"})
+    ),
+    "agent_surfaces.tasks.sweep_web_visitors.observed": EventSpec(
+        "info", frozenset({"codes", "conversations", "sessions"})
+    ),
+    "agent_surfaces.telegram.callback_acknowledgement_best_effort": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.telegram.callback_keyboard_cleanup_best_effort": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.telegram.empty_message_not_sent": EventSpec(
+        "warning", frozenset({"has_reply_markup"})
+    ),
+    "agent_surfaces.telegram.media_type_rejected.degraded": EventSpec(
+        "warning", frozenset({"method", "mime_type"})
+    ),
+    "agent_surfaces.telegram.message_partially_delivered.degraded": EventSpec(
+        "warning", frozenset({"sent_chunks", "total_chunks"})
+    ),
+    "agent_surfaces.telegram.mini_app_sync_failed.degraded": EventSpec(
+        "warning", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.telegram.questions_partially_delivered.degraded": EventSpec(
+        "warning", frozenset({"sent_questions", "total_questions"})
+    ),
+    "agent_surfaces.telegram_command.reply_failed.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "agent_surfaces.telegram_group_join.adopted.observed": EventSpec(
+        "info", frozenset({"group_id", "surface_id"})
+    ),
+    "agent_surfaces.telegram_group_join.hello_failed.observed": EventSpec(
+        "info", frozenset({"surface_id"})
+    ),
+    "agent_surfaces.telegram_group_links.redeem_unavailable.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.telegram_manager.bot_branding_best_effort": EventSpec(
+        "debug", frozenset({"method"})
+    ),
+    "agent_surfaces.telegram_manager.bot_profile_photo_best_effort": EventSpec(
+        "debug", frozenset()
+    ),
+    "agent_surfaces.telegram_manager.managed_bot_provisioning_failed": EventSpec(
+        "error", frozenset()
+    ),
+    "agent_surfaces.telegram_manager.polling_receiver_failed": EventSpec(
+        "error", frozenset()
+    ),
+    "agent_surfaces.telegram_manager.webhook_registration_failed": EventSpec(
+        "error", frozenset()
+    ),
+    "agent_surfaces.telegram_manager.webhook_secret_missing": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.web_limits.exceeded.observed": EventSpec(
+        "info", frozenset({"window"})
+    ),
+    "agent_surfaces.web_limits.unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "agent_surfaces.webhook_controller.whatsapp_number_mismatch.denied": EventSpec(
+        "warning", frozenset({"addressed_phone_number_ids", "phone_number_id"})
+    ),
+    "agent_surfaces.webhook_controller.whatsapp_number_signature_rejected.denied": EventSpec(
+        "warning", frozenset({"phone_number_id", "reason", "verified_with"})
+    ),
+    "agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic": EventSpec(
+        "debug", frozenset({"account_id"})
+    ),
+    "agent_surfaces.whatsapp_contract.number_ownership_unreadable.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.whatsapp_contract.shared_number_unreadable.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "agent_surfaces.whatsapp_surface_provisioning.number_allocated": EventSpec(
+        "info", frozenset({"organization_id", "phone_number_id", "pod_id"})
+    ),
+    "agent_surfaces.widget_directory.unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "analytics.actor.unattributed": EventSpec(
+        "warning", frozenset({"actor_type", "analytic_event"})
+    ),
+    "analytics.app_session.cache_unavailable": EventSpec("debug", frozenset()),
+    "analytics.app_session.record_failed": EventSpec("debug", frozenset()),
+    "analytics.buffer.overflowed": EventSpec("warning", frozenset({"count"})),
+    "analytics.contract.violation": EventSpec(
+        "warning", frozenset({"analytic_event", "origin", "reason"})
+    ),
+    "analytics.delivery.failed": EventSpec(
+        "warning", frozenset({"count", "error_type", "status"})
+    ),
+    "analytics.flush.failed": EventSpec("warning", frozenset({"error_type"})),
+    "analytics.pod_delivered.cache_unavailable": EventSpec("debug", frozenset()),
+    "analytics.shutdown.drain_timed_out": EventSpec("warning", frozenset({"count"})),
+    "api.warm_import.failed": EventSpec("warning", frozenset({"target"})),
+    "api.warm_import.ready": EventSpec("debug", frozenset({"target"})),
+    "app.health_ready.probe_failed.failed": EventSpec("error", frozenset()),
+    "apps.app_asset_resolver.branding_entitlement.diagnostic": EventSpec(
+        "warning", frozenset({"error_type", "pod_id"})
+    ),
+    "apps.app_release_retention.releases_pruned": EventSpec(
+        "info", frozenset({"app_id", "pruned_count"})
+    ),
+    "apps.app_release_service.release_promoted": EventSpec(
+        "info", frozenset({"app_id", "pod_id", "release_number", "version"})
+    ),
+    "apps.app_service.app_html_lint.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "apps.app_storage_phase.app_storage_cleanup_s_s.diagnostic": EventSpec(
+        "debug", frozenset({"app_id"})
+    ),
+    "apps.app_use_cases.release_retention.degraded": EventSpec(
+        "warning", frozenset({"pod_id"})
+    ),
+    "apps.tasks.sweep_app_releases.failed": EventSpec("error", frozenset()),
+    "apps.tasks.sweep_app_releases.observed": EventSpec(
+        "info",
+        frozenset(
+            {"examined", "failed", "pruned_apps", "pruned_releases", "truncated"}
+        ),
+    ),
+    "apps.tasks.sweep_app_releases.skipped": EventSpec(
+        "warning", frozenset({"app_id"})
+    ),
+    "authorization.resource_names.dangling_grants_skipped": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "background_task.failed": EventSpec(
+        "error", frozenset({"error_type", "task_name"})
+    ),
+    "concurrency.offload.configured_offload_thread_pool.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "concurrency.offload.could_not_configure_offload_thread.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "connector.operation.timeout": EventSpec(
+        "warning", frozenset({"connector_id", "operation_name"})
+    ),
+    "connector_catalog.app.synced": EventSpec("debug", frozenset({"connector_id"})),
+    "connector_catalog.composio.disabled": EventSpec("debug", frozenset()),
+    "connector_catalog.composio.duplicate_field.observed": EventSpec(
+        "warning", frozenset({"field_name"})
+    ),
+    "connector_catalog.composio_batch.started": EventSpec(
+        "debug", frozenset({"connector_id"})
+    ),
+    "connector_catalog.composio_retirement.applied": EventSpec(
+        "debug", frozenset({"connector_id"})
+    ),
+    "connector_catalog.composio_retirement.installs_disabled": EventSpec(
+        "warning", frozenset({"connector_id", "count"})
+    ),
+    "connector_catalog.composio_retirement.no_native_capability": EventSpec(
+        "warning", frozenset({"connector_id"})
+    ),
+    "connector_catalog.composio_retirement.rows_deleted": EventSpec(
+        "debug", frozenset({"connector_id", "count", "table"})
+    ),
+    "connector_catalog.composio_retirements.applied": EventSpec(
+        "info", frozenset({"count"})
+    ),
+    "connector_catalog.config.missing": EventSpec(
+        "warning", frozenset({"config_name"})
+    ),
+    "connector_catalog.connector.creating": EventSpec(
+        "debug", frozenset({"connector_id"})
+    ),
+    "connector_catalog.connector.deactivated": EventSpec(
+        "debug", frozenset({"connector_id"})
+    ),
+    "connector_catalog.connector.renamed": EventSpec(
+        "debug", frozenset({"new_connector_id", "old_connector_id"})
+    ),
+    "connector_catalog.connector.updating": EventSpec(
+        "debug", frozenset({"connector_id"})
+    ),
+    "connector_catalog.dry_run.completed": EventSpec(
+        "info",
+        frozenset(
+            {
+                "composio_app_count",
+                "composio_operation_count",
+                "composio_trigger_count",
+                "native_app_count",
+                "native_operation_count",
+                "native_trigger_count",
+            }
+        ),
+    ),
+    "connector_catalog.import.completed": EventSpec(
+        "info",
+        frozenset(
+            {
+                "composio_app_count",
+                "composio_operation_count",
+                "composio_trigger_count",
+                "native_app_count",
+                "native_operation_count",
+                "native_trigger_count",
+            }
+        ),
+    ),
+    "connector_catalog.native_batch.started": EventSpec(
+        "debug", frozenset({"connector_id"})
+    ),
+    "connector_catalog.rename.rows_repointed": EventSpec(
+        "debug", frozenset({"count", "new_connector_id", "old_connector_id", "table"})
+    ),
+    "connector_catalog.rename.target_missing": EventSpec(
+        "warning", frozenset({"new_connector_id", "old_connector_id"})
+    ),
+    "connector_catalog.renames.applied": EventSpec("debug", frozenset({"count"})),
+    "connector_catalog.skill.failed": EventSpec(
+        "warning", frozenset({"connector_id", "error_type", "provider"})
+    ),
+    "connector_catalog.skill.generated": EventSpec(
+        "debug", frozenset({"connector_id", "provider"})
+    ),
+    "connector_catalog.skill_batch.completed": EventSpec(
+        "debug", frozenset({"count", "total_count"})
+    ),
+    "connector_catalog.skills.completed": EventSpec("info", frozenset({"app_count"})),
+    "connector_catalog.skills.started": EventSpec("debug", frozenset({"app_count"})),
+    "connector_catalog.static_operations.synced": EventSpec(
+        "info", frozenset({"connector_id", "count"})
+    ),
+    "connector_catalog.toolkit.skipped": EventSpec(
+        "debug", frozenset({"error_type", "toolkit_id"})
+    ),
+    "connector_catalog.toolkits.selected": EventSpec(
+        "debug", frozenset({"managed_by", "toolkit_count"})
+    ),
+    "connector_catalog.unmanaged_composio_default.installs_disabled": EventSpec(
+        "warning", frozenset({"accounts_flagged", "connector_id", "count"})
+    ),
+    "connectors.account_identity.telegram_getme_while_resolving_account.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "connectors.account_revocation.skipped_without_install": EventSpec(
+        "info", frozenset({"connector_id"})
+    ),
+    "connectors.breaker.opened.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "connector_id",
+                "cooldown_seconds",
+                "failures",
+                "operation_name",
+                "organization_id",
+            }
+        ),
+    ),
+    "connectors.breaker.recovered": EventSpec(
+        "info", frozenset({"connector_id", "operation_name", "organization_id"})
+    ),
+    "connectors.breaker.rejected.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {"connector_id", "cooldown_seconds", "operation_name", "organization_id"}
+        ),
+    ),
+    "connectors.breaker.unavailable.degraded": EventSpec(
+        "warning", frozenset({"scope"})
+    ),
+    "connectors.catalog_row.invalid.skipped": EventSpec(
+        "warning", frozenset({"invalid_fields", "kind", "row_id", "table"})
+    ),
+    "connectors.composio_auth_provider.callback_account_mismatch": EventSpec(
+        "warning", frozenset()
+    ),
+    "connectors.composio_auth_provider.fetch_token_info_google_api.diagnostic": EventSpec(
+        "debug", frozenset({"status"})
+    ),
+    "connectors.composio_auth_provider.google_token_expiration_lookup.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "connectors.composio_auth_provider.set_token_expiration.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "connectors.connect_request_controller.install_chained.diagnostic": EventSpec(
+        "info", frozenset()
+    ),
+    "connectors.connect_request_controller.install_return.diagnostic": EventSpec(
+        "info", frozenset()
+    ),
+    "connectors.connect_request_controller.state.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "connectors.connector_operation_search.install_failed.diagnostic": EventSpec(
+        "debug", frozenset({"auth_config"})
+    ),
+    "connectors.connector_service.account_profile_operation.degraded": EventSpec(
+        "warning", frozenset({"connector_id", "operation_name"})
+    ),
+    "connectors.connector_service.auth_config_operation_discovery.failed": EventSpec(
+        "warning", frozenset({"auth_config_id", "error_type"})
+    ),
+    "connectors.connector_service.auth_config_updated": EventSpec(
+        "info",
+        frozenset(
+            {
+                "accounts_marked_for_reauth",
+                "auth_config_id",
+                "operations_discovered",
+                "operations_discovery_status",
+                "organization_id",
+            }
+        ),
+    ),
+    "connectors.connector_service.credential_refresh_rejected.degraded": EventSpec(
+        "warning", frozenset({"account_id", "connector_id", "error_type"})
+    ),
+    "connectors.connector_service.discovery_credentials.skipped": EventSpec(
+        "info", frozenset({"auth_config_id", "error_type"})
+    ),
+    "connectors.connector_service.exchange_connector_authorization_code.propagated": EventSpec(
+        "debug", frozenset({"error_type"})
+    ),
+    "connectors.connector_service.get_connector_authorization_url.propagated": EventSpec(
+        "warning", frozenset({"connector_id", "error_type"})
+    ),
+    "connectors.connector_service.revoke.failed": EventSpec("error", frozenset()),
+    "connectors.discovery.mcp_events.none_offered": EventSpec(
+        "info", frozenset({"code"})
+    ),
+    "connectors.github_app.installation_token_refused": EventSpec(
+        "warning", frozenset({"upstream_status"})
+    ),
+    "connectors.github_installation.choice_required.diagnostic": EventSpec(
+        "info", frozenset({"count"})
+    ),
+    "connectors.github_installation.claim_rejected.denied": EventSpec(
+        "warning", frozenset({"status_code"})
+    ),
+    "connectors.github_installation.lookup_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "connectors.github_installation.verify_failed.degraded": EventSpec(
+        "warning", frozenset({"status_code"})
+    ),
+    "connectors.github_presenter.fell_back_to_user_token": EventSpec(
+        "info", frozenset({"connector_id"})
+    ),
+    "connectors.github_reconciler.cache_unavailable.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "connectors.github_reconciler.installation_bound.diagnostic": EventSpec(
+        "info", frozenset({"account_id"})
+    ),
+    "connectors.github_reconciler.no_token.degraded": EventSpec(
+        "warning", frozenset({"account_id"})
+    ),
+    "connectors.install_provisioning.account_operation_discovery.degraded": EventSpec(
+        "warning", frozenset({"auth_config_id"})
+    ),
+    "connectors.install_update.renegotiating_mcp_authorization": EventSpec(
+        "info", frozenset({"replacing_registered_client"})
+    ),
+    "connectors.lemma_auth_provider.access_token_not_found_s.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "connectors.mcp_events.renew_budget_spent.degraded": EventSpec(
+        "warning", frozenset({"left_count", "renewed_count"})
+    ),
+    "connectors.mcp_events.renewed": EventSpec("info", frozenset({"renewed_count"})),
+    "connectors.mcp_events.target_unavailable": EventSpec(
+        "info", frozenset({"error_type", "subscription_id"})
+    ),
+    "connectors.mcp_events.unsubscribe.degraded": EventSpec(
+        "warning", frozenset({"code", "subscription_id"})
+    ),
+    "connectors.mcp_executor.calling_mcp_tool.observed": EventSpec(
+        "debug", frozenset({"connector_id", "tool_name"})
+    ),
+    "connectors.mcp_oauth.registered": EventSpec("info", frozenset({"issuer"})),
+    "connectors.mcp_oauth.registration_refused_unsafe_url": EventSpec(
+        "warning", frozenset({"issuer"})
+    ),
+    "connectors.mcp_oauth.registration_skipped": EventSpec(
+        "info", frozenset({"error_type"})
+    ),
+    "connectors.oauth_callback.followup_account_foreign.denied": EventSpec(
+        "warning", frozenset({"connector_id"})
+    ),
+    "connectors.oauth_callback.followup_identity_absent.denied": EventSpec(
+        "warning", frozenset({"connector_id"})
+    ),
+    "connectors.oauth_callback.followup_identity_mismatch.denied": EventSpec(
+        "warning", frozenset({"connector_id"})
+    ),
+    "connectors.oauth_callback.installation_recorded.diagnostic": EventSpec(
+        "info", frozenset({"connector_id"})
+    ),
+    "connectors.openapi_http_executor.calling_http_operation.observed": EventSpec(
+        "debug", frozenset({"connector_id", "http_method", "mode", "operation_name"})
+    ),
+    "connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic": EventSpec(
+        "debug", frozenset({"error_type"})
+    ),
+    "connectors.webhook_sources.mcp.heard.degraded": EventSpec(
+        "warning", frozenset({"subscription_id"})
+    ),
+    "contacts.forget.contact_forgotten.observed": EventSpec(
+        "info",
+        frozenset(
+            {
+                "contact_id",
+                "conversations",
+                "forgotten_by_user_id",
+                "notifications",
+                "pod_id",
+                "rows",
+                "senders",
+                "web_sessions",
+            }
+        ),
+    ),
+    "contacts.visitor_sessions.liveness_unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "crypto.keys.published_local_encryption_key.degraded": EventSpec(
+        "warning", frozenset({"environment"})
+    ),
+    "crypto.keys.unparsable_secret_encryption_keyset.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "crypto.rotation.column_reencrypted": EventSpec(
+        "debug", frozenset({"column", "migrated", "scanned"})
+    ),
+    "datastore.access.files_withheld": EventSpec(
+        "warning", frozenset({"actor_type", "total_candidates", "withheld_count"})
+    ),
+    "datastore.access.files_withheld.expected": EventSpec(
+        "info", frozenset({"actor_type", "total_candidates", "withheld_count"})
+    ),
+    "datastore.authorization.authorization_check_document_admin_user.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id", "user_id"})
+    ),
+    "datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id", "user_id"})
+    ),
+    "datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.config.setting_renamed": EventSpec(
+        "warning", frozenset({"new_name", "old_name"})
+    ),
+    "datastore.docling_processor.docling_pdf_page_count_probe.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.docling_processor.docling_poll_hiccup_s_retrying.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.file_processing_service.datastore_completion_persisted_s_file.observed": EventSpec(
+        "debug",
+        frozenset(
+            {
+                "count",
+                "extraction_seconds",
+                "file_id",
+                "indexing_seconds",
+                "page_count",
+                "projection_seconds",
+            }
+        ),
+    ),
+    "datastore.file_processing_service.datastore_persisted_s_file_s.observed": EventSpec(
+        "debug", frozenset({"file_id"})
+    ),
+    "datastore.file_processing_service.extraction_unavailable_claim_released.degraded": EventSpec(
+        "warning", frozenset({"facility", "file_id", "released"})
+    ),
+    "datastore.file_processing_service.file_s_d_bytes_exceeds.diagnostic": EventSpec(
+        "debug", frozenset({"file_id", "max_file_bytes", "size_bytes"})
+    ),
+    "datastore.file_processing_service.file_s_not_found_processing.diagnostic": EventSpec(
+        "debug", frozenset({"file_id"})
+    ),
+    "datastore.file_processing_service.removing_search_projection_s.diagnostic": EventSpec(
+        "debug", frozenset({"file_id"})
+    ),
+    "datastore.file_processing_service.search_processing_s.propagated": EventSpec(
+        "debug", frozenset({"file_id"})
+    ),
+    "datastore.file_recovery_service.dispatch_deferred_extractor_down.degraded": EventSpec(
+        "info", frozenset({"cooldown_seconds"})
+    ),
+    "datastore.file_recovery_service.dispatch_deferred_model_unavailable.degraded": EventSpec(
+        "info", frozenset({"cooldown_seconds"})
+    ),
+    "datastore.handlers.cleanup_deleted_datastore_paths_pod.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.handlers.datastore_file_recovery_terminally_d.degraded": EventSpec(
+        "warning", frozenset({"terminal_count"})
+    ),
+    "datastore.handlers.dispatched_pending_datastore_files.observed": EventSpec(
+        "debug", frozenset({"enqueued_count", "pod_count"})
+    ),
+    "datastore.handlers.finished_cleanup_deleted_datastore_paths.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.handlers.no_stale_datastore_files_re.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.handlers.pending_file_dispatch_cron.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "datastore.handlers.process_datastore_file_task_s.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.handlers.stuck_file_recovery_cron_s.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "datastore.indexing_availability.indexing_facility_absent.degraded": EventSpec(
+        "warning", frozenset({"facility", "pod_id"})
+    ),
+    "datastore.kreuzberg_helper.chunking_request_text_chunker_s.diagnostic": EventSpec(
+        "debug", frozenset({"chunker_type"})
+    ),
+    "datastore.kreuzberg_helper.kreuzberg_enhanced_extraction_s_retrying.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.kreuzberg_helper.kreuzberg_extract_connection_s_attempt.diagnostic": EventSpec(
+        "debug", frozenset({"max_attempts"})
+    ),
+    "datastore.kreuzberg_helper.pdfium_ocr_probe_defaulting_native.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.module.local_embedding_model_degraded.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "datastore.module.local_embedding_model_ready.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.module.preloading_local_embedding_model.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.orphan_schemas.drop.degraded": EventSpec(
+        "warning", frozenset({"schema_name"})
+    ),
+    "datastore.orphan_schemas.dropped": EventSpec("info", frozenset({"schema_name"})),
+    "datastore.orphan_schemas.reaped": EventSpec(
+        "info",
+        frozenset({"dropped_count", "failed_count", "retention_days", "scanned_count"}),
+    ),
+    "datastore.postgres_search_service.add_file_search_s.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.postgres_search_service.datastore_indexing_stages_file_s.observed": EventSpec(
+        "debug",
+        frozenset(
+            {
+                "count",
+                "embedding_seconds",
+                "file_id",
+                "persistence_seconds",
+                "schema_seconds",
+            }
+        ),
+    ),
+    "datastore.postgres_search_service.legacy_index_drop.degraded": EventSpec(
+        "warning", frozenset({"index_name", "schema_name"})
+    ),
+    "datastore.postgres_search_service.no_chunks_s.diagnostic": EventSpec(
+        "debug", frozenset({"file_id"})
+    ),
+    "datastore.postgres_search_service.vector_index_build.degraded": EventSpec(
+        "warning", frozenset({"schema_name"})
+    ),
+    "datastore.projection.delete_derived_child_artifacts_s.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.projection.delete_file_s_s.diagnostic": EventSpec("debug", frozenset()),
+    "datastore.projection.remove_indexed_chunks_s_s.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.public_rows.closed": EventSpec(
+        "info", frozenset({"pod_id", "table_id", "user_id"})
+    ),
+    "datastore.public_rows.opened": EventSpec(
+        "info", frozenset({"audience", "column_count", "pod_id", "table_id", "user_id"})
+    ),
+    "datastore.query_role.ensure.degraded": EventSpec("warning", frozenset({"role"})),
+    "datastore.query_role.grant.contended": EventSpec(
+        "debug", frozenset({"attempt", "schema_name"})
+    ),
+    "datastore.query_role.heal.degraded": EventSpec(
+        "warning", frozenset({"schema_name"})
+    ),
+    "datastore.query_role.schema_healed": EventSpec("info", frozenset({"schema_name"})),
+    "datastore.reader.load_child_manifest_s.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.record.bulk_delete.propagated": EventSpec("debug", frozenset()),
+    "datastore.record.bulk_update.propagated": EventSpec("debug", frozenset()),
+    "datastore.record.bulk_write.propagated": EventSpec("debug", frozenset()),
+    "datastore.record.create.propagated": EventSpec("debug", frozenset()),
+    "datastore.record.index.degraded": EventSpec(
+        "warning", frozenset({"schema_name", "table_name"})
+    ),
+    "datastore.record.list.propagated": EventSpec("debug", frozenset()),
+    "datastore.record.query.propagated": EventSpec("debug", frozenset()),
+    "datastore.record.query.rls_context_tampered.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "datastore.record.query_plan.propagated": EventSpec("debug", frozenset()),
+    "datastore.record.query_plan_left_the_pod_schema.degraded": EventSpec(
+        "warning", frozenset({"foreign_schema_count", "schema_name"})
+    ),
+    "datastore.reindex_queue.pod_admission_deferred_to_dispatcher.observed": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "datastore.renderer.load_cached_page_image_will.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.reranker.local_reranker_keeping_first_stage.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.reranker.openai_compat_reranker_keeping_first.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.reranker.openai_compat_reranking_requires_lemma.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.schema_manager.dropped_schema_pod.observed": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "datastore.search.readable_set_enumerated": EventSpec(
+        "warning", frozenset({"candidates", "pod_id", "post_filtered", "requested"})
+    ),
+    "datastore.signed_url.cache_population_failed.observed": EventSpec(
+        "warning", frozenset({"error_type", "pod_id"})
+    ),
+    "datastore.signed_url.purged_expired_link_rows.observed": EventSpec(
+        "info", frozenset({"count"})
+    ),
+    "datastore.signed_url.rehydrated_link_from_record.observed": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "datastore.signed_url.revocation_cache_invalidation_failed.observed": EventSpec(
+        "warning", frozenset({"error_type", "pod_id"})
+    ),
+    "datastore.storage.copying_datastore_prefix_s.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.storage.deleting_datastore_file_s.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.storage.deleting_datastore_prefix_s.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.storage_phase.carrying_child_artifacts_s.diagnostic": EventSpec(
+        "debug", frozenset({"file_id"})
+    ),
+    "datastore.storage_phase.deleted_file_search_purge.failed": EventSpec(
+        "error", frozenset({"file_count"})
+    ),
+    "datastore.storage_phase.rolling_back_staged_move_s.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "datastore.storage_phase.search_index_purge_unsearchable.degraded": EventSpec(
+        "warning", frozenset({"file_id"})
+    ),
+    "datastore.storage_phase.staged_object_delete.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "datastore.storage_phase.uncommitted_object_delete.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "datastore.table_service.metadata_undo_failed.degraded": EventSpec(
+        "warning", frozenset({"change", "pod_id", "table_name"})
+    ),
+    "datastore.table_service.table_undo_failed.degraded": EventSpec(
+        "warning", frozenset({"pod_id", "table_name"})
+    ),
+    "datastore.transaction_writer.delete_user_markdown_s_s.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "db.session.pool_utilization_probe_failed": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "decisions.decision_service.decided.observed": EventSpec(
+        "info",
+        frozenset(
+            {
+                "duration_ms",
+                "input_tokens",
+                "model",
+                "priority",
+                "provider",
+                "questions",
+                "source_type",
+                "unsure",
+            }
+        ),
+    ),
+    "decisions.decision_service.provider_answer_invalid.degraded": EventSpec(
+        "error", frozenset({"problems", "provider"})
+    ),
+    "decisions.rate_limit.unavailable.degraded": EventSpec("warning", frozenset()),
+    "decisions.registry.typesafe_unconfigured.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "decisions.typesafe_provider.answer_unreadable.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "decisions.typesafe_provider.key_refused.degraded": EventSpec(
+        "error", frozenset({"status_code"})
+    ),
+    "decisions.typesafe_provider.refused.degraded": EventSpec(
+        "warning", frozenset({"status_code"})
+    ),
+    "decisions.typesafe_provider.unreachable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "dependency.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {"dependency", "error_type", "failure_count", "incident_duration_ms"}
+        ),
+    ),
+    "dependency.recovered": EventSpec(
+        "info", frozenset({"dependency", "failure_count", "incident_duration_ms"})
+    ),
+    "email.send.failed": EventSpec("error", frozenset()),
+    "embeddings.local_embedder.backend_import_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "embeddings.local_embedder.model_load_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type", "model_name"})
+    ),
+    "embeddings.provider.retrying.degraded": EventSpec(
+        "warning", frozenset({"attempt", "delay_seconds", "error_type", "max_attempts"})
+    ),
+    "events.consumer.handler_timed_out.failed": EventSpec(
+        "error", frozenset({"message_id", "original_stream", "timeout_seconds"})
+    ),
+    "events.consumer.stray_cancellation.failed": EventSpec(
+        "error", frozenset({"message_id", "original_stream"})
+    ),
+    "events.quarantine.counter_unavailable": EventSpec("debug", frozenset()),
+    "events.quarantine.dead_letter_write_failed": EventSpec(
+        "error", frozenset({"error_type", "message_id", "original_stream"})
+    ),
+    "events.quarantine.message_dead_lettered": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "consumer_groups",
+                "dead_letter_stream",
+                "error_message",
+                "error_type",
+                "message_id",
+                "original_stream",
+            }
+        ),
+    ),
+    "function.contact_access.changed.observed": EventSpec(
+        "info", frozenset({"contacts_invoke", "function_id", "pod_id", "user_id"})
+    ),
+    "function.contact_calls.unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "function.contact_functions.daily_limit_reached.observed": EventSpec(
+        "info", frozenset({"actor", "function_name"})
+    ),
+    "function.contact_functions.deadline_passed.observed": EventSpec(
+        "info", frozenset({"actor", "run_id"})
+    ),
+    "function.contact_functions.run_started.observed": EventSpec(
+        "info", frozenset({"actor", "function_name", "pod_id", "run_id"})
+    ),
+    "function.dispatcher.runtime_cancellation.failed": EventSpec(
+        "warning", frozenset({"run_id"})
+    ),
+    "function.function_dispatcher.execution_failed": EventSpec(
+        "warning", frozenset({"error", "error_type", "run_id"})
+    ),
+    "function.function_revision_retention.revisions_pruned": EventSpec(
+        "info", frozenset({"function_id", "pruned_count"})
+    ),
+    "function.function_revision_service.revision_promoted": EventSpec(
+        "info",
+        frozenset({"function_id", "pod_id", "revision_number", "schema_changed"}),
+    ),
+    "function.function_runtime_gateway.artifact_generation_recovered": EventSpec(
+        "info", frozenset({"candidate_count", "function_id", "revision_hash"})
+    ),
+    "function.handlers.cron.failed": EventSpec("error", frozenset({"task_name"})),
+    "function.handlers.function_run_job.propagated": EventSpec(
+        "debug", frozenset({"run_id"})
+    ),
+    "function.handlers.prune_function_runs.observed": EventSpec(
+        "debug", frozenset({"deleted_count"})
+    ),
+    "function.handlers.run_reconcile_enqueue_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type", "run_id"})
+    ),
+    "function.handlers.sweep_function_revisions.observed": EventSpec(
+        "info",
+        frozenset(
+            {"examined", "failed", "pruned_functions", "pruned_revisions", "truncated"}
+        ),
+    ),
+    "function.handlers.sweep_function_revisions.skipped": EventSpec(
+        "warning", frozenset({"function_id"})
+    ),
+    "function.preflight.underivable_input_schema": EventSpec(
+        "warning", frozenset({"function_id"})
+    ),
+    "function.runtime.endpoint_acquired": EventSpec(
+        "info", frozenset({"cold", "elapsed_ms", "mode", "pod_id"})
+    ),
+    "function.runtime.quarantine_failed": EventSpec("warning", frozenset({"pod_id"})),
+    "function.runtime.reresolved_after_refused_connection": EventSpec(
+        "info", frozenset({"pod_id", "run_id"})
+    ),
+    "function.runtime.sandbox_quarantined": EventSpec("info", frozenset({"pod_id"})),
+    "function.session_token.shorter_than_window": EventSpec(
+        "warning", frozenset({"expires_at", "function_id", "pod_id", "required_until"})
+    ),
+    "function.use_cases.legacy_revision_backfilled": EventSpec(
+        "info", frozenset({"function_id", "pod_id", "revision_hash"})
+    ),
+    "function.use_cases.revision_retention.degraded": EventSpec(
+        "warning", frozenset({"function_id"})
+    ),
+    "function.use_cases.run_enqueue_deferred.degraded": EventSpec(
+        "warning", frozenset({"error_type", "run_id"})
+    ),
+    "http.request.completed": EventSpec(
+        "debug", frozenset({"duration_ms", "method", "route", "status_code"})
+    ),
+    "http.request.failed": EventSpec(
+        "error",
+        frozenset(
+            {
+                "duration_ms",
+                "error_code",
+                "error_type",
+                "method",
+                "path",
+                "route",
+                "status_code",
+            }
+        ),
+    ),
+    "http.request.local_completed": EventSpec(
+        "info", frozenset({"duration_ms", "method", "route", "status_code"})
+    ),
+    "http.request.rate_limited": EventSpec(
+        "warning", frozenset({"duration_ms", "method", "route", "status_code"})
+    ),
+    "http.request.slow": EventSpec(
+        "warning",
+        frozenset(
+            {"duration_ms", "latency_kind", "method", "path", "route", "status_code"}
+        ),
+    ),
+    "icon.icon_service.delete_icon_asset.diagnostic": EventSpec("debug", frozenset()),
+    "icon.icon_service.ignoring_malformed_managed_icon_url.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "identity.auth_abuse.counter_clear_failed": EventSpec("warning", frozenset()),
+    "identity.auth_abuse.rate_limit_unavailable": EventSpec("error", frozenset()),
+    "identity.email.not_sent": EventSpec("warning", frozenset({"kind", "reason"})),
+    "identity.email_delivery.test_failed": EventSpec("warning", frozenset()),
+    "identity.email_delivery.test_sent": EventSpec("info", frozenset()),
+    "identity.email_login.abandon_ignored": EventSpec("info", frozenset()),
+    "identity.email_login.continue_resolved": EventSpec("info", frozenset({"method"})),
+    "identity.email_verification.invalid_local_user_id": EventSpec(
+        "warning", frozenset()
+    ),
+    "identity.email_verification.local_user_missing": EventSpec("warning", frozenset()),
+    "identity.first_workspace.invitation_accepted": EventSpec(
+        "info", frozenset({"invitation_id", "user_id"})
+    ),
+    "identity.first_workspace.invitation_skipped": EventSpec(
+        "warning", frozenset({"error_type", "invitation_id"})
+    ),
+    "identity.jwks_guard.install_failed.degraded": EventSpec("warning", frozenset()),
+    "identity.jwks_guard.unknown_kid_cache_full.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "identity.mobile_verification.whatsapp.feedback_send_failed": EventSpec(
+        "warning", frozenset({"error_type", "outcome"})
+    ),
+    "identity.mobile_verification.whatsapp.ineligible_user": EventSpec(
+        "info", frozenset()
+    ),
+    "identity.mobile_verification.whatsapp.invalid_sender": EventSpec(
+        "info", frozenset()
+    ),
+    "identity.mobile_verification.whatsapp.number_lookup_failed": EventSpec(
+        "info", frozenset()
+    ),
+    "identity.mobile_verification.whatsapp.owner_conflict": EventSpec(
+        "info", frozenset()
+    ),
+    "identity.mobile_verification.whatsapp.rejected": EventSpec(
+        "info", frozenset({"reason"})
+    ),
+    "identity.mobile_verification.whatsapp.started": EventSpec(
+        "info", frozenset({"user_id"})
+    ),
+    "identity.mobile_verification.whatsapp.succeeded": EventSpec(
+        "info", frozenset({"user_id"})
+    ),
+    "identity.querier_client.install_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "identity.session.access_token_expiry_implausible.degraded": EventSpec(
+        "warning", frozenset({"expired_by_seconds"})
+    ),
+    "identity.session.access_token_stale.observed": EventSpec(
+        "debug", frozenset({"expired_by_seconds"})
+    ),
+    "identity.signup.admitted": EventSpec("info", frozenset({"admission"})),
+    "identity.signup.refused": EventSpec("info", frozenset({"code", "signup_mode"})),
+    "infrastructure.admin.outbox_event_replay_requested.observed": EventSpec(
+        "debug", frozenset({"event_id"})
+    ),
+    "infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic": EventSpec(
+        "debug", frozenset({"error_type"})
+    ),
+    "infrastructure.consumer_groups.initial_ensure.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "infrastructure.consumer_groups.reconcile.failed": EventSpec("error", frozenset()),
+    "infrastructure.inbox.delivery_held_for_reclaim.observed": EventSpec(
+        "debug", frozenset({"consumer", "event_id", "event_type"})
+    ),
+    "infrastructure.inbox.event_delivery_dead_lettered.failed": EventSpec(
+        "error",
+        frozenset({"attempt", "consumer", "error_type", "event_id", "event_type"}),
+    ),
+    "infrastructure.inbox.terminal_event_validation.degraded": EventSpec(
+        "warning", frozenset({"consumer", "event_id", "event_type"})
+    ),
+    "infrastructure.job_liveness.publish_failed.degraded": EventSpec(
+        "warning", frozenset({"job_id"})
+    ),
+    "infrastructure.job_liveness.read_failed.degraded": EventSpec(
+        "warning", frozenset({"job_id"})
+    ),
+    "infrastructure.message_bus.cancelled_broker_stop.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "infrastructure.message_bus.partial_broker_stop.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "infrastructure.message_bus.timed_out_closing_faststream_redis.timeout": EventSpec(
+        "warning", frozenset()
+    ),
+    "infrastructure.outbox.paused_for_redis_memory.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "infrastructure.outbox.resumed_after_redis_memory_pressure": EventSpec(
+        "info", frozenset({"paused_seconds"})
+    ),
+    "infrastructure.outbox_wake.listener_connected.observed": EventSpec(
+        "debug", frozenset({"label"})
+    ),
+    "infrastructure.publisher.staged_event_transactional_outbox.observed": EventSpec(
+        "debug", frozenset({"event_id", "event_type"})
+    ),
+    "infrastructure.redis_client.close_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "infrastructure.stream_subscriber.consumer_group_ensure.failed": EventSpec(
+        "error", frozenset({"error_type", "group_count", "groups"})
+    ),
+    "infrastructure.stream_subscriber.created_consumer_groups.observed": EventSpec(
+        "debug", frozenset({"group_count", "groups"})
+    ),
+    "infrastructure.stream_subscriber.recreated_missing_consumer_groups.degraded": EventSpec(
+        "warning", frozenset({"group_count", "groups"})
+    ),
+    "infrastructure.streaq_job_queue.clients_lost.failed": EventSpec(
+        "error", frozenset()
+    ),
+    "infrastructure.streaq_job_queue.ignoring_streaq_queue_shutdown_context.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "infrastructure.streaq_job_queue.job_context_read_failed.degraded": EventSpec(
+        "warning", frozenset({"job_id"})
+    ),
+    "infrastructure.streaq_runtime.background_task_shutdown.degraded": EventSpec(
+        "warning", frozenset({"task"})
+    ),
+    "infrastructure.streaq_runtime.lane_shutdown_timed_out.degraded": EventSpec(
+        "warning", frozenset({"lanes", "timeout_seconds"})
+    ),
+    "infrastructure.streaq_runtime.pending_task_dump.diagnostic": EventSpec(
+        "warning", frozenset({"frames", "task_name"})
+    ),
+    "infrastructure.streaq_runtime.worker_shutdown_step.diagnostic": EventSpec(
+        "debug", frozenset({"step"})
+    ),
+    "infrastructure.streaq_runtime.worker_shutdown_step_failed.degraded": EventSpec(
+        "warning", frozenset({"step"})
+    ),
+    "infrastructure.streaq_runtime.worker_shutdown_step_timed_out.degraded": EventSpec(
+        "warning", frozenset({"step", "timeout_seconds"})
+    ),
+    "infrastructure.tasks.pruned_durable_event_delivery_records.observed": EventSpec(
+        "debug", frozenset({"deleted_count"})
+    ),
+    "infrastructure.uow.staged_domain_events_transactional_outbox.observed": EventSpec(
+        "debug", frozenset({"event_count"})
+    ),
+    "mcp_access.client.registered": EventSpec(
+        "info", frozenset({"client_id", "client_name"})
+    ),
+    "mcp_access.client_assertion.replayed": EventSpec("warning", frozenset()),
+    "mcp_access.client_document.no_safe_redirect": EventSpec(
+        "warning", frozenset({"client_id"})
+    ),
+    "mcp_access.client_document.unusable": EventSpec(
+        "warning", frozenset({"client_id"})
+    ),
+    "mcp_access.consent.denied": EventSpec("info", frozenset({"client_id", "pod_id"})),
+    "mcp_access.event_delivery.attempted": EventSpec(
+        "info", frozenset({"outcome", "subscription_id"})
+    ),
+    "mcp_access.event_delivery.rate_limited.degraded": EventSpec(
+        "warning", frozenset({"subscription_id"})
+    ),
+    "mcp_access.grant.created": EventSpec(
+        "info", frozenset({"client_id", "grant_id", "pod_id", "scopes"})
+    ),
+    "mcp_access.grant.revoked": EventSpec(
+        "info", frozenset({"by_admin", "by_user_id", "grant_id", "pod_id"})
+    ),
+    "mcp_access.grant.revoked_by_client": EventSpec(
+        "info", frozenset({"client_id", "grant_id"})
+    ),
+    "mcp_access.grants.ended_with_pod": EventSpec(
+        "info", frozenset({"count", "pod_id"})
+    ),
+    "mcp_access.rate_limit.unavailable.degraded": EventSpec("warning", frozenset()),
+    "mcp_access.refresh_token.replayed": EventSpec(
+        "warning", frozenset({"client_id", "grant_id"})
+    ),
+    "mcp_access.refresh_token.retried": EventSpec(
+        "info", frozenset({"client_id", "grant_id"})
+    ),
+    "mcp_access.subscriptions.fan_out_saturated.degraded": EventSpec(
+        "warning", frozenset({"limit", "pod_id"})
+    ),
+    "mcp_access.tasks.sweep_event_subscriptions.observed": EventSpec(
+        "info", frozenset({"removed"})
+    ),
+    "mcp_access.tasks.sweep_grants.observed": EventSpec("info", frozenset({"ended"})),
+    "net.impersonating_client.fetch_completed.observed": EventSpec(
+        "debug", frozenset({"bytes", "status_code"})
+    ),
+    "observability.telemetry.setup_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "observability.telemetry.shutdown_step_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type", "step"})
+    ),
+    "observability.worker_liveness.publish_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "observability.worker_liveness.read_failed.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "observability.worker_liveness.read_timed_out.degraded": EventSpec(
+        "warning", frozenset({"timeout_seconds"})
+    ),
+    "pod.member_event.creation_failed": EventSpec("debug", frozenset()),
+    "pod.pod_handlers.no_pod_admins_notify_pod.observed": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "pod.pod_handlers.pod_not_found_skipping_notification.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "pod.pod_handlers.requester_not_found_skipping_notification.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "pod.pod_member_service.could_not_find_user_details.diagnostic": EventSpec(
+        "debug", frozenset({"organization_member_id"})
+    ),
+    "pod.pod_member_service.fetch_user_info_event_emission.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "pod_bundle.applier.file_metadata_unreadable.degraded": EventSpec(
+        "warning", frozenset({"metadata_file"})
+    ),
+    "pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic": EventSpec(
+        "debug", frozenset({"raw_type"})
+    ),
+    "pod_bundle.applier.skipping_grant_without_resource_name.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "pod_bundle.exporter.skipping_file_export_pod_s.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "pod_bundle.exporter.skipping_grant_export_s_s.diagnostic": EventSpec(
+        "debug", frozenset({"grantee_id", "grantee_type"})
+    ),
+    "pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id"})
+    ),
+    "pod_bundle.handlers.clean_staging_cancelled_import.diagnostic": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic": EventSpec(
+        "debug", frozenset({"pod_id", "user_id"})
+    ),
+    "pod_bundle.handlers.delete_staged_import_s_s.diagnostic": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.github_import_s_retryable_s.propagated": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.github_import_s_terminal_s.degraded": EventSpec(
+        "warning", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.import_s_step_s_s.diagnostic": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.persist_state_export_s_s.diagnostic": EventSpec(
+        "debug", frozenset({"export_id"})
+    ),
+    "pod_bundle.handlers.persist_state_import_s_s.diagnostic": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.pod_bundle_apply_s_retryable.propagated": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.pod_bundle_apply_s_terminal.degraded": EventSpec(
+        "warning", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.pod_bundle_export_s_retryable.propagated": EventSpec(
+        "debug", frozenset({"export_id"})
+    ),
+    "pod_bundle.handlers.pod_bundle_export_s_terminal.degraded": EventSpec(
+        "warning", frozenset({"export_id"})
+    ),
+    "pod_bundle.handlers.pod_bundle_plan_s_retryable.propagated": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.pod_bundle_plan_s_terminal.degraded": EventSpec(
+        "warning", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.url_import_s_retryable_s.propagated": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.handlers.url_import_s_terminal_s.degraded": EventSpec(
+        "warning", frozenset({"import_id"})
+    ),
+    "pod_bundle.import_use_cases.clean_staging_idle_cancelled_import.diagnostic": EventSpec(
+        "debug", frozenset({"import_id"})
+    ),
+    "pod_bundle.plan_builder.surface_snapshot_unavailable.degraded": EventSpec(
+        "warning", frozenset({"pod_id"})
+    ),
+    "pod_bundle.publish_lock.release.diagnostic": EventSpec(
+        "debug", frozenset({"account_id", "repo_name"})
+    ),
+    "pod_bundle.publish_task.pod_publish_s_retryable_s.propagated": EventSpec(
+        "debug", frozenset({"publish_id"})
+    ),
+    "pod_bundle.publish_task.pod_publish_s_terminal_s.degraded": EventSpec(
+        "warning", frozenset({"publish_id"})
+    ),
+    "pod_bundle.publish_task.publish_failure_report.failed": EventSpec(
+        "error", frozenset({"publish_id"})
+    ),
+    "pod_bundle.rate_limiter.bundle_rate_limit_counter_unavailable.degraded": EventSpec(
+        "warning", frozenset({"operation", "user_id"})
+    ),
+    "pod_bundle.realtime.publishing_pod_bundle_realtime_event.diagnostic": EventSpec(
+        "debug", frozenset({"job_id"})
+    ),
+    "pod_bundle.state_store.inspect_legacy_pod_bundle_cache.diagnostic": EventSpec(
+        "debug", frozenset({"job_id", "job_kind"})
+    ),
+    "pod_bundle.state_store.mirror_recovered_pod_bundle_job.diagnostic": EventSpec(
+        "debug", frozenset({"job_id", "job_kind"})
+    ),
+    "pod_bundle.state_store.refresh_pod_bundle_state_cache.diagnostic": EventSpec(
+        "debug", frozenset({"job_id", "job_kind", "status"})
+    ),
+    "pod_bundle.sweep.archive_delete_failed.degraded": EventSpec(
+        "warning", frozenset({"job_id", "job_kind"})
+    ),
+    "pod_bundle.sweep.archive_listing_unavailable.degraded": EventSpec(
+        "warning", frozenset({"job_kind"})
+    ),
+    "pod_bundle.sweep.swept": EventSpec(
+        "debug", frozenset({"purged", "reclaimed", "recovered"})
+    ),
+    "pubsub.message.binary_parse_failed": EventSpec("debug", frozenset()),
+    "pubsub.message.dropped": EventSpec("warning", frozenset()),
+    "redis.memory.critical": EventSpec(
+        "error", frozenset({"max_bytes", "ratio", "used_bytes"})
+    ),
+    "redis.memory.pressure.degraded": EventSpec(
+        "warning", frozenset({"max_bytes", "ratio", "used_bytes"})
+    ),
+    "redis.stream.abandoned_consumer_group.degraded": EventSpec(
+        "warning",
+        frozenset({"destroyed", "group", "last_delivered_age_seconds", "stream_name"}),
+    ),
+    "redis.stream.abandoned_consumer_group_destroy.degraded": EventSpec(
+        "warning", frozenset({"group", "stream_name"})
+    ),
+    "redis.stream.abandoned_consumer_group_revived.degraded": EventSpec(
+        "warning", frozenset({"group", "reason", "stream_name"})
+    ),
+    "redis.stream.abandoned_consumer_groups_detected.observed": EventSpec(
+        "info", frozenset({"destroyed", "group_count"})
+    ),
+    "redis.stream.budget_trimmed.observed": EventSpec(
+        "info", frozenset({"reclaimed_bytes", "streams"})
+    ),
+    "redis.stream.gap_record.failed": EventSpec(
+        "error", frozenset({"after_ms", "group", "stream_name", "until_ms"})
+    ),
+    "redis.stream.gap_replayed": EventSpec(
+        "info", frozenset({"after_ms", "group", "stream_name", "until_ms"})
+    ),
+    "redis.stream.gap_unreadable.degraded": EventSpec(
+        "warning", frozenset({"gap_key"})
+    ),
+    "redis.stream.gap_unrecoverable": EventSpec(
+        "error", frozenset({"after_ms", "group", "stream_name", "until_ms"})
+    ),
+    "redis.stream.group_claim.degraded": EventSpec(
+        "warning", frozenset({"group_count"})
+    ),
+    "redis.stream.group_claim_read.degraded": EventSpec("warning", frozenset()),
+    "redis.stream.group_stalled": EventSpec(
+        "error", frozenset({"group", "stall_seconds", "stream_name"})
+    ),
+    "redis.stream.over_budget.degraded": EventSpec(
+        "warning", frozenset({"budget_bytes", "memory_bytes", "reason", "stream_name"})
+    ),
+    "redis.stream.over_budget.failed": EventSpec(
+        "error", frozenset({"budget_bytes", "memory_bytes"})
+    ),
+    "redis.stream.retired": EventSpec("info", frozenset({"streams"})),
+    "redis.stream.snapshot": EventSpec(
+        "info",
+        frozenset(
+            {
+                "active_consumers",
+                "caught_up",
+                "consumers",
+                "delayed",
+                "group",
+                "last_delivered_age_seconds",
+                "length",
+                "maxlen",
+                "memory_bytes",
+                "oldest_pending_ms",
+                "pending",
+                "reported_lag",
+                "stream_name",
+            }
+        ),
+    ),
+    "redis.stream.snapshot_cycle": EventSpec(
+        "info", frozenset({"reported", "streams"})
+    ),
+    "redis.stream.trim_degraded.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "group",
+                "group_declared",
+                "hard_maxlen",
+                "maxlen",
+                "reason",
+                "stream_name",
+                "suppressed_since_last",
+            }
+        ),
+    ),
+    "redis.stream.unread_trimmed": EventSpec(
+        "error", frozenset({"after_ms", "group", "stream_name", "until_ms"})
+    ),
+    "release.identity.malformed": EventSpec(
+        "warning", frozenset({"deployment_environment"})
+    ),
+    "release.identity.missing": EventSpec(
+        "warning", frozenset({"deployment_environment"})
+    ),
+    "runtime.connection_scope.armed": EventSpec(
+        "info", frozenset({"service", "threshold_ms"})
+    ),
+    "runtime.connection_scope.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "gap_ms",
+                "held_ms",
+                "in_transaction",
+                "querying_ms",
+                "stack_frames",
+                "statements",
+                "threshold_ms",
+            }
+        ),
+    ),
+    "runtime.connectors.composio_trigger_creation.diagnostic": EventSpec(
+        "debug", frozenset({"error_type"})
+    ),
+    "runtime.connectors.composio_trigger_deletion.diagnostic": EventSpec(
+        "debug", frozenset({"error_type"})
+    ),
+    "runtime.heartbeat.write_failed": EventSpec(
+        "debug", frozenset({"error_type", "service"})
+    ),
+    "runtime.lifecycle_task.shutdown_failed.degraded": EventSpec(
+        "warning", frozenset({"task"})
+    ),
+    "runtime.loop_lag.degraded": EventSpec(
+        "warning",
+        frozenset({"breach_count", "lag_ms", "service", "threshold_ms", "unhealthy"}),
+    ),
+    "runtime.loop_lag.recovered": EventSpec(
+        "info",
+        frozenset({"breach_count", "degraded_duration_ms", "max_lag_ms", "service"}),
+    ),
+    "runtime.loop_stall.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "other_thread_frames",
+                "service",
+                "stack_frames",
+                "stalled_ms",
+                "threshold_ms",
+            }
+        ),
+    ),
+    "runtime.memory.allocator": EventSpec("info", frozenset({"allocator", "service"})),
+    "runtime.memory.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "baseline_mib",
+                "bounded_collections",
+                "compiled_caches",
+                "growth_mib",
+                "parked_mcp_tasks",
+                "rss_mib",
+                "service",
+                "stack_frames",
+                "threshold_mib",
+                "total_tasks",
+            }
+        ),
+    ),
+    "runtime.memory.dump": EventSpec("info", frozenset({"service", "snapshot"})),
+    "runtime.memory.recovered": EventSpec(
+        "info", frozenset({"degraded_duration_ms", "peak_rss_mib", "service"})
+    ),
+    "runtime.memory.snapshot": EventSpec(
+        "info",
+        frozenset({"bounded_collections", "compiled_caches", "rss_mib", "service"}),
+    ),
+    "runtime.memory.unavailable.diagnostic": EventSpec("debug", frozenset({"service"})),
+    "sandbox_health.probe.docker_socket_missing.failed": EventSpec(
+        "error", frozenset({"provider", "socket_path"})
+    ),
+    "sandbox_health.probe.provider_unavailable.failed": EventSpec(
+        "error", frozenset({"provider"})
+    ),
+    "schedule.agent_outcome.recorded": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "schedule.breaker.tripped": EventSpec(
+        "warning", frozenset({"consecutive_failures", "schedule_id"})
+    ),
+    "schedule.breakers.reconcile_skipped": EventSpec("warning", frozenset()),
+    "schedule.breakers.reconciled": EventSpec(
+        "warning", frozenset({"deactivated_count"})
+    ),
+    "schedule.cleanup.primary_failed": EventSpec("debug", frozenset({"pod_id"})),
+    "schedule.datastore_consumer.fired_s_datastore_schedules.observed": EventSpec(
+        "debug", frozenset({"count"})
+    ),
+    "schedule.datastore_consumer.unroutable_pod_id.degraded": EventSpec(
+        "warning", frozenset({"event_type"})
+    ),
+    "schedule.datastore_event_handler.active_schedule_lookup.degraded": EventSpec(
+        "warning", frozenset({"pod_id"})
+    ),
+    "schedule.datastore_event_handler.datastore_event_s_s_record.diagnostic": EventSpec(
+        "debug", frozenset({"count", "pod_id", "record_id"})
+    ),
+    "schedule.datastore_event_handler.fire_datastore_schedule_s_s.propagated": EventSpec(
+        "debug", frozenset({"record_id"})
+    ),
+    "schedule.datastore_event_handler.truncated_payload.degraded": EventSpec(
+        "warning", frozenset({"record_id", "schedule_id", "table_name"})
+    ),
+    "schedule.datastore_event_handler.unparsable_config.diagnostic": EventSpec(
+        "debug", frozenset({"schedule_id"})
+    ),
+    "schedule.decision_filter.fields_not_asked.observed": EventSpec(
+        "info", frozenset({"fields", "schedule_id"})
+    ),
+    "schedule.due_claimer.claimed.observed": EventSpec(
+        "debug", frozenset({"claimed_count"})
+    ),
+    "schedule.due_claimer.cursors_backfilled": EventSpec(
+        "info", frozenset({"retired_count", "scheduled_count"})
+    ),
+    "schedule.event.staged": EventSpec(
+        "debug", frozenset({"schedule_id", "source_event_id"})
+    ),
+    "schedule.filter.dead_lettered.degraded": EventSpec(
+        "warning", frozenset({"counted", "error_type", "pod_id", "schedule_id"})
+    ),
+    "schedule.fire.latency_ms": EventSpec(
+        "debug", frozenset({"latency_ms", "schedule_id"})
+    ),
+    "schedule.fire_telemetry.failed": EventSpec("debug", frozenset({"schedule_id"})),
+    "schedule.poller.started": EventSpec("info", frozenset({"interval_ms", "service"})),
+    "schedule.poller.stopped": EventSpec("info", frozenset({"service"})),
+    "schedule.poller.tick_failed.degraded": EventSpec("warning", frozenset()),
+    "schedule.repository.config_match_saturated.degraded": EventSpec(
+        "warning", frozenset({"limit", "schedule_type"})
+    ),
+    "schedule.runs.pruned": EventSpec("info", frozenset({"deleted_count"})),
+    "schedule.runs.recovered": EventSpec(
+        "warning",
+        frozenset({"dead_lettered", "reconciled", "redelivered", "still_running"}),
+    ),
+    "schedule.schedule_consumer.filter_skipped.diagnostic": EventSpec(
+        "debug", frozenset({"found", "judged", "schedule_id"})
+    ),
+    "schedule.schedule_event_publisher.staged_schedule_event_schedule_s.observed": EventSpec(
+        "debug", frozenset({"source_event_id"})
+    ),
+    "schedule.schedule_notification_consumer.scheduledeactivated_s_has_no_notification.diagnostic": EventSpec(
+        "debug", frozenset({"schedule_id"})
+    ),
+    "schedule.schedule_processor.s_filtered_out_llm.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "schedule.schedule_service.create_external_schedule_s.propagated": EventSpec(
+        "debug", frozenset()
+    ),
+    "schedule.schedule_service.delete_external_schedule_s.propagated": EventSpec(
+        "debug", frozenset({"schedule_id"})
+    ),
+    "schedule.target_outcome.unmapped": EventSpec(
+        "error", frozenset({"target_kind", "target_status"})
+    ),
+    "schedule.time_job.removed": EventSpec("debug", frozenset({"schedule_id"})),
+    "schedule.trigger_resubscription.drop.degraded": EventSpec(
+        "warning", frozenset({"schedule_id"})
+    ),
+    "schedule.webhook_controller.rejecting_oversized_delivery.degraded": EventSpec(
+        "warning", frozenset({"size", "source"})
+    ),
+    "schedule.webhook_controller.rejecting_unknown_webhook_source_s.degraded": EventSpec(
+        "warning", frozenset({"source"})
+    ),
+    "schedule.webhook_controller.source_verifier_raised.degraded": EventSpec(
+        "warning", frozenset({"source"})
+    ),
+    "schedule.webhook_controller.verified_whatsapp_webhook.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "schedule.webhook_handler.quarantined_webhook_without_stable_provider.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "schedule.webhook_handler.s_has_filter_instruction_offloading.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "schedule.webhook_schedule_matcher.composio_webhook_missing_provider_id.diagnostic": EventSpec(
+        "debug", frozenset()
+    ),
+    "schedule.webhook_sources.github.delivery_without_installation.degraded": EventSpec(
+        "warning", frozenset({"github_event"})
+    ),
+    "schedule.webhook_sources.github.installation_retired.degraded": EventSpec(
+        "warning", frozenset({"accounts", "action", "schedules"})
+    ),
+    "schedule.webhook_sources.github.no_webhook_secret_configured.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "schedule.workflow_outcome.recorded": EventSpec("debug", frozenset({"run_id"})),
+    "security.auth_dependency.unexpected_failure.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "service.started": EventSpec(
+        "info", frozenset({"gc_frozen_objects", "startup_ms"})
+    ),
+    "service.startup.slow_step.degraded": EventSpec(
+        "warning", frozenset({"budget_ms", "duration_ms", "service", "step"})
+    ),
+    "service.startup.step": EventSpec(
+        "info", frozenset({"duration_ms", "ok", "service", "step"})
+    ),
+    "service.stopped": EventSpec("info", frozenset()),
+    "surface.cleanup.failed": EventSpec(
+        "error", frozenset({"failure_count", "pod_id"})
+    ),
+    "surface.cleanup.surface_failed.degraded": EventSpec(
+        "warning", frozenset({"pod_id", "surface_id"})
+    ),
+    "surface.slack.parse_channel_setup_failed": EventSpec("debug", frozenset()),
+    "surface.slack.parse_failed": EventSpec("debug", frozenset()),
+    "surface.slack.parse_lifecycle_failed": EventSpec("debug", frozenset()),
+    "surface.teams.authentication_failed": EventSpec(
+        "error", frozenset({"app_id", "error_code", "status", "tenant_id"})
+    ),
+    "surface.tool.failed": EventSpec("debug", frozenset({"tool"})),
+    "surface.whatsapp.media_type_rejected.degraded": EventSpec(
+        "warning", frozenset({"mime_type", "send_type", "status_code"})
+    ),
+    "surface.whatsapp.media_upload_rejected.degraded": EventSpec(
+        "warning", frozenset({"mime_type", "status_code"})
+    ),
+    "usage.contacts_cap.changed.observed": EventSpec(
+        "info",
+        frozenset(
+            {
+                "changed_by_user_id",
+                "monthly_limit_usd",
+                "organization_id",
+                "previous_limit_usd",
+                "previous_was_default",
+            }
+        ),
+    ),
+    "usage.limit_overrides.not_a_list": EventSpec("warning", frozenset({"detail"})),
+    "usage.limit_overrides.unparseable": EventSpec("warning", frozenset({"detail"})),
+    "usage.pricing.invalid_system_model_usage_metadata.failed": EventSpec(
+        "error", frozenset({"error_type"})
+    ),
+    "usage.pricing.usage_pricing_not_registered_recording.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "usage.request_accounting_gateway.request_not_priceable.degraded": EventSpec(
+        "warning",
+        frozenset(
+            {
+                "model",
+                "provider",
+                "rate_card_enforceable",
+                "refused",
+                "request_shape_priceable",
+            }
+        ),
+    ),
+    "web_login.list.no_browser_capability.degraded": EventSpec("warning", frozenset()),
+    "web_login.list.relay_unavailable.degraded": EventSpec(
+        "warning", frozenset({"detail", "error_type", "wake"})
+    ),
+    "web_login.sign_in.browser_not_ready.degraded": EventSpec("warning", frozenset()),
+    "web_login.sign_in.browser_unreachable.degraded": EventSpec(
+        "warning", frozenset({"origin"})
+    ),
+    "web_login.sign_in.conversation_gone.degraded": EventSpec(
+        "warning", frozenset({"conversation_id"})
+    ),
+    "web_login.sign_in.mark_failed.degraded": EventSpec(
+        "warning", frozenset({"origin", "site"})
+    ),
+    "web_search.request.failed": EventSpec("debug", frozenset()),
+    "worker.context.persist_failed": EventSpec(
+        "debug", frozenset({"error_type", "job_id", "task_name"})
+    ),
+    "worker.crons.prune_failed.degraded": EventSpec("warning", frozenset({"queue"})),
+    "worker.crons.prune_skipped_empty_registry.degraded": EventSpec(
+        "warning", frozenset({"queue"})
+    ),
+    "worker.crons.pruned": EventSpec("info", frozenset({"queue", "tasks"})),
+    "worker.heartbeat": EventSpec("info", frozenset()),
+    "worker.job.failed": EventSpec(
+        "error", frozenset({"attempt", "duration_ms", "error_type", "retryable"})
+    ),
+    "worker.job.retrying": EventSpec(
+        "debug", frozenset({"attempt", "error_type", "retryable"})
+    ),
+    "worker.lane.dead": EventSpec(
+        "error",
+        frozenset(
+            {"error_type", "group", "lane_kind", "lane_name", "reason", "stream_name"}
+        ),
+    ),
+    "worker.lanes.starting": EventSpec("info", frozenset({"lanes"})),
+    "worker.startup.failed": EventSpec("error", frozenset()),
+    "workflow.cancel.underlying_work_stop_failed": EventSpec(
+        "warning", frozenset({"run_id", "wait_type"})
+    ),
+    "workflow.decision_queue.enqueue_deferred.degraded": EventSpec(
+        "warning", frozenset({"external_ref"})
+    ),
+    "workflow.decision_queue.job_status_unknown.degraded": EventSpec(
+        "warning", frozenset({"external_ref"})
+    ),
+    "workflow.decision_resume.lost_decision_requeued.degraded": EventSpec(
+        "warning", frozenset({"requeues", "run_id", "wait_id"})
+    ),
+    "workflow.decision_resume.unqueued_decision_queued.degraded": EventSpec(
+        "warning", frozenset({"requeues", "run_id", "wait_id"})
+    ),
+    "workflow.fail.stale_event": EventSpec("debug", frozenset({"wait_type"})),
+    "workflow.form.invalid_schema": EventSpec("warning", frozenset({"node_id"})),
+    "workflow.handlers.ignoring_agentruncompleted_non_workflow_conversation.observed": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "workflow.handlers.job_resuming_workflow_run_waiting.observed": EventSpec(
+        "debug", frozenset({"agent_conversation_id", "function_run_id"})
+    ),
+    "workflow.handlers.prune_workflow_run_waits.observed": EventSpec(
+        "debug", frozenset({"deleted_count"})
+    ),
+    "workflow.notifications.assignee_unresolved.degraded": EventSpec(
+        "warning", frozenset({"node_id", "run_id"})
+    ),
+    "workflow.notifications.cancel_failed.degraded": EventSpec(
+        "warning", frozenset({"error", "run_id"})
+    ),
+    "workflow.notifications.form_close_failed.degraded": EventSpec(
+        "warning", frozenset({"error", "node_id", "run_id"})
+    ),
+    "workflow.notifications.form_notify_failed.degraded": EventSpec(
+        "warning", frozenset({"error", "node_id", "run_id"})
+    ),
+    "workflow.reconcile.failed": EventSpec("error", frozenset({"run_id", "wait_id"})),
+    "workflow.reconcile.firing_lost_timer": EventSpec(
+        "warning", frozenset({"run_id", "wait_id"})
+    ),
+    "workflow.reconcile.recovered": EventSpec("debug", frozenset({"count"})),
+    "workflow.reconcile.resuming_lost_completion": EventSpec(
+        "warning", frozenset({"conversation_id", "function_run_id", "run_id"})
+    ),
+    "workflow.reconcile.time_wait_bad_scheduled_at": EventSpec(
+        "warning", frozenset({"wait_id"})
+    ),
+    "workflow.reconcile.wait_expired": EventSpec(
+        "warning", frozenset({"run_id", "wait_id", "wait_type"})
+    ),
+    "workflow.resume.stale_event": EventSpec(
+        "debug", frozenset({"run_status", "wait_type"})
+    ),
+    "workflow.run.announce_failed": EventSpec("debug", frozenset()),
+    "workflow.run.cancelled": EventSpec("debug", frozenset({"run_id"})),
+    "workflow.run.completed": EventSpec("debug", frozenset({"run_id"})),
+    "workflow.run.failed": EventSpec(
+        "warning", frozenset({"failed_node_id", "run_id"})
+    ),
+    "workflow.run.publish_failed": EventSpec("debug", frozenset({"run_id"})),
+    "workflow.run.stream_failed": EventSpec("error", frozenset({"run_id"})),
+    "workflow.run.stream_teardown_failed": EventSpec("debug", frozenset({"run_id"})),
+    "workflow.run_resume_service.no_active_workflow_wait_agent.observed": EventSpec(
+        "debug", frozenset({"conversation_id"})
+    ),
+    "workflow.run_resume_service.no_active_workflow_wait_function.observed": EventSpec(
+        "debug", frozenset({"function_run_id"})
+    ),
+    "workflow.schedule_start_service.no_target_schedule.observed": EventSpec(
+        "debug", frozenset({"schedule_id"})
+    ),
+    "workflow.schedule_start_service.start_agent_schedule.propagated": EventSpec(
+        "debug", frozenset({"agent_id", "schedule_id"})
+    ),
+    "workflow.schedule_start_service.wait_fire_no_ref.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "workflow.schedule_start_service.wait_fire_stale.observed": EventSpec(
+        "debug", frozenset()
+    ),
+    "workflow.schedule_start_service.waking_workflow_run_scheduler.observed": EventSpec(
+        "debug", frozenset({"run_id"})
+    ),
+    "workflow.step.started": EventSpec(
+        "debug", frozenset({"flow_id", "node_id", "node_type", "run_id"})
+    ),
+    "workflow.step.suspended": EventSpec(
+        "debug", frozenset({"node_id", "run_id", "wait_type"})
+    ),
+    "workspace.agent_host_provider.reopened": EventSpec(
+        "info", frozenset({"method", "sandbox_id"})
+    ),
+    "workspace.browser_proxy.delivery_failed.degraded": EventSpec(
+        "warning", frozenset({"user_id"})
+    ),
+    "workspace.browser_view.accept_before_close_failed.observed": EventSpec(
+        "debug", frozenset({"doing", "error_type"})
+    ),
+    "workspace.browser_view.browser_start_failed.degraded": EventSpec(
+        "warning", frozenset({"reason"})
+    ),
+    "workspace.browser_view.close_not_delivered.observed": EventSpec(
+        "debug", frozenset({"close_code", "doing", "error_type"})
+    ),
+    "workspace.browser_view.origin_refused.denied": EventSpec(
+        "warning", frozenset({"origin_hint"})
+    ),
+    "workspace.browser_view.public_sandbox_refused.denied": EventSpec(
+        "warning", frozenset()
+    ),
+    "workspace.browser_view.relay_absent.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "workspace.browser_view.relay_not_served.degraded": EventSpec(
+        "warning", frozenset({"reason"})
+    ),
+    "workspace.browser_view.resize_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "workspace.browser_view.resize_had_no_effect.degraded": EventSpec(
+        "warning", frozenset({"height", "width"})
+    ),
+    "workspace.browser_view.resize_no_relay.degraded": EventSpec(
+        "warning", frozenset({"error_type", "height", "width"})
+    ),
+    "workspace.browser_view.resize_unsupported.degraded": EventSpec(
+        "warning", frozenset({"height", "width"})
+    ),
+    "workspace.browser_view.sandbox_refused.degraded": EventSpec(
+        "warning", frozenset({"error_type", "reason"})
+    ),
+    "workspace.browser_view.sandbox_unavailable.degraded": EventSpec(
+        "warning", frozenset({"reason"})
+    ),
+    "workspace.browser_view.session_unreadable.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "workspace.browser_view.status_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "workspace.browser_view.unsupported.denied": EventSpec("warning", frozenset()),
+    "workspace.browser_view.upstream.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "workspace.e2b.drift_tolerated": EventSpec(
+        "info", frozenset({"configured", "drifted", "recorded", "sandbox_id"})
+    ),
+    "workspace.e2b.path_not_resolved.degraded": EventSpec(
+        "warning", frozenset({"error_type", "path"})
+    ),
+    "workspace.e2b.size_template_missing.degraded": EventSpec(
+        "warning", frozenset({"sandbox_id", "size"})
+    ),
+    "workspace.files.not_ready.degraded": EventSpec("warning", frozenset()),
+    "workspace.files.read_failed.degraded": EventSpec("warning", frozenset()),
+    "workspace.files.runtime_unauthorized.failed": EventSpec("warning", frozenset()),
+    "workspace.files.session_close.degraded": EventSpec("warning", frozenset()),
+    "workspace.host_workspace.opened": EventSpec(
+        "info", frozenset({"bound_folder", "host_id", "sandbox_id"})
+    ),
+    "workspace.local_sandbox_client.adopted_sandbox_not_serving": EventSpec(
+        "warning", frozenset({"error_type", "kind", "sandbox_id"})
+    ),
+    "workspace.mime_type.unknown": EventSpec("debug", frozenset()),
+    "workspace.port_proxy.upstream_websocket.degraded": EventSpec(
+        "warning", frozenset()
+    ),
+    "workspace.process_probe.unreadable": EventSpec(
+        "debug", frozenset({"error_type", "process_id"})
+    ),
+    "workspace.provider_factory.metadata_namespace_derived": EventSpec(
+        "info", frozenset({"environment", "namespace"})
+    ),
+    "workspace.release.browser_close_failed": EventSpec(
+        "warning", frozenset({"detail", "provider_id"})
+    ),
+    "workspace.runtime_bundle.absent": EventSpec("info", frozenset()),
+    "workspace.runtime_bundle.install_failed.degraded": EventSpec(
+        "warning", frozenset({"error_type", "user_id", "version"})
+    ),
+    "workspace.runtime_bundle.installed": EventSpec(
+        "info", frozenset({"component_version", "user_id", "version"})
+    ),
+    "workspace.runtime_bundle.loaded": EventSpec(
+        "info", frozenset({"component_version", "size_bytes", "source", "version"})
+    ),
+    "workspace.runtime_bundle.unusable.degraded": EventSpec(
+        "warning", frozenset({"directory", "error_type"})
+    ),
+    "workspace.runtime_restart.deferred_busy": EventSpec(
+        "info", frozenset({"running_version", "user_id", "version"})
+    ),
+    "workspace.runtime_restart.restart_failed.degraded": EventSpec(
+        "warning", frozenset({"user_id", "version"})
+    ),
+    "workspace.runtime_restart.restarting": EventSpec(
+        "info", frozenset({"running_version", "user_id", "version"})
+    ),
+    "workspace.runtime_restart.state_unavailable.degraded": EventSpec(
+        "warning", frozenset({"user_id"})
+    ),
+    "workspace.runtime_restart.still_stale.failed": EventSpec(
+        "error", frozenset({"running_version", "user_id", "version"})
+    ),
+    "workspace.sandbox_progress.clear_failed.degraded": EventSpec(
+        "warning", frozenset({"sandbox_id"})
+    ),
+    "workspace.sandbox_progress.read_failed.degraded": EventSpec(
+        "warning", frozenset({"sandbox_id"})
+    ),
+    "workspace.sandbox_progress.record_failed.degraded": EventSpec(
+        "warning", frozenset({"sandbox_id"})
+    ),
+    "workspace.sandbox_service.directory_ensure_exhausted.degraded": EventSpec(
+        "warning", frozenset({"attempts", "path", "reason", "user_id"})
+    ),
+    "workspace.sandbox_service.directory_ensure_refused.degraded": EventSpec(
+        "warning", frozenset({"error_type", "path", "reconciling", "user_id"})
+    ),
+    "workspace.sandbox_service.ensure_retrying": EventSpec(
+        "info", frozenset({"attempt", "reason", "retry_after_ms", "sandbox_id"})
+    ),
+    "workspace.sandbox_service.provisioning_claim_expired": EventSpec(
+        "info", frozenset({"sandbox_id"})
+    ),
+    "workspace.sandbox_service.workspace_storage_recreated": EventSpec(
+        "info", frozenset({"sandbox_id"})
+    ),
+    "workspace.sandbox_session.output_cursor_read_failed": EventSpec(
+        "debug", frozenset({"process_id", "sandbox_id"})
+    ),
+    "workspace.sandbox_session.output_cursor_write_failed": EventSpec(
+        "debug", frozenset({"process_id", "sandbox_id"})
+    ),
+    "workspace.sandbox_session.python_session_delete.degraded": EventSpec(
+        "warning", frozenset({"sandbox_id", "session_id"})
+    ),
+    "workspace.sandbox_sweeper.idle_release_failed": EventSpec(
+        "warning", frozenset({"error_type", "sandbox_id"})
+    ),
+    "workspace.sandbox_sweeper.orphan_destroy_failed": EventSpec(
+        "warning", frozenset({"error_type", "sandbox_id"})
+    ),
+    "workspace.sandbox_sweeper.orphan_destroy_ineffective": EventSpec(
+        "warning", frozenset({"reason", "sandbox_id"})
+    ),
+    "workspace.sandbox_sweeper.orphan_reclaimed": EventSpec(
+        "info", frozenset({"reason", "sandbox_id"})
+    ),
+    "workspace.sandbox_sweeper.reclaimed_orphaned_objects.observed": EventSpec(
+        "info", frozenset({"reclaimed_count"})
+    ),
+    "workspace.sandbox_sweeper.released_idle_sandbox.observed": EventSpec(
+        "info", frozenset({"idle_after_seconds", "sandbox_id"})
+    ),
+    "workspace.sandbox_sweeper.released_idle_sandboxes.observed": EventSpec(
+        "info", frozenset({"released_count"})
+    ),
+    "workspace.sandbox_sweeper.released_unreachable_sandbox.observed": EventSpec(
+        "info", frozenset({"error_type", "idle_after_seconds", "sandbox_id"})
+    ),
+    "workspace.sandbox_sweeper.unattributed_objects": EventSpec(
+        "info", frozenset({"count", "sample"})
+    ),
+    "workspace.status.unavailable.degraded": EventSpec(
+        "warning", frozenset({"error_type"})
+    ),
+    "workspace.ws_bridge.origin_pattern_invalid.denied": EventSpec(
+        "warning", frozenset()
+    ),
 }
