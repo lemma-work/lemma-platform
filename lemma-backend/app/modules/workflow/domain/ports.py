@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -261,6 +261,11 @@ class WorkflowNotificationPort(Protocol):
         """Withdraw every notification this run raised, when it is cancelled."""
 
 
+#: Where the job asking a decision is: still going to ask it (queued, waiting
+#: out a retry, or running), never queued at all, or ended without an answer.
+DecisionJobState = Literal["alive", "missing", "ended"]
+
+
 class DecisionPort(Protocol):
     """Hands a run's pending decision to whoever asks it.
 
@@ -277,9 +282,11 @@ class DecisionPort(Protocol):
         `requeue` counts the sweep's queueings of a job that was lost.
         """
 
-    async def job_alive(self, external_ref: str, *, requeue: int = 0) -> bool | None:
-        """Whether the job asking this decision will still ask it: queued,
-        waiting out a retry, or running. None when the queue cannot say."""
+    async def job_state(
+        self, external_ref: str, *, requeue: int = 0
+    ) -> DecisionJobState | None:
+        """Where the job asking this decision is; None when the queue cannot
+        say."""
 
 
 class SchedulePort(ABC):

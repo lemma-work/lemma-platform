@@ -84,10 +84,12 @@ provider (`not_configured`) fail the run at once, as does an answer with no
 route and no default edge. A cancelled run's job finds no active wait and does
 nothing. A `DECISION` wait older than the reconciliation grace period has a job
 that is lost or held up, and the sweep asks the queue which. A job still
-queued, waiting out a retry or running is left to answer; one that is gone is
-queued again under a job id of its own, up to three times (counted in the
-wait's `requeues`), and the run then fails saying the job was lost. A queue
-that cannot be reached is asked again by the next sweep.
+queued, waiting out a retry or running is left to answer. One that never
+reached the queue -- its enqueue lost after the commit -- is queued again and
+not counted. One that ran and ended without answering is queued again under a
+job id of its own, up to three times (counted in the wait's `requeues`), and
+the run then fails saying the job was lost. A queue that cannot be reached is
+asked again by the next sweep.
 
 ## API groups
 

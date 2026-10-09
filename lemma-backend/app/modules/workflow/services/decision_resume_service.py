@@ -152,24 +152,32 @@ class DecisionResumeService:
     async def recover_lost(self, wait: WorkflowRunWaitEntity) -> bool:
         """Queue a decision again whose job was lost, a bounded number of times.
 
-        A wait this old usually means its job is gone -- never queued, or ended
-        without answering. But it may only be slow: behind a backlog, or
-        waiting out a retry. So the queue is asked first, and a job that is
-        still alive is left to answer and not counted; only a lost one is
-        queued again and counted towards giving up. When the queue cannot say,
-        the next sweep asks again rather than count a loss that may not be one.
+        A wait this old has a job that is lost or only held up, and the queue
+        is asked which:
 
-        Then takes the run's row lock and re-reads the wait under it: the job
-        may be answering this very decision, and resuming takes the same lock,
-        so whichever comes second sees what the first did.
+        - still queued, waiting out a retry, or running: left to answer, and
+          not counted;
+        - never queued -- its enqueue lost after the commit, as when Redis
+          refused it -- so nothing ran and nothing is counted: the same
+          queueing is tried again;
+        - ended without resolving the wait: that is a loss, so it is queued
+          again under an id of its own and counted towards giving up.
+
+        When the queue cannot say, the next sweep asks again rather than count
+        a loss that may not be one. A queue that never takes the job is ended
+        by the wait's own age ceiling, not here.
+
+        Takes the run's row lock before acting and re-reads the wait under it:
+        the job may be answering this very decision, and resuming takes the
+        same lock, so whichever comes second sees what the first did.
         """
         external_ref = wait.external_ref
         if not external_ref:
             return False
-        alive = await self._engine.decision_adapter.job_alive(
+        state = await self._engine.decision_adapter.job_state(
             external_ref, requeue=_requeues_of(wait)
         )
-        if alive is not False:
+        if state is None or state == "alive":
             return False
         run = await self._engine.run_repo.get_for_update(wait.run_id)
         current = await self._engine.wait_repo.find_active_by_external_ref(
@@ -181,6 +189,18 @@ class DecisionResumeService:
             await self._engine.uow.commit()
             return False
         requeues = _requeues_of(current)
+        if state == "missing":
+            self._engine.decision_adapter.ask_once_committed(
+                external_ref, requeue=requeues
+            )
+            await self._engine.uow.commit()
+            logger.warning(
+                "workflow.decision_resume.unqueued_decision_queued.degraded",
+                run_id=str(wait.run_id),
+                wait_id=str(wait.id),
+                requeues=requeues,
+            )
+            return True
         if requeues >= MAX_DECISION_REQUEUES:
             await self._engine.fail_for_wait(
                 current,

@@ -123,15 +123,15 @@ class _Ports:
         self.asked: list[str] = []
         self.requeues: list[int] = []
         self.functions: list[str] = []
-        #: What the queue says of the job: lost (False), alive, or unknown.
-        self.alive: bool | None = False
+        #: What the queue says of the job; None when it cannot say.
+        self.state: str | None = "ended"
 
     def ask_once_committed(self, external_ref: str, *, requeue: int = 0) -> None:
         self.asked.append(external_ref)
         self.requeues.append(requeue)
 
-    async def job_alive(self, external_ref: str, *, requeue: int = 0) -> bool | None:
-        return self.alive
+    async def job_state(self, external_ref: str, *, requeue: int = 0) -> str | None:
+        return self.state
 
     async def execute_function(self, function_name, inputs, pod_id, user_id, ctx=None):
         self.functions.append(function_name)
@@ -612,13 +612,13 @@ async def test_a_lost_decision_is_queued_again_and_counted():
     assert engine.failed == []
 
 
-@pytest.mark.parametrize("alive", [True, None], ids=["alive", "unknown"])
-async def test_a_decision_whose_job_may_still_answer_is_not_requeued_or_counted(alive):
+@pytest.mark.parametrize("state", ["alive", None], ids=["alive", "unknown"])
+async def test_a_decision_whose_job_may_still_answer_is_not_requeued_or_counted(state):
     """Slow is not lost: a job behind a backlog or waiting out a retry is left to
     answer, and a queue that cannot say is asked again by the next sweep, so no
     run is failed for a backlog."""
     engine = _Engine(_flow(_question()))
-    engine.decision_adapter.alive = alive
+    engine.decision_adapter.state = state
 
     assert await _service(engine).recover_lost(engine.wait) is False
 
@@ -638,6 +638,22 @@ async def test_a_decision_answered_meanwhile_is_left_alone():
     assert engine.decision_adapter.asked == []
     assert engine.updated == engine.failed == []
     assert engine.uow.commits == 1, "the run's row lock is released"
+
+
+async def test_a_job_that_never_reached_the_queue_is_queued_again_uncounted():
+    """Its enqueue was lost after the commit -- Redis refused it -- so nothing
+    ran: the same queueing is tried again, and no loss is counted against the
+    run for a queue outage."""
+    engine = _Engine(_flow(_question()))
+    engine.decision_adapter.state = "missing"
+
+    assert await _service(engine).recover_lost(engine.wait) is True
+
+    assert engine.decision_adapter.asked == ["ref"]
+    assert engine.decision_adapter.requeues == [0], "the same queueing, not a new one"
+    assert engine.updated == [], "nothing counted"
+    assert engine.failed == []
+    assert engine.uow.commits == 1
 
 
 async def test_a_decision_lost_too_often_fails_the_run():
@@ -709,28 +725,28 @@ async def test_a_requeued_job_gets_an_id_of_its_own():
 
 
 @pytest.mark.parametrize(
-    ("status", "alive"),
+    ("status", "state"),
     [
-        (TaskStatus.QUEUED, True),
-        (TaskStatus.SCHEDULED, True),
-        (TaskStatus.RUNNING, True),
-        (TaskStatus.DONE, False),
-        (TaskStatus.NOT_FOUND, False),
+        (TaskStatus.QUEUED, "alive"),
+        (TaskStatus.SCHEDULED, "alive"),
+        (TaskStatus.RUNNING, "alive"),
+        (TaskStatus.DONE, "ended"),
+        (TaskStatus.NOT_FOUND, "missing"),
     ],
 )
-async def test_a_job_is_alive_while_it_will_still_ask(status, alive):
+async def test_where_a_job_is_comes_from_the_queue(status, state):
     queue = _JobQueue(statuses={"workflow-decision:ref:1": status})
     adapter = AfterCommitDecisionQueue(_AfterCommitUow(), queue=queue)
 
-    assert await adapter.job_alive("ref", requeue=1) is alive
+    assert await adapter.job_state("ref", requeue=1) == state
 
 
-async def test_a_queue_that_cannot_be_reached_cannot_say_whether_a_job_is_alive():
+async def test_a_queue_that_cannot_be_reached_cannot_say_where_a_job_is():
     adapter = AfterCommitDecisionQueue(
         _AfterCommitUow(), queue=_JobQueue(ConnectionRefusedError())
     )
 
-    assert await adapter.job_alive("ref") is None
+    assert await adapter.job_state("ref") is None
 
 
 async def test_the_job_is_queued_only_once_the_wait_is_committed():

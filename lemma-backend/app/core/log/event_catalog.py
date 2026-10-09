@@ -972,6 +972,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workflow.decision_queue.enqueue_deferred.degraded': EventSpec('warning', frozenset({'external_ref'})),
     'workflow.decision_queue.job_status_unknown.degraded': EventSpec('warning', frozenset({'external_ref'})),
     'workflow.decision_resume.lost_decision_requeued.degraded': EventSpec('warning', frozenset({'requeues', 'run_id', 'wait_id'})),
+    'workflow.decision_resume.unqueued_decision_queued.degraded': EventSpec('warning', frozenset({'requeues', 'run_id', 'wait_id'})),
     'workflow.fail.stale_event': EventSpec('debug', frozenset({'wait_type'})),
     'workflow.form.invalid_schema': EventSpec('warning', frozenset({'node_id'})),
     'workflow.handlers.ignoring_agentruncompleted_non_workflow_conversation.observed': EventSpec('debug', frozenset({'conversation_id'})),

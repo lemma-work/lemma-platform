@@ -22,6 +22,7 @@ from app.core.domain.job_queue import JobQueuePort
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.core.log.log import get_logger
+from app.modules.workflow.domain.ports import DecisionJobState
 
 logger = get_logger(__name__)
 
@@ -84,7 +85,9 @@ class AfterCommitDecisionQueue:
             )
         )
 
-    async def job_alive(self, external_ref: str, *, requeue: int = 0) -> bool | None:
+    async def job_state(
+        self, external_ref: str, *, requeue: int = 0
+    ) -> DecisionJobState | None:
         try:
             status = await self._job_queue().status(
                 decision_step_job_id(external_ref, requeue=requeue)
@@ -96,7 +99,11 @@ class AfterCommitDecisionQueue:
                 exc_info=True,
             )
             return None
-        return status in _ALIVE
+        if status in _ALIVE:
+            return "alive"
+        # A finished job keeps its result for a day; one that never reached
+        # the queue -- its enqueue lost after the commit -- has nothing.
+        return "ended" if status is TaskStatus.DONE else "missing"
 
     def _job_queue(self) -> DecisionJobQueue:
         return self._queue if self._queue is not None else get_streaq_job_queue()
