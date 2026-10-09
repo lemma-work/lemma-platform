@@ -16,7 +16,7 @@ import {
 } from "./library-cache";
 import { readingProblem, withItemStatus } from "./file-status";
 import { readDropped, type DroppedTree } from "./drop-entries";
-import { rememberMade } from "@/data/made";
+import { forgetMade, rememberMade, renamedMade } from "@/data/made";
 
 /** Making, renaming and removing things in the library.
  *
@@ -56,7 +56,7 @@ export function useLibraryWrites(podId: string, directory: string) {
             const here = at === directory;
             if (sample) {
                 const item = rowFor(file.name, pathIn(at, file.name), "file", describeSize(file.size));
-                rememberMade(at, item);
+                rememberMade(podId, at, item);
                 if (here) patch((pages) => withItem(pages, item));
             } else {
                 const written = await lemma(podId).files.upload(file, {
@@ -138,7 +138,7 @@ export function useLibraryWrites(podId: string, directory: string) {
             const here = parent === directory;
             if (sample) {
                 const item = rowFor(name, path, "folder", "Folder");
-                rememberMade(parent, item);
+                rememberMade(podId, parent, item);
                 if (here) patch((pages) => withItem(pages, item));
             } else {
                 const made = await lemma(podId).files.folder.create(name, { directoryPath: parent });
@@ -172,9 +172,8 @@ export function useLibraryWrites(podId: string, directory: string) {
         setProblem(null);
         patch((pages) => withRenamedItem(pages, item.path, clean, next));
         try {
-            if (!sample) {
-                await lemma(podId).files.update(item.path, { name: clean });
-            }
+            if (sample) renamedMade(podId, item.path, clean, next);
+            else await lemma(podId).files.update(item.path, { name: clean });
             return true;
         } catch (failure) {
             cache.setQueryData(key, before);
@@ -191,9 +190,8 @@ export function useLibraryWrites(podId: string, directory: string) {
         setProblem(null);
         patch((pages) => withoutItem(pages, item.path));
         try {
-            if (!sample) {
-                await lemma(podId).files.delete(item.path);
-            }
+            if (sample) forgetMade(podId, item.path);
+            else await lemma(podId).files.delete(item.path);
         } catch (failure) {
             cache.setQueryData(key, before);
             setProblem(failure instanceof Error ? failure.message : "That was not deleted.");

@@ -2636,7 +2636,7 @@ export const fixtureSource: PodSource = {
         const updated = "2026-09-14T08:00:00Z";
         /* Made here, in front of what the sample already had: a folder somebody
            just created belongs at the top of its listing, as it does live. */
-        const made = madeIn(directory);
+        const made = madeIn(podId, directory);
         if (kind === "tables") return { items: SAMPLE_TABLES.map(table => ({
             id: table.name, name: table.name, kind: "table" as const, path: table.name, updated, detail: table.detail,
         })) };
