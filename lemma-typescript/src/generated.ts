@@ -64,7 +64,9 @@ export class GeneratedClientAdapter {
   }
 
   async request<T>(operation: () => PromiseLike<T>): Promise<T> {
+    await this.auth.ready();
     this.configure();
+    let renewed = false;
 
     for (let attempt = 0; ; attempt++) {
       try {
@@ -72,6 +74,13 @@ export class GeneratedClientAdapter {
       } catch (error) {
         if (error instanceof GeneratedApiError) {
           if (error.status === 401) {
+            // As in `HttpClient.request`: a framed app asks its view once for
+            // a fresh token, and the generated client reads it again.
+            if (!renewed && (await this.auth.renewEmbeddedToken())) {
+              renewed = true;
+              this.configure();
+              continue;
+            }
             this.auth.markUnauthenticated();
           }
 

@@ -199,6 +199,15 @@ real data variation, empty/error/permission states, and breakpoint transitions.
 Treat screenshots as evidence, not decoration. Never call an app polished without
 viewing both a representative desktop render and the 375px experience.
 
+### 9. Make The Cover
+
+Every app ships a 1200×630 cover: what its links unfurl with in Slack, iMessage
+and X, and what its card shows in Lemma. Render the first screen **with sample
+rows you write, never real data**, into one of the fixed templates, and ship it
+in the build at `.lemma/cover.png`. Follow
+[`references/cover.md`](references/cover.md) exactly — it is the only safe way to
+make one. An app without a cover gets a plain lettered one from the host.
+
 ## Finish With Evidence
 
 Before handing off, confirm:
@@ -213,5 +222,6 @@ When implementation is in scope, also confirm:
 
 - Keyboard, focus, contrast, touch, reduced-motion, and 375px behavior hold.
 - Desktop and mobile screenshots were visually inspected after the final change.
+- The served `/.lemma/cover.png` is the app's own cover, made with sample rows.
 - The primary scenario works with real data; route deeper verification through
   `lemma-app-qa` and deployment verification through `lemma-builder`.

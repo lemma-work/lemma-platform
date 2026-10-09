@@ -9108,6 +9108,7 @@ var LemmaClient = (() => {
     composeInConversation: () => composeInConversation,
     getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
+    isEmbeddedInHost: () => isEmbeddedInHost,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
     setTestingToken: () => setTestingToken,
     startAppAccess: () => startAppAccess,
@@ -9347,6 +9348,102 @@ var LemmaClient = (() => {
       ]
     });
     initializedSignature = signature;
+  }
+
+  // src/embedded.ts
+  var EMBED_PARAM = "lemma_embed";
+  var EMBED_VALUE = "mcp";
+  var TOKEN_REQUEST = "lemma:token-request";
+  var TOKEN_MESSAGE = "lemma:token";
+  var ACCESS_REQUEST = "lemma:app-access-request";
+  var ACCESS_MESSAGE = "lemma:app-access";
+  var REMEMBERED_KEY = "lemma:embedded";
+  var ANSWER_TIMEOUT_MS = 2e4;
+  var RENEW_BEFORE_MS = 6e4;
+  function isEmbeddedInHost() {
+    if (typeof window === "undefined" || window.parent === window) return false;
+    let marked = false;
+    try {
+      marked = new URL(window.location.href).searchParams.get(EMBED_PARAM) === EMBED_VALUE;
+    } catch {
+      marked = false;
+    }
+    try {
+      if (marked) window.sessionStorage.setItem(REMEMBERED_KEY, "1");
+      else marked = window.sessionStorage.getItem(REMEMBERED_KEY) === "1";
+    } catch {
+    }
+    return marked;
+  }
+  var HostRefusedError = class extends Error {
+  };
+  var asked = 0;
+  function askHost(requestType, answerType) {
+    const id = `${requestType}:${Date.now().toString(36)}:${(asked++).toString(36)}`;
+    return new Promise((resolve2, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener("message", listen);
+        reject(new Error("The Lemma view did not answer"));
+      }, ANSWER_TIMEOUT_MS);
+      function listen(event) {
+        if (event.source !== window.parent) return;
+        const data = event.data;
+        if (!data || data.type !== answerType || data.id !== id) return;
+        clearTimeout(timer);
+        window.removeEventListener("message", listen);
+        if (typeof data.error === "string") reject(new HostRefusedError(data.error));
+        else resolve2(data);
+      }
+      window.addEventListener("message", listen);
+      window.parent.postMessage({ type: requestType, id }, "*");
+    });
+  }
+  var EmbeddedCredentials = class {
+    constructor() {
+      __publicField(this, "token", null);
+      __publicField(this, "expiresAt", Number.NaN);
+      __publicField(this, "renewing", null);
+      __publicField(this, "timer");
+    }
+    current() {
+      return this.token;
+    }
+    /** The token, asking the view for the first one. */
+    ready() {
+      return this.token ? Promise.resolve(this.token) : this.renew();
+    }
+    /** A fresh token. Callers asking at once share one question. */
+    renew() {
+      if (!this.renewing) {
+        this.renewing = askHost(TOKEN_REQUEST, TOKEN_MESSAGE).then((answer) => {
+          if (typeof answer.token !== "string" || !answer.token) {
+            throw new Error("The Lemma view sent no token");
+          }
+          this.token = answer.token;
+          this.expiresAt = typeof answer.expiresAt === "string" ? Date.parse(answer.expiresAt) : Number.NaN;
+          this.renewBeforeExpiry();
+          return answer.token;
+        }).finally(() => {
+          this.renewing = null;
+        });
+      }
+      return this.renewing;
+    }
+    renewBeforeExpiry() {
+      clearTimeout(this.timer);
+      if (!Number.isFinite(this.expiresAt)) return;
+      const wait = Math.max(0, this.expiresAt - Date.now() - RENEW_BEFORE_MS);
+      this.timer = setTimeout(() => {
+        this.renew().catch(() => void 0);
+      }, wait);
+    }
+  };
+  async function askHostForAppAccess() {
+    const answer = await askHost(ACCESS_REQUEST, ACCESS_MESSAGE);
+    if (typeof answer.ticket !== "string" || !answer.ticket) {
+      throw new Error("The Lemma view sent no ticket");
+    }
+    return answer.ticket;
   }
 
   // src/reachability.ts
@@ -9602,6 +9699,8 @@ var LemmaClient = (() => {
       __publicField(this, "apiUrl");
       __publicField(this, "authUrl");
       __publicField(this, "injectedToken");
+      /** An app framed inside an AI tool, whose token comes from the Lemma view around it. */
+      __publicField(this, "embedded");
       __publicField(this, "state", { status: "loading", user: null });
       __publicField(this, "listeners", /* @__PURE__ */ new Set());
       __publicField(this, "authCheckPromise", null);
@@ -9610,17 +9709,39 @@ var LemmaClient = (() => {
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
       this.injectedToken = (token == null ? void 0 : token.trim()) || detectInjectedToken();
-      if (!this.injectedToken) {
+      this.embedded = !this.injectedToken && isEmbeddedInHost() ? new EmbeddedCredentials() : null;
+      if (!this.injectedToken && !this.embedded) {
         ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       }
     }
-    /** Whether requests will use an injected Bearer token (testing mode). */
+    /** Whether requests carry a Bearer token rather than the session cookie. */
     get isTokenMode() {
-      return this.injectedToken !== null;
+      return this.injectedToken !== null || this.embedded !== null;
     }
-    /** The current injected Bearer token, if token-mode auth is active. */
+    /** The Bearer token requests carry right now, if token-mode auth is active. */
     getBearerToken() {
-      return this.injectedToken;
+      var _a, _b, _c;
+      return (_c = (_b = this.injectedToken) != null ? _b : (_a = this.embedded) == null ? void 0 : _a.current()) != null ? _c : null;
+    }
+    /**
+     * Resolves once requests can carry credentials: at once, except in an app
+     * framed inside an AI tool, which waits for its first token from the view.
+     */
+    async ready() {
+      if (this.embedded) await this.embedded.ready();
+    }
+    /**
+     * In a framed app, a fresh token from the view after a 401 — the one it held
+     * may have outlived itself. False anywhere else, and when none came.
+     */
+    async renewEmbeddedToken() {
+      if (!this.embedded) return false;
+      try {
+        await this.embedded.renew();
+        return true;
+      } catch {
+        return false;
+      }
     }
     /** The current auth state. */
     getState() {
@@ -9735,7 +9856,7 @@ var LemmaClient = (() => {
      * Check whether a cookie-backed session is active without mutating auth state.
      */
     async isAuthenticatedViaCookie() {
-      if (this.injectedToken) {
+      if (this.isTokenMode) {
         return this.isAuthenticated();
       }
       try {
@@ -9757,6 +9878,9 @@ var LemmaClient = (() => {
       if (this.injectedToken) {
         return this.injectedToken;
       }
+      if (this.embedded) {
+        return this.embedded.ready();
+      }
       this.assertBrowserContext();
       ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
       const token = await import_session2.default.getAccessToken();
@@ -9771,6 +9895,9 @@ var LemmaClient = (() => {
     async refreshAccessToken() {
       if (this.injectedToken) {
         return this.injectedToken;
+      }
+      if (this.embedded) {
+        return this.embedded.renew();
       }
       this.assertBrowserContext();
       ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
@@ -9798,12 +9925,13 @@ var LemmaClient = (() => {
       if (init.body !== void 0 && !isFormData2 && !hasHeader(headers, "Content-Type")) {
         setHeader(headers, "Content-Type", "application/json");
       }
-      if (this.injectedToken) {
-        setHeader(headers, "Authorization", `Bearer ${this.injectedToken}`);
+      const bearer = this.getBearerToken();
+      if (bearer) {
+        setHeader(headers, "Authorization", `Bearer ${bearer}`);
       }
       return {
         ...init,
-        credentials: this.injectedToken ? "omit" : "include",
+        credentials: this.isTokenMode ? "omit" : "include",
         headers
       };
     }
@@ -9893,11 +10021,18 @@ var LemmaClient = (() => {
         return next;
       };
       this.setState({ status: "loading", user: null });
-      if (!this.injectedToken && typeof window !== "undefined") {
+      if (!this.isTokenMode && typeof window !== "undefined") {
         ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
         const local = await this.localSession();
         if (local === "unreachable") return unreachable();
         if (local === "absent") return unauthenticated();
+      }
+      if (this.embedded) {
+        try {
+          await this.embedded.ready();
+        } catch {
+          return unauthenticated();
+        }
       }
       if (revision !== this.authRevision) return this.state;
       try {
@@ -9941,6 +10076,10 @@ var LemmaClient = (() => {
       this.authCheckPromise = null;
       if (this.injectedToken) {
         this.clearInjectedToken();
+        this.markUnauthenticated();
+        return true;
+      }
+      if (this.embedded) {
         this.markUnauthenticated();
         return true;
       }
@@ -10318,10 +10457,17 @@ var LemmaClient = (() => {
     async request(method, path, options = {}) {
       var _a;
       const url = this.buildUrl(path, options.params);
-      const init = this.buildRequestInit(method, options);
+      await this.auth.ready();
+      let init = this.buildRequestInit(method, options);
+      let renewed = false;
       for (let attempt = 0; ; attempt++) {
         const response = await this.fetchWithTimeout(url, init, options.signal);
         if (response.status === 401) {
+          if (!renewed && await this.auth.renewEmbeddedToken()) {
+            renewed = true;
+            init = this.buildRequestInit(method, options);
+            continue;
+          }
           this.auth.markUnauthenticated();
         }
         const retryDelay = retryDelayForStatus(
@@ -10364,6 +10510,7 @@ var LemmaClient = (() => {
      */
     async streamResponse(path, options = {}) {
       var _a, _b, _c;
+      await this.auth.ready();
       let response;
       try {
         response = await fetch(
@@ -10412,6 +10559,7 @@ var LemmaClient = (() => {
      */
     async requestBytesResponse(method, path, options = {}) {
       const url = `${this.apiUrl}${path}`;
+      await this.auth.ready();
       const init = this.auth.getRequestInit({ method });
       if (options.headers) {
         init.headers = { ...init.headers, ...options.headers };
@@ -10611,13 +10759,20 @@ var LemmaClient = (() => {
     }
     async request(operation) {
       var _a;
+      await this.auth.ready();
       this.configure();
+      let renewed = false;
       for (let attempt = 0; ; attempt++) {
         try {
           return await this.runWithTimeout(operation);
         } catch (error) {
           if (error instanceof ApiError2) {
             if (error.status === 401) {
+              if (!renewed && await this.auth.renewEmbeddedToken()) {
+                renewed = true;
+                this.configure();
+                continue;
+              }
               this.auth.markUnauthenticated();
             }
             const retryDelay = retryDelayForStatus(
@@ -19306,6 +19461,7 @@ var LemmaClient = (() => {
     blocked: { title: "Your browser blocked app access", message: "Allow cookies for this site, then try again." }
   };
   function failureKind(error) {
+    if (error instanceof HostRefusedError) return "denied";
     if (error instanceof ApiError && error.statusCode === 401) return "signed-out";
     if (error instanceof ApiError && [403, 404].includes(error.statusCode)) return "denied";
     return "unavailable";
@@ -19336,11 +19492,12 @@ var LemmaClient = (() => {
       return await send();
     }
   }
-  async function redeem(ticket) {
+  async function redeem(ticket, embedded) {
+    const body = embedded ? { ticket, embedded: true } : { ticket };
     const response = await fetch("/_lemma/app-access/redeem", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ticket }),
+      body: JSON.stringify(body),
       credentials: "same-origin",
       cache: "no-store",
       signal: AbortSignal.timeout(1e4)
@@ -19377,8 +19534,9 @@ var LemmaClient = (() => {
     };
     show("checking");
     try {
-      const { ticket } = await requestTicket(options);
-      await redeem(ticket);
+      const embedded = isEmbeddedInHost();
+      const ticket = embedded ? await askHostForAppAccess() : (await requestTicket(options)).ticket;
+      await redeem(ticket, embedded);
       const verified = await fetch("/", { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/octet-stream" }, signal: AbortSignal.timeout(1e4) });
       if (verified.status === 401) {
         show("blocked");
@@ -19506,7 +19664,8 @@ var LemmaClient = (() => {
       LEMMA_COMPOSE_MESSAGE_TYPE,
       LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
       canComposeInConversation,
-      composeInConversation
+      composeInConversation,
+      isEmbeddedInHost
     };
     if (!scope.LemmaClient) {
       scope.LemmaClient = surface;
