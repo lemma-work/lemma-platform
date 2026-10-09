@@ -250,11 +250,7 @@ class WebChat:
                 table_name=table,
                 answers=answers,
                 contact_id=contact_id,
-                actor=(
-                    f"visitor:{visitor.session.id}"
-                    if visitor is not None and contact_id is None
-                    else None
-                ),
+                actor=visitor.session.actor_id if visitor is not None else None,
             )
         except PublicRowRefused as exc:
             raise refused(exc.message, 422, "bad_answer") from exc
