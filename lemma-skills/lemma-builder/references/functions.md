@@ -315,7 +315,7 @@ urls.expires_at   # when urls.url stops working
 link = pod.files.create_signed_url("/reports/summary.pdf")                       # defaults: 3h, 50 downloads
 link = pod.files.create_signed_url("/reports/summary.pdf",
                                    expires_seconds=604800, max_hits=5)           # 7d, 5 downloads
-link.signed_url   # https://<api>/s/<code>  — short, copy-pasteable
+link.signed_url   # https://<api>/public/s/<code>  — short, copy-pasteable
 link.expires_at
 link.max_hits     # effective cap (max 7d / 1000 hits; out of range is a 422)
 ```

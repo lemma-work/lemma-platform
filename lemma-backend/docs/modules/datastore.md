@@ -29,7 +29,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | Per-pod PostgreSQL schema | Physical record tables, constraints, indexes, and RLS policies. Born readable by the ad-hoc query role (schema `USAGE` plus a per-schema default privilege for its tables); a schema from before that heals on its first query |
 | `datastore_files` | Hierarchical metadata, ownership, processing status, Markdown/index metadata |
 | Object storage/local store | Original bytes, derived Markdown, images, and page renders |
-| `datastore_signed_links` | Durable `/s/{code}` capability grants: object key, expiry, hit ceiling, and revocation. Redis still serves every fetch and keeps the spend counter; the row is what makes a link's lifetime a promise rather than a function of how the operator deployed Redis |
+| `datastore_signed_links` | Durable `/public/s/{code}` capability grants: object key, expiry, hit ceiling, and revocation. Redis still serves every fetch and keeps the spend counter; the row is what makes a link's lifetime a promise rather than a function of how the operator deployed Redis |
 | Search tables/indexes | Chunks and embeddings used by PostgreSQL search/reranking |
 
 ## API groups
@@ -40,7 +40,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | `/.../tables/{table}/records` | CRUD, filter/sort/page, and bulk create/update/delete records |
 | `/pods/{pod_id}/datastore/query` | Restricted ad-hoc datastore query under the RLS subject role |
 | `/pods/{pod_id}/datastore/files` | Upload, folders, metadata/content update, Markdown attachment, tree, search, preview/download |
-| `/public/datastore/files`, `/s/{code}` | Signed file delivery paths |
+| `/public/datastore/files`, `/public/s/{code}` | Signed file delivery paths (`/s/{code}` is a legacy alias until 2026-10-17) |
 | `/pods/{pod_id}/datastore/changes` | Resumable WebSocket stream for authorized row changes |
 
 ## File lifecycle

@@ -387,7 +387,9 @@ FUNCTION_RUNTIME_GATEWAY_URL=http://backend:8000
 ```
 
 `WORKSPACE_PORT_ACCESS_URL` publishes a port a workspace opened, for previewing
-something running inside it.
+something running inside it. It is a base URL (default `API_URL`); the signed
+URL is `<base>/public/workspace-ports/<grant>/`, unauthenticated by design,
+since the grant in the path is the credential.
 
 ## Function execution
 

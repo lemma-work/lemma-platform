@@ -2725,7 +2725,7 @@ export const fixtureSource: PodSource = {
         await wait(260);
         const code = "sample" + Math.random().toString(36).slice(2, 8);
         const link = {
-            rawUrl: "https://api.example/s/" + code,
+            rawUrl: "https://api.example/public/s/" + code,
             readUrl: (typeof window === "undefined" ? "" : window.location.origin) + "/d/" + code,
             code,
             expiresAt: new Date(Date.now() + (options?.expiresSeconds ?? 10800) * 1000).toISOString(),

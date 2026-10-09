@@ -429,7 +429,7 @@ fn configured_origins_are_exact() {
 fn ordinary_web_navigation_stays_in_the_webview() {
     let urls = [
         "https://sales.apps.lemma.work/",
-        "https://api.lemma.work/widgets/serve/conversation/tool",
+        "https://api.lemma.work/public/widgets/serve/conversation/tool",
         "http://sales.apps.lemma.localhost:8711/",
         "https://widgets.example.com/report",
     ];

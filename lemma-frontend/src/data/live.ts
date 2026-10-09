@@ -1252,7 +1252,7 @@ export const liveSource: PodSource = {
             max_hits?: number;
         };
         const rawUrl = minted.signed_url ?? "";
-        /* The code is the last segment of `{api}/s/{code}`. Taken from the URL
+        /* The code is the last segment of `{api}/public/s/{code}`. Taken from the URL
            the server returned rather than minted here, so a change of shape on
            that side cannot leave this one confidently wrong. */
         const code = rawUrl.split("/").filter(Boolean).pop() ?? "";

@@ -340,7 +340,7 @@ export interface ResourcePage<T> { items: T[]; next?: string | null }
  *  and fifty opens by default, a day and a hundred at the ceiling — so what
  *  comes back is the truth rather than what was asked for. */
 export interface SharedLink {
-    /** `{api}/s/{code}` — the bytes. */
+    /** `{api}/public/s/{code}` — the bytes. */
     rawUrl: string;
     /** The same document, rendered, for a person rather than a browser. */
     readUrl: string;

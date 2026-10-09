@@ -174,7 +174,7 @@ class DatastoreFile(UUIDAuditBase):
 
 
 class DatastoreSignedLink(UUIDAuditBase):
-    """A public short link (``/s/{code}``) to one datastore file.
+    """A public short link (``/public/s/{code}``) to one datastore file.
 
     The link record lives here rather than only in Redis because it is a
     capability grant, not a cache: it is the whole of what stands between a URL

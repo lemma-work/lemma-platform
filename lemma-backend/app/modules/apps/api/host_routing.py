@@ -37,9 +37,12 @@ _GLOBAL_PUBLIC_PREFIXES = (
     "/public/datastore/",
     "/public/icons/",
     # Short file links. Same reason as /public/datastore/ above — this is the
-    # other half of the same feature — and it was simply missed when it landed.
-    # Without it a `/s/{code}` fetched on an app host is rewritten to
-    # `/public/apps/s/{code}` and 404s as a missing asset of that app.
+    # other half of the same feature. Without it a short link fetched on an app
+    # host is rewritten to `/public/apps/...` and 404s as a missing asset of
+    # that app.
+    "/public/s/",
+    # The links' old path, until its date in `LEGACY_ALIASES`
+    # (app/core/auth_exemptions.py); goes with that alias.
     "/s/",
 )
 
