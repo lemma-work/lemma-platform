@@ -17,7 +17,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import Text, cast, column, delete, literal_column, select, table, text
+from sqlalchemy.sql.expression import TableClause
 from sqlalchemy.exc import DBAPIError
 
 from app.modules.datastore.config import datastore_settings
@@ -178,19 +179,24 @@ async def delete_rows_of_contact(
     As the schema's owner, with the session naming the contact, so the policy
     holds the delete to their rows even if the ``WHERE`` were ever wrong.
     """
-    schema_name = schema.get_schema_name(pod_id)
-    table = sanitize_identifier(table_name)
+    rows = _contact_table(schema.get_schema_name(pod_id), table_name)
     async with schema.session_factory() as session:
         async with session.begin():
             await schema.set_rls_context(session, RowPrincipal.contact(contact_id))
             result = await session.execute(
-                text(
-                    f'DELETE FROM "{schema_name}"."{table}" '
-                    f'WHERE "{CONTACT_COLUMN}" = :contact'
-                ),
-                {"contact": contact_id},
+                delete(rows).where(rows.c[CONTACT_COLUMN] == contact_id)
             )
-            return int(result.rowcount or 0)
+            return int(getattr(result, "rowcount", 0) or 0)
+
+
+def _contact_table(schema_name: str, table_name: str, *keys: str) -> TableClause:
+    """A contact-owned table as SQLAlchemy sees it: names quoted by the dialect."""
+    names = (CONTACT_COLUMN, *(sanitize_identifier(key) for key in keys))
+    return table(
+        sanitize_identifier(table_name),
+        *(column(name) for name in dict.fromkeys(names)),
+        schema=schema_name,
+    )
 
 
 async def read_rows_of_contact_after(
@@ -210,30 +216,24 @@ async def read_rows_of_contact_after(
     The key is compared as text because a table's key may be of any type.
     """
     await schema.ensure_query_role()
-    schema_name = schema.get_schema_name(pod_id)
-    table = sanitize_identifier(table_name)
-    key = sanitize_identifier(key_column)
+    rows = _contact_table(schema.get_schema_name(pod_id), table_name, key_column)
+    key = cast(rows.c[sanitize_identifier(key_column)], Text)
+    page = (
+        select(literal_column("*"))
+        .select_from(rows)
+        .where(rows.c[CONTACT_COLUMN] == contact_id)
+        .order_by(key)
+        .limit(max(1, min(limit, MAX_CONTACT_ROWS)))
+    )
+    if after_key is not None:
+        page = page.where(key > after_key)
     query_role = sanitize_identifier(datastore_settings.datastore_query_role)
-    after = "" if after_key is None else f'AND "{key}"::text > :after '
     async with schema.session_factory() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
         principal = RowPrincipal.contact(contact_id)
         await schema.set_rls_context(session, principal)
         await session.execute(text(f'SET LOCAL ROLE "{query_role}"'))
-        parameters: dict[str, object] = {
-            "contact": contact_id,
-            "limit": max(1, min(limit, MAX_CONTACT_ROWS)),
-        }
-        if after_key is not None:
-            parameters["after"] = after_key
-        result = await session.execute(
-            text(
-                f'SELECT * FROM "{schema_name}"."{table}" '
-                f'WHERE "{CONTACT_COLUMN}" = :contact {after}'
-                f'ORDER BY "{key}"::text LIMIT :limit'
-            ),
-            parameters,
-        )
-        rows = [dict(row._mapping) for row in result]
+        result = await session.execute(page)
+        found = [dict(row._mapping) for row in result]
         await verify_rls_context(session, principal)
-        return rows
+        return found

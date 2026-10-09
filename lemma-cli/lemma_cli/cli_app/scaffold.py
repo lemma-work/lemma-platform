@@ -94,6 +94,7 @@ TABLE_JSON = _fill_enums("""{
   "enable_rls": __RLS__,           // true = per-user private rows (default); false = shared team data
   "visibility": "POD",          // one of: __VISIBILITY__
   // "contact_owned": true,     // rows about the pod's contacts: adds contact_id; each contact reads only their own. Needs enable_rls: false
+  // "contact_columns": ["title", "status"],  // with contact_owned: the columns a contact may read of their own rows (required)
   "columns": [
     { "name": "title", "type": "TEXT", "required": true, "max_length": 240 },
     { "name": "status", "type": "ENUM", "required": true, "default": "open",
@@ -238,6 +239,9 @@ SCHEDULE_JSON = """{
   // work afterwards. Optional; omit to fire every time.
   // "filter_instruction": "Only when the row's status is 'urgent'.",
   // "filter_output_schema": { "type": "object" },  // shape the filter must answer in
+  // DATASTORE only: also fire on rows people outside the pod added through a
+  // table opened to them. Off by default; their content is untrusted.
+  // "include_outside_rows": false,
   // WEBHOOK only — the connector account and trigger this listens on.
   // "account_id": "TODO-connector-account-uuid",
   // "connector_trigger_id": "TODO-connector-trigger-uuid",
