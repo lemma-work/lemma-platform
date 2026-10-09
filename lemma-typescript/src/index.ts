@@ -41,6 +41,7 @@ export * from "./types.js";
 export { readSSE, parseSSEJson } from "./streams.js";
 export type { SseRawEvent } from "./streams.js";
 export { watchDatastoreChanges } from "./datastore-changes.js";
+export { isEmbeddedInHost } from "./embedded.js";
 export type {
   DatastoreChangeFrame,
   ChangeStreamStatus,

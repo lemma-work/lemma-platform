@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lemma app</title>
+<style>
+/* A frame around the app and nothing more: the app draws its own ground. The
+   host's variables (MCP Apps standard names) first, Lemma's stock after. */
+:root {
+  color-scheme: light dark;
+  --ink: var(--color-text-primary, light-dark(#20211f, #f6f4ec));
+  --ink-2: var(--color-text-secondary, light-dark(#55564e, #aaa79a));
+  --ink-3: var(--color-text-tertiary, light-dark(#6a6b62, #8b8878));
+  --chrome: var(--color-background-secondary, light-dark(#f4f3ed, #272520));
+  --line: var(--color-border-tertiary, light-dark(rgb(32 33 31 / 0.08), rgb(246 244 236 / 0.09)));
+  --line-2: var(--color-border-secondary, light-dark(rgb(32 33 31 / 0.16), rgb(246 244 236 / 0.18)));
+  --ring: var(--color-ring-primary, light-dark(#6b4fe0, #a08cff));
+  --bad: var(--color-text-danger, light-dark(#b3261e, #f08a7e));
+  --ui: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  --mono: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  --radius: var(--border-radius-md, 8px);
+  --radius-sm: var(--border-radius-sm, 6px);
+  --frame-height: 600px;
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: transparent; }
+body { font: 400 13px/1.45 var(--ui); color: var(--ink); }
+.view { display: flex; flex-direction: column; gap: 8px; }
+:root[data-mode="fullscreen"] .view { height: 100vh; padding: 8px; }
+.head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 2px 0; }
+/* Weight never goes above 500. */
+.name { margin: 0; min-width: 0; font: 500 13px/1.3 var(--ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kicker { font: 400 11px/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
+.actions { display: inline-flex; gap: 6px; flex: none; }
+button { font: 400 12px/1 var(--ui); color: var(--ink); background: transparent; border: 1px solid var(--line-2); border-radius: var(--radius-sm); padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+button:hover { background: var(--chrome); }
+button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+iframe { display: block; width: 100%; height: var(--frame-height); border: 1px solid var(--line); border-radius: var(--radius); background: var(--chrome); }
+:root[data-mode="fullscreen"] iframe { flex: 1; height: auto; }
+.state { margin: 0; padding: 16px; border-radius: var(--radius); background: var(--chrome); color: var(--ink-2); text-align: center; }
+.state[data-kind="error"] { color: var(--bad); }
+</style>
+</head>
+<body>
+<main class="view" id="view">
+  <header class="head">
+    <p class="name"><span class="kicker">Lemma · App</span><span id="name">Opening…</span></p>
+    <span class="actions">
+      <button type="button" id="open" hidden>Open in a tab</button>
+      <button type="button" id="expand" hidden>Expand</button>
+    </span>
+  </header>
+  <p class="state" id="state" role="status">Opening the app…</p>
+  <iframe id="frame" title="App" hidden allow="clipboard-write"></iframe>
+</main>
+
+<script>
+"use strict";
+// Lemma's half of the conversation with a framed app. These names are the
+// SDK's too (lemma-typescript/src/embedded.ts): a framed app asks; this view,
+// and only this view, answers -- to that frame, at that app's origin.
+const LemmaAppView = (() => {
+  const EMBED_PARAM = "lemma_embed";
+  const EMBED_VALUE = "mcp";
+  const TOKEN_REQUEST = "lemma:token-request";
+  const TOKEN = "lemma:token";
+  const ACCESS_REQUEST = "lemma:app-access-request";
+  const ACCESS = "lemma:app-access";
+  const SECRET_META_KEY = "lemma/app";
+
+  // The app's own address, marked so its SDK knows to ask this view for
+  // credentials rather than look for a Lemma session it cannot reach.
+  function embeddedUrl(url) {
+    const marked = new URL(url);
+    marked.searchParams.set(EMBED_PARAM, EMBED_VALUE);
+    return marked.href;
+  }
+
+  function appOf(result) {
+    const payload = result && result.structuredContent;
+    const app = payload && payload.app;
+    if (!app || typeof app.url !== "string" || typeof app.slug !== "string") return null;
+    let origin;
+    try {
+      origin = new URL(app.url).origin;
+    } catch (_) {
+      return null;
+    }
+    return { name: typeof app.name === "string" ? app.name : app.slug, slug: app.slug, url: app.url, origin };
+  }
+
+  // What a view-only tool handed back, out of `_meta` where the model never sees it.
+  function secretOf(result) {
+    const meta = result && result._meta;
+    return (meta && meta[SECRET_META_KEY]) || null;
+  }
+
+  function failureOf(result) {
+    if (!result || result.isError !== true) return null;
+    const payload = result.structuredContent;
+    return (payload && typeof payload.error === "string" && payload.error) || "That did not work.";
+  }
+
+  return { EMBED_PARAM, EMBED_VALUE, TOKEN_REQUEST, TOKEN, ACCESS_REQUEST, ACCESS, embeddedUrl, appOf, secretOf, failureOf };
+})();
+</script>
+
+<script>
+"use strict";
+// The MCP Apps bridge (ext-apps 2026-01-26) to the host, and the frame.
+(() => {
+  const byId = (id) => document.getElementById(id);
+  const root = document.documentElement;
+  const frame = byId("frame");
+  let app = null;
+  let hostContext = {};
+  let hostCapabilities = {};
+
+  // --- JSON-RPC with the host ---------------------------------------------
+
+  let nextId = 1;
+  const pending = new Map();
+  const post = (message) => window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+
+  function request(method, params, timeoutMs = 30000) {
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`${method} timed out`));
+      }, timeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      post({ id, method, params });
+    });
+  }
+
+  const notify = (method, params) => post({ method, params });
+
+  async function callTool(name, args) {
+    const result = await request("tools/call", { name, arguments: args });
+    const failure = LemmaAppView.failureOf(result);
+    if (failure) throw new Error(failure);
+    return LemmaAppView.secretOf(result);
+  }
+
+  window.addEventListener("message", (event) => {
+    if (app && event.source === frame.contentWindow) {
+      if (event.origin === app.origin) void answerFrame(event.data || {});
+      return;
+    }
+    if (event.source !== window.parent) return;
+    const message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (message.method === undefined) {
+      const waiting = pending.get(message.id);
+      if (!waiting) return;
+      pending.delete(message.id);
+      clearTimeout(waiting.timer);
+      if (message.error) waiting.reject(new Error(message.error.message || "Request failed"));
+      else waiting.resolve(message.result || {});
+    } else if (message.id !== undefined) {
+      const known = message.method === "ui/resource-teardown" || message.method === "ping";
+      post(known ? { id: message.id, result: {} } : { id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } });
+    } else if (message.method === "ui/notifications/tool-result") {
+      open(message.params);
+    } else if (message.method === "ui/notifications/host-context-changed") {
+      applyHostContext(message.params || {});
+    }
+  });
+
+  // --- The framed app's two questions ---------------------------------------
+
+  async function answerFrame(data) {
+    const reply = (message) => frame.contentWindow.postMessage({ id: data.id, ...message }, app.origin);
+    if (data.type === LemmaAppView.TOKEN_REQUEST) {
+      try {
+        const session = await callTool("lemma_app_session", {});
+        reply({ type: LemmaAppView.TOKEN, token: session.token, expiresAt: session.expires_at });
+      } catch (error) {
+        reply({ type: LemmaAppView.TOKEN, error: String(error.message || error) });
+      }
+    } else if (data.type === LemmaAppView.ACCESS_REQUEST) {
+      try {
+        const access = await callTool("lemma_app_access", { app: app.slug });
+        reply({ type: LemmaAppView.ACCESS, ticket: access.ticket });
+      } catch (error) {
+        reply({ type: LemmaAppView.ACCESS, error: String(error.message || error) });
+      }
+    }
+  }
+
+  // --- Drawing ---------------------------------------------------------------
+
+  function showState(message, kind) {
+    const state = byId("state");
+    state.textContent = message;
+    state.dataset.kind = kind;
+    state.hidden = false;
+    frame.hidden = true;
+  }
+
+  function open(result) {
+    const failure = LemmaAppView.failureOf(result);
+    const opened = LemmaAppView.appOf(result);
+    if (failure || !opened) {
+      showState(failure || "This app could not be opened here.", "error");
+      return;
+    }
+    app = opened;
+    byId("name").textContent = app.name;
+    frame.title = app.name;
+    frame.src = LemmaAppView.embeddedUrl(app.url);
+    frame.hidden = false;
+    byId("state").hidden = true;
+    byId("open").hidden = !hostCapabilities.openLinks;
+    drawExpand();
+  }
+
+  function applyHostContext(changes) {
+    hostContext = { ...hostContext, ...changes };
+    if (changes.theme === "light" || changes.theme === "dark") root.dataset.theme = changes.theme;
+    const variables = changes.styles && changes.styles.variables;
+    if (variables && typeof variables === "object") {
+      for (const [name, value] of Object.entries(variables)) {
+        if (name.startsWith("--") && typeof value === "string") root.style.setProperty(name, value);
+      }
+    }
+    const dimensions = hostContext.containerDimensions || {};
+    if (Number.isFinite(dimensions.maxHeight)) {
+      root.style.setProperty("--frame-height", `${Math.max(320, Math.min(720, dimensions.maxHeight - 48))}px`);
+    }
+    root.dataset.mode = hostContext.displayMode === "fullscreen" ? "fullscreen" : "inline";
+    drawExpand();
+  }
+
+  function drawExpand() {
+    const button = byId("expand");
+    const modes = hostContext.availableDisplayModes || [];
+    const fullscreen = hostContext.displayMode === "fullscreen";
+    const target = fullscreen ? "inline" : "fullscreen";
+    button.hidden = !app || !modes.includes(target);
+    button.textContent = fullscreen ? "Collapse" : "Expand";
+    button.dataset.target = target;
+  }
+
+  byId("expand").addEventListener("click", async (event) => {
+    try {
+      const result = await request("ui/request-display-mode", { mode: event.currentTarget.dataset.target });
+      applyHostContext({ displayMode: result.mode });
+    } catch (_) {
+      // The host kept the mode it had.
+    }
+  });
+
+  byId("open").addEventListener("click", () => {
+    if (app) request("ui/open-link", { url: app.url }).catch(() => {});
+  });
+
+  let reported = "";
+  new ResizeObserver(() => {
+    const box = byId("view").getBoundingClientRect();
+    const key = `${Math.ceil(box.width)}x${Math.ceil(box.height)}`;
+    if (key === reported) return;
+    reported = key;
+    notify("ui/notifications/size-changed", { width: Math.ceil(box.width), height: Math.ceil(box.height) });
+  }).observe(byId("view"));
+
+  (async () => {
+    try {
+      const init = await request(
+        "ui/initialize",
+        {
+          protocolVersion: "2026-01-26",
+          // `appInfo`, as the spec's types and SDK-built hosts require.
+          appInfo: { name: "lemma-app", version: "1.0.0" },
+          appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+        },
+        10000,
+      );
+      hostCapabilities = init.hostCapabilities || {};
+      applyHostContext(init.hostContext || {});
+      notify("ui/notifications/initialized", {});
+    } catch (_) {
+      showState("This view opens inside a conversation, where a Lemma app is opened.", "neutral");
+    }
+  })();
+})();
+</script>
+</body>
+</html>
