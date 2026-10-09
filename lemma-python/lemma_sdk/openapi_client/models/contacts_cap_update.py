@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, TypeVar, cast
+
+from attrs import define as _attrs_define
+from attrs import field as _attrs_field
+
+from ..types import UNSET, Unset
+
+T = TypeVar("T", bound="ContactsCapUpdate")
+
+
+@_attrs_define
+class ContactsCapUpdate:
+    """
+    Attributes:
+        monthly_limit_usd (float | None | Unset): Null removes the cap: no limit, kept as the owner's choice. Zero stops
+            bots answering contacts.
+    """
+
+    monthly_limit_usd: float | None | Unset = UNSET
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        monthly_limit_usd: float | None | Unset
+        if isinstance(self.monthly_limit_usd, Unset):
+            monthly_limit_usd = UNSET
+        else:
+            monthly_limit_usd = self.monthly_limit_usd
+
+        field_dict: dict[str, Any] = {}
+        field_dict.update(self.additional_properties)
+        field_dict.update({})
+        if monthly_limit_usd is not UNSET:
+            field_dict["monthly_limit_usd"] = monthly_limit_usd
+
+        return field_dict
+
+    @classmethod
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        d = dict(src_dict)
+
+        def _parse_monthly_limit_usd(data: object) -> float | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(float | None | Unset, data)
+
+        monthly_limit_usd = _parse_monthly_limit_usd(d.pop("monthly_limit_usd", UNSET))
+
+        contacts_cap_update = cls(
+            monthly_limit_usd=monthly_limit_usd,
+        )
+
+        contacts_cap_update.additional_properties = d
+        return contacts_cap_update
+
+    @property
+    def additional_keys(self) -> list[str]:
+        return list(self.additional_properties.keys())
+
+    def __getitem__(self, key: str) -> Any:
+        return self.additional_properties[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.additional_properties[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self.additional_properties[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.additional_properties

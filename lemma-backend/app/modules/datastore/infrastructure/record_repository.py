@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.errors import (
     DatastoreConflictError,
     DatastoreInfrastructureError,
@@ -157,7 +158,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         try:
             async with self.schema_manager.session_factory() as session:
                 if ctx.enable_rls:
-                    await self.schema_manager.set_rls_context(session, user_id)
+                    await self.schema_manager.set_rls_context(
+                        session, RowPrincipal.for_user(user_id)
+                    )
 
                 if event_factory is None:
                     # No subscriber: executemany is cheapest, nothing needs the rows.
@@ -223,7 +226,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         try:
             async with self.schema_manager.session_factory() as session:
                 if ctx.enable_rls:
-                    await self.schema_manager.set_rls_context(session, user_id)
+                    await self.schema_manager.set_rls_context(
+                        session, RowPrincipal.for_user(user_id)
+                    )
                 result = await session.execute(text(sql), values)
                 row = result.fetchone()
 
@@ -290,8 +295,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             if ctx.enable_rls:
                 await self.schema_manager.set_rls_context(
                     session,
-                    user_id,
-                    is_pod_admin=not enforce_user_scope,
+                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
                 )
             result = await session.execute(text(sql), params)
             row = result.fetchone()
@@ -301,12 +305,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         return self._row_to_entity(dict(row._mapping), ctx)
 
     async def execute_readonly_query(
-        self,
-        pod_id: UUID,
-        query: str,
-        user_id: UUID,
-        enable_rls: bool = True,
-        is_pod_admin: bool = False,
+        self, pod_id: UUID, query: str, principal: RowPrincipal
     ) -> QueryRows:
         """Execute a pre-validated read-only SQL query inside the pod schema.
 
@@ -316,18 +315,14 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         cost ceiling that rejects database-hogging queries before they run, and a
         streamed row cap so a large result never fully materializes.
 
-        ``is_pod_admin`` is forwarded to the RLS context: when true, RLS-enabled
-        tables return all rows; otherwise rows are scoped to ``user_id``. The
-        query itself runs in ``readonly_query``.
+        ``principal`` is who the row policies see: a member (every row of a
+        contact-owned table; their own, or all as a pod admin, of a per-user
+        one), a contact (their own contact-owned rows only), or an outsider
+        (neither). The query itself runs in ``readonly_query``.
         """
         try:
             return await execute_readonly_query(
-                self.schema_manager,
-                pod_id,
-                query,
-                user_id,
-                enable_rls=enable_rls,
-                is_pod_admin=is_pod_admin,
+                self.schema_manager, pod_id, query, principal
             )
         except DBAPIError as exc:
             logger.debug("datastore.record.query.propagated", exc_info=True)
@@ -393,8 +388,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 if ctx.enable_rls:
                     await self.schema_manager.set_rls_context(
                         session,
-                        user_id,
-                        is_pod_admin=not enforce_user_scope,
+                        RowPrincipal.for_user(
+                            user_id, is_pod_admin=not enforce_user_scope
+                        ),
                     )
 
                 rows, total = await rows_and_total(
@@ -468,8 +464,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 if ctx.enable_rls:
                     await self.schema_manager.set_rls_context(
                         session,
-                        user_id,
-                        is_pod_admin=not enforce_user_scope,
+                        RowPrincipal.for_user(
+                            user_id, is_pod_admin=not enforce_user_scope
+                        ),
                     )
 
                 result = await session.execute(text(sql), params)
@@ -533,8 +530,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             if ctx.enable_rls:
                 await self.schema_manager.set_rls_context(
                     session,
-                    user_id,
-                    is_pod_admin=not enforce_user_scope,
+                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
                 )
             try:
                 result = await session.execute(text(sql), params)

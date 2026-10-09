@@ -22,6 +22,15 @@ class DatastoreRecordOperation(str, Enum):
     DELETE = "DELETE"
 
 
+class RecordOrigin(str, Enum):
+    """Whose hand a row change came from."""
+
+    MEMBER = "MEMBER"
+    #: Somebody outside the pod, through a table opened to them. The write ran
+    #: as the member who opened it; the content is the outsider's.
+    OUTSIDE = "OUTSIDE"
+
+
 class DatastoreDomainEvent(DomainEvent):
     """Base for every datastore domain event.
 
@@ -137,6 +146,12 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
     # seconds decoding them.
     payload_truncated: bool = False
     previous_truncated: bool = False
+    # Who wrote the row's content. An OUTSIDE row carries no ``actor_id`` -- it
+    # was not the member's doing -- and names the outsider in ``outside_actor``
+    # (``visitor:{session}`` or ``contact:{id}``), so a subscriber can refuse,
+    # or flag, content nobody in the pod wrote.
+    origin: RecordOrigin = RecordOrigin.MEMBER
+    outside_actor: str | None = None
 
     @classmethod
     def create(
@@ -153,6 +168,7 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
         owner_user_id: UUID | None = None,
         payload_truncated: bool = False,
         previous_truncated: bool = False,
+        outside_actor: str | None = None,
     ) -> "DatastoreRecordEvent":
         return cls(
             # Event-type names follow the lowercase dotted convention; the
@@ -165,8 +181,10 @@ class DatastoreRecordEvent(DatastoreDomainEvent):
             payload=payload,
             changed=changed,
             previous=previous,
-            actor_id=actor_id,
+            actor_id=None if outside_actor else actor_id,
             owner_user_id=owner_user_id,
             payload_truncated=payload_truncated,
             previous_truncated=previous_truncated,
+            origin=RecordOrigin.OUTSIDE if outside_actor else RecordOrigin.MEMBER,
+            outside_actor=outside_actor,
         )

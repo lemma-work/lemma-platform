@@ -46,6 +46,23 @@ class AltchaRejected(ValueError):
     pass
 
 
+def altcha_hmac_key() -> str:
+    """The key challenges are signed with: ``AUTH_ALTCHA_HMAC_KEY``, or one
+    derived from the platform's signing key when that is unset.
+
+    Derived so a deployment gets bot protection without a second secret to
+    provision -- the signing key is required already, and HKDF keeps this use
+    of it from forging anything else. A key rotation invalidates only the
+    challenges in flight, which last five minutes.
+    """
+    configured = reveal_secret(identity_settings.auth_altcha_hmac_key)
+    if configured:
+        return configured
+    from app.core.crypto import get_secret_signer
+
+    return get_secret_signer().sign("altcha-hmac", b"altcha")
+
+
 class AuthAbuseStore:
     def __init__(self, redis_url: str | None = None):
         self._redis = get_redis(url=redis_url or settings.redis_url)
@@ -89,14 +106,17 @@ class AuthAbuseStore:
         except RedisError:
             logger.warning("identity.auth_abuse.counter_clear_failed")
 
-    async def issue_altcha(self, purpose: str) -> dict[str, Any]:
-        if not settings.auth_altcha_enabled:
+    async def issue_altcha(
+        self, purpose: str, *, enabled: bool | None = None
+    ) -> dict[str, Any]:
+        """A challenge for ``purpose``, or ``{"enabled": False}``.
+
+        ``enabled`` is the caller's own switch; sign-in's
+        ``AUTH_ALTCHA_ENABLED`` when it passes none.
+        """
+        if not (settings.auth_altcha_enabled if enabled is None else enabled):
             return {"enabled": False}
-        key = reveal_secret(identity_settings.auth_altcha_hmac_key)
-        if not key:
-            raise RuntimeError(
-                "AUTH_ALTCHA_HMAC_KEY is required when ALTCHA is enabled"
-            )
+        key = altcha_hmac_key()
         maximum = identity_settings.auth_altcha_max_number
         salt = secrets.token_hex(16)
         number = secrets.randbelow(maximum + 1)
@@ -129,8 +149,10 @@ class AuthAbuseStore:
             "signature": signature,
         }
 
-    async def verify_altcha(self, encoded_payload: str | None, *, purpose: str) -> None:
-        if not settings.auth_altcha_enabled:
+    async def verify_altcha(
+        self, encoded_payload: str | None, *, purpose: str, enabled: bool | None = None
+    ) -> None:
+        if not (settings.auth_altcha_enabled if enabled is None else enabled):
             return
         if not encoded_payload:
             raise AltchaRejected("Missing proof-of-work")
@@ -149,9 +171,7 @@ class AuthAbuseStore:
             or not 0 <= number <= identity_settings.auth_altcha_max_number
         ):
             raise AltchaRejected("Invalid proof-of-work parameters")
-        key = reveal_secret(identity_settings.auth_altcha_hmac_key)
-        if not key:
-            raise AltchaRejected("Proof-of-work is unavailable")
+        key = altcha_hmac_key()
         expected_signature = hmac.new(
             key.encode(), challenge.encode(), hashlib.sha256
         ).hexdigest()

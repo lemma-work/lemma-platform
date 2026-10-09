@@ -530,6 +530,7 @@ class NotificationModel(UUIDAuditBase):
     # From a stranger's thread: answered only as words the recipient approved.
     from_outside: Mapped[bool] = mapped_column(Boolean, server_default="false")
     origin_group_title: Mapped[str | None] = mapped_column(String(255))
+    asked_in_private: Mapped[bool] = mapped_column(Boolean, server_default="false")
     asked_by_name: Mapped[str | None] = mapped_column(String(255))
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -576,6 +577,7 @@ class NotificationModel(UUIDAuditBase):
             origin_conversation_id=self.origin_conversation_id,
             from_outside=self.from_outside,
             origin_group_title=self.origin_group_title,
+            asked_in_private=bool(self.asked_in_private),
             asked_by_name=self.asked_by_name,
             title=self.title,
             body=self.body,

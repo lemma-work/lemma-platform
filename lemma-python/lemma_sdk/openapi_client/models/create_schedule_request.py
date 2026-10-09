@@ -37,6 +37,9 @@ class CreateScheduleRequest:
             schedule, not the workflow start.
         filter_output_schema (CreateScheduleRequestFilterOutputSchemaType0 | None | Unset): Optional schema for the
             schedule-level filter output. Filters belong to the schedule, not the workflow start.
+        include_outside_rows (bool | Unset): DATASTORE schedules only: also fire on rows people outside the pod added to
+            an open table. Off by default. When it fires, the run is told the row's content came from outside and is
+            untrusted. Default: False.
         instruction (None | str | Unset): What the target should do when this fires, in your own words. Reaches an agent
             as the run's conversation instructions, layered after the agent's own. Required when targeting the default
             assistant, which has no standing instruction to fall back on. Distinct from filter_instruction, which decides
@@ -55,6 +58,7 @@ class CreateScheduleRequest:
     filter_output_schema: (
         CreateScheduleRequestFilterOutputSchemaType0 | None | Unset
     ) = UNSET
+    include_outside_rows: bool | Unset = False
     instruction: None | str | Unset = UNSET
     name: None | str | Unset = UNSET
     visibility: None | str | Unset = UNSET
@@ -108,6 +112,8 @@ class CreateScheduleRequest:
         else:
             filter_output_schema = self.filter_output_schema
 
+        include_outside_rows = self.include_outside_rows
+
         instruction: None | str | Unset
         if isinstance(self.instruction, Unset):
             instruction = UNSET
@@ -151,6 +157,8 @@ class CreateScheduleRequest:
             field_dict["filter_instruction"] = filter_instruction
         if filter_output_schema is not UNSET:
             field_dict["filter_output_schema"] = filter_output_schema
+        if include_outside_rows is not UNSET:
+            field_dict["include_outside_rows"] = include_outside_rows
         if instruction is not UNSET:
             field_dict["instruction"] = instruction
         if name is not UNSET:
@@ -252,6 +260,8 @@ class CreateScheduleRequest:
             d.pop("filter_output_schema", UNSET)
         )
 
+        include_outside_rows = d.pop("include_outside_rows", UNSET)
+
         def _parse_instruction(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -296,6 +306,7 @@ class CreateScheduleRequest:
             connector_trigger_id=connector_trigger_id,
             filter_instruction=filter_instruction,
             filter_output_schema=filter_output_schema,
+            include_outside_rows=include_outside_rows,
             instruction=instruction,
             name=name,
             visibility=visibility,

@@ -49,6 +49,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
+| DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.delete` | Delete Widget |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
 | GET | `/pods/{pod_id}/groups` | `agent.group.list` | List Groups |
 | GET | `/pods/{pod_id}/groups/{group_id}` | `agent.group.get` | Get Group |
@@ -61,6 +62,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | `agent.surface.channels` | List Surface Channels |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | `agent.surface.setup` | Get Surface Setup |
 | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
+| GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
+| GET | `/public/web/{public_key}/challenge` | `public.web.challenge.read` | Web Challenge |
+| GET | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
+| GET | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
+| GET | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
@@ -69,6 +75,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/surfaces/{surface_id}/webhook` | `surface.webhook.verify_surface` | Verify surface webhook using a surface-level callback URL |
 | PATCH | `/pods/{pod_id}/groups/{group_id}` | `agent.group.update` | Update Group |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
+| PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.update` | Update Widget |
 | POST | `/pods/{pod_id}/groups` | `agent.group.start` | Start Group |
 | POST | `/pods/{pod_id}/groups/links` | `agent.group.link` | Group Link |
 | POST | `/pods/{pod_id}/notifications` | `notification.send` | Notify A Pod Member |
@@ -79,6 +86,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
+| POST | `/pods/{pod_id}/web-widgets` | `agent.web_widget.create` | Create Widget |
+| POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | `agent.web_widget.reissue` | Reissue Widget |
+| POST | `/public/web/{public_key}/code` | `public.web.code.send` | Web Send Code |
+| POST | `/public/web/{public_key}/code/verify` | `public.web.code.verify` | Web Verify Code |
+| POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
+| POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
+| POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
@@ -135,6 +149,17 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | `connector.operation.details.batch` | Get Connector Operation Details In Batch |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute` | `connector.operation.execute` | Execute Connector Operation |
 
+## contacts
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/contacts/{contact_id}` | `contact.delete` | Delete Contact |
+| GET | `/pods/{pod_id}/contacts` | `contact.list` | List Contacts |
+| GET | `/pods/{pod_id}/contacts/{contact_id}` | `contact.get` | Get Contact |
+| GET | `/pods/{pod_id}/contacts/{contact_id}/export` | `contact.export` | Export Contact |
+| PATCH | `/pods/{pod_id}/contacts/{contact_id}` | `contact.update` | Update Contact |
+| POST | `/pods/{pod_id}/contacts/{contact_id}/messages` | `contact.follow_up` | Follow Up Contact |
+
 ## datastore
 
 | Method | Path | Operation ID | Summary |
@@ -144,6 +169,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/datastore/files/signed-urls/{code}` | `file.signed_url.revoke` | Revoke a public signed URL |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.delete` | Delete Table |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.remove` | Remove Column |
+| DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.close` | Stop People Outside Adding Rows |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.delete` | Delete Record |
 | GET | `/pods/{pod_id}/datastore/files` | `file.list` | List Files |
 | GET | `/pods/{pod_id}/datastore/files/by-path` | `file.get` | Get File |
@@ -154,8 +180,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/files/tree` | `file.tree` | Get Directory Tree |
 | GET | `/pods/{pod_id}/datastore/files/url` | `file.url` | Get a short-lived URL for a file |
 | GET | `/pods/{pod_id}/datastore/files/{file_id}` | `file.get_by_id` | Get File by ID |
+| GET | `/pods/{pod_id}/datastore/public-rows` | `table.public_rows.list` | Tables Open To People Outside |
 | GET | `/pods/{pod_id}/datastore/tables` | `table.list` | List Tables |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.get` | Get Table |
+| GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.get` | Who Outside May Add Rows |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records` | `record.list` | List Records |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.get` | Get Record |
 | PATCH | `/pods/{pod_id}/datastore/files/by-path` | `file.update` | Update File |
@@ -174,6 +202,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/delete` | `record.bulk_delete` | Bulk Delete |
 | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/update` | `record.bulk_update` | Bulk Update |
 | PUT | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.attach` | Attach Document Markdown |
+| PUT | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.open` | Let People Outside Add Rows |
 
 ## decisions
 
@@ -197,6 +226,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/functions` | `function.create` | Create Function |
 | POST | `/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote` | `function.revision.promote` | Promote Function Revision |
 | POST | `/pods/{pod_id}/functions/{function_name}/runs` | `function.run` | Execute Function |
+| PUT | `/pods/{pod_id}/functions/{function_name}/contacts` | `function.contacts.update` | Open a Function to Contacts |
 | PUT | `/pods/{pod_id}/functions/{function_name}/permissions` | `function.permissions.replace` | Replace Function Resource Permissions |
 
 ## icon
@@ -316,11 +346,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/usage/me/limits` | `usage.me.limits.get` | My Limits |
 | GET | `/usage/me/stats` | `usage.me.stats.get` | My Stats |
 | GET | `/usage/me/summary` | `usage.me.summary.get` | My Summary |
+| GET | `/usage/organizations/{organization_id}/contacts-cap` | `usage.organization.contacts_cap.get` | Get Contacts Cap |
 | GET | `/usage/organizations/{organization_id}/events` | `usage.organization.events.list` | List Usage Events |
 | GET | `/usage/organizations/{organization_id}/limits` | `usage.organization.limits.get` | Get Usage Limits |
 | GET | `/usage/organizations/{organization_id}/me` | `usage.organization.me.summary.get` | Get My Usage |
 | GET | `/usage/organizations/{organization_id}/stats` | `usage.organization.stats.get` | Get Usage Stats |
 | GET | `/usage/organizations/{organization_id}/summary` | `usage.organization.summary.get` | Get Organization Usage Summary |
+| PUT | `/usage/organizations/{organization_id}/contacts-cap` | `usage.organization.contacts_cap.update` | Update Contacts Cap |
 
 ## web_login
 

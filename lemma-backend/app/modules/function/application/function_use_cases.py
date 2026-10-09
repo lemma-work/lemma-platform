@@ -51,6 +51,7 @@ from app.modules.function.domain.errors import (
 from app.modules.function.domain.ports import FunctionExecutionPort
 from app.modules.function.domain.ports import FunctionRunQueuePort
 from app.modules.function.domain.types import JsonObject
+from app.modules.function.services.contact_execution import resolve_contact_execute
 from app.modules.function.services.execution_preflight import (
     LegacyFunctionRevisionRequired,
 )
@@ -523,6 +524,29 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
                         ctx=auth_ctx,
                         dispatch_mode=FunctionDispatchMode.ASYNCHRONOUS,
                     )
+
+        resolved = await self._resolve_with_revision_backfill(resolve_once)
+        return await self._enqueue_run(resolved.run)
+
+    async def dispatch_function_for_contact(
+        self,
+        *,
+        pod_id: UUID,
+        name: str,
+        input_data: JsonObject,
+        contact_id: UUID | None,
+    ) -> FunctionRunEntity:
+        """Create + enqueue a run for a contact, acting for no member."""
+
+        async def resolve_once() -> ResolvedExecution:
+            async with uow_scope(self._uow_factory) as uow:
+                return await resolve_contact_execute(
+                    self._build(uow),
+                    pod_id=pod_id,
+                    name=name,
+                    input_data=input_data,
+                    contact_id=contact_id,
+                )
 
         resolved = await self._resolve_with_revision_backfill(resolve_once)
         return await self._enqueue_run(resolved.run)

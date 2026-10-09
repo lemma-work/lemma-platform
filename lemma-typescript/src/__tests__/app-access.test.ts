@@ -81,6 +81,25 @@ describe("app access sign-in page", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  it("asks the server, not a stale marker, whether a lapsed session can be renewed", async () => {
+    // A failed refresh left the update marker on this host and took the front
+    // token; SuperTokens answers "no session" from that without a request.
+    document.cookie = "st-last-access-token-update=1700000000000; path=/";
+    const seen: string[] = [];
+    vi.mocked(Session.attemptRefreshingSession).mockImplementation(async () => {
+      seen.push(document.cookie);
+      return true;
+    });
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(refused(401))
+      .mockResolvedValueOnce(issued())
+      .mockResolvedValueOnce(json({ expires_in_seconds: 43200 }))
+      .mockResolvedValueOnce(new Response("ok"));
+    await startAppAccess(options);
+    expect(seen).toEqual([expect.not.stringContaining("st-last-access-token-update")]);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   it("signs in at the top when shown in a workspace tab", async () => {
     vi.spyOn(window, "parent", "get").mockReturnValue({} as Window);
     vi.mocked(fetch).mockResolvedValue(refused(401));

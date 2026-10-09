@@ -30,6 +30,7 @@ def _engine() -> WorkflowEngine:
         agent_adapter=Mock(),
         function_adapter=Mock(),
         schedule_adapter=Mock(),
+        decision_adapter=Mock(),
         notification_adapter=AsyncMock(),
     )
     engine.agent_adapter.stop_conversation = AsyncMock()

@@ -20,6 +20,7 @@ limits.
 | --- | --- |
 | `usage_records` | Immutable run/profile/model/token/unit/cost/status attribution |
 | `usage_limit_counters` | Per organization/user time-window reserved amount used to constrain concurrency |
+| `usage_contacts_caps` | What an organization lets its bots spend answering contacts and group outsiders a month, set by an organization owner (`org.billing.manage`) through `PUT /usage/organizations/{id}/contacts-cap`; no row means `USAGE_CONTACTS_MONTHLY_DEFAULT_USD`, a row with no limit means none. `contracts/contacts_cap.contacts_cap_reached` is asked before a surface starts an outside run, and `check_run_budget` holds an outside run to it as well. Such runs are recorded as `contact_run` / `outsider_run`, charge the organization and never the personal windows of the member who looks after the conversation, and are held to a `contacts_month` window counting only those sources |
 
 System-scoped runtimes use registered per-model pricing when available. An
 unknown model is still metered, but its record has `cost_usd = null` and

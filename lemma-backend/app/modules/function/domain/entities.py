@@ -121,8 +121,10 @@ class FunctionExecutionDispatch(BaseModel):
     pod_id: UUID
     function_id: UUID
     function_name: str
-    user_id: UUID
+    #: ``None`` on a run started for a contact, which acts for no member.
+    user_id: UUID | None
     user_email: str | None
+    contact_id: UUID | None = None
     config: JsonObject | None
     mode: FunctionDispatchMode
     deadline_at: datetime
@@ -133,14 +135,22 @@ class FunctionExecutionDispatch(BaseModel):
 
 
 class FunctionSessionPrincipal(BaseModel):
-    """Authenticated delegated function identity on a runtime request."""
+    """Authenticated function identity on a runtime request.
 
-    user_id: UUID
+    One of two shapes. A member's run carries a delegated session: ``user_id``
+    and the ``session_id`` its token was minted under. A person-less run
+    carries a function-run token, which names the one run and revision it was
+    minted for (``run_id``, ``revision_hash``) and no user.
+    """
+
+    user_id: UUID | None = None
     pod_id: UUID
     function_id: UUID
-    session_id: str
+    session_id: str | None = None
     actor_name: str | None = None
     scope: tuple[str, ...] = ()
+    run_id: UUID | None = None
+    revision_hash: str | None = None
 
     model_config = {"frozen": True}
 
@@ -152,8 +162,9 @@ class FunctionRunRuntimeContext(BaseModel):
     artifact_path: str
     input_data: JsonObject
     config: JsonObject | None
-    user_id: UUID
+    user_id: UUID | None
     user_email: str | None
+    contact_id: UUID | None = None
     pod_id: UUID
     function_id: UUID
     function_name: str
@@ -181,6 +192,7 @@ class FunctionEntity(BaseModel):
     type: FunctionType = FunctionType.API
     status: FunctionStatus = FunctionStatus.DRAFT
     visibility: str = "POD"
+    contacts_invoke: bool = False
     pending_artifact: FunctionArtifact | None = Field(
         default=None, exclude=True, repr=False
     )
@@ -258,7 +270,13 @@ class FunctionRunEntity(BaseModel):
     id: UUID | None = None
     function_id: UUID
     revision_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
-    user_id: UUID
+    #: The member the run acts for; ``None`` on a run started for a contact,
+    #: which runs as the function's own workload (``contact_functions``).
+    #: Required all the same, so a run can't lose its member by omission.
+    user_id: UUID | None
+    #: The contact a person-less run serves; ``None`` for a member's run and
+    #: for an anonymous form submission's.
+    contact_id: UUID | None = None
     input_data: JsonObject | None = None
     output_data: JsonObject | None = None
     status: FunctionRunStatus = FunctionRunStatus.PENDING
@@ -273,6 +291,15 @@ class FunctionRunEntity(BaseModel):
     updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+    @property
+    def actor(self) -> str:
+        """Who the run acted for, the way listings and logs name them."""
+        if self.user_id is not None:
+            return f"user:{self.user_id}"
+        if self.contact_id is not None:
+            return f"contact:{self.contact_id}"
+        return "anonymous"
 
     def add_event(self, event: DomainEvent) -> None:
         self._domain_events.append(event)

@@ -84,6 +84,18 @@ def public_surface_api_url(monkeypatch):
     monkeypatch.setattr(settings, "api_url", "https://surface-e2e.test")
 
 
+@pytest.fixture(autouse=True)
+def public_web_switched_on(monkeypatch):
+    """Web chat and forms are off on a deployment until an operator turns them
+    on; these journeys are about what happens once they are. The kill switch's
+    own test turns it back off. Bot protection is on by default; these
+    journeys are not about it, and its own test turns it back on."""
+    from app.core.public_web import public_web_settings
+
+    monkeypatch.setattr(public_web_settings, "public_web_enabled", True)
+    monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", False)
+
+
 # Set before anything imports settings, so every reader sees it — including the
 # worker, which serves these tests from its own task and picked up an attribute
 # patched onto one Settings instance too late to matter. The fixture below says

@@ -17,7 +17,10 @@ from sqlalchemy import Column, MetaData, String, Table
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
-from app.core.authorization.anonymous import build_anonymous_context
+from app.core.authorization.anonymous import (
+    build_anonymous_context,
+    build_outsider_context,
+)
 from app.core.authorization.context import (
     ActorType,
     Context,
@@ -164,3 +167,73 @@ def test_a_row_whose_pod_cannot_be_told_projects_nothing():
     sql = _projected_sql(_outsider(uuid4()), with_pod_column=False)
 
     assert "PUBLIC" not in sql
+
+
+# -- a contact: the same reach, with a name -----------------------------------
+
+
+def _contact(pod_id: UUID) -> Context:
+    return build_outsider_context(
+        session=None,  # type: ignore[arg-type]
+        pod_id=pod_id,
+        organization_id=uuid4(),
+        contact_id=uuid4(),
+    )
+
+
+def test_a_contact_is_named_and_holds_nothing():
+    ctx = _contact(uuid4())
+
+    assert ctx.actor_type is ActorType.CONTACT
+    assert ctx.actor_id == f"contact:{ctx.contact_id}"
+    assert ctx.is_outsider and not ctx.is_authenticated
+    assert not ctx.principal_refs and not ctx.permission_ids
+
+
+def test_without_a_contact_the_outsider_is_anonymous_and_must_be_named():
+    pod_id = uuid4()
+
+    ctx = build_outsider_context(
+        session=None,  # type: ignore[arg-type]
+        pod_id=pod_id,
+        organization_id=None,
+        contact_id=None,
+        actor_id="visitor:1",
+    )
+
+    assert ctx.actor_type is ActorType.ANONYMOUS and ctx.contact_id is None
+    with pytest.raises(ValueError):
+        build_outsider_context(
+            session=None,  # type: ignore[arg-type]
+            pod_id=pod_id,
+            organization_id=None,
+            contact_id=None,
+        )
+
+
+async def test_a_contact_reads_public_in_its_pod_and_nothing_else():
+    pod_id = uuid4()
+    ctx = _contact(pod_id)
+
+    public_here = await ctx.authorizer.authorize(
+        ctx, Permissions.FOLDER_READ, _folder(pod_id, ResourceVisibility.PUBLIC)
+    )
+    public_elsewhere = await ctx.authorizer.authorize(
+        ctx, Permissions.FOLDER_READ, _folder(uuid4(), ResourceVisibility.PUBLIC)
+    )
+    pod_only = await ctx.authorizer.authorize(
+        ctx, Permissions.FOLDER_READ, _folder(pod_id, ResourceVisibility.POD)
+    )
+
+    assert public_here.allowed
+    assert not public_elsewhere.allowed
+    assert not pod_only.allowed
+
+
+@pytest.mark.parametrize("builder", [_outsider, _contact])
+def test_an_outsider_is_never_a_member_of_the_pod(builder):
+    from app.core.authorization.dependencies import assert_pod_membership
+    from app.core.domain.errors import DomainError
+
+    with pytest.raises(DomainError):
+        assert_pod_membership(builder(uuid4()))

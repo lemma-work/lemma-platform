@@ -92,15 +92,26 @@ class ScheduleRun(UUIDAuditBase):
         # schedule's whole completed history and sorted it, on every run
         # completion.
         #
-        # Partial on completed_at IS NOT NULL because that is the query's own
-        # filter and because an in-flight run has no place in a streak: at rest
-        # that excludes only the small fraction of the table still running.
+        # Partial on the query's own filter: an in-flight run has no place in a
+        # streak, and neither has an event the filter skipped -- a schedule
+        # that skips most events would otherwise make every count walk past
+        # them.
         Index(
-            "ix_schedule_runs_schedule_completed",
+            "ix_schedule_runs_schedule_streak",
             "schedule_id",
             text("completed_at DESC"),
             text("id DESC"),
-            postgresql_where=text("completed_at IS NOT NULL"),
+            postgresql_where=text("completed_at IS NOT NULL AND status <> 'FILTERED'"),
+        ),
+        # A schedule's history without the events its filter skipped, newest
+        # first -- what the run list shows by default, and what would otherwise
+        # walk past every skip of a busy webhook schedule to find its fires.
+        Index(
+            "ix_schedule_runs_schedule_fires",
+            "schedule_id",
+            text("created_at DESC"),
+            text("id DESC"),
+            postgresql_where=text("status <> 'FILTERED'"),
         ),
         Index(
             "uq_schedule_runs_target",

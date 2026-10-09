@@ -82,7 +82,7 @@ async def _owner_says(db_session: AsyncSession, *, text: str, message_id: int, s
         script=script,
     )
     assert isinstance(context, SurfaceChatContext)
-    assert context.answers_outsider is False
+    assert context.audience.answers_outsiders is False
     return context
 
 

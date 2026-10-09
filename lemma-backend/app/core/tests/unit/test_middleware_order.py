@@ -28,9 +28,12 @@ def _layer_names(app) -> list[str]:
 
 
 def test_the_body_limit_sits_inside_cors_so_a_413_is_readable():
+    """CORS is the public-web dispatcher, which wraps the app-wide policy."""
     layers = _layer_names(appmod.app)
 
-    assert layers.index("CORSMiddleware") < layers.index("RequestBodyLimitMiddleware")
+    assert layers.index("PublicWebCORSMiddleware") < layers.index(
+        "RequestBodyLimitMiddleware"
+    )
 
 
 def test_the_correlation_id_stays_outermost():
