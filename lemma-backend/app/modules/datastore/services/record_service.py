@@ -10,7 +10,7 @@ from app.core.authorization.context import Context
 from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.datastore_entities import DatastoreDataType
 from app.modules.datastore.domain.ports import DatastoreRecordRepositoryPort
-from app.modules.datastore.domain.row_security import RowPrincipal
+from app.modules.datastore.domain.row_security import CONTACT_COLUMN, RowPrincipal
 from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.infrastructure.record_bulk_delete import (
     bulk_delete_records as write_bulk_deletes,
@@ -72,12 +72,22 @@ class RecordService:
     async def _require_record_read(self, *, user_id: UUID, ctx: TableContext) -> None:
         if self.authz is None:
             return
+        self.authz.refuse_contact_scoped_records(ctx)
         await self.authz.require_record_read(user_id=user_id, ctx=ctx)
 
-    async def _require_record_write(self, *, user_id: UUID, ctx: TableContext) -> None:
+    async def _require_record_write(
+        self, *, user_id: UUID, ctx: TableContext, creates: bool = False
+    ) -> None:
         if self.authz is None:
             return
+        if not creates:
+            self.authz.refuse_contact_scoped_records(ctx)
         await self.authz.require_record_write(user_id=user_id, ctx=ctx)
+
+    def _stamp_contact(self, ctx: TableContext, row: dict[str, Any]) -> dict[str, Any]:
+        """A new row made for a contact names them, whatever the caller sent."""
+        contact_id = self.authz.contact_scope(ctx) if self.authz is not None else None
+        return row if contact_id is None else {**row, CONTACT_COLUMN: str(contact_id)}
 
     async def _should_enforce_user_scope(
         self,
@@ -155,10 +165,12 @@ class RecordService:
         data: dict[str, Any],
         user_id: UUID,
     ):
-        await self._require_record_write(user_id=user_id, ctx=ctx)
+        await self._require_record_write(user_id=user_id, ctx=ctx, creates=True)
 
         validator = RecordValidator(ctx)
-        sanitized_data = validator.strip_system_write_overrides(data)
+        sanitized_data = self._stamp_contact(
+            ctx, validator.strip_system_write_overrides(data)
+        )
 
         is_valid, errors, error_details = validator.validate(
             sanitized_data, is_creation=True
@@ -403,13 +415,14 @@ class RecordService:
         *,
         upsert: bool = False,
     ):
-        await self._require_record_write(user_id=user_id, ctx=ctx)
+        await self._require_record_write(user_id=user_id, ctx=ctx, creates=not upsert)
         if not records:
             return 0
 
         validator = RecordValidator(ctx)
         sanitized_records = [
-            validator.strip_system_write_overrides(record) for record in records
+            self._stamp_contact(ctx, validator.strip_system_write_overrides(record))
+            for record in records
         ]
 
         # Collected row by row so each row's own validation still runs in

@@ -367,6 +367,78 @@ async def test_a_runs_token_reaches_pod_data_on_the_functions_grants_alone(
     assert revoked.json()["code"] == "DELEGATION_REVOKED"
 
 
+async def test_a_runs_token_sees_only_its_contacts_rows_of_a_contact_owned_table(
+    db_manager, test_pod, fixed_test_user, authenticated_client, async_client
+):
+    """The run holds grants on the table, so nothing short of the contact stops it.
+
+    Record reads run where the contact policy does not hold, so they are
+    refused; a query reads under the policy and sees this contact's rows only;
+    a row the run adds names its contact whatever the input said.
+    """
+    pod_id = test_pod["id"]
+    function = await _seed_function(
+        db_manager, pod_id=pod_id, owner_id=fixed_test_user["id"]
+    )
+    contact_id = await _seed_contact(db_manager, pod_id=pod_id)
+    someone_else = await _seed_contact(db_manager, pod_id=pod_id)
+    run_id = await _seed_run(db_manager, function, contact_id)
+    orders = f"orders_{uuid4().hex[:8]}"
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": orders,
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["item"],
+            "columns": [{"name": "item", "type": "TEXT", "required": True}],
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    await replace_function_resource_grants(
+        authenticated_client,
+        pod_id,
+        function.name,
+        [
+            {
+                "resource_type": "datastore_table",
+                "resource_name": orders,
+                "permission_ids": [
+                    "datastore.table.read",
+                    "datastore.record.read",
+                    "datastore.record.write",
+                ],
+            }
+        ],
+    )
+    theirs = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables/{orders}/records",
+        json={"data": {"item": "theirs", "contact_id": str(someone_else)}},
+    )
+    assert theirs.status_code == status.HTTP_201_CREATED, theirs.text
+    _claims, headers = _token(function, run_id, contact_id)
+
+    mine = await async_client.post(
+        f"/pods/{pod_id}/datastore/tables/{orders}/records",
+        json={"data": {"item": "mine", "contact_id": str(someone_else)}},
+        headers=headers,
+    )
+    assert mine.status_code == status.HTTP_201_CREATED, mine.text
+
+    listed = await async_client.get(
+        f"/pods/{pod_id}/datastore/tables/{orders}/records", headers=headers
+    )
+    assert listed.status_code == status.HTTP_403_FORBIDDEN, listed.text
+
+    queried = await async_client.post(
+        f"/pods/{pod_id}/datastore/query",
+        json={"query": f"SELECT item, contact_id FROM {orders}"},
+        headers=headers,
+    )
+    assert queried.status_code == status.HTTP_200_OK, queried.text
+    assert queried.json()["items"] == [{"item": "mine", "contact_id": str(contact_id)}]
+
+
 async def test_a_runs_token_reports_its_own_run_and_no_other(
     db_manager, test_pod, fixed_test_user, async_client
 ):

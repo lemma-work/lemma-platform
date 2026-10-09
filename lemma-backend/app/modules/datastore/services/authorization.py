@@ -162,6 +162,30 @@ class DatastoreAuthorization:
         if ctx.contact_owned and auth_ctx.is_outsider:
             raise DatastoreAccessDeniedError("This table is not readable here")
 
+    def contact_scope(self, ctx: TableContext) -> UUID | None:
+        """The contact a write to ``ctx`` must name, for work done on their behalf.
+
+        A function a contact called runs as its own workload, not an outsider,
+        and holds grants on the table -- so the outsider refusal above does not
+        stop it. Its record writes are stamped with the contact it acts for.
+        """
+        if not ctx.contact_owned:
+            return None
+        return self._context().contact_id
+
+    def refuse_contact_scoped_records(self, ctx: TableContext) -> None:
+        """Keep work for a contact off the record API of a contact-owned table.
+
+        Record reads, updates and deletes run on the application's connection,
+        where the contact policy does not hold, so one contact's call could
+        reach everyone's rows. A query reads under the policy instead, and sees
+        only this contact's.
+        """
+        if self.contact_scope(ctx) is not None:
+            raise DatastoreAccessDeniedError(
+                "Read this table with a query: it shows only this contact's rows"
+            )
+
     async def require_record_read(
         self,
         *,
