@@ -515,6 +515,25 @@ MCP_ACCESS_TOKEN_REQUESTS_PER_MINUTE=600     # token + revoke, per client per so
 MCP_ACCESS_TOKEN_REQUESTS_PER_ADDRESS_PER_MINUTE=6000  # token + revoke, per source IP, any client
 ```
 
+## Web chat and forms for people outside a pod
+
+A pod's web widgets put its chat, and forms for tables it opens to visitors, on
+other people's sites, reached by a public key anybody can copy off the page.
+They are off until an operator turns them on; while off, every `/public/web`
+endpoint and hosted page answers 404 and no widget can be set to answer anybody.
+
+```dotenv
+PUBLIC_WEB_ENABLED=true
+# Optional: an origin of its own for Lemma's hosted chat and form pages, routed
+# to the API but sharing no cookies with it. Unset, they are served on API_URL.
+PUBLIC_PAGES_URL=https://pages.example.com
+```
+
+With `PUBLIC_PAGES_URL` set, hosted pages answer only on that host, and that
+origin -- not `API_URL`'s -- is the one every widget allows. `AUTH_ALTCHA_ENABLED`
+also puts a proof-of-work in front of starting an anonymous chat and sending an
+email code.
+
 ## Authentication and email
 
 Email transport, sender identity, and the sign-up abuse controls are covered in

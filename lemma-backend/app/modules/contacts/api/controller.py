@@ -27,6 +27,10 @@ from app.modules.contacts.domain.entities import (
     IdentityKind,
     IdentityStrength,
 )
+from app.modules.contacts.contracts.visitor_sessions import (
+    forget_session_liveness,
+    revoke_visitor_sessions,
+)
 from app.modules.contacts.infrastructure.repository import (
     MAX_PAGE,
     ContactRepository,
@@ -176,9 +180,14 @@ async def export_contact(
 async def delete_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> None:
     """Forget a contact: their handles and their conversations go with them.
 
-    One transaction, so a contact is never half forgotten.
+    One transaction, so a contact is never half forgotten. Their web sessions
+    end with it, before the contact goes: a session the forgetting left behind
+    would otherwise go on as an anonymous visitor's, holding a token that still
+    names them.
     """
     await _found(uow, pod_id=pod_id, contact_id=contact_id)
+    ended = await revoke_visitor_sessions(uow, contact_id=contact_id)
     await forget_contact_conversations(uow, pod_id=pod_id, contact_id=contact_id)
     await ContactRepository(uow.session).delete(pod_id=pod_id, contact_id=contact_id)
     await uow.commit()
+    await forget_session_liveness(ended)

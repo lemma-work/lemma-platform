@@ -20,7 +20,7 @@ from app.modules.agent_surfaces.domain.web_widgets import (
     mint_public_key,
     mint_secret,
 )
-from app.modules.agent_surfaces.services.web_chat import verify_host_token
+from app.modules.agent_surfaces.services.web_visitors import verify_host_token
 
 pytestmark = pytest.mark.unit
 

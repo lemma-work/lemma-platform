@@ -1,23 +1,18 @@
-"""Reading and writing web widgets, their visitors' sessions, and codes."""
+"""Reading and writing web widgets.
+
+Their visitors' sessions and codes are contacts' (``contacts.contracts.visitor_sessions``).
+"""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto.factory import get_secret_cipher
-from app.modules.agent_surfaces.domain.web_widgets import (
-    WebSession,
-    WebWidget,
-    WidgetAnswer,
-    digest,
-)
+from app.modules.agent_surfaces.domain.web_widgets import WebWidget, WidgetAnswer
 from app.modules.agent_surfaces.infrastructure.web_widget_models import (
-    WebCodeModel,
-    WebSessionModel,
     WebWidgetModel,
 )
 
@@ -36,17 +31,6 @@ def _widget(row: WebWidgetModel) -> WebWidget:
         answer=WidgetAnswer(row.answer),
         looked_after_by=row.looked_after_by,
         created_at=row.created_at,
-    )
-
-
-def _session(row: WebSessionModel) -> WebSession:
-    return WebSession(
-        id=row.id,
-        widget_id=row.widget_id,
-        conversation_id=row.conversation_id,
-        contact_id=row.contact_id,
-        contact_strength=row.contact_strength,
-        display_name=row.display_name,
     )
 
 
@@ -136,104 +120,3 @@ class WebWidgetRepository:
             )
         )
         return bool(result.rowcount)
-
-    # -- sessions -----------------------------------------------------------
-
-    async def open_session(
-        self,
-        *,
-        widget_id: UUID,
-        token: str,
-        contact_id: UUID | None,
-        contact_strength: str | None,
-        display_name: str | None,
-    ) -> WebSession:
-        row = WebSessionModel(
-            widget_id=widget_id,
-            token_hash=digest(token),
-            contact_id=contact_id,
-            contact_strength=contact_strength,
-            display_name=display_name,
-            last_seen_at=datetime.now(timezone.utc),
-        )
-        self.session.add(row)
-        await self.session.flush()
-        return _session(row)
-
-    async def session_by_token(
-        self, *, widget_id: UUID, token: str
-    ) -> WebSession | None:
-        row = await self.session.scalar(
-            select(WebSessionModel).where(
-                WebSessionModel.token_hash == digest(token),
-                WebSessionModel.widget_id == widget_id,
-            )
-        )
-        return _session(row) if row else None
-
-    async def attach_conversation(
-        self, *, session_id: UUID, conversation_id: UUID
-    ) -> None:
-        await self.session.execute(
-            update(WebSessionModel)
-            .where(WebSessionModel.id == session_id)
-            .values(conversation_id=conversation_id)
-        )
-
-    async def identify(
-        self, *, session_id: UUID, contact_id: UUID, strength: str
-    ) -> None:
-        await self.session.execute(
-            update(WebSessionModel)
-            .where(WebSessionModel.id == session_id)
-            .values(contact_id=contact_id, contact_strength=strength)
-        )
-
-    async def touch(self, session_id: UUID) -> None:
-        await self.session.execute(
-            update(WebSessionModel)
-            .where(WebSessionModel.id == session_id)
-            .values(last_seen_at=datetime.now(timezone.utc))
-        )
-
-    async def links_to(self, conversation_id: UUID) -> bool:
-        """Whether a web session leads to this conversation."""
-        return bool(
-            await self.session.scalar(
-                select(
-                    select(WebSessionModel.id)
-                    .where(WebSessionModel.conversation_id == conversation_id)
-                    .exists()
-                )
-            )
-        )
-
-    # -- codes --------------------------------------------------------------
-
-    async def add_code(
-        self, *, session_id: UUID, email: str, code_hash: str, expires_at: datetime
-    ) -> None:
-        self.session.add(
-            WebCodeModel(
-                session_id=session_id,
-                email=email,
-                code_hash=code_hash,
-                expires_at=expires_at,
-                attempts=0,
-            )
-        )
-        await self.session.flush()
-
-    async def live_code(self, *, session_id: UUID, email: str) -> WebCodeModel | None:
-        """The newest unexpired, unconsumed code for this session and address."""
-        return await self.session.scalar(
-            select(WebCodeModel)
-            .where(
-                WebCodeModel.session_id == session_id,
-                WebCodeModel.email == email,
-                WebCodeModel.consumed_at.is_(None),
-                WebCodeModel.expires_at > datetime.now(timezone.utc),
-            )
-            .order_by(WebCodeModel.created_at.desc())
-            .limit(1)
-        )

@@ -25,10 +25,11 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
 )
 from app.modules.agent_surfaces.tests.e2e.test_web_widgets_e2e import (
     SHOP,
+    _as,
     _latest_code,
+    _page,
     _say,
     _session,
-    _text,
     _widget,
 )
 
@@ -95,10 +96,10 @@ async def test_an_open_table_takes_one_row_per_answer_and_nothing_more(
     assert listed.json()["items"] == [{"table": table, "audience": "anyone"}]
 
     key = (await _widget(authenticated_client, pod_id, name="Door"))["public_key"]
-    session = await _session(authenticated_client, key)
+    visitor = await _session(authenticated_client, key)
 
-    described = await authenticated_client.post(
-        f"/public/web/{key}/table", **_text({"table": table})
+    described = await authenticated_client.get(
+        f"/public/web/{key}/table", params={"table": table}, headers=_page()
     )
     assert described.status_code == 200, described.text
     assert described.headers["access-control-allow-origin"] == SHOP
@@ -113,19 +114,17 @@ async def test_an_open_table_takes_one_row_per_answer_and_nothing_more(
 
     added = await authenticated_client.post(
         f"/public/web/{key}/rows",
-        **_text(
-            {
-                "session": session["session"],
-                "table": table,
-                "values": {
-                    "full_name": "Ana Ruiz",
-                    "work_email": "ana@client.example",
-                    "seats": "2",
-                    "track": "Code",
-                    "internal_notes": "VIP, comp her ticket",
-                },
-            }
-        ),
+        json={
+            "table": table,
+            "values": {
+                "full_name": "Ana Ruiz",
+                "work_email": "ana@client.example",
+                "seats": "2",
+                "track": "Code",
+                "internal_notes": "VIP, comp her ticket",
+            },
+        },
+        headers=_as(visitor),
     )
     assert added.status_code == 201, added.text
     assert added.json() == {"ok": True}
@@ -138,10 +137,11 @@ async def test_an_open_table_takes_one_row_per_answer_and_nothing_more(
 
     refused = await authenticated_client.post(
         f"/public/web/{key}/rows",
-        **_text({"table": table, "values": {"work_email": "x@y.co"}}),
+        json={"table": table, "values": {"work_email": "x@y.co"}},
+        headers=_page(),
     )
     assert refused.status_code == 422
-    assert "Full name is required" in refused.json()["error"]
+    assert "Full name is required" in refused.json()["message"]
 
     closed = await authenticated_client.delete(
         f"/pods/{pod_id}/datastore/tables/{table}/public-rows"
@@ -149,7 +149,8 @@ async def test_an_open_table_takes_one_row_per_answer_and_nothing_more(
     assert closed.status_code == 204
     after = await authenticated_client.post(
         f"/public/web/{key}/rows",
-        **_text({"table": table, "values": {"full_name": "Late"}}),
+        json={"table": table, "values": {"full_name": "Late"}},
+        headers=_page(),
     )
     assert after.status_code == 404
     assert len(await _rows(authenticated_client, pod_id, table)) == 1
@@ -189,37 +190,38 @@ async def test_a_contacts_only_table_asks_a_stranger_to_confirm_first(
     assert opened.status_code == 200, opened.text
     widget = await _widget(authenticated_client, pod_id, name="Requests door")
     key = widget["public_key"]
-    session = await _session(authenticated_client, key)
+    visitor = await _session(authenticated_client, key)
 
-    described = await authenticated_client.post(
-        f"/public/web/{key}/table", **_text({"table": table})
+    described = await authenticated_client.get(
+        f"/public/web/{key}/table", params={"table": table}, headers=_page()
     )
     assert described.json()["contacts_only"] is True
     answers = {"full_name": "Ana", "work_email": "ana@client.example"}
     stranger = await authenticated_client.post(
         f"/public/web/{key}/rows",
-        **_text({"session": session["session"], "table": table, "values": answers}),
+        json={"table": table, "values": answers},
+        headers=_as(visitor),
     )
     assert stranger.status_code == 403
     assert stranger.json()["code"] == "needs_contact"
 
     email = f"rows-{widget['id'][:8]}@client.example"
     await authenticated_client.post(
-        f"/public/web/{key}/code",
-        **_text({"session": session["session"], "email": email}),
+        f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
     )
     verified = await authenticated_client.post(
         f"/public/web/{key}/code/verify",
-        **_text(
-            {"session": session["session"], "email": email, "code": _latest_code(email)}
-        ),
+        json={"email": email, "code": _latest_code(email)},
+        headers=_as(visitor),
     )
     assert verified.status_code == 200, verified.text
+    contact = verified.json()
 
     forged = {**answers, "contact_id": "00000000-0000-0000-0000-000000000000"}
     added = await authenticated_client.post(
         f"/public/web/{key}/rows",
-        **_text({"session": session["session"], "table": table, "values": forged}),
+        json={"table": table, "values": forged},
+        headers=_as(contact),
     )
     assert added.status_code == 201, added.text
     contact_id = (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
@@ -242,8 +244,12 @@ async def test_the_hosted_page_draws_an_open_tables_form_and_nothing_else(
     await _open(authenticated_client, pod_id, table)
     page = await authenticated_client.get(f"/public/web/{key}/page?table={table}")
     assert page.status_code == 200
-    assert "default-src 'none'" in page.headers["content-security-policy"]
+    policy = page.headers["content-security-policy"]
+    assert "default-src 'none'" in policy
+    # Only the widget's own site may frame it.
+    assert f"frame-ancestors {SHOP}" in policy
     assert f'data-lemma-table="{table}"' in page.text
+    assert "Don't share passwords" in page.text
 
     odd = await authenticated_client.get(f"/public/web/{key}/page?table=x%22%3E%3Cb")
     assert odd.status_code == 404
@@ -262,13 +268,13 @@ async def test_the_chat_fills_the_open_columns_and_writes_nothing(
     table = await _signups(authenticated_client, pod_id, "filled")
     await _open(authenticated_client, pod_id, table)
     key = (await _widget(authenticated_client, pod_id, name="Fill door"))["public_key"]
-    session = await _session(authenticated_client, key)
+    visitor = await _session(authenticated_client, key)
 
     conversation_id = await _say(
         authenticated_client,
         db_session,
         key=key,
-        session=session["session"],
+        visitor=visitor,
         text="I'm Jonas from Lumen Labs, 3 seats on Code please",
         owner=UUID(fixed_test_user["id"]),
         pod_id=pod_id,

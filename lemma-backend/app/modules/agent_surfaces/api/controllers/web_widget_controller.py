@@ -7,6 +7,10 @@ once, when it is minted or rotated, and never again.
 A widget is also a page's door into the pod for its visitors: the session it
 opens is what adds rows to a table open to visitors, so a form is a page with a
 widget's key on it, not a kind of widget.
+
+A new widget answers nobody until a member chooses whom it answers, and while
+the deployment has public web switched off (``PUBLIC_WEB_ENABLED``) it cannot
+be set to answer anyone at all.
 """
 
 from __future__ import annotations
@@ -21,16 +25,23 @@ from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.core.config import settings
+from app.core.public_web import hosted_pages_base, public_web_enabled
 from app.modules.agent.contracts.agents import agent_id_for_name
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
     WidgetAnswer,
     mint_public_key,
     mint_secret,
-    normalize_origin,
+    parse_origin,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.web_widget_repository import (  # noqa: E501
     WebWidgetRepository,
+)
+from app.modules.agent_surfaces.services.widget_directory import forget_widget
+from app.modules.contacts.contracts.visitor_sessions import (
+    VisitorStrength,
+    forget_session_liveness,
+    revoke_visitor_sessions,
 )
 from app.modules.pod.contracts.members import pod_member_id
 
@@ -75,7 +86,10 @@ class WebWidgetCreateRequest(BaseModel):
         description="The agent that answers. The pod's assistant if omitted.",
     )
     allowed_origins: list[str] = Field(default_factory=list, max_length=20)
-    answer: WidgetAnswer = WidgetAnswer.ANYONE
+    answer: WidgetAnswer = Field(
+        default=WidgetAnswer.OFF,
+        description="Whom it answers. Off until a member chooses.",
+    )
     looked_after_by: UUID | None = None
 
 
@@ -111,7 +125,7 @@ def _response(widget: WebWidget) -> WebWidgetResponse:
         looked_after_by=widget.looked_after_by,
         created_at=widget.created_at,
         embed=_embed(widget),
-        page_url=f"{_base()}/public/web/{widget.public_key}/page",
+        page_url=f"{hosted_pages_base()}/public/web/{widget.public_key}/page",
     )
 
 
@@ -124,14 +138,24 @@ async def _require_member(uow: UoWDep, pod_id: UUID, user_id: UUID | None) -> No
 
 
 def _origins(values: list[str]) -> list[str]:
-    origins = sorted({normalize_origin(value) for value in values if value.strip()})
-    for origin in origins:
-        if not origin.startswith(("https://", "http://localhost", "http://127.0.0.1")):
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Origins are https:// addresses: {origin}",
-            )
-    return origins
+    try:
+        return sorted({parse_origin(value) for value in values if value.strip()})
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
+def _refuse_answering_while_off(answer: WidgetAnswer | None) -> None:
+    if answer is None or answer is WidgetAnswer.OFF or public_web_enabled():
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "code": "PUBLIC_WEB_DISABLED",
+            "message": "Web chat is switched off on this deployment",
+        },
+    )
 
 
 @router.get(
@@ -155,6 +179,7 @@ async def list_widgets(pod_id: UUID, uow: UoWDep) -> WebWidgetListResponse:
 async def create_widget(
     pod_id: UUID, request: WebWidgetCreateRequest, user: CurrentUser, uow: UoWDep
 ) -> WebWidgetCreatedResponse:
+    _refuse_answering_while_off(request.answer)
     looked_after_by = request.looked_after_by or user.id
     await _require_member(uow, pod_id, looked_after_by)
     agent_id = (
@@ -193,6 +218,7 @@ async def update_widget(
     if "allowed_origins" in fields and request.allowed_origins is not None:
         values["allowed_origins"] = _origins(request.allowed_origins)
     if "answer" in fields and request.answer is not None:
+        _refuse_answering_while_off(request.answer)
         values["answer"] = request.answer.value
     if "looked_after_by" in fields:
         await _require_member(uow, pod_id, request.looked_after_by)
@@ -203,6 +229,7 @@ async def update_widget(
     if widget is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Widget not found")
     await uow.commit()
+    await forget_widget(widget.public_key)
     return _response(widget)
 
 
@@ -215,13 +242,22 @@ async def update_widget(
 async def reissue_widget(
     pod_id: UUID, widget_id: UUID, uow: UoWDep
 ) -> WebWidgetSecretResponse:
-    """Mint a new signing secret. Tokens signed with the old one stop working."""
+    """Mint a new signing secret. Tokens signed with the old one stop working.
+
+    So do the sessions they started: a host session is the old secret's word
+    for who somebody is, and a secret is reissued because that word is no
+    longer trusted.
+    """
     repository = WebWidgetRepository(uow.session)
     if await repository.get(pod_id=pod_id, widget_id=widget_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Widget not found")
     secret = mint_secret()
     await repository.rotate_secret(widget_id=widget_id, secret=secret)
+    ended = await revoke_visitor_sessions(
+        uow, widget_id=widget_id, strength=VisitorStrength.HOST
+    )
     await uow.commit()
+    await forget_session_liveness(ended)
     return WebWidgetSecretResponse(signing_secret=secret)
 
 
@@ -232,8 +268,11 @@ async def reissue_widget(
     dependencies=[require_action(Permissions.POD_UPDATE)],
 )
 async def delete_widget(pod_id: UUID, widget_id: UUID, uow: UoWDep) -> None:
-    if not await WebWidgetRepository(uow.session).delete(
+    repository = WebWidgetRepository(uow.session)
+    widget = await repository.get(pod_id=pod_id, widget_id=widget_id)
+    if widget is None or not await repository.delete(
         pod_id=pod_id, widget_id=widget_id
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Widget not found")
     await uow.commit()
+    await forget_widget(widget.public_key)

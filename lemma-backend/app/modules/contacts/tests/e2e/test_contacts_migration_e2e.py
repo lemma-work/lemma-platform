@@ -19,7 +19,7 @@ TABLES = (
     "contact_identities",
     "usage_contacts_caps",
     "agent_surface_web_widgets",
-    "agent_surface_web_sessions",
+    "visitor_sessions",
     "agent_surface_web_codes",
 )
 

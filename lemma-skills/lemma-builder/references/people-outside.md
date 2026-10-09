@@ -51,8 +51,13 @@ model. Use it for "look up my order", "book me in".
 **Web chat** — a web widget (`/pods/{pod}/web-widgets`, SDK `pod.web_widgets`). Its
 `embed` script puts the pod's chat on any site; its `page_url` is a page Lemma hosts.
 A visitor becomes a contact by confirming an email code, or when the site's server
-signs them in with the widget's secret (a short-lived HS256 token, `aud` = the public
-key). The public key goes in pages; the signing secret never does.
+signs them in with the widget's secret (an HS256 token living at most ten minutes,
+`aud` = the public key, `sub` = their user id, at most 200 characters). A signed-in
+chat lasts only as long as the site keeps handing over fresh tokens:
+`Lemma.identify(() => fetch("/lemma-token").then(r => r.text()))`. Reissuing the
+secret ends every signed-in chat. The public key goes in pages; the signing secret
+never does. A new widget answers nobody until `answer` is set, and none answers
+anybody unless the deployment has `PUBLIC_WEB_ENABLED` on.
 
 **Forms** — not an object. A **table opened to people outside**
 (`PUT /pods/{pod}/datastore/tables/{t}/public-rows`, SDK

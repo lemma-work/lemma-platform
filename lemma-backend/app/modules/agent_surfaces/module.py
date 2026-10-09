@@ -160,10 +160,15 @@ async def _surface_event_receiver(context):
         await _close_dedup_store()
 
 
+def _register_streaq() -> None:
+    import app.modules.agent_surfaces.events.visitor_retention  # noqa: F401
+
+
 module = LemmaModule(
     name="agent_surfaces",
     routers=_routers,
     event_routers=_event_routers,
+    register_streaq=_register_streaq,
     api_lifespans=(
         _dedup_store_lifespan,
         _telegram_manager_webhook_lifespan,

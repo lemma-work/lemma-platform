@@ -36,9 +36,11 @@ each answering as one of its agents. A widget is also how a page's visitor is
 known: the session it opens is what adds rows to a table open to visitors. Its `public_key` is
 unique and readable by anybody; its `signing_secret` (encrypted) signs the
 tokens a customer's server issues for its own signed-in users.
-**`agent_surface_web_sessions`** is one visitor's chat with one widget, found by
-a token stored only as a digest; it cascades from its conversation, so
-forgetting a contact ends the sessions that led to them.
+**`visitor_sessions`** is one visitor's hold on one widget, found by a secret
+stored only as a digest and exchanged for short-lived access tokens. `strength`
+is how they are known (`ANONYMOUS`, `CODE`, `HOST`), `expires_at` when the
+session ends and `revoked_at` when it was ended early. It cascades from its
+conversation, so forgetting a contact ends the sessions that led to them.
 **`agent_surface_web_codes`** is the one-time codes sent to email addresses
 visitors typed, stored as salted digests.
 
@@ -57,6 +59,14 @@ revision = "0044_contacts"
 down_revision = "0043_surface_groups"
 branch_labels = None
 depends_on = None
+
+_VISITOR_SESSION_INDEXES = (
+    ("ix_visitor_sessions_pod", "pod_id"),
+    ("ix_visitor_sessions_widget", "widget_id"),
+    ("ix_visitor_sessions_contact", "contact_id"),
+    ("ix_visitor_sessions_conversation", "conversation_id"),
+    ("ix_visitor_sessions_expires", "expires_at"),
+)
 
 
 def upgrade() -> None:
@@ -163,23 +173,29 @@ def upgrade() -> None:
         ["public_key"],
         unique=True,
     )
+    # -- web widgets' visitors: visitor_sessions and their codes -------------
+    op.create_index("ix_web_widget_agent", "agent_surface_web_widgets", ["agent_id"])
+    op.create_index(
+        "ix_web_widget_looked_after_by",
+        "agent_surface_web_widgets",
+        ["looked_after_by"],
+    )
     op.create_table(
-        "agent_surface_web_sessions",
+        "visitor_sessions",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "pod_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("pods.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column(
             "widget_id",
             postgresql.UUID(as_uuid=True),
             sa.ForeignKey("agent_surface_web_widgets.id", ondelete="CASCADE"),
             nullable=False,
-        ),
-        sa.Column("token_hash", sa.String(64), nullable=False),
-        sa.Column(
-            "conversation_id",
-            postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("agent_conversations.id", ondelete="CASCADE"),
-            nullable=True,
         ),
         sa.Column(
             "contact_id",
@@ -187,21 +203,27 @@ def upgrade() -> None:
             sa.ForeignKey("contacts.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column("contact_strength", sa.String(20), nullable=True),
-        sa.Column("display_name", sa.String(255), nullable=True),
+        sa.Column("strength", sa.String(20), nullable=False),
+        sa.Column(
+            "conversation_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column("secret_hash", sa.String(64), nullable=False),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("ip_hash", sa.String(64), nullable=True),
     )
     op.create_index(
-        "uq_web_session_token",
-        "agent_surface_web_sessions",
-        ["token_hash"],
+        "uq_visitor_sessions_secret",
+        "visitor_sessions",
+        ["secret_hash"],
         unique=True,
     )
-    op.create_index(
-        "ix_web_session_conversation",
-        "agent_surface_web_sessions",
-        ["conversation_id"],
-    )
+    for name, column in _VISITOR_SESSION_INDEXES:
+        op.create_index(name, "visitor_sessions", [column])
     op.create_table(
         "agent_surface_web_codes",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -210,7 +232,7 @@ def upgrade() -> None:
         sa.Column(
             "session_id",
             postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("agent_surface_web_sessions.id", ondelete="CASCADE"),
+            sa.ForeignKey("visitor_sessions.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("email", sa.String(320), nullable=False),
@@ -281,11 +303,14 @@ def downgrade() -> None:
     _downgrade_contact_function_runs()
     op.drop_index("ix_web_code_session", table_name="agent_surface_web_codes")
     op.drop_table("agent_surface_web_codes")
+    for name, _column in reversed(_VISITOR_SESSION_INDEXES):
+        op.drop_index(name, table_name="visitor_sessions")
+    op.drop_index("uq_visitor_sessions_secret", table_name="visitor_sessions")
+    op.drop_table("visitor_sessions")
     op.drop_index(
-        "ix_web_session_conversation", table_name="agent_surface_web_sessions"
+        "ix_web_widget_looked_after_by", table_name="agent_surface_web_widgets"
     )
-    op.drop_index("uq_web_session_token", table_name="agent_surface_web_sessions")
-    op.drop_table("agent_surface_web_sessions")
+    op.drop_index("ix_web_widget_agent", table_name="agent_surface_web_widgets")
     op.drop_index("uq_web_widget_public_key", table_name="agent_surface_web_widgets")
     op.drop_index("uq_web_widget_pod_name", table_name="agent_surface_web_widgets")
     op.drop_table("agent_surface_web_widgets")
