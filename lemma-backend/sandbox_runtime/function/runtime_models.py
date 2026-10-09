@@ -14,8 +14,11 @@ class RuntimeModel(BaseModel):
 
 
 class RuntimeIdentity(RuntimeModel):
-    user_id: UUID
+    #: ``None`` on a run started for a contact, which acts for no member.
+    user_id: UUID | None
     user_email: str | None = None
+    #: The contact such a run serves. The backend sends it only when set.
+    contact_id: UUID | None = None
     pod_id: UUID
     function_id: UUID
     function_name: str

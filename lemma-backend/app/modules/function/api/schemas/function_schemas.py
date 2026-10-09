@@ -263,7 +263,15 @@ class FunctionRunResponse(BaseModel):
     id: UUID
     function_id: UUID
     revision_hash: str | None = None
-    user_id: UUID
+    user_id: UUID | None = None
+    contact_id: UUID | None = None
+    actor: str = Field(
+        description=(
+            "Who the run acted for: `user:{id}` for a member, `contact:{id}` "
+            "for a contact's call (which runs as the function itself, with no "
+            "member), or `anonymous`."
+        )
+    )
     input_data: JsonObject | None = None
     output_data: JsonObject | None = None
     status: FunctionRunStatus
@@ -283,7 +291,15 @@ class FunctionRunSummaryResponse(BaseModel):
 
     id: UUID
     function_id: UUID
-    user_id: UUID
+    user_id: UUID | None = None
+    contact_id: UUID | None = None
+    actor: str = Field(
+        description=(
+            "Who the run acted for: `user:{id}` for a member, `contact:{id}` "
+            "for a contact's call (which runs as the function itself, with no "
+            "member), or `anonymous`."
+        )
+    )
     status: FunctionRunStatus
     started_at: datetime | None
     completed_at: datetime | None
@@ -312,7 +328,9 @@ class FunctionContactAccessRequest(BaseModel):
     contacts_invoke: bool = Field(
         description=(
             "Let a contact's conversation call this function. It runs as the "
-            "function owner's runs do, held to the function's own grants, and "
-            "the platform puts the asking contact's `contact_id` in its input."
+            "function itself, with no member behind it: its own grants, its own "
+            "pod, and only the asking contact's rows of contact-owned tables. "
+            "The platform puts the contact's `contact_id` in its input, so the "
+            "input schema must declare `contact_id`."
         )
     )

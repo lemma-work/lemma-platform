@@ -27,7 +27,9 @@ its contacts: it carries a `contact_id`, every member sees every row, and a
 contact's run reads only rows naming that contact, under a row-level policy
 installed when the flag is set. **`functions.contacts_invoke`** marks a function
 a contact's conversation may call. Both default to false, so nothing existing
-changes.
+changes. A run such a function makes for a contact acts for no member:
+**`function_runs.user_id`** becomes nullable and **`function_runs.contact_id`**
+names the contact it served, cascading from the contact.
 
 **`agent_surface_web_widgets`** is a pod's chat for other people's web pages,
 each answering as one of its agents. A widget is also how a page's visitor is
@@ -240,9 +242,43 @@ def upgrade() -> None:
             server_default=sa.text("false"),
         ),
     )
+    _upgrade_contact_function_runs()
+
+
+def _upgrade_contact_function_runs() -> None:
+    """A run started for a contact acts for no member and names the contact."""
+    op.alter_column("function_runs", "user_id", nullable=True)
+    op.add_column(
+        "function_runs",
+        sa.Column(
+            "contact_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey(
+                "contacts.id",
+                name="fk_function_runs_contact_id",
+                ondelete="CASCADE",
+            ),
+            nullable=True,
+        ),
+    )
+    op.create_index(
+        "ix_function_runs_contact_id",
+        "function_runs",
+        ["contact_id"],
+        postgresql_where=sa.text("contact_id IS NOT NULL"),
+    )
+
+
+def _downgrade_contact_function_runs() -> None:
+    # A run with no member cannot be kept once ``user_id`` is required again.
+    op.execute("DELETE FROM function_runs WHERE user_id IS NULL")
+    op.drop_index("ix_function_runs_contact_id", table_name="function_runs")
+    op.drop_column("function_runs", "contact_id")
+    op.alter_column("function_runs", "user_id", nullable=False)
 
 
 def downgrade() -> None:
+    _downgrade_contact_function_runs()
     op.drop_index("ix_web_code_session", table_name="agent_surface_web_codes")
     op.drop_table("agent_surface_web_codes")
     op.drop_index(

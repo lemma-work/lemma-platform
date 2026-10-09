@@ -13,7 +13,10 @@ from app.core.authorization.grants import (
     replace_grantee_resource_grants,
     validate_pod_resource_grant_permissions,
 )
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import (
+    PodContextDep,
+    reject_delegated_workload_pod,
+)
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import normalize_resource_name
 
@@ -37,6 +40,10 @@ from app.modules.function.api.schemas.function_schemas import (
     UpdateFunctionRequest,
 )
 from app.modules.function.infrastructure.contact_access import set_contacts_invoke
+from app.modules.function.services.contact_access import (
+    require_contact_input,
+    require_contacts_opener,
+)
 from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionUpdateEntity,
@@ -330,10 +337,12 @@ async def replace_function_permissions(
     summary="Open a Function to Contacts",
     description=(
         "Let a contact's conversation call this function, or stop it. A contact "
-        "holds no grant: the function runs as its owner's runs do, held to its "
-        "own grants, and is told the asking contact as `contact_id`."
+        "holds no grant and the run acts for no member: it runs as the function "
+        "itself, held to its own grants, and is told the asking contact as "
+        "`contact_id`, which its input schema must declare. Takes pod settings "
+        "permission and either owning the function or administering the pod."
     ),
-    dependencies=[FunctionResourceEditorDep],
+    dependencies=[reject_delegated_workload_pod("open a function to contacts")],
 )
 async def update_function_contact_access(
     request: Request,
@@ -354,8 +363,14 @@ async def update_function_contact_access(
         ctx=ctx,
     )
     assert function is not None and function.id is not None
+    await require_contacts_opener(ctx, function)
+    if data.contacts_invoke:
+        require_contact_input(function)
     await set_contacts_invoke(
-        uow, function_id=function.id, contacts_invoke=data.contacts_invoke
+        uow,
+        function=function,
+        contacts_invoke=data.contacts_invoke,
+        changed_by=user.id,
     )
     return FunctionResponse.model_validate(
         function.model_copy(update={"contacts_invoke": data.contacts_invoke})
