@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { source, type LibraryItem, type Member, type SpaceView, type Tab } from "@/data";
-import { AppIcon, ChevronDownIcon, FileIcon, GlobeIcon, LibraryIcon, LockIcon, PeopleIcon, PlusIcon, SearchIcon, TableIcon, UploadIcon } from "@/ui/icons";
+import { AppIcon, ChevronDownIcon, FileIcon, FolderIcon, GlobeIcon, LibraryIcon, LockIcon, PeopleIcon, PlusIcon, SearchIcon, TableIcon, UploadIcon } from "@/ui/icons";
 import { isDoc } from "@/docs/doc-space";
 import { useQueryClient } from "@tanstack/react-query";
 import { PAGE_TEMPLATES, makePage, type PageTemplate } from "@/docpages/templates";
@@ -138,14 +138,22 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
        screen, from the button or by dropping them on the list. */
     const writes = useLibraryWrites(podId, directory);
     const picker = useRef<HTMLInputElement>(null);
+    /** The name being typed for a new folder, or null when the form is away. */
+    const [newFolder, setNewFolder] = useState<string | null>(null);
+    const settle = () => void cache.invalidateQueries({ queryKey: ["library", podId] });
     const upload = async (chosen: File[]) => {
         if (chosen.length === 0) return;
         await writes.upload(chosen);
-        void cache.invalidateQueries({ queryKey: ["library", podId] });
+        settle();
     };
     const [dropping, setDropping] = useState(false);
     const dragDepth = useRef(0);
-    const carriesFiles = (event: React.DragEvent) => Array.from(event.dataTransfer.types).includes("Files");
+    /* A folder dragged in is a file as far as the browser's type list goes, so
+       the entries are what is asked about, and the type list is only a
+       fallback for a browser that fills in one and not the other. */
+    const carriesFiles = (event: React.DragEvent) =>
+        Array.from(event.dataTransfer.types).includes("Files")
+        || Array.from(event.dataTransfer.items ?? []).some((item) => item.kind === "file");
     const dropProps = view !== "files" ? {} : {
         onDragEnter: (event: React.DragEvent) => { if (!carriesFiles(event)) return; dragDepth.current += 1; setDropping(true); },
         onDragOver: (event: React.DragEvent) => { if (carriesFiles(event)) event.preventDefault(); },
@@ -159,7 +167,24 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
             event.preventDefault();
             dragDepth.current = 0;
             setDropping(false);
-            void upload(Array.from(event.dataTransfer.files));
+            /* Read out of the event before anything is awaited: a drop's data
+               is only there for as long as the handler is running. */
+            const entries = Array.from(event.dataTransfer.items ?? [])
+                .map((item) => item.webkitGetAsEntry?.() ?? null)
+                .filter((entry): entry is FileSystemEntry => entry !== null);
+            const files = Array.from(event.dataTransfer.files);
+            /* drop() reports its own failures. Caught here as well so that one
+               cannot take settle() with it: a drop that stops half-way still
+               has to refresh what is on screen. */
+            void (async () => {
+                try {
+                    await writes.drop(entries, files);
+                } catch {
+                    /* Said by drop, next to the file it was about. */
+                } finally {
+                    settle();
+                }
+            })();
         },
     };
 
@@ -271,6 +296,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
     const handlers: EmptyHandlers = {
         page: () => void maker.run("page", onNewPage),
         upload: () => picker.current?.click(),
+        folder: () => { writes.clearProblem(); setNewFolder(""); },
         ask: onAsk,
     };
     /* Apps keep the idea catalog under whatever is listed: the ready-made
@@ -294,123 +320,140 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
     );
 
     return (
-        <div className={"all" + (dropping && !nothing ? " all--drop" : "")} {...dropProps}>
-            {view === "files" && (
-                <input ref={picker} type="file" multiple hidden tabIndex={-1} aria-hidden="true"
-                    onChange={(event) => { void upload(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-            )}
-            <header className="all__head">
-                <h1>{TITLES[view]}</h1>
-                <label className="all__search">
-                    <SearchIcon size={17} />
-                    <input placeholder="Search" aria-label="Search everything here" value={query} onChange={event => setQuery(event.target.value)} />
-                </label>
-                <div className="all__layout" role="group" aria-label="Show as">
-                    <button aria-pressed={layout === "list"} title="List" aria-label="List" onClick={() => setLayout("list")}><ListIcon size={17} /></button>
-                    <button aria-pressed={layout === "grid"} title="Grid" aria-label="Grid" onClick={() => setLayout("grid")}><GridIcon size={17} /></button>
-                </div>
-                <div className="all__new">
-                    <button className="all__new-button" aria-expanded={newOpen} onClick={() => setNewOpen(was => !was)}>
-                        New <ChevronDownIcon size={15} />
-                    </button>
-                    {newOpen && (
-                        <div className="all__menu" role="menu" onMouseLeave={() => setNewOpen(false)}>
-                            {view === "files" && <button role="menuitem" onClick={() => { setNewOpen(false); picker.current?.click(); }}><UploadIcon size={16} /> Upload files</button>}
-                            {view === "tables" && onAsk && <button role="menuitem" onClick={() => { setNewOpen(false); onAsk("Set up a table to track "); }}><TableIcon size={16} /> Table</button>}
-                            {view === "apps" && onAsk && <button role="menuitem" onClick={() => { setNewOpen(false); onAsk("Build an app that "); }}><AppIcon size={16} /> App</button>}
-                            <button role="menuitem" onClick={() => { setNewOpen(false); void maker.run("page", onNewPage); }}><FileIcon size={16} /> Page</button>
-                            <button role="menuitem" onClick={() => { setNewOpen(false); onNewChat(); }}><PlusIcon size={16} /> Conversation</button>
+        <div className="all-zone" {...dropProps}>
+            <div className={"all" + (dropping && !nothing ? " all--drop" : "")}>
+                {view === "files" && (
+                    <input ref={picker} type="file" multiple hidden tabIndex={-1} aria-hidden="true"
+                        onChange={(event) => { void upload(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+                )}
+                <header className="all__head">
+                    <h1>{TITLES[view]}</h1>
+                    <label className="all__search">
+                        <SearchIcon size={17} />
+                        <input placeholder="Search" aria-label="Search everything here" value={query} onChange={event => setQuery(event.target.value)} />
+                    </label>
+                    <div className="all__layout" role="group" aria-label="Show as">
+                        <button aria-pressed={layout === "list"} title="List" aria-label="List" onClick={() => setLayout("list")}><ListIcon size={17} /></button>
+                        <button aria-pressed={layout === "grid"} title="Grid" aria-label="Grid" onClick={() => setLayout("grid")}><GridIcon size={17} /></button>
+                    </div>
+                    <div className="all__new">
+                        <button className="all__new-button" aria-expanded={newOpen} onClick={() => setNewOpen(was => !was)}>
+                            New <ChevronDownIcon size={15} />
+                        </button>
+                        {newOpen && (
+                            <div className="all__menu" role="menu" onMouseLeave={() => setNewOpen(false)}>
+                                {view === "files" && <button role="menuitem" onClick={() => { setNewOpen(false); picker.current?.click(); }}><UploadIcon size={16} /> Upload files</button>}
+                                {view === "files" && <button role="menuitem" onClick={() => { setNewOpen(false); writes.clearProblem(); setNewFolder(""); }}><FolderIcon size={16} /> New folder</button>}
+                                {view === "tables" && onAsk && <button role="menuitem" onClick={() => { setNewOpen(false); onAsk("Set up a table to track "); }}><TableIcon size={16} /> Table</button>}
+                                {view === "apps" && onAsk && <button role="menuitem" onClick={() => { setNewOpen(false); onAsk("Build an app that "); }}><AppIcon size={16} /> App</button>}
+                                <button role="menuitem" onClick={() => { setNewOpen(false); void maker.run("page", onNewPage); }}><FileIcon size={16} /> Page</button>
+                                <button role="menuitem" onClick={() => { setNewOpen(false); onNewChat(); }}><PlusIcon size={16} /> Conversation</button>
+                            </div>
+                        )}
+                    </div>
+                </header>
+                {view === "files" && newFolder !== null && (
+                    <form className="all__new-folder" onSubmit={(event) => {
+                        event.preventDefault();
+                        void (async () => {
+                            if (await writes.createFolder(newFolder)) { setNewFolder(null); settle(); }
+                        })();
+                    }}>
+                        <input autoFocus aria-label="Folder name" placeholder="Folder name" value={newFolder}
+                            onChange={(event) => { setNewFolder(event.target.value); if (writes.problem) writes.clearProblem(); }}
+                            onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setNewFolder(null); writes.clearProblem(); } }} />
+                        <button className="btn btn--primary" type="submit" disabled={Boolean(writes.busy)}>Create</button>
+                        <button className="btn" type="button" onClick={() => { setNewFolder(null); writes.clearProblem(); }}>Cancel</button>
+                    </form>
+                )}
+                {maker.error && (
+                    <p className="all__error" role="alert">
+                        Couldn’t make that page. {maker.error}
+                        <button onClick={maker.clear} aria-label="Dismiss">×</button>
+                    </p>
+                )}
+                {writes.problem && (
+                    <p className="all__error" role="alert">
+                        {writes.problem}
+                        <button onClick={writes.clearProblem} aria-label="Dismiss">×</button>
+                    </p>
+                )}
+                {writes.busy && <p className="all__busy" role="status">Working on {writes.busy}…</p>}
+                {dropping && !nothing && <p className="all__drop-note">Drop to upload them here.</p>}
+                {view === "files" && (
+                    <div className="all__scopes">
+                        <div className="all__tabs" role="tablist" aria-label="Whose files">
+                            {(["shared", "personal"] as const).map(each => (
+                                <button key={each} role="tab" aria-selected={scope === each} onClick={() => { setScope(each); setTrail([]); }}>
+                                    {each === "shared" ? "Shared" : "Personal"}
+                                </button>
+                            ))}
                         </div>
-                    )}
-                </div>
-            </header>
-            {maker.error && (
-                <p className="all__error" role="alert">
-                    Couldn’t make that page. {maker.error}
-                    <button onClick={maker.clear} aria-label="Dismiss">×</button>
-                </p>
-            )}
-            {writes.problem && (
-                <p className="all__error" role="alert">
-                    {writes.problem}
-                    <button onClick={writes.clearProblem} aria-label="Dismiss">×</button>
-                </p>
-            )}
-            {writes.busy && <p className="all__busy" role="status">Uploading {writes.busy}…</p>}
-            {dropping && !nothing && <p className="all__drop-note">Drop to upload them here.</p>}
-            {view === "files" && (
-                <div className="all__scopes">
-                    <div className="all__tabs" role="tablist" aria-label="Whose files">
-                        {(["shared", "personal"] as const).map(each => (
-                            <button key={each} role="tab" aria-selected={scope === each} onClick={() => { setScope(each); setTrail([]); }}>
-                                {each === "shared" ? "Shared" : "Personal"}
+                        <p className="all__scope-note">{scope === "shared" ? "Everyone in " + spaceName + " can open these." : "Only you can open these."}</p>
+                        {trail.length > 0 && (
+                            <nav className="all__trail" aria-label="Folder">
+                                <button onClick={() => setTrail([])}>{scope === "shared" ? "Shared" : "Personal"}</button>
+                                {trail.map((step, index) => (
+                                    <span key={step.path}>
+                                        <span className="all__trail-sep">/</span>
+                                        <button aria-current={index === trail.length - 1 ? "page" : undefined} onClick={() => setTrail(was => was.slice(0, index + 1))}>{step.name}</button>
+                                    </span>
+                                ))}
+                            </nav>
+                        )}
+                    </div>
+                )}
+                {!nothing && templates}
+                {rows.length === 0 ? null : layout === "grid" ? (
+                    <div className="all__grid">
+                        {rows.map((row) => (
+                            <button key={row.key} className="all__card" onClick={row.open} title={row.file}>
+                                <span className="all__card-top" data-kind={row.kind}>
+                                    {row.kind === "page" && row.path ? <PagePreview podId={podId} path={row.path} />
+                                        : row.kind === "app" && row.appUrl ? <AppCover url={row.appUrl} fallback={<Glyph kind="app" />} />
+                                        : <Glyph kind={row.kind} />}
+                                </span>
+                                <span className="all__card-body">
+                                    <b>{row.name}</b>
+                                    <small>{[row.kind === "page" ? null : row.detail, since(row.updated)].filter(Boolean).join(" · ")}</small>
+                                </span>
                             </button>
                         ))}
                     </div>
-                    <p className="all__scope-note">{scope === "shared" ? "Everyone in " + spaceName + " can open these." : "Only you can open these."}</p>
-                    {trail.length > 0 && (
-                        <nav className="all__trail" aria-label="Folder">
-                            <button onClick={() => setTrail([])}>{scope === "shared" ? "Shared" : "Personal"}</button>
-                            {trail.map((step, index) => (
-                                <span key={step.path}>
-                                    <span className="all__trail-sep">/</span>
-                                    <button aria-current={index === trail.length - 1 ? "page" : undefined} onClick={() => setTrail(was => was.slice(0, index + 1))}>{step.name}</button>
-                                </span>
-                            ))}
-                        </nav>
-                    )}
-                </div>
-            )}
-            {!nothing && templates}
-            {rows.length === 0 ? null : layout === "grid" ? (
-                <div className="all__grid">
-                    {rows.map((row) => (
-                        <button key={row.key} className="all__card" onClick={row.open} title={row.file}>
-                            <span className="all__card-top" data-kind={row.kind}>
-                                {row.kind === "page" && row.path ? <PagePreview podId={podId} path={row.path} />
-                                    : row.kind === "app" && row.appUrl ? <AppCover url={row.appUrl} fallback={<Glyph kind="app" />} />
-                                    : <Glyph kind={row.kind} />}
-                            </span>
-                            <span className="all__card-body">
-                                <b>{row.name}</b>
-                                <small>{[row.kind === "page" ? null : row.detail, since(row.updated)].filter(Boolean).join(" · ")}</small>
-                            </span>
-                        </button>
-                    ))}
-                </div>
-            ) : (
-            <table className="all__table">
-                <thead>
-                    <tr><th>Name</th><th className="all__col-access">Access</th><th className="all__col-when">Last activity</th></tr>
-                </thead>
-                <tbody>
-                    {rows.map(row => (
-                        <tr key={row.key} tabIndex={0} onClick={row.open} onKeyDown={event => { if (event.key === "Enter") row.open(); }}>
-                            <td>
-                                <span className="all__name">
-                                    <Glyph kind={row.kind} />
-                                    <span className="all__label">
-                                        <span title={row.file}>{row.name}{view === "all" && <em className="all__kind">{KIND_NAME[row.kind]}</em>}{row.rls && <em className="rls-badge" title="Row-level security: each person sees only their own rows">RLS</em>}</span>
-                                        {row.detail && <small>{row.detail}</small>}
+                ) : (
+                <table className="all__table">
+                    <thead>
+                        <tr><th>Name</th><th className="all__col-access">Access</th><th className="all__col-when">Last activity</th></tr>
+                    </thead>
+                    <tbody>
+                        {rows.map(row => (
+                            <tr key={row.key} tabIndex={0} onClick={row.open} onKeyDown={event => { if (event.key === "Enter") row.open(); }}>
+                                <td>
+                                    <span className="all__name">
+                                        <Glyph kind={row.kind} />
+                                        <span className="all__label">
+                                            <span title={row.file}>{row.name}{view === "all" && <em className="all__kind">{KIND_NAME[row.kind]}</em>}{row.rls && <em className="rls-badge" title="Row-level security: each person sees only their own rows">RLS</em>}</span>
+                                            {row.detail && <small>{row.detail}</small>}
+                                        </span>
                                     </span>
-                                </span>
-                            </td>
-                            <td className="all__col-access"><AccessCell access={row.access} people={people} space={spaceName} /></td>
-                            <td className="all__col-when">{since(row.updated)}</td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-            )}
-            {nothing && (
-                <SpaceEmpty empty={emptyFor(place, botName)} on={handlers} dropping={dropping}
-                    busy={making === "page" ? "page" : writes.busy ? "upload" : null}
-                    learn={onLearn && (view === "pages" || view === "tables" || view === "apps") ? { label: guideTitle(view), onOpen: onLearn } : undefined} />
-            )}
-            {nothing && (templates || ideas) && <div className="all__after-empty">{templates}{ideas}</div>}
-            {!loading && rows.length === 0 && query && <p className="all__empty">Nothing matches.</p>}
-            {!nothing && !loading && ideas}
-            {loading && <p className="all__empty">Loading…</p>}
+                                </td>
+                                <td className="all__col-access"><AccessCell access={row.access} people={people} space={spaceName} /></td>
+                                <td className="all__col-when">{since(row.updated)}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                )}
+                {nothing && (
+                    <SpaceEmpty empty={emptyFor(place, botName)} on={handlers} dropping={dropping}
+                        busy={making === "page" ? "page" : writes.busy ? "upload" : null}
+                        learn={onLearn && (view === "pages" || view === "tables" || view === "apps") ? { label: guideTitle(view), onOpen: onLearn } : undefined} />
+                )}
+                {nothing && (templates || ideas) && <div className="all__after-empty">{templates}{ideas}</div>}
+                {!loading && rows.length === 0 && query && <p className="all__empty">Nothing matches.</p>}
+                {!nothing && !loading && ideas}
+                {loading && <p className="all__empty">Loading…</p>}
+            </div>
         </div>
     );
 }

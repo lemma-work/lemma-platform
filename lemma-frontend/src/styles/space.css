@@ -527,6 +527,35 @@
     background: var(--accent-soft);
 }
 
+/* Naming a folder, under the button that asked for it: the form is the same
+   size as the row it will become, so making one does not move the page. */
+.all__new-folder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -14px 0 24px;
+}
+.all__new-folder input {
+    flex: 1;
+    min-width: 0;
+    max-width: 340px;
+    height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    font: inherit;
+    font-size: 14px;
+    color: var(--ink);
+}
+.all__new-folder input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.all__new-folder .btn {
+    min-height: 44px;
+}
+
 .all__table {
     width: 100%;
     border-collapse: collapse;
@@ -1321,6 +1350,32 @@
 @media (max-width: 700px) {
     .all__col-access { width: auto; }
     .all__access { font-size: 13px; }
+}
+/* A pane narrower than the list — beside a conversation, or with the sidebar
+   open on a tablet — wraps its header and keeps the name, dropping the
+   columns beside it, rather than running off the side of the pane. The same
+   answer the phone gets, asked of the space the list is actually drawn in: a
+   viewport a little above the phone breakpoint still has a narrow pane when
+   the sidebar sits beside it. 580px is where the header and the three-column
+   table stop fitting. */
+@container (max-width: 580px) {
+    .all__head {
+        flex-wrap: wrap;
+    }
+    .all__search {
+        order: 3;
+        width: 100%;
+    }
+    .all__table:not(.chats-page__table) th:not(:first-child),
+    .all__table:not(.chats-page__table) td:not(:first-child) {
+        display: none;
+    }
+    .all__table:not(.chats-page__table) {
+        table-layout: fixed;
+    }
+    .all__table:not(.chats-page__table) td:first-child {
+        overflow: hidden;
+    }
 }
 .ssheet__note--public {
     color: var(--warn);

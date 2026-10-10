@@ -22,6 +22,7 @@ export type EmptyArt = "pages" | "apps" | "tables" | "files" | "folder" | "workf
 export type EmptyAction =
     | { kind: "page"; label: string }
     | { kind: "upload"; label: string }
+    | { kind: "folder"; label: string }
     | { kind: "chat"; label: string }
     | { kind: "row"; label: string }
     | { kind: "reach"; label: string }
@@ -89,7 +90,7 @@ export function emptyFor(where: EmptyPlace, name: string): Empty {
             };
         case "files":
             if (where.folder) {
-                return { art: "folder", title: "This folder is empty", line: "Upload files into it, or drop them here.", primary: { kind: "upload", label: "Upload files" }, starters: [] };
+                return { art: "folder", title: "This folder is empty", line: "Upload files into it, or drop them here.", primary: { kind: "upload", label: "Upload files" }, starters: [{ kind: "folder", label: "New folder" }] };
             }
             if (where.scope === "personal") {
                 return {
@@ -97,7 +98,7 @@ export function emptyFor(where: EmptyPlace, name: string): Empty {
                     title: "Nothing of yours yet",
                     line: "Only you can open files here, and " + name + " reads them when you ask.",
                     primary: { kind: "upload", label: "Upload files" },
-                    starters: [],
+                    starters: [{ kind: "folder", label: "New folder" }],
                 };
             }
             return {
@@ -105,7 +106,7 @@ export function emptyFor(where: EmptyPlace, name: string): Empty {
                 title: "No files yet",
                 line: "Upload PDFs, docs, sheets or images for " + name + " to read; what it makes lands here too.",
                 primary: { kind: "upload", label: "Upload files" },
-                starters: [],
+                starters: [{ kind: "folder", label: "New folder" }],
             };
         case "workflows":
             return {
