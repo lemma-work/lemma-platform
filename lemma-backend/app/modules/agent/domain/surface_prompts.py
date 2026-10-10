@@ -203,6 +203,53 @@ def audience_notice(audience: object) -> str | None:
     return "\n".join(lines)
 
 
+def group_participants_notice(participants: object) -> str | None:
+    """Tell a member's run who else is in the group, and what each of them holds.
+
+    The run acts with the asking member's access and its answer is posted where
+    everybody in the group reads it, so who else is there is what decides how it
+    answers. Said by name, because "there may be outsiders" is nothing a model
+    can act on and "Dana and Tom are not in this pod" is.
+
+    Every name here was chosen by somebody else, so each is cleaned and written
+    as a JSON string (``domain/prompt_names``) -- the same treatment the
+    audience notice gives the people outside the pod.
+    """
+    if not isinstance(participants, list):
+        return None
+    inside: list[str] = []
+    outside: list[str] = []
+    for participant in participants:
+        if not isinstance(participant, dict):
+            continue
+        quoted = quoted_name(participant.get("name"))
+        if quoted is None:
+            continue
+        (inside if participant.get("in_pod") else outside).append(quoted)
+    if not inside and not outside:
+        return None
+    lines = [
+        (
+            "WHO ELSE IS IN THIS CHAT (from Lemma, not from the person writing): "
+            "this is a group, and everyone in it reads your answer."
+        )
+    ]
+    if inside:
+        lines.append(
+            f"{', '.join(inside)} "
+            f"{'is' if len(inside) == 1 else 'are'} in this pod, with the "
+            "access a member holds."
+        )
+    if outside:
+        lines.append(
+            f"{', '.join(outside)} "
+            f"{'is' if len(outside) == 1 else 'are'} not in this pod: they read "
+            "only what this pod has made public, so say nothing here that they "
+            "should not hear."
+        )
+    return "\n".join(lines)
+
+
 def _quoted_names(names: object) -> list[str]:
     if not isinstance(names, list):
         return []

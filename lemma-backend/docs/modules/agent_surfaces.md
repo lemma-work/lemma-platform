@@ -358,6 +358,18 @@ is answered *for the pod*, in a group the pod has opened to them.
   for an answer the member would give in front of them
   (`services/group_audience.py`, rendered by the agent module's
   `audience_notice`).
+- **A member's run is told who else is in the room.** Beside the recent lines it
+  is handed the group's people -- everyone the pod's log has heard speak there,
+  most recent first and bounded -- each marked as in the pod or not, rendered by
+  the agent module's `group_participants_notice`. The run acts with the member's
+  access and posts where all of them read it, so knowing who else is reading is
+  what the answer is shaped by. A stranger's run is handed no roster: it acts as
+  nobody, and who holds access to the pod is not its to know. Where the pod
+  keeps no log (Slack, Teams) the roster comes from the history fetched for that
+  run instead, and membership is never read off it: a platform names who spoke,
+  and marks only a line from another company's workspace, so a speaker counts as
+  a member only where the pod itself resolved them to one
+  (`group_log.pod_members_in_lines`, then `group_log.participants_in_lines`).
 - **Own bots are no different.** A pod's own Telegram bot or WhatsApp number is
   delivered to at `/surfaces/{id}/webhook`; its group messages go through the
   same log, mention check, name addressing and admission as a shared bot's
@@ -371,6 +383,12 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **A notification is never delivered into a group.** Reaching a member
   proactively reuses only private threads; a member whose only thread with the
   bot is a group is reached by email or their Lemma inbox instead.
+- **A word for one person is never posted in the group.** `surface_send_message`
+  reaches the current conversation's user alone. In a group that conversation is
+  one member's but its address is the group, so the message goes to that
+  member's own chat with the bot (`services/private_message.py`, over
+  `SurfaceDelivery.private_thread_for`) -- and a member who has never had one is
+  not reached at all rather than reached in front of everybody.
 - **An email thread with other people on it is a group.** The inbound
   normalizer keeps To and Cc; a reply goes to the sender and copies the others
   (at most `MAX_REPLY_CC`). Copied is not asked: an email that only Cc's the

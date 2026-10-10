@@ -36,6 +36,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.services import egress_service
+from app.modules.agent_surfaces.services.private_message import PrivateMessage
 from app.modules.agent_surfaces.services.display_resource_content import (
     PodFileDelivery,
     PodFileParts,
@@ -136,6 +137,124 @@ async def test_send_agent_message_for_conversation_sends_surface_message():
     assert sent is True
     adapter.send_message.assert_awaited_once()
     assert adapter.send_message.await_args.kwargs["message"] == "assistant update"
+
+
+def _slack_group_event() -> ParsedInboundSurfaceEvent:
+    """A channel somebody addressed the bot in, as opposed to a direct chat."""
+    return ParsedInboundSurfaceEvent(
+        platform="SLACK",
+        conversation_type=ConversationType.EXTERNAL_GROUP,
+        tenant_id="T123",
+        external_channel_id="C123",
+        external_thread_id="C123",
+        external_message_id="1700000000.000200",
+        sender_external_user_id="U123",
+        sender_display_name="Asha",
+        message_text="what's our margin on this deal?",
+        is_dm=False,
+        mentioned_agent=True,
+        reply_target={"channel": "C123"},
+    )
+
+
+def _link(
+    surface,
+    event: ParsedInboundSurfaceEvent,
+    *,
+    conversation_id,
+    kind: str,
+) -> AgentSurfaceConversationLink:
+    return AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation_id,
+        platform="SLACK",
+        external_channel_id=event.external_channel_id,
+        external_thread_id=event.external_thread_id,
+        external_user_id=event.sender_external_user_id,
+        conversation_kind=kind,
+        last_event=event.model_dump(mode="json"),
+    )
+
+
+async def test_a_message_for_one_person_in_a_group_goes_to_their_own_chat():
+    """`surface_send_message` promises one person, and a group is not one person.
+
+    The conversation is the member's, but its address is the group: delivering
+    to the conversation posted the aside in front of everybody in it.
+    """
+    surface = _slack_surface()
+    group_conversation, private_conversation = uuid4(), uuid4()
+    group_link = _link(
+        surface,
+        _slack_group_event(),
+        conversation_id=group_conversation,
+        kind="CHANNEL",
+    )
+    private_link = _link(
+        surface, _slack_event(), conversation_id=private_conversation, kind="DM"
+    )
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=group_link)
+    repository = egress.delivery.conversation_link_repository
+    repository.get_by_conversation_id.side_effect = {
+        group_conversation: group_link,
+        private_conversation: private_link,
+    }.get
+    repository.find_latest_dm_link_for_person.return_value = private_link
+
+    sent = await PrivateMessage(egress=egress).send(
+        conversation_id=group_conversation,
+        message="the floor is 40k",
+    )
+
+    assert sent is True
+    adapter.send_message.assert_awaited_once()
+    assert adapter.send_message.await_args.kwargs["message"] == "the floor is 40k"
+    assert adapter.send_message.await_args.kwargs["event"].external_channel_id == "D123"
+
+
+async def test_a_member_with_no_private_chat_is_not_messaged_in_the_group():
+    """The group is not a fallback for a message meant for one person."""
+    surface = _slack_surface()
+    group_conversation = uuid4()
+    group_link = _link(
+        surface,
+        _slack_group_event(),
+        conversation_id=group_conversation,
+        kind="CHANNEL",
+    )
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=group_link)
+    repository = egress.delivery.conversation_link_repository
+    repository.get_by_conversation_id.return_value = group_link
+    repository.find_latest_dm_link_for_person.return_value = None
+
+    sent = await PrivateMessage(egress=egress).send(
+        conversation_id=group_conversation,
+        message="the floor is 40k",
+    )
+
+    assert sent is False
+    adapter.send_message.assert_not_awaited()
+
+
+async def test_a_message_in_a_direct_chat_still_goes_to_that_chat():
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    link = _link(surface, _slack_event(), conversation_id=conversation_id, kind="DM")
+    adapter = _delivering_adapter()
+    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
+    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
+        link
+    )
+
+    sent = await PrivateMessage(egress=egress).send(
+        conversation_id=conversation_id,
+        message="on my way",
+    )
+
+    assert sent is True
+    assert adapter.send_message.await_args.kwargs["event"].external_channel_id == "D123"
 
 
 async def test_send_agent_message_strips_thinking_tokens_before_delivery():

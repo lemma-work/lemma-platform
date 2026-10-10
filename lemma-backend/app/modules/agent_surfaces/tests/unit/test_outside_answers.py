@@ -199,6 +199,18 @@ def test_a_slack_line_from_another_workspace_is_marked_outside_the_pod():
     ]
 
 
+def test_a_slack_line_keeps_the_id_its_author_was_sent_under():
+    """Slack marks a line only when it comes from another company's workspace,
+    so the roster needs the sender's id to ask the pod about everybody else."""
+    lines = _context_messages(
+        [{"user": "U1", "text": "ours", "ts": "1", "team": "T-HOME"}],
+        current_ts="",
+        home_team="T-HOME",
+    )
+
+    assert [(line.author, line.author_external_id) for line in lines] == [("U1", "U1")]
+
+
 def _event(**metadata) -> SimpleNamespace:
     return SimpleNamespace(is_dm=False, metadata=metadata)
 
@@ -326,3 +338,37 @@ async def test_a_private_notes_run_cannot_post_to_the_chat():
     assert private.success is False
     assert public.success is True
     assert sent == ["on my way"]
+
+
+@pytest.mark.anyio
+async def test_a_group_send_that_reached_nobody_says_where_it_did_not_go():
+    """The group is not a fallback, and the model has to be told so.
+
+    A member with no private chat cannot be reached by this tool at all. Left as
+    a bare failure the model retries or assumes it landed; said plainly it puts
+    the message in its reply instead.
+    """
+    from app.modules.agent_surfaces.platforms import surface_send_tools
+
+    async def deliver(*, conversation_id, message):
+        return False
+
+    tool = (
+        surface_send_tools.build_surface_send_toolset(deliver=deliver)
+        .tools["surface_send_message"]
+        .function
+    )
+
+    result = await tool(
+        SimpleNamespace(
+            deps=SimpleNamespace(
+                conversation_id=uuid4(),
+                delivers_to_surface=True,
+                surface_conversation_kind="CHANNEL",
+            )
+        ),
+        "the floor is 40k",
+    )
+
+    assert result.success is False
+    assert "group chat" in result.message

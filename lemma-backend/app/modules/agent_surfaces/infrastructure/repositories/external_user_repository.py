@@ -100,6 +100,46 @@ class ExternalSurfaceUserRepository:
         result = await self.session.execute(stmt)
         return [instance.to_entity() for instance in result.scalars().all()]
 
+    async def resolved_users_by_external_ids(
+        self,
+        *,
+        platform: str,
+        tenant_id: str | None,
+        external_user_ids: Sequence[str],
+    ) -> dict[str, UUID]:
+        """Which Lemma user each of these platform senders is, where we know.
+
+        The reverse of :meth:`list_by_resolved_users`, and the read behind a
+        group roster on the platforms whose history is fetched live: there the
+        pod is asked who it has resolved, because a platform's lines say who
+        spoke and never who holds access. One read for a whole window's
+        speakers, since the alternative is a lookup per person.
+
+        A sender with no row, or a row nothing resolved (a contact), is simply
+        absent -- and the caller's answer for both is the same one, which is
+        that nobody vouched for them.
+        """
+        wanted = sorted(set(external_user_ids))
+        if not wanted:
+            return {}
+        stmt = select(
+            AgentSurfaceExternalUser.external_user_id,
+            AgentSurfaceExternalUser.resolved_user_id,
+        ).where(
+            AgentSurfaceExternalUser.platform == platform,
+            AgentSurfaceExternalUser.external_user_id.in_(wanted),
+            AgentSurfaceExternalUser.resolved_user_id.is_not(None),
+        )
+        # `tenant_id` is matched the way `get_by_identity` matches it, and the
+        # uniqueness it leans on is the same index: Slack ids are per workspace
+        # and Teams ids per tenant, so the tenant is half of who a sender is.
+        if tenant_id is None:
+            stmt = stmt.where(AgentSurfaceExternalUser.tenant_id.is_(None))
+        else:
+            stmt = stmt.where(AgentSurfaceExternalUser.tenant_id == tenant_id)
+        rows = await self.session.execute(stmt)
+        return {external: user for external, user in rows.all() if user is not None}
+
     async def upsert(
         self,
         *,

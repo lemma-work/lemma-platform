@@ -19,7 +19,7 @@ has left reads as a stranger.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -36,8 +36,17 @@ from app.modules.agent_surfaces.domain.groups import (
     SurfaceGroup,
     answer_withheld_from,
 )
-from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
+from app.modules.agent_surfaces.domain.models import (
+    SurfaceContextMessage,
+    SurfaceGroupParticipant,
+)
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
+    ExternalSurfaceUserRepository,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.group_page_repository import (
+    GroupPageRepository,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
 )
@@ -83,6 +92,10 @@ def answered_in_group(
 #: How much of a group a run is shown. The same window a Slack run fetches, so a
 #: group reads the same to the agent whichever platform it is on.
 GROUP_CONTEXT_LINES = 15
+
+#: How many of a group's people go in front of the model. The roster is who the
+#: pod knows is there, and a group past this many speakers has outgrown a list.
+_MAX_PARTICIPANTS = 20
 
 
 def keeps_group_log(platform: str) -> bool:
@@ -164,6 +177,10 @@ class GroupBackground:
     #: Who, among the lines' authors, is outside the pod -- for a member run's
     #: notice of who else will read its answer.
     outside_authors: tuple[str, ...] = ()
+    #: Everyone the pod knows is in the group, and whether they are in the pod.
+    #: Empty for a stranger's run, which acts as nobody and is told no more
+    #: about the pod than it can already read.
+    participants: tuple[SurfaceGroupParticipant, ...] = ()
 
 
 async def group_background(
@@ -218,9 +235,86 @@ async def group_background(
                 outside_pod=outside,
             )
         )
-    return GroupBackground(
-        lines=kept, withheld=withheld, outside_authors=tuple(outside_authors)
+    participants = (
+        ()
+        if for_stranger
+        else await _participants(uow, group=group, membership=membership)
     )
+    return GroupBackground(
+        lines=kept,
+        withheld=withheld,
+        outside_authors=tuple(outside_authors),
+        participants=participants,
+    )
+
+
+async def pod_members_in_lines(
+    *,
+    lines: Sequence[Mapping[str, object]],
+    pod_id: UUID,
+    platform: str,
+    tenant_id: str | None,
+    membership: SurfacePodMembershipPort,
+    external_users: ExternalSurfaceUserRepository,
+) -> set[str]:
+    """Which of a fetched history's speakers the pod knows to be members of it.
+
+    Where the pod keeps no log of a group -- Slack and Teams read their own
+    history live -- a platform's lines are the only record of who is there, and
+    a line says who spoke, never who holds access. What the platform marks is
+    not that either: Slack marks a line from another company's workspace, and a
+    colleague in the pod's own workspace who has no Lemma account reads exactly
+    like one who does. So the question is put to the pod instead: the speakers
+    it has already resolved to a Lemma user on this platform, and of those the
+    ones still in this pod. A speaker with no such row -- the colleague who has
+    never spoken to the bot, and anybody here without an account -- is in
+    neither answer, and is not a member the run may speak from.
+
+    One read per table for a whole window, because the alternative is a lookup
+    per person on a path that already runs several.
+    """
+    wanted = sorted({external for line in lines if (external := _external_id(line))})
+    if not wanted:
+        return set()
+    resolved = await external_users.resolved_users_by_external_ids(
+        platform=platform, tenant_id=tenant_id, external_user_ids=wanted
+    )
+    members = await membership.pod_members_among(pod_id, resolved.values())
+    return {external for external, user_id in resolved.items() if user_id in members}
+
+
+def participants_in_lines(
+    lines: Sequence[Mapping[str, object]],
+    *,
+    verified: Set[str] = frozenset(),
+) -> tuple[SurfaceGroupParticipant, ...]:
+    """The people a fetched history names, and which of them hold access here.
+
+    Where the pod keeps no log of a group -- Slack and Teams read their own
+    history live -- the platform's own lines are the only record of who is
+    there. Membership is not read off them: ``verified`` is the platform ids the
+    pod itself says belong to it (``pod_members_in_lines``), and a speaker whose
+    id is not in it is somebody the pod cannot vouch for. Saying otherwise is
+    how a room of clients came to read like a room of colleagues.
+    """
+    seen: list[SurfaceGroupParticipant] = []
+    named: set[str] = set()
+    for line in lines:
+        name = " ".join(str(line.get("author") or "").split())
+        if not name or name.casefold() in named:
+            continue
+        named.add(name.casefold())
+        seen.append(
+            SurfaceGroupParticipant(name=name, in_pod=_external_id(line) in verified)
+        )
+        if len(seen) >= _MAX_PARTICIPANTS:
+            break
+    return tuple(seen)
+
+
+def _external_id(line: Mapping[str, object]) -> str:
+    """The platform id a line's author was sent under, where the line has one."""
+    return str(line.get("author_external_id") or "").strip()
 
 
 def for_member_run(
@@ -241,11 +335,42 @@ async def _members_among(
     *,
     pod_id: UUID,
     membership: SurfacePodMembershipPort,
-) -> set[UUID | None]:
-    """Which of these lines' authors are in the pod now. One read per author."""
-    authors = {line.author_user_id for line in lines if line.author_user_id}
-    members: set[UUID | None] = set()
-    for user_id in authors:
-        if user_id and await membership.get_pod_member_id(user_id, pod_id):
-            members.add(user_id)
-    return members
+) -> set[UUID]:
+    """Which of these lines' authors are in the pod now, in one read."""
+    return await membership.pod_members_among(
+        pod_id, (line.author_user_id for line in lines if line.author_user_id)
+    )
+
+
+async def _participants(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    group: SurfaceGroup,
+    membership: SurfacePodMembershipPort,
+) -> tuple[SurfaceGroupParticipant, ...]:
+    """Who the pod knows is in this group, and which of them hold access to it.
+
+    Read from the group's own log rather than from the lines this run is shown:
+    a member who spoke last week is still in the group today, and the run that
+    answers in front of them should know so. The log is the pod's whole
+    knowledge of a group on the platforms whose history cannot be fetched --
+    everybody in it who has ever spoken to the bot or past it.
+    """
+    speakers = await GroupPageRepository(uow.session).speakers([group])
+    recent = sorted(speakers, key=lambda speaker: speaker.last_said_at, reverse=True)[
+        :_MAX_PARTICIPANTS
+    ]
+    members = await membership.pod_members_among(
+        group.pod_id, (speaker.user_id for speaker in recent if speaker.user_id)
+    )
+    seen: list[SurfaceGroupParticipant] = []
+    named: set[str] = set()
+    for speaker in recent:
+        name = " ".join(str(speaker.name or speaker.external_id or "").split())
+        if not name or name.casefold() in named:
+            continue
+        named.add(name.casefold())
+        seen.append(
+            SurfaceGroupParticipant(name=name, in_pod=speaker.user_id in members)
+        )
+    return tuple(seen)

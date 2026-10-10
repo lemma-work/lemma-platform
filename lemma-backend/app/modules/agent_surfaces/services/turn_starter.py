@@ -18,6 +18,7 @@ is what those became once nothing needed them to be methods on a namespace.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
@@ -33,6 +34,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceReplyContext,
 )
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.agent_surfaces.domain.models import SurfaceGroupParticipant
 from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
     get_surface_event_dedup_store,
@@ -45,6 +47,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapt
 )
 from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
     IdentityUserDirectoryAdapter,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
+    ExternalSurfaceUserRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
@@ -76,6 +81,8 @@ from app.modules.agent_surfaces.services.group_log import (
     for_member_run,
     group_background,
     keeps_group_log,
+    participants_in_lines,
+    pod_members_in_lines,
 )
 from app.modules.agent_surfaces.services.group_audience import (
     Audience,
@@ -108,6 +115,8 @@ class _RunBackground:
     lines: list[dict[str, object]]
     withheld: int = 0
     audience: Audience | None = None
+    #: Everyone the pod knows is in the group, and whether they are in the pod.
+    participants: tuple[SurfaceGroupParticipant, ...] = ()
 
 
 class SurfaceTurnStarter:
@@ -197,6 +206,11 @@ class SurfaceTurnStarter:
                 metadata["channel_context"] = background.lines
             if background.withheld:
                 metadata["channel_context_withheld"] = background.withheld
+            if background.participants:
+                metadata["channel_participants"] = [
+                    participant.model_dump(mode="json")
+                    for participant in background.participants
+                ]
             if background.audience is not None:
                 metadata["outside_audience"] = background.audience.to_metadata()
         elif not context.audience.answers_outsiders:
@@ -341,12 +355,20 @@ class SurfaceTurnStarter:
         if logged is not None:
             lines = [line.model_dump(mode="json") for line in logged.lines]
             withheld, outside = logged.withheld, list(logged.outside_authors)
+            participants = logged.participants
         else:
             lines = await fetch_channel_context(
                 adapter=adapter, context=context, credentials=credentials
             )
             outside = outside_names(lines)
             withheld = 0
+            # A stranger's run acts as nobody, so it is not handed a roster of
+            # who holds access to this pod -- only a member's run is.
+            participants = (
+                ()
+                if context.audience.answers_outsiders
+                else await self._participants_in_live_group(context, lines)
+            )
             if not context.audience.answers_outsiders:
                 lines, withheld = for_member_run(lines)
         # The message being answered was logged on its way in and is already
@@ -364,7 +386,44 @@ class SurfaceTurnStarter:
                 outside_authors=outside,
             )
         )
-        return _RunBackground(lines=lines, withheld=withheld, audience=audience)
+        return _RunBackground(
+            lines=lines,
+            withheld=withheld,
+            audience=audience,
+            participants=participants,
+        )
+
+    async def _participants_in_live_group(
+        self,
+        context: SurfaceChatContext,
+        lines: Sequence[Mapping[str, object]],
+    ) -> tuple[SurfaceGroupParticipant, ...]:
+        """Who the pod can vouch for among the speakers a fetched window names.
+
+        The platforms the pod keeps no log for -- Slack, Teams -- hand it the
+        lines and nothing else, and a line says who spoke rather than who holds
+        access. So the roster is the pod's own answer about those speakers: the
+        ones it has resolved to a member of this pod. A colleague in the same
+        workspace who has never spoken to the bot, and anyone there with no
+        Lemma account, is named as outside the pod rather than as a member.
+
+        No roster where the run has no pod to check against, or nothing was
+        fetched: an empty roster claims nothing, where a guessed one claims
+        access somebody may not hold.
+        """
+        pod_id = context.pod_id
+        if pod_id is None or not lines:
+            return ()
+        async with self.uow_factory() as uow:
+            verified = await pod_members_in_lines(
+                lines=lines,
+                pod_id=pod_id,
+                platform=context.platform.value,
+                tenant_id=context.event.tenant_id,
+                membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
+                external_users=ExternalSurfaceUserRepository(uow),
+            )
+        return participants_in_lines(lines, verified=verified)
 
     async def _group_background(
         self, context: SurfaceChatContext

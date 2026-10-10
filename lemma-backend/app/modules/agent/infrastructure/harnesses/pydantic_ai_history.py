@@ -38,6 +38,7 @@ from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.infrastructure.harnesses.channel_context import (
     audience_block,
     channel_context_block,
+    participants_block,
 )
 from app.modules.agent.domain.value_objects import (
     TEXTUAL_MESSAGE_KINDS,
@@ -387,6 +388,7 @@ def user_prompt_text(msg: object) -> str:
         _sender_label(metadata, platform),
         body,
         _quoted_message_block(metadata),
+        participants_block(metadata),
         channel_context_block(metadata),
         audience_block(metadata),
         *_shared_files_blocks(metadata, platform),

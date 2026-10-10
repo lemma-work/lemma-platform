@@ -97,6 +97,12 @@ async def test_a_members_turn_in_a_mixed_group_is_told_who_reads_it_and_not_show
     assert "Proofs are due Friday." in carried
     assert "WHO READS YOUR ANSWER" in carried
     assert "Tom" in carried
+    # Who else is in the room, and which of them hold access to this pod: the
+    # run acts with the member's access and its answer is posted where all of
+    # them read it.
+    assert "WHO ELSE IS IN THIS CHAT" in carried
+    assert '"Arjun" is in this pod' in carried
+    assert '"Tom" is not in this pod' in carried
 
 
 async def test_an_email_with_an_outside_cc_tells_the_run_who_reads_the_reply(
@@ -175,3 +181,46 @@ async def test_a_members_only_group_carries_no_notice(
 
     carried = " ".join(request["text"] for request in seen)
     assert "WHO READS YOUR ANSWER" not in carried
+
+
+async def test_a_strangers_run_is_not_handed_who_is_in_the_pod(
+    scenario, db_session: AsyncSession, fake_telegram, monkeypatch
+):
+    """A stranger's run acts as nobody, so who holds access is not its business.
+
+    It is shown the same lines -- a member's words in the group are readable by
+    everybody in it -- but not a roster saying which of the people there are in
+    the pod.
+    """
+    _, group, _owner = await _group_with_owner(
+        scenario, db_session, fake_telegram, monkeypatch
+    )
+    await SurfaceGroupRepository(db_session).append_line(
+        group_id=group.id,
+        body="Proofs are due Friday.",
+        external_message_id="501",
+        author_external_id=str(MEMBER_TELEGRAM_ID),
+        author_name="Arjun",
+    )
+    await db_session.commit()
+    seen = record_model_requests(monkeypatch)
+
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="telegram",
+            payload=_group_message(
+                text="@lemmabot what's our margin?",
+                message_id=405,
+                sender_id=STRANGER_TELEGRAM_ID,
+            ),
+            headers={},
+        ),
+        script=[script_text("I can only share what's public.")],
+    )
+
+    assert isinstance(context, SurfaceChatContext)
+    assert context.audience.answers_outsiders is True
+    carried = " ".join(request["text"] for request in seen)
+    assert "Proofs are due Friday." in carried
+    assert "WHO ELSE IS IN THIS CHAT" not in carried
