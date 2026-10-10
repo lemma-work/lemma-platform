@@ -50,6 +50,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `public.web.history.read` | GET | `/public/web/{public_key}/history` | Web Read History |
 | `public.web.message.send` | POST | `/public/web/{public_key}/messages` | Web Send Message |
 | `public.web.row.add` | POST | `/public/web/{public_key}/rows` | Web Add Row |
+| `public.web.rows.read` | GET | `/public/web/{public_key}/rows` | Web Read Rows |
 | `public.web.session.start` | POST | `/public/web/{public_key}/session` | Web Start Session |
 | `public.web.stream.read` | GET | `/public/web/{public_key}/stream` | Web Stream Answers |
 | `public.web.table.read` | GET | `/public/web/{public_key}/table` | Web Read Table |

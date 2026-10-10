@@ -65,6 +65,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
 | GET | `/public/web/{public_key}/challenge` | `public.web.challenge.read` | Web Challenge |
 | GET | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
+| GET | `/public/web/{public_key}/rows` | `public.web.rows.read` | Web Read Rows |
 | GET | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
 | GET | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |

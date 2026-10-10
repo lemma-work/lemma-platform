@@ -645,6 +645,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.projection.remove_indexed_chunks_s_s.diagnostic': EventSpec('debug', frozenset()),
     'datastore.public_rows.closed': EventSpec('info', frozenset({'pod_id', 'table_id', 'user_id'})),
     'datastore.public_rows.opened': EventSpec('info', frozenset({'audience', 'column_count', 'pod_id', 'table_id', 'user_id'})),
+    'datastore.public_tables.read_failed.degraded': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'datastore.query_role.ensure.degraded': EventSpec('warning', frozenset({'role'})),
     'datastore.query_role.grant.contended': EventSpec('debug', frozenset({'attempt', 'schema_name'})),
     'datastore.query_role.heal.degraded': EventSpec('warning', frozenset({'schema_name'})),
