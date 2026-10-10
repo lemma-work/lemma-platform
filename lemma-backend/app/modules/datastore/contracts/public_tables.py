@@ -121,8 +121,13 @@ async def read_public_table(
         for column in table.columns
         if column.name != CONTACT_COLUMN
     )
-    if order_by is not None and order_by not in {c.name for c in columns}:
-        raise PublicOrderRefused(order_by)
+    # The name sorted by is the table's own, looked up by what the page asked
+    # for: the page's string never reaches the query.
+    order_column = None
+    if order_by is not None:
+        order_column = next((c.name for c in columns if c.name == order_by), None)
+        if order_column is None:
+            raise PublicOrderRefused(order_by)
     table_ctx = TableContext.from_table_entity(
         table, get_schema_manager().get_schema_name(ctx.pod_id)
     )
@@ -131,7 +136,9 @@ async def read_public_table(
             table_ctx,
             ctx.user_id,
             limit=max(1, min(limit, MAX_PUBLIC_ROWS)),
-            sorts=[(order_by, "desc" if descending else "asc")] if order_by else None,
+            sorts=[(order_column, "desc" if descending else "asc")]
+            if order_column
+            else None,
         )
     except DomainError as exc:
         raise _closed_or_failed(exc, ctx, table_name) from exc
