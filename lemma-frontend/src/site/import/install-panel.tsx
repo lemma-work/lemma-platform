@@ -17,6 +17,7 @@ import {
 import { useSession } from "@/session/session";
 import { hasApiUrl, lemma } from "@/session/client";
 import { source as data } from "@/data";
+import { bestAccount } from "@/data/accounts";
 import { Mark } from "@/shell/mark";
 import type { Pod } from "@/data/types";
 import type { ImportStatusResponse, VariableSpec } from "../import-types";
@@ -24,9 +25,12 @@ import {
     WORKING,
     actionLabel,
     askedVariables,
+    contentsLine,
     groupSteps,
     humanize,
+    needsAnswer,
     statusLine,
+    suggestedValue,
     teammateName,
 } from "./plan";
 import s from "./import.module.css";
@@ -34,6 +38,20 @@ import s from "./import.module.css";
 type Props = { owner: string; repo: string; title: string };
 
 const NEW = "new";
+
+/** The organization's own GitHub account, when it has a usable one.
+ *
+ *  Without one the archive fetch is anonymous, and GitHub rate-limits
+ *  anonymous calls hard enough that an import sits through retries; with one it
+ *  is a single authenticated request. Failing to read the list is not a reason
+ *  to refuse the install — it only means the slower path. */
+async function githubAccountId(orgId: string): Promise<string | undefined> {
+    try {
+        return bestAccount(await data.listAccounts(orgId), "github")?.id;
+    } catch {
+        return undefined;
+    }
+}
 
 export function InstallPanel(props: Props) {
     const [client] = useState(
@@ -136,6 +154,9 @@ function Journey({ repo, owner, title }: Props) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [retry, setRetry] = useState(0);
+    /* The plain path shows a sentence and one button. The component list, and
+       the names behind it, are one press away for whoever wants them. */
+    const [choosing, setChoosing] = useState(false);
 
     const existing = pods.data?.find((p) => p.id === target) ?? null;
     const who =
@@ -187,11 +208,19 @@ function Journey({ repo, owner, title }: Props) {
                 setCreated(pod);
                 id = pod.id;
             }
+            const accountId = await githubAccountId(orgId);
             setJob(
                 await lemma(id).request<ImportStatusResponse>(
                     "POST",
                     "/pods/" + id + "/bundle/imports",
-                    { body: { kind: "GITHUB", owner, repo } },
+                    {
+                        body: {
+                            kind: "GITHUB",
+                            owner,
+                            repo,
+                            account_id: accountId,
+                        },
+                    },
                 ),
             );
         } catch (e) {
@@ -223,7 +252,7 @@ function Journey({ repo, owner, title }: Props) {
                             variables: Object.fromEntries(
                                 job.plan.variables.map((v) => [
                                     v.name,
-                                    values[v.name] ?? v.default ?? "",
+                                    values[v.name] ?? suggestedValue(v, who),
                                 ]),
                             ),
                             confirm_destructive: confirm,
@@ -473,6 +502,14 @@ function Journey({ repo, owner, title }: Props) {
     const plan = job.plan;
     const groups = plan ? groupSteps(plan.steps) : [];
     const asked = plan ? askedVariables(plan.variables) : [];
+    /* Only what nothing can stand in for is put in front of the person: an
+       account, or a name we could not derive. Everything else is named after
+       the teammate, and shown prefilled to whoever opens the list. */
+    const needsFromYou = choosing
+        ? asked
+        : asked.filter((v) => needsAnswer(v, who));
+    const valueOf = (v: VariableSpec) =>
+        values[v.name] ?? suggestedValue(v, who);
     const warnings = [...job.warnings, ...(plan?.warnings ?? [])];
     const markFor = podForMark ?? {
         id: job.pod_id,
@@ -480,9 +517,7 @@ function Journey({ repo, owner, title }: Props) {
     };
     const cancelled =
         job.status === "CANCELLED" || job.status === "PARTIALLY_CANCELLED";
-    const missing = asked.some(
-        (v) => v.required && !(values[v.name] ?? v.default ?? ""),
-    );
+    const missing = asked.some((v) => v.required && !valueOf(v));
 
     /* ── Done ───────────────────────────────────────────────────────── */
     if (job.status === "COMPLETED")
@@ -556,11 +591,18 @@ function Journey({ repo, owner, title }: Props) {
             <h2 className={s.panelTitle}>
                 {reviewing ? "What's included" : statusLine(job.status)}
             </h2>
+            {reviewing && (
+                <p className={s.muted}>
+                    {who === title ? "Everything" : who + " gets everything"}{" "}
+                    {title} brings
+                    {groups.length > 0 ? " — " + contentsLine(groups) : ""}.
+                </p>
+            )}
             {!reviewing && (
                 <Progress done={job.progress.done} total={job.progress.total} />
             )}
             {warnings.length > 0 && <Warnings list={warnings} />}
-            {groups.length > 0 && (
+            {(choosing || !reviewing) && groups.length > 0 && (
                 <div className={s.plan}>
                     {groups.map((g) => (
                         <section key={g.kind}>
@@ -601,6 +643,18 @@ function Journey({ repo, owner, title }: Props) {
                     ))}
                 </div>
             )}
+            {reviewing && groups.length > 0 && (
+                <button
+                    type="button"
+                    className={s.quiet}
+                    aria-expanded={choosing}
+                    onClick={() => setChoosing((on) => !on)}
+                >
+                    {choosing
+                        ? "Hide the details"
+                        : "I'm a developer — show me the details"}
+                </button>
+            )}
             {reviewing && plan && (
                 <form
                     className={s.confirm}
@@ -609,15 +663,15 @@ function Journey({ repo, owner, title }: Props) {
                         void install();
                     }}
                 >
-                    {asked.length > 0 && (
+                    {needsFromYou.length > 0 && (
                         <fieldset className={s.needs}>
                             <legend>Needs from you</legend>
-                            {asked.map((v) => (
+                            {needsFromYou.map((v) => (
                                 <Variable
                                     key={v.name}
                                     variable={v}
                                     orgId={orgId}
-                                    value={values[v.name] ?? v.default ?? ""}
+                                    value={valueOf(v)}
                                     onChange={(value) =>
                                         setValues({
                                             ...values,
@@ -650,7 +704,7 @@ function Journey({ repo, owner, title }: Props) {
                                 (plan.has_destructive_steps && !confirm)
                             }
                         >
-                            {busy ? "Starting…" : "Install"}
+                            {busy ? "Starting…" : "Install everything"}
                         </button>
                         <button
                             type="button"
