@@ -205,48 +205,6 @@
         padding: 8px 12px calc(12px + env(safe-area-inset-bottom));
     }
 
-    /* ── Settings: the sections become a row of chips ─────────────────── */
-    .settings {
-        display: block;
-        padding: 8px 0 120px;
-    }
-    .settings__nav {
-        position: sticky;
-        top: 0;
-        z-index: 2;
-        flex-direction: row;
-        flex-wrap: nowrap;
-        align-items: center;
-        gap: 4px;
-        padding: 8px 16px 10px;
-        overflow-x: auto;
-        scrollbar-width: none;
-        background: var(--paper);
-        border-bottom: 1px solid var(--line);
-    }
-    .settings__nav::-webkit-scrollbar {
-        display: none;
-    }
-    .settings__nav h1 {
-        display: none;
-    }
-    .settings__nav button {
-        flex: none;
-        height: 32px;
-        padding: 0 12px;
-        border-radius: 999px;
-        font-size: 14px;
-    }
-    .settings__body {
-        max-width: none;
-        padding: 16px 16px 0;
-    }
-    .settings__heading {
-        flex-wrap: wrap;
-    }
-    .settings__row {
-        flex-wrap: wrap;
-    }
     .agentlist__row {
         gap: 12px;
     }
@@ -532,9 +490,6 @@
     }
     .aboutpage__who h1 {
         font-size: 28px;
-    }
-    .settings__elsewhere {
-        display: none;
     }
 }
 /* A channel's groups, and note-or-reply: every control a thumb's height on
