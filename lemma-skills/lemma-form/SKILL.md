@@ -75,6 +75,9 @@ The script gives the page:
 |---|---|
 | `Lemma.addRow(table, values)` | Adds one row. Rejects with `error.code`: `bad_answer` (message names the field), `needs_contact`, `table_closed`, `rate_limited` |
 | `Lemma.describeTable(table)` | The open columns (`name`, `type`, `required`, `options`, `description`) and `contacts_only` |
+| `Lemma.readRows(table, {orderBy, desc})` | Every row of a table the pod marked **Public** (at most 500): `{columns, rows}`. Rejects `table_closed` (not Public, per-member, or missing), `bad_order`, `rate_limited` |
+| `Lemma.sendCode(email)` / `Lemma.verifyCode(email, code)` | Confirm the visitor's email on your own form, before a contacts-only table takes their row |
+| `Lemma.isContact()` | Whether this visitor has confirmed an email |
 | `Lemma.onFill(cb)` | The chat filled fields: `cb({table, values})`. `data-lemma-table` forms are filled for you |
 | `Lemma.openChat()` | Opens the chat, e.g. for "Questions?" |
 

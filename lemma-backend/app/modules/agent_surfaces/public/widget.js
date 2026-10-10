@@ -22,7 +22,11 @@
  *
  * A page with its own design marks <form data-lemma-table="signups">, or calls
  * Lemma.addRow("signups", {...}). Either way the table decides which columns
- * may be written; the page only asks. Such a form is never submitted by the
+ * may be written; the page only asks. A table the pod marked Public is read
+ * with Lemma.readRows("open_slots", { orderBy: "starts_at" }): every row, the
+ * same reading the pod's chat does for this visitor.
+ * Lemma.sendCode(email) and Lemma.verifyCode(email, code) confirm the visitor's
+ * email, which a table open to contacts only asks for first. Such a form is never submitted by the
  * browser itself once this script runs; give it method="post" anyway, so a
  * submit before the script arrives keeps the answers out of the URL.
  * data-lemma-page is set by Lemma's hosted page.
@@ -1098,6 +1102,33 @@
     });
   }
 
+  // A Public table, read as this visitor: with their session when there is
+  // one, so it is the same reading the chat does for them.
+  function readRows(table, options) {
+    options = options || {};
+    var path = "/rows?table=" + encodeURIComponent(table);
+    if (options.orderBy) path += "&order_by=" + encodeURIComponent(options.orderBy);
+    if (options.desc) path += "&desc=true";
+    return state.access ? withSession(function () { return call(path); }) : call(path, { auth: false });
+  }
+
+  function sendCode(email) {
+    return withSession(function () {
+      return proof("code").then(function (altcha) {
+        return call("/code", { body: { email: email, altcha: altcha } });
+      });
+    });
+  }
+
+  function verifyCode(email, code) {
+    return withSession(function () {
+      return call("/code/verify", { body: { email: email, code: code } });
+    }).then(function (data) {
+      adopt(data);
+      return { isContact: state.isContact };
+    });
+  }
+
   function describeTable(table) {
     return call("/table?table=" + encodeURIComponent(table), { auth: false });
   }
@@ -1353,6 +1384,12 @@
   // What a page of its own can call: an app, or any website with the script.
   window.Lemma = window.LemmaChat = {
     addRow: addRow,
+    readRows: readRows,
+    sendCode: sendCode,
+    verifyCode: verifyCode,
+    isContact: function () {
+      return state.isContact;
+    },
     describeTable: describeTable,
     openChat: function () {
       launchOpen();
