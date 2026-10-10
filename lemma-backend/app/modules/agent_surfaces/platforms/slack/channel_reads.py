@@ -105,7 +105,11 @@ def _context_messages(
 
     A message from another workspace -- a Slack Connect channel's other company
     -- is marked ``outside_pod``, the same mark the pod's own group log puts on
-    a stranger's line, so a member's run can leave it out.
+    a stranger's line, so a member's run can leave it out. That mark is the only
+    one Slack makes, and it says nothing about somebody in the pod's own
+    workspace, so the sender's id is kept beside the name: the roster a member's
+    run is handed asks the pod whether that id is one of its own people
+    (``services/group_log.pod_members_in_lines``).
     """
     out: list[SurfaceContextMessage] = []
     for item in raw:
@@ -119,6 +123,7 @@ def _context_messages(
         out.append(
             SurfaceContextMessage(
                 author=payload_first(item, "user", "username").strip() or None,
+                author_external_id=payload_text(item, "user").strip() or None,
                 text=text,
                 ts=ts or None,
                 outside_pod=bool(home_team and theirs and theirs != home_team),

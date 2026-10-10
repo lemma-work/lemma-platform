@@ -366,6 +366,7 @@ class TeamsChannelHistoryMixin:
                 SurfaceContextMessage(
                     author=snapshot.author_label
                     or channel_author_label(snapshot.display_name, snapshot.user_id),
+                    author_external_id=snapshot.user_id,
                     text=text,
                     ts=snapshot.message_id,
                 )

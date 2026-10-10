@@ -24,7 +24,10 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
 )
-from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
+from app.modules.agent_surfaces.domain.models import (
+    SurfaceContextMessage,
+    SurfaceMessageMetadata,
+)
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
     IngestedAttachment,
@@ -40,9 +43,12 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
 )
 from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    ExternalIdentityDouble,
+    MembershipDouble,
     ScopeCountingFactory,
     _conversation,
     _registry,
+    _slack_channel_event,
     _slack_event,
     _slack_surface,
     _telegram_event,
@@ -310,6 +316,66 @@ async def test_execute_chat_holds_no_session_during_io(monkeypatch):
     # Two short UoWs total: credential read + message-write tail.
     assert factory.opened == 2
     assert factory.active == 0
+
+
+async def test_a_speaker_the_pod_cannot_place_is_not_reported_as_a_member(monkeypatch):
+    """The roster in a fetched Slack window is the pod's answer, not Slack's.
+
+    Slack marks a line only when it comes from another company's workspace, so
+    "not marked" is not membership: a colleague in the pod's own workspace with
+    no Lemma account used to be handed to the run as a member holding member
+    access, in front of whom it then answered with the member's own data.
+    """
+    surface = _slack_surface(agent_id=None)
+    conversation = _conversation(surface, uuid4())
+    member = uuid4()
+    adapter = AsyncMock()
+    adapter.fetch_thread_context = AsyncMock(
+        return_value=[
+            SurfaceContextMessage(
+                author="Dana", author_external_id="U-DANA", text="morning", ts="1"
+            ),
+            SurfaceContextMessage(
+                author="Arjun",
+                author_external_id="U-ARJUN",
+                text="the figures?",
+                ts="2",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.turn_starter.ExternalSurfaceUserRepository",
+        lambda _uow: ExternalIdentityDouble({"U-ARJUN": member}),
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.turn_starter.SqlAlchemySurfaceRoutingResolutionAdapter",
+        lambda _uow: MembershipDouble({member}),
+    )
+    starter = build_turn_starter(
+        adapter=adapter, surfaces=[surface], conversation=conversation
+    )
+    context = SurfaceChatContext(
+        platform="SLACK",
+        pod_id=surface.pod_id,
+        agent_name=None,
+        conversation_id=conversation.id,
+        user_id=conversation.user_id,
+        surface_id=surface.id,
+        surface_config=surface.config,
+        agent_display_name="Lemma",
+        message_text="Hello from a channel",
+        message_metadata=SurfaceMessageMetadata(surface_platform="SLACK"),
+        message_user_id=conversation.user_id,
+        message_external_user_id="U123",
+        event=_slack_channel_event(),
+    )
+
+    background = await starter._background(context, adapter=adapter, credentials={})
+
+    assert [(person.name, person.in_pod) for person in background.participants] == [
+        ("Dana", False),
+        ("Arjun", True),
+    ]
 
 
 async def test_transcribe_voice_attachments_joins_caption_and_voice(monkeypatch):

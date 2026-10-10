@@ -571,6 +571,49 @@ _REQUEST_APPROVAL_TOOL_ARGS = {
 }
 
 
+class MembershipDouble:
+    """Pod membership, as the group roster asks it: are these people in?
+
+    Stands in for `SurfacePodMembershipPort` where the answer under test is what
+    a roster does with it, not how it is looked up.
+    """
+
+    def __init__(self, members: set[UUID] | None = None) -> None:
+        self.members = members or set()
+
+    async def pod_members_among(self, _pod_id: UUID, user_ids) -> set[UUID]:
+        return {user_id for user_id in user_ids if user_id in self.members}
+
+
+class ExternalIdentityDouble:
+    """The pod's cache of who a platform sender is, as a roster reads it.
+
+    Stands in for `ExternalSurfaceUserRepository`, and records how it was asked:
+    the roster's answer turns on the platform and tenant it asks with, because a
+    Slack id means one person in one workspace and somebody else in another.
+    """
+
+    def __init__(self, known: dict[str, UUID] | None = None) -> None:
+        self.known = known or {}
+        self.asked: list[dict[str, object]] = []
+
+    async def resolved_users_by_external_ids(
+        self, *, platform: str, tenant_id: str | None, external_user_ids
+    ) -> dict[str, UUID]:
+        self.asked.append(
+            {
+                "platform": platform,
+                "tenant_id": tenant_id,
+                "external_user_ids": list(external_user_ids),
+            }
+        )
+        return {
+            external: self.known[external]
+            for external in external_user_ids
+            if external in self.known
+        }
+
+
 class ScopeCountingFactory:
     """A unit-of-work factory over one doubled session, counting open scopes.
 

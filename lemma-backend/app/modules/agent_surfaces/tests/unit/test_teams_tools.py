@@ -279,6 +279,10 @@ async def test_teams_fetch_recent_context_maps_graph_messages(monkeypatch):
     texts = {m.text for m in messages}
     assert "First message" in texts and "Second message" in texts
     assert all(m.author for m in messages)
+    # The sender's Graph id is kept beside the name it is shown under: a Teams
+    # channel names who spoke, and the roster asks the pod whether they hold
+    # access by that id.
+    assert {m.author_external_id for m in messages} == {"u1", "u2"}
 
 
 @pytest.mark.asyncio

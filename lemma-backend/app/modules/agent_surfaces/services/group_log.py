@@ -19,7 +19,7 @@ has left reads as a stranger.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -41,6 +41,9 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceGroupParticipant,
 )
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (  # noqa: E501
+    ExternalSurfaceUserRepository,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.group_page_repository import (
     GroupPageRepository,
 )
@@ -245,15 +248,54 @@ async def group_background(
     )
 
 
+async def pod_members_in_lines(
+    *,
+    lines: Sequence[Mapping[str, object]],
+    pod_id: UUID,
+    platform: str,
+    tenant_id: str | None,
+    membership: SurfacePodMembershipPort,
+    external_users: ExternalSurfaceUserRepository,
+) -> set[str]:
+    """Which of a fetched history's speakers the pod knows to be members of it.
+
+    Where the pod keeps no log of a group -- Slack and Teams read their own
+    history live -- a platform's lines are the only record of who is there, and
+    a line says who spoke, never who holds access. What the platform marks is
+    not that either: Slack marks a line from another company's workspace, and a
+    colleague in the pod's own workspace who has no Lemma account reads exactly
+    like one who does. So the question is put to the pod instead: the speakers
+    it has already resolved to a Lemma user on this platform, and of those the
+    ones still in this pod. A speaker with no such row -- the colleague who has
+    never spoken to the bot, and anybody here without an account -- is in
+    neither answer, and is not a member the run may speak from.
+
+    One read per table for a whole window, because the alternative is a lookup
+    per person on a path that already runs several.
+    """
+    wanted = sorted({external for line in lines if (external := _external_id(line))})
+    if not wanted:
+        return set()
+    resolved = await external_users.resolved_users_by_external_ids(
+        platform=platform, tenant_id=tenant_id, external_user_ids=wanted
+    )
+    members = await membership.pod_members_among(pod_id, resolved.values())
+    return {external for external, user_id in resolved.items() if user_id in members}
+
+
 def participants_in_lines(
     lines: Sequence[Mapping[str, object]],
+    *,
+    verified: Set[str] = frozenset(),
 ) -> tuple[SurfaceGroupParticipant, ...]:
-    """The people a fetched history names, and which of them are outside the pod.
+    """The people a fetched history names, and which of them hold access here.
 
     Where the pod keeps no log of a group -- Slack and Teams read their own
     history live -- the platform's own lines are the only record of who is
-    there, and the platform is what marks a line from another workspace as
-    ``outside_pod``.
+    there. Membership is not read off them: ``verified`` is the platform ids the
+    pod itself says belong to it (``pod_members_in_lines``), and a speaker whose
+    id is not in it is somebody the pod cannot vouch for. Saying otherwise is
+    how a room of clients came to read like a room of colleagues.
     """
     seen: list[SurfaceGroupParticipant] = []
     named: set[str] = set()
@@ -263,11 +305,16 @@ def participants_in_lines(
             continue
         named.add(name.casefold())
         seen.append(
-            SurfaceGroupParticipant(name=name, in_pod=not line.get("outside_pod"))
+            SurfaceGroupParticipant(name=name, in_pod=_external_id(line) in verified)
         )
         if len(seen) >= _MAX_PARTICIPANTS:
             break
     return tuple(seen)
+
+
+def _external_id(line: Mapping[str, object]) -> str:
+    """The platform id a line's author was sent under, where the line has one."""
+    return str(line.get("author_external_id") or "").strip()
 
 
 def for_member_run(

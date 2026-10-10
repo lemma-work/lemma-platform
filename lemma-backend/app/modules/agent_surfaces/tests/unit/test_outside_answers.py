@@ -199,6 +199,18 @@ def test_a_slack_line_from_another_workspace_is_marked_outside_the_pod():
     ]
 
 
+def test_a_slack_line_keeps_the_id_its_author_was_sent_under():
+    """Slack marks a line only when it comes from another company's workspace,
+    so the roster needs the sender's id to ask the pod about everybody else."""
+    lines = _context_messages(
+        [{"user": "U1", "text": "ours", "ts": "1", "team": "T-HOME"}],
+        current_ts="",
+        home_team="T-HOME",
+    )
+
+    assert [(line.author, line.author_external_id) for line in lines] == [("U1", "U1")]
+
+
 def _event(**metadata) -> SimpleNamespace:
     return SimpleNamespace(is_dm=False, metadata=metadata)
 

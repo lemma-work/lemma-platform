@@ -366,7 +366,10 @@ is answered *for the pod*, in a group the pod has opened to them.
   what the answer is shaped by. A stranger's run is handed no roster: it acts as
   nobody, and who holds access to the pod is not its to know. Where the pod
   keeps no log (Slack, Teams) the roster comes from the history fetched for that
-  run instead (`group_log.participants_in_lines`).
+  run instead, and membership is never read off it: a platform names who spoke,
+  and marks only a line from another company's workspace, so a speaker counts as
+  a member only where the pod itself resolved them to one
+  (`group_log.pod_members_in_lines`, then `group_log.participants_in_lines`).
 - **Own bots are no different.** A pod's own Telegram bot or WhatsApp number is
   delivered to at `/surfaces/{id}/webhook`; its group messages go through the
   same log, mention check, name addressing and admission as a shared bot's

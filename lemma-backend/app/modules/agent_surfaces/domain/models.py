@@ -65,10 +65,18 @@ class SurfaceContextMessage(BaseModel):
     """
 
     author: str | None = None
+    #: The platform id its author was sent under, where the platform gives one
+    #: beside the name it shows. A fetched history can say who spoke; only the
+    #: pod can say whether they hold access, and it knows a person on a platform
+    #: by this id (``services/group_log.pod_members_in_lines``). Left unset where
+    #: the line carries no id to check, and then its author is nobody the pod
+    #: vouches for.
+    author_external_id: str | None = None
     text: str
     ts: str | None = None
-    #: Written by somebody outside the pod. Known only where the line came from
-    #: the pod's own group log, which can tell; a platform's history API cannot.
+    #: Written by somebody outside the pod. Known where the line came from the
+    #: pod's own group log, and where the platform marks the workspace it came
+    #: from (Slack) -- which is another company's, not merely another person.
     outside_pod: bool = False
 
 
