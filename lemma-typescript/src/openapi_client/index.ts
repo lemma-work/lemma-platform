@@ -323,8 +323,10 @@ export type { PodRoleResourcePermissionResponse } from './models/PodRoleResource
 export type { PodRoleResponse } from './models/PodRoleResponse.js';
 export type { PodUpdateRequest } from './models/PodUpdateRequest.js';
 export { PublicAudience } from './models/PublicAudience.js';
+export type { PublicColumnItem } from './models/PublicColumnItem.js';
 export type { PublicColumnResponse } from './models/PublicColumnResponse.js';
 export type { PublicFileResponse } from './models/PublicFileResponse.js';
+export type { PublicRowsResponse } from './models/PublicRowsResponse.js';
 export { PublishMode } from './models/PublishMode.js';
 export type { PublishStartRequest } from './models/PublishStartRequest.js';
 export { PublishStatus } from './models/PublishStatus.js';

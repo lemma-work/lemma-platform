@@ -129,6 +129,19 @@ class TableResponse(BaseModel):
     columns: list[TableColumn]
 
 
+class PublicColumnItem(BaseModel):
+    name: str
+    type: str
+
+
+class PublicRowsResponse(BaseModel):
+    table: str
+    columns: list[PublicColumnItem]
+    rows: list[dict[str, str | int | float | bool | None]] = Field(
+        description="Every row, at most 500. Dates and times are ISO 8601."
+    )
+
+
 class RowRequest(BaseModel):
     table: str = Field(max_length=255)
     values: dict[str, object] = Field(default_factory=dict)
@@ -350,6 +363,40 @@ async def web_read_table(
             )
             for column in opened.columns
         ],
+    )
+
+
+@router.get(
+    "/{public_key}/rows",
+    operation_id="public.web.rows.read",
+    response_model=PublicRowsResponse,
+)
+async def web_read_rows(
+    widget: PublicWidgetDep,
+    visitor: OptionalVisitorDep,
+    address: VisitorAddressDep,
+    table: str = Query(max_length=255),
+    order_by: str | None = Query(default=None, max_length=255),
+    desc: bool = False,
+    chat: WebChat = Depends(web_chat),
+) -> PublicRowsResponse:
+    """Read a table the pod marked Public: every row, at most 500.
+
+    The same reading the pod's chat does for this visitor -- Public, and
+    nothing else. A booking page reads its free slots here.
+    """
+    read = await chat.public_rows(
+        widget,
+        visitor,
+        table=table,
+        address=address,
+        order_by=order_by,
+        descending=desc,
+    )
+    return PublicRowsResponse(
+        table=read.table,
+        columns=[PublicColumnItem(name=c.name, type=c.type) for c in read.columns],
+        rows=read.rows,
     )
 
 

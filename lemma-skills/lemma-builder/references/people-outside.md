@@ -65,6 +65,14 @@ anybody unless the deployment has `PUBLIC_WEB_ENABLED` on.
 its rows through a widget's key: the hosted `{page_url}?table=t`, the embed script
 with `data-lemma-table`, a `<form data-lemma-table>`, or `Lemma.addRow(t, values)`.
 Rows are added as the member who opened the table, with only the open columns.
+
+**Showing a table on a page** — a page reads a table the pod marked **Public**
+with `Lemma.readRows(t, {orderBy})` (`GET /public/web/{key}/rows?table=t`), as the
+same outsider the chat answers: Public reads and nothing else, every column, at most
+500 rows. Use it for what a page must show strangers -- free slots, a menu, a price
+list -- and keep only those columns in that table. Per-member tables never read this
+way, and a Public table open to outside rows would show everyone's answers, so don't
+make a form's table Public.
 The chat beside the form can fill it in (`fill_form`); it never sends it. Build forms
 with the **`lemma-form`** skill.
 

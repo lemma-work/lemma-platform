@@ -13760,6 +13760,24 @@
         "title": "PublicAudience",
         "type": "string"
       },
+      "PublicColumnItem": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "PublicColumnItem",
+        "type": "object"
+      },
       "PublicColumnResponse": {
         "properties": {
           "description": {
@@ -13833,6 +13851,55 @@
           "name"
         ],
         "title": "PublicFileResponse",
+        "type": "object"
+      },
+      "PublicRowsResponse": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/PublicColumnItem"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "rows": {
+            "description": "Every row, at most 500. Dates and times are ISO 8601.",
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "columns",
+          "rows"
+        ],
+        "title": "PublicRowsResponse",
         "type": "object"
       },
       "PublishMode": {
@@ -39004,6 +39071,91 @@
       }
     },
     "/public/web/{public_key}/rows": {
+      "get": {
+        "description": "Read a table the pod marked Public: every row, at most 500.\n\nThe same reading the pod's chat does for this visitor -- Public, and\nnothing else. A booking page reads its free slots here.",
+        "operationId": "public.web.rows.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "title": "Table",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order_by",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Order By"
+            }
+          },
+          {
+            "in": "query",
+            "name": "desc",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Desc",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicRowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Web Read Rows",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "public.web.rows",
+          "result": "entity",
+          "verb": "read"
+        }
+      },
       "post": {
         "description": "Add one row to a table the pod opened to visitors. Nothing is read back.",
         "operationId": "public.web.row.add",

@@ -6,6 +6,7 @@ import type { Accepted } from '../models/Accepted.js';
 import type { CodeRequest } from '../models/CodeRequest.js';
 import type { HistoryResponse } from '../models/HistoryResponse.js';
 import type { MessageRequest } from '../models/MessageRequest.js';
+import type { PublicRowsResponse } from '../models/PublicRowsResponse.js';
 import type { RowRequest } from '../models/RowRequest.js';
 import type { SessionRequest } from '../models/SessionRequest.js';
 import type { SessionResponse } from '../models/SessionResponse.js';
@@ -137,6 +138,41 @@ export class AgentSurfacesWebService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Web Read Rows
+     * Read a table the pod marked Public: every row, at most 500.
+     *
+     * The same reading the pod's chat does for this visitor -- Public, and
+     * nothing else. A booking page reads its free slots here.
+     * @param publicKey
+     * @param table
+     * @param orderBy
+     * @param desc
+     * @returns PublicRowsResponse Successful Response
+     * @throws ApiError
+     */
+    public static publicWebRowsRead(
+        publicKey: string,
+        table: string,
+        orderBy?: (string | null),
+        desc: boolean = false,
+    ): CancelablePromise<PublicRowsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/public/web/{public_key}/rows',
+            path: {
+                'public_key': publicKey,
+            },
+            query: {
+                'table': table,
+                'order_by': orderBy,
+                'desc': desc,
+            },
             errors: {
                 422: `Validation Error`,
             },

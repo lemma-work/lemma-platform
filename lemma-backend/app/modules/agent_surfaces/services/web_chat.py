@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.authorization.anonymous import build_anonymous_context
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -47,6 +48,12 @@ from app.modules.contacts.contracts.visitor_sessions import (
     touch_visitor_session,
     visitor_session,
 )
+from app.modules.datastore.contracts.public_tables import (
+    PublicOrderRefused,
+    PublicRows,
+    PublicTableClosed,
+    read_public_table,
+)
 from app.modules.datastore.contracts.public_rows import (
     OpenTable,
     PublicAudience,
@@ -55,7 +62,11 @@ from app.modules.datastore.contracts.public_rows import (
     add_visitor_row,
     visitor_table,
 )
-from app.modules.pod.contracts.members import pod_member_id, pod_name
+from app.modules.pod.contracts.members import (
+    pod_member_id,
+    pod_name,
+    pod_organization_id,
+)
 
 #: The longest message a visitor may send. Longer is refused, never cut: a
 #: message cut short says something its writer did not.
@@ -342,6 +353,54 @@ class WebChat:
             raise refused(
                 "This isn't taking answers right now", 403, "table_closed"
             ) from exc
+
+    async def public_rows(
+        self,
+        widget: WebWidget,
+        visitor: Visitor | None,
+        *,
+        table: str,
+        address: str,
+        order_by: str | None,
+        descending: bool,
+    ) -> PublicRows:
+        """Every row of a table the pod marked Public, as this visitor reads it.
+
+        Read with the visitor's own outsider context -- the one the pod's chat
+        answers them with -- or, for a page that started no chat, an anonymous
+        one pinned to the widget's pod. Either reads Public and nothing else, and
+        anything else is said the same way: nothing to read here.
+        """
+        if not await self.limiter.allow_read(widget_id=widget.id, address=address):
+            raise refused("Too many requests. Try again later.", 429, "rate_limited")
+        async with self.uow_factory() as uow:
+            ctx = (
+                visitor.context
+                if visitor is not None
+                else build_anonymous_context(
+                    session=uow.session,
+                    pod_id=widget.pod_id,
+                    organization_id=await pod_organization_id(uow, widget.pod_id),
+                    actor_id=f"web:{widget.id}",
+                )
+            )
+            token = set_current_context(ctx)
+            try:
+                return await read_public_table(
+                    uow,
+                    ctx=ctx,
+                    table_name=table,
+                    order_by=order_by,
+                    descending=descending,
+                )
+            except PublicTableClosed as exc:
+                raise refused(
+                    "There is nothing to read here", 404, "table_closed"
+                ) from exc
+            except PublicOrderRefused as exc:
+                raise refused("The table has no such column", 422, "bad_order") from exc
+            finally:
+                reset_current_context(token)
 
 
 def _visitor_metadata(name: str | None, client_nonce: str | None) -> dict[str, object]:
