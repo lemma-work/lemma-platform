@@ -20,9 +20,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 from app.core.api.dependencies import get_uow_factory
+from app.core.api.schemas import ErrorResponse
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frames
 from app.modules.agent_surfaces.api.public_dependencies import (
@@ -137,8 +138,14 @@ class PublicColumnItem(BaseModel):
 class PublicRowsResponse(BaseModel):
     table: str
     columns: list[PublicColumnItem]
-    rows: list[dict[str, str | int | float | bool | None]] = Field(
-        description="Every row, at most 500. Dates and times are ISO 8601."
+    rows: list[dict[str, JsonValue]] = Field(
+        description=(
+            "Every row, at most 500. Dates and times are ISO 8601; a JSON column "
+            "is its own lists and objects."
+        )
+    )
+    truncated: bool = Field(
+        description="More than 500 rows matched, so these are the first of them."
     )
 
 
@@ -370,6 +377,14 @@ async def web_read_table(
     "/{public_key}/rows",
     operation_id="public.web.rows.read",
     response_model=PublicRowsResponse,
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "Not a Public table: missing, not Public, or per-member",
+        },
+        422: {"model": ErrorResponse, "description": "No such column to order by"},
+        429: {"model": ErrorResponse, "description": "Too many reads"},
+    },
 )
 async def web_read_rows(
     widget: PublicWidgetDep,
@@ -397,6 +412,7 @@ async def web_read_rows(
         table=read.table,
         columns=[PublicColumnItem(name=c.name, type=c.type) for c in read.columns],
         rows=read.rows,
+        truncated=read.truncated,
     )
 
 

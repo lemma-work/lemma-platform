@@ -19,13 +19,16 @@ class PublicRowsResponse:
     """
     Attributes:
         columns (list[PublicColumnItem]):
-        rows (list[PublicRowsResponseRowsItem]): Every row, at most 500. Dates and times are ISO 8601.
+        rows (list[PublicRowsResponseRowsItem]): Every row, at most 500. Dates and times are ISO 8601; a JSON column is
+            its own lists and objects.
         table (str):
+        truncated (bool): More than 500 rows matched, so these are the first of them.
     """
 
     columns: list[PublicColumnItem]
     rows: list[PublicRowsResponseRowsItem]
     table: str
+    truncated: bool
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -41,6 +44,8 @@ class PublicRowsResponse:
 
         table = self.table
 
+        truncated = self.truncated
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -48,6 +53,7 @@ class PublicRowsResponse:
                 "columns": columns,
                 "rows": rows,
                 "table": table,
+                "truncated": truncated,
             }
         )
 
@@ -75,10 +81,13 @@ class PublicRowsResponse:
 
         table = d.pop("table")
 
+        truncated = d.pop("truncated")
+
         public_rows_response = cls(
             columns=columns,
             rows=rows,
             table=table,
+            truncated=truncated,
         )
 
         public_rows_response.additional_properties = d

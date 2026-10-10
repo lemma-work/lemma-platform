@@ -174,7 +174,9 @@ export class AgentSurfacesWebService {
                 'desc': desc,
             },
             errors: {
-                422: `Validation Error`,
+                404: `Not a Public table: missing, not Public, or per-member`,
+                422: `No such column to order by`,
+                429: `Too many reads`,
             },
         });
     }

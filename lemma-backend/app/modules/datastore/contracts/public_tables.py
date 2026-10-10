@@ -23,6 +23,7 @@ from decimal import Decimal
 
 from app.core.authorization.context import Context
 from app.core.domain.errors import DomainError
+from app.core.log.log import get_logger
 from app.modules.datastore.domain.row_security import CONTACT_COLUMN
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.wiring import (
@@ -31,11 +32,20 @@ from app.modules.datastore.services.wiring import (
     get_schema_manager,
 )
 
+logger = get_logger(__name__)
+
+#: A refusal of the read itself -- no such table, or not this person's to read
+#: (401 for an anonymous reader, 403 for a contact) -- as opposed to the
+#: datastore failing underneath it.
+_REFUSED = frozenset({401, 403, 404})
+
 #: The most rows one read returns. A page reads a short list it shows whole --
 #: the free slots of the coming weeks, a menu -- not one to page through.
 MAX_PUBLIC_ROWS = 500
 
-type PublicValue = str | int | float | bool | None
+type PublicValue = (
+    str | int | float | bool | None | list[PublicValue] | dict[str, PublicValue]
+)
 
 
 class PublicTableClosed(Exception):
@@ -61,12 +71,22 @@ class PublicRows:
     table: str
     columns: tuple[PublicColumn, ...]
     rows: list[dict[str, PublicValue]]
+    #: More rows than :data:`MAX_PUBLIC_ROWS` matched, so ``rows`` is the
+    #: first of them, not all.
+    truncated: bool
 
 
 def public_value(value: object) -> PublicValue:
-    """A stored value as a page receives it: JSON, dates as ISO 8601."""
+    """A stored value as a page receives it: JSON, dates as ISO 8601.
+
+    A JSON column arrives as the lists and objects it holds, never as a repr.
+    """
     if value is None or isinstance(value, bool | int | float | str):
         return value
+    if isinstance(value, dict):
+        return {str(key): public_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [public_value(item) for item in value]
     if isinstance(value, datetime | date | time):
         return value.isoformat()
     if isinstance(value, Decimal):
@@ -93,7 +113,7 @@ async def read_public_table(
     try:
         table = await build_table_service(uow).get_table(ctx.pod_id, table_name, ctx)
     except DomainError as exc:
-        raise PublicTableClosed(table_name) from exc
+        raise _closed_or_failed(exc, ctx, table_name) from exc
     if table.enable_rls:
         raise PublicTableClosed(table_name)
     columns = tuple(
@@ -107,14 +127,14 @@ async def read_public_table(
         table, get_schema_manager().get_schema_name(ctx.pod_id)
     )
     try:
-        records, _total = await build_record_service(uow).list_records(
+        records, total = await build_record_service(uow).list_records(
             table_ctx,
             ctx.user_id,
             limit=max(1, min(limit, MAX_PUBLIC_ROWS)),
             sorts=[(order_by, "desc" if descending else "asc")] if order_by else None,
         )
     except DomainError as exc:
-        raise PublicTableClosed(table_name) from exc
+        raise _closed_or_failed(exc, ctx, table_name) from exc
     return PublicRows(
         table=table.table_name,
         columns=columns,
@@ -125,7 +145,27 @@ async def read_public_table(
             }
             for record in records
         ],
+        truncated=total > len(records),
     )
+
+
+def _closed_or_failed(
+    exc: DomainError, ctx: Context, table_name: str
+) -> PublicTableClosed | DomainError:
+    """A refusal, said like every other; anything else, kept and logged.
+
+    Only "no such table" and "not yours to read" become the one answer a
+    stranger gets. A datastore that failed underneath stays a failure, so an
+    outage never reads as a table that isn't Public.
+    """
+    if exc.status_code in _REFUSED:
+        return PublicTableClosed(table_name)
+    logger.warning(
+        "datastore.public_tables.read_failed.degraded",
+        pod_id=str(ctx.pod_id),
+        error_type=type(exc).__name__,
+    )
+    return exc
 
 
 __all__ = [

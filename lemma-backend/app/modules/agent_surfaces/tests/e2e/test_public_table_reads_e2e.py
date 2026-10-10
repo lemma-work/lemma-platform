@@ -76,6 +76,7 @@ async def test_a_page_reads_every_row_of_a_public_table_in_the_order_it_asks(
     body = read.json()
     assert {c["name"] for c in body["columns"]} >= {"id", "starts_at", "kind"}
     assert [row["kind"] for row in body["rows"]] == ["chat", "demo"]
+    assert body["truncated"] is False
     assert body["rows"][0]["starts_at"].startswith("2026-10-15T13:30:00")
 
     latest_first = await _read(

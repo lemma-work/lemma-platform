@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -13,15 +13,12 @@ T = TypeVar("T", bound="PublicRowsResponseRowsItem")
 class PublicRowsResponseRowsItem:
     """ """
 
-    additional_properties: dict[str, bool | float | int | None | str] = _attrs_field(
-        init=False, factory=dict
-    )
+    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
 
         field_dict: dict[str, Any] = {}
-        for prop_name, prop in self.additional_properties.items():
-            field_dict[prop_name] = prop
+        field_dict.update(self.additional_properties)
 
         return field_dict
 
@@ -30,31 +27,17 @@ class PublicRowsResponseRowsItem:
         d = dict(src_dict)
         public_rows_response_rows_item = cls()
 
-        additional_properties = {}
-        for prop_name, prop_dict in d.items():
-
-            def _parse_additional_property(
-                data: object,
-            ) -> bool | float | int | None | str:
-                if data is None:
-                    return data
-                return cast(bool | float | int | None | str, data)
-
-            additional_property = _parse_additional_property(prop_dict)
-
-            additional_properties[prop_name] = additional_property
-
-        public_rows_response_rows_item.additional_properties = additional_properties
+        public_rows_response_rows_item.additional_properties = d
         return public_rows_response_rows_item
 
     @property
     def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
-    def __getitem__(self, key: str) -> bool | float | int | None | str:
+    def __getitem__(self, key: str) -> Any:
         return self.additional_properties[key]
 
-    def __setitem__(self, key: str, value: bool | float | int | None | str) -> None:
+    def __setitem__(self, key: str, value: Any) -> None:
         self.additional_properties[key] = value
 
     def __delitem__(self, key: str) -> None:

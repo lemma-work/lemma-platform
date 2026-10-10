@@ -27,6 +27,10 @@ pytestmark = pytest.mark.unit
         (date(2026, 10, 15), "2026-10-15"),
         (Decimal("2.5"), 2.5),
         (UUID(int=7), "00000000-0000-0000-0000-000000000007"),
+        (
+            {"rooms": ["A", "B"], "opens": date(2026, 10, 15)},
+            {"rooms": ["A", "B"], "opens": "2026-10-15"},
+        ),
     ],
 )
 def test_values_become_what_json_can_carry(value, expected):

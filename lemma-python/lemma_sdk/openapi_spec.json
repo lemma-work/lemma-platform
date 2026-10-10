@@ -13863,26 +13863,10 @@
             "type": "array"
           },
           "rows": {
-            "description": "Every row, at most 500. Dates and times are ISO 8601.",
+            "description": "Every row, at most 500. Dates and times are ISO 8601; a JSON column is its own lists and objects.",
             "items": {
               "additionalProperties": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "$ref": "#/components/schemas/JsonValue"
               },
               "type": "object"
             },
@@ -13892,12 +13876,18 @@
           "table": {
             "title": "Table",
             "type": "string"
+          },
+          "truncated": {
+            "description": "More than 500 rows matched, so these are the first of them.",
+            "title": "Truncated",
+            "type": "boolean"
           }
         },
         "required": [
           "table",
           "columns",
-          "rows"
+          "rows",
+          "truncated"
         ],
         "title": "PublicRowsResponse",
         "type": "object"
@@ -39133,6 +39123,16 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not a Public table: missing, not Public, or per-member"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -39141,7 +39141,17 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "No such column to order by"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many reads"
           }
         },
         "summary": "Web Read Rows",
