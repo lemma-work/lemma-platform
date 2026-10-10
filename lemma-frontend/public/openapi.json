@@ -7462,8 +7462,22 @@
         "title": "FirstWorkspaceResponse",
         "type": "object"
       },
+      "FollowUpChannel": {
+        "description": "Where a follow-up goes.\n\n``latest``: the contact's most recent conversation, on its own channel.\n``email``: their verified email address -- that conversation when it is\nan email thread, a new thread from the pod's address when it is not.",
+        "enum": [
+          "latest",
+          "email"
+        ],
+        "title": "FollowUpChannel",
+        "type": "string"
+      },
       "FollowUpRequest": {
         "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/FollowUpChannel",
+            "default": "latest",
+            "description": "`latest` writes in the contact's most recent conversation. `email` sends to their verified email address: in that conversation when it is an email thread, otherwise in a new thread from the pod's email address that answers contacts."
+          },
           "message": {
             "maxLength": 4000,
             "minLength": 1,
@@ -13760,6 +13774,24 @@
         "title": "PublicAudience",
         "type": "string"
       },
+      "PublicColumnItem": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "PublicColumnItem",
+        "type": "object"
+      },
       "PublicColumnResponse": {
         "properties": {
           "description": {
@@ -13833,6 +13865,45 @@
           "name"
         ],
         "title": "PublicFileResponse",
+        "type": "object"
+      },
+      "PublicRowsResponse": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/PublicColumnItem"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "rows": {
+            "description": "Every row, at most 500. Dates and times are ISO 8601; a JSON column is its own lists and objects.",
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "More than 500 rows matched, so these are the first of them.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table",
+          "columns",
+          "rows",
+          "truncated"
+        ],
+        "title": "PublicRowsResponse",
         "type": "object"
       },
       "PublishMode": {
@@ -28286,7 +28357,7 @@
     },
     "/pods/{pod_id}/contacts/{contact_id}/messages": {
       "post": {
-        "description": "Write to a contact in their most recent conversation, where the channel allows.\n\nRefused (409) when they unsubscribed there, when WhatsApp's 24-hour window\nhas closed, or when they have never written to the pod; 429 past the day's\nfollow-ups for this contact; 502 when the platform did not take it, which\nthe conversation then shows as not sent.",
+        "description": "Write to a contact in their most recent conversation, where the channel allows.\n\nWith ``channel: email``, to their verified email address instead, which\nreaches a web chat contact who is not on the page.\n\nRefused (409) when they unsubscribed there, when WhatsApp's 24-hour window\nhas closed, when they have never written to the pod, or, for email, when\nthey have no verified address or the pod no email address answering\ncontacts; 429 past the day's follow-ups for this contact; 502 when the\nplatform did not take it, which the conversation then shows as not sent.",
         "operationId": "contact.follow_up",
         "parameters": [
           {
@@ -39004,6 +39075,111 @@
       }
     },
     "/public/web/{public_key}/rows": {
+      "get": {
+        "description": "Read a table the pod marked Public: every row, at most 500.\n\nThe same reading the pod's chat does for this visitor -- Public, and\nnothing else. A booking page reads its free slots here.",
+        "operationId": "public.web.rows.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_key",
+            "required": true,
+            "schema": {
+              "title": "Public Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "title": "Table",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order_by",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Order By"
+            }
+          },
+          {
+            "in": "query",
+            "name": "desc",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Desc",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicRowsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not a Public table: missing, not Public, or per-member"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such column to order by"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many reads"
+          }
+        },
+        "summary": "Web Read Rows",
+        "tags": [
+          "Agent Surfaces (Web)"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "public.web.rows",
+          "result": "entity",
+          "verb": "read"
+        }
+      },
       "post": {
         "description": "Add one row to a table the pod opened to visitors. Nothing is read back.",
         "operationId": "public.web.row.add",

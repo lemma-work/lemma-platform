@@ -8,10 +8,14 @@ each channel allows a business to write:
 * **Telegram:** any time -- a bot can only ever write to somebody who wrote to
   it first.
 * **Email:** any time, with a line saying how to stop, and a link that does.
-* **A web widget:** the message waits in their chat for their next visit.
+* **A web widget:** the message waits in their chat for their next visit --
+  unless the member asks for email (``channel="email"``) and the contact has a
+  verified address: then it is emailed from the pod's own address, in a new
+  thread their reply comes back on (see ``contact_email_follow_ups``).
 
-Never to a handle the contact unsubscribed, and always in the contact's most
-recent conversation, so the agent and the contact both see it in context. At
+Never to a handle the contact unsubscribed, and, unless email was asked for,
+always in the contact's most recent conversation, so the agent and the contact
+both see it in context. At
 most ``surface_contact_follow_ups_per_contact_per_day`` a day per contact.
 
 Sent first, then written into the conversation, and written as not sent when
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from urllib.parse import quote
 from uuid import UUID
 
@@ -39,6 +44,11 @@ from app.modules.agent_surfaces.infrastructure.repositories.outside_links import
     latest_contact_thread,
 )
 from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.services.contact_email_follow_ups import (
+    ContactsMailbox,
+    contacts_mailbox,
+    email_contact,
+)
 from app.modules.agent_surfaces.services.contact_windows import (
     ContactWindows,
     Window,
@@ -46,6 +56,7 @@ from app.modules.agent_surfaces.services.contact_windows import (
 from app.modules.contacts.contracts import (
     ContactHandle,
     IdentityKind,
+    IdentityStrength,
     contact_handles,
 )
 
@@ -62,6 +73,18 @@ _KIND_FOR_PLATFORM = {
     SurfacePlatform.TELEGRAM.value: IdentityKind.TELEGRAM,
     SurfacePlatform.RESEND.value: IdentityKind.EMAIL,
 }
+
+
+class FollowUpChannel(StrEnum):
+    """Where a follow-up goes.
+
+    ``latest``: the contact's most recent conversation, on its own channel.
+    ``email``: their verified email address -- that conversation when it is
+    an email thread, a new thread from the pod's address when it is not.
+    """
+
+    LATEST = "latest"
+    EMAIL = "email"
 
 
 class FollowUpRefused(DomainError):
@@ -135,6 +158,26 @@ def _check_channel(
     return latest
 
 
+def _verified_email(handles: list[ContactHandle]) -> ContactHandle:
+    """The address an emailed follow-up goes to, or a refusal.
+
+    Only an address something vouched for -- a code the contact entered, the
+    host's signed token, or mail the receiving service authenticated. One a
+    member typed in says who they think it is, not that the contact reads it.
+    """
+    email = [handle for handle in handles if handle.kind is IdentityKind.EMAIL]
+    if any(handle.unsubscribed_at is not None for handle in email):
+        raise FollowUpRefused(
+            "The contact asked not to be written to there", code="unsubscribed"
+        )
+    verified = [h for h in email if h.strength is not IdentityStrength.MEMBER]
+    if not verified:
+        raise FollowUpRefused(
+            "The contact has no verified email address", code="no_verified_email"
+        )
+    return max(verified, key=lambda handle: handle.verified_at)
+
+
 async def send_follow_up(
     uow_factory: UnitOfWorkFactory,
     *,
@@ -142,6 +185,7 @@ async def send_follow_up(
     contact_id: UUID,
     message: str,
     sent_by_user_id: UUID,
+    channel: FollowUpChannel = FollowUpChannel.LATEST,
     windows: ContactWindows | None = None,
 ) -> FollowUpSent:
     text = message.strip()[:MAX_FOLLOW_UP_CHARS]
@@ -154,11 +198,28 @@ async def send_follow_up(
                 "Contact not found", code="not_found", status_code=404
             )
         thread = await latest_contact_thread(uow.session, contact_id)
-    if thread is None:
-        raise FollowUpRefused(
-            "The contact has not written to the pod yet", code="no_conversation"
+        if thread is None:
+            raise FollowUpRefused(
+                "The contact has not written to the pod yet", code="no_conversation"
+            )
+        conversation_id, platform = thread
+        # Asked for email, and their latest conversation is not an email thread.
+        email_first = (
+            channel is FollowUpChannel.EMAIL
+            and platform != SurfacePlatform.RESEND.value
         )
-    conversation_id, platform = thread
+        mailbox = await contacts_mailbox(uow, pod_id) if email_first else None
+    if email_first:
+        return await _email_first(
+            uow_factory,
+            mailbox,
+            handle=_verified_email(handles),
+            contact_id=contact_id,
+            latest_conversation_id=conversation_id,
+            text=text,
+            sent_by_user_id=sent_by_user_id,
+            windows=windows or ContactWindows(),
+        )
     handle = _check_channel(platform, handles, datetime.now(timezone.utc))
     await _within_the_days_follow_ups(windows or ContactWindows(), contact_id)
     if handle is not None and handle.kind is IdentityKind.EMAIL:
@@ -185,6 +246,57 @@ async def send_follow_up(
             status_code=502,
         )
     return FollowUpSent(conversation_id, platform, delivered=bool(delivered))
+
+
+async def _email_first(
+    uow_factory: UnitOfWorkFactory,
+    mailbox: ContactsMailbox | None,
+    *,
+    handle: ContactHandle,
+    contact_id: UUID,
+    latest_conversation_id: UUID,
+    text: str,
+    sent_by_user_id: UUID,
+    windows: ContactWindows,
+) -> FollowUpSent:
+    """A follow-up by email to a contact whose latest conversation is not one.
+
+    The same rules as any other: their verified, subscribed address, the day's
+    cap, and the unsubscribe line. One that was not sent is written into the
+    conversation they do have, as not sent.
+    """
+    if mailbox is None:
+        raise FollowUpRefused(
+            "The pod has no email address that answers contacts",
+            code="no_email_surface",
+        )
+    await _within_the_days_follow_ups(windows, contact_id)
+    text += _unsubscribe_line(handle)
+    conversation_id = await email_contact(
+        uow_factory,
+        mailbox,
+        contact_id=contact_id,
+        recipient_email=handle.value,
+        text=text,
+        sent_by_user_id=sent_by_user_id,
+    )
+    if conversation_id is None:
+        async with uow_factory() as uow:
+            await append_follow_up(
+                uow,
+                conversation_id=latest_conversation_id,
+                message=text,
+                sent_by_user_id=sent_by_user_id,
+                delivered=False,
+            )
+        raise FollowUpRefused(
+            "The message could not be delivered. Try again later.",
+            code="not_delivered",
+            status_code=502,
+        )
+    return FollowUpSent(
+        conversation_id, mailbox.surface.surface_type.value, delivered=True
+    )
 
 
 async def _within_the_days_follow_ups(

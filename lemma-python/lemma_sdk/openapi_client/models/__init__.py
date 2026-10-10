@@ -244,6 +244,7 @@ _NAME_TO_MODULE = {
     'FirstWorkspaceRequest': 'first_workspace_request',
     'FirstWorkspaceResponse': 'first_workspace_response',
     'FirstWorkspaceResponseEntry': 'first_workspace_response_entry',
+    'FollowUpChannel': 'follow_up_channel',
     'FollowUpRequest': 'follow_up_request',
     'FollowUpResponse': 'follow_up_response',
     'ForeignKeySpec': 'foreign_key_spec',
@@ -412,8 +413,11 @@ _NAME_TO_MODULE = {
     'PodRoleResponse': 'pod_role_response',
     'PodUpdateRequest': 'pod_update_request',
     'PublicAudience': 'public_audience',
+    'PublicColumnItem': 'public_column_item',
     'PublicColumnResponse': 'public_column_response',
     'PublicFileResponse': 'public_file_response',
+    'PublicRowsResponse': 'public_rows_response',
+    'PublicRowsResponseRowsItem': 'public_rows_response_rows_item',
     'PublicWebChallengeReadResponsePublicWebChallengeRead': 'public_web_challenge_read_response_public_web_challenge_read',
     'PublishMode': 'publish_mode',
     'PublishStartRequest': 'publish_start_request',
@@ -858,6 +862,7 @@ if TYPE_CHECKING:
     from .first_workspace_request import FirstWorkspaceRequest
     from .first_workspace_response import FirstWorkspaceResponse
     from .first_workspace_response_entry import FirstWorkspaceResponseEntry
+    from .follow_up_channel import FollowUpChannel
     from .follow_up_request import FollowUpRequest
     from .follow_up_response import FollowUpResponse
     from .foreign_key_spec import ForeignKeySpec
@@ -1026,8 +1031,11 @@ if TYPE_CHECKING:
     from .pod_role_response import PodRoleResponse
     from .pod_update_request import PodUpdateRequest
     from .public_audience import PublicAudience
+    from .public_column_item import PublicColumnItem
     from .public_column_response import PublicColumnResponse
     from .public_file_response import PublicFileResponse
+    from .public_rows_response import PublicRowsResponse
+    from .public_rows_response_rows_item import PublicRowsResponseRowsItem
     from .public_web_challenge_read_response_public_web_challenge_read import PublicWebChallengeReadResponsePublicWebChallengeRead
     from .publish_mode import PublishMode
     from .publish_start_request import PublishStartRequest
@@ -1485,6 +1493,7 @@ __all__ = [
     'FirstWorkspaceRequest',
     'FirstWorkspaceResponse',
     'FirstWorkspaceResponseEntry',
+    'FollowUpChannel',
     'FollowUpRequest',
     'FollowUpResponse',
     'ForeignKeySpec',
@@ -1653,8 +1662,11 @@ __all__ = [
     'PodRoleResponse',
     'PodUpdateRequest',
     'PublicAudience',
+    'PublicColumnItem',
     'PublicColumnResponse',
     'PublicFileResponse',
+    'PublicRowsResponse',
+    'PublicRowsResponseRowsItem',
     'PublicWebChallengeReadResponsePublicWebChallengeRead',
     'PublishMode',
     'PublishStartRequest',

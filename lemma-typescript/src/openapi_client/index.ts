@@ -175,6 +175,7 @@ export type { FileSummaryResponse } from './models/FileSummaryResponse.js';
 export type { FileUrlResponse } from './models/FileUrlResponse.js';
 export type { FirstWorkspaceRequest } from './models/FirstWorkspaceRequest.js';
 export { FirstWorkspaceResponse } from './models/FirstWorkspaceResponse.js';
+export { FollowUpChannel } from './models/FollowUpChannel.js';
 export type { FollowUpRequest } from './models/FollowUpRequest.js';
 export type { FollowUpResponse } from './models/FollowUpResponse.js';
 export type { ForeignKeySpec } from './models/ForeignKeySpec.js';
@@ -323,8 +324,10 @@ export type { PodRoleResourcePermissionResponse } from './models/PodRoleResource
 export type { PodRoleResponse } from './models/PodRoleResponse.js';
 export type { PodUpdateRequest } from './models/PodUpdateRequest.js';
 export { PublicAudience } from './models/PublicAudience.js';
+export type { PublicColumnItem } from './models/PublicColumnItem.js';
 export type { PublicColumnResponse } from './models/PublicColumnResponse.js';
 export type { PublicFileResponse } from './models/PublicFileResponse.js';
+export type { PublicRowsResponse } from './models/PublicRowsResponse.js';
 export { PublishMode } from './models/PublishMode.js';
 export type { PublishStartRequest } from './models/PublishStartRequest.js';
 export { PublishStatus } from './models/PublishStatus.js';
