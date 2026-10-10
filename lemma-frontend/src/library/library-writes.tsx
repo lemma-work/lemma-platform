@@ -15,6 +15,8 @@ import {
     type Pages,
 } from "./library-cache";
 import { readingProblem, withItemStatus } from "./file-status";
+import { readDropped, type DroppedTree } from "./drop-entries";
+import { forgetMade, rememberMade, renamedMade } from "@/data/made";
 
 /** Making, renaming and removing things in the library.
  *
@@ -43,9 +45,38 @@ export function useLibraryWrites(podId: string, directory: string) {
         return { id: path, name, kind, path, updated: new Date().toISOString(), detail, status };
     }
 
-    async function upload(files: File[]) {
-        const big = files.filter(tooLarge);
-        const rest = files.filter((file) => !tooLarge(file));
+    /** One file, into the folder it belongs in. Its own failure is reported
+     *  and the rest carry on: a folder of thirty files should not stop at the
+     *  fourth, and the fourth is still the one worth naming. */
+    async function writeOne(file: File, at: string) {
+        setBusy(file.name);
+        try {
+            /* Patched only into the listing it belongs to: a file dropped
+               inside a folder is not a row of the folder it was dropped on. */
+            const here = at === directory;
+            if (sample) {
+                const item = rowFor(file.name, pathIn(at, file.name), "file", describeSize(file.size));
+                rememberMade(podId, at, item);
+                if (here) patch((pages) => withItem(pages, item));
+            } else {
+                const written = await lemma(podId).files.upload(file, {
+                    name: file.name,
+                    directoryPath: at,
+                    searchEnabled: true,
+                });
+                if (here) patch((pages) => withItem(pages, rowFor(written.name ?? file.name, written.path, "file", describeSize(file.size), written.status)));
+            }
+        } catch (failure) {
+            setProblem(failure instanceof Error ? failure.message : "That file did not upload.");
+        } finally {
+            setBusy(null);
+        }
+    }
+
+    /** What will not be taken, said before anything is: one file is named with
+     *  its size, and a pile of them is counted, because the list of names would
+     *  be longer than the message it was read in. */
+    function reportTooLarge(big: File[]) {
         setProblem(
             big.length === 0
                 ? null
@@ -53,39 +84,65 @@ export function useLibraryWrites(podId: string, directory: string) {
                   ? big[0].name + " is too large to upload (" + describeSize(big[0].size) + ")."
                   : big.length + " files are too large to upload.",
         );
-        for (const file of rest) {
-            setBusy(file.name);
-            try {
-                if (sample) {
-                    patch((pages) => withItem(pages, rowFor(file.name, pathIn(directory, file.name), "file", describeSize(file.size))));
-                } else {
-                    const written = await lemma(podId).files.upload(file, {
-                        name: file.name,
-                        directoryPath: directory,
-                        searchEnabled: true,
-                    });
-                    patch((pages) => withItem(pages, rowFor(written.name ?? file.name, written.path, "file", describeSize(file.size), written.status)));
-                }
-            } catch (failure) {
-                setProblem(failure instanceof Error ? failure.message : "That file did not upload.");
-            } finally {
-                setBusy(null);
-            }
+    }
+
+    async function upload(files: File[]) {
+        if (files.length === 0) return;
+        reportTooLarge(files.filter(tooLarge));
+        for (const file of files) if (!tooLarge(file)) await writeOne(file, directory);
+    }
+
+    /** A drop, which carries folders as readily as files. The tree is read
+     *  first — a folder dropped from the desktop hands over the folder, not
+     *  what is inside it — and then made and written.
+     *
+     *  Reading can fail on its own: a file moved since the drag started, a
+     *  directory the browser will not open. Nothing has been written at that
+     *  point, so the drop stops and says so rather than leaving the person
+     *  with a drag that did nothing. */
+    async function drop(entries: readonly FileSystemEntry[], files: File[]) {
+        if (entries.length === 0) { await upload(files); return; }
+        setProblem(null);
+        let tree: DroppedTree;
+        try {
+            tree = await readDropped(entries, directory);
+        } catch {
+            setProblem("That drop could not be read. Try dragging it in again.");
+            return;
+        }
+        /* A dropped folder is the other way a file arrives here, and the same
+           ceiling the picker applies is applied to it: a file that is too
+           large is refused before it is written, not after a minute of
+           uploading. */
+        reportTooLarge(tree.files.map((each) => each.file).filter(tooLarge));
+        /* The files go in first: an upload makes the folders above it
+           (`mkdir -p`), so by the time an empty folder inside a dropped folder
+           is made, the folder it sits in exists. Made the other way round, an
+           empty folder whose parent only the upload was going to create would
+           fail, and the drop would carry on without it. */
+        for (const each of tree.files) if (!tooLarge(each.file)) await writeOne(each.file, each.directory);
+        for (const folder of tree.folders) {
+            /* The sample has no server to make a parent on the way to a file,
+               so every folder is made there; live, only the folders an upload
+               would not bring into being. */
+            if (sample || !folder.holdsFile) await makeFolder(folder.path, folder.path.slice(folder.path.lastIndexOf("/") + 1));
         }
     }
 
-    async function createFolder(name: string) {
-        const bad = nameProblem(name);
-        if (bad) { setProblem(bad); return false; }
-        const clean = name.trim();
-        setBusy(clean);
-        setProblem(null);
+    /** A folder, made where it is named. The path rather than the parent and
+     *  the name, because a dropped tree names folders at every depth. */
+    async function makeFolder(path: string, name: string) {
+        const parent = path.slice(0, path.lastIndexOf("/")) || "/";
+        setBusy(name);
         try {
+            const here = parent === directory;
             if (sample) {
-                patch((pages) => withItem(pages, rowFor(clean, pathIn(directory, clean), "folder", "Folder")));
+                const item = rowFor(name, path, "folder", "Folder");
+                rememberMade(podId, parent, item);
+                if (here) patch((pages) => withItem(pages, item));
             } else {
-                const made = await lemma(podId).files.folder.create(clean, { directoryPath: directory });
-                patch((pages) => withItem(pages, rowFor(made.name ?? clean, made.path, "folder", "Folder")));
+                const made = await lemma(podId).files.folder.create(name, { directoryPath: parent });
+                if (here) patch((pages) => withItem(pages, rowFor(made.name ?? name, made.path, "folder", "Folder")));
             }
             return true;
         } catch (failure) {
@@ -94,6 +151,14 @@ export function useLibraryWrites(podId: string, directory: string) {
         } finally {
             setBusy(null);
         }
+    }
+
+    async function createFolder(name: string) {
+        const bad = nameProblem(name);
+        if (bad) { setProblem(bad); return false; }
+        const clean = name.trim();
+        setProblem(null);
+        return makeFolder(pathIn(directory, clean), clean);
     }
 
     async function rename(item: LibraryItem, name: string) {
@@ -107,9 +172,8 @@ export function useLibraryWrites(podId: string, directory: string) {
         setProblem(null);
         patch((pages) => withRenamedItem(pages, item.path, clean, next));
         try {
-            if (!sample) {
-                await lemma(podId).files.update(item.path, { name: clean });
-            }
+            if (sample) renamedMade(podId, item.path, clean, next);
+            else await lemma(podId).files.update(item.path, { name: clean });
             return true;
         } catch (failure) {
             cache.setQueryData(key, before);
@@ -126,9 +190,8 @@ export function useLibraryWrites(podId: string, directory: string) {
         setProblem(null);
         patch((pages) => withoutItem(pages, item.path));
         try {
-            if (!sample) {
-                await lemma(podId).files.delete(item.path);
-            }
+            if (sample) forgetMade(podId, item.path);
+            else await lemma(podId).files.delete(item.path);
         } catch (failure) {
             cache.setQueryData(key, before);
             setProblem(failure instanceof Error ? failure.message : "That was not deleted.");
@@ -168,7 +231,7 @@ export function useLibraryWrites(podId: string, directory: string) {
         }
     }
 
-    return { busy, problem, clearProblem: () => setProblem(null), upload, createFolder, rename, remove, retry, explain };
+    return { busy, problem, clearProblem: () => setProblem(null), upload, drop, createFolder, rename, remove, retry, explain };
 }
 
 /** Ask before removing something.
