@@ -2172,28 +2172,6 @@ samp,
     color: var(--ink-3);
 }
 
-/* Space settings sits at the foot of the sidebar's list, and stays there:
-   a long list of chats scrolls under it instead of pushing it out of view. */
-.snav__foot {
-    margin-top: auto;
-    position: sticky;
-    bottom: -16px;
-    margin-bottom: -16px;
-    padding: 4px 0 16px;
-    background: var(--chrome);
-    z-index: 1;
-}
-.snav__foot::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: -16px;
-    height: 16px;
-    background: linear-gradient(to bottom, transparent, var(--chrome));
-    pointer-events: none;
-}
-
 /* ── Collapsed sidebar: one centre line for everything ─────────────────── */
 .shell--collapsed .side {
     align-items: center;
@@ -2248,161 +2226,6 @@ samp,
     text-align: left;
 }
 
-/* ── Space settings: a short list on the left, one section on the right ── */
-.settings {
-    display: grid;
-    grid-template-columns: 200px minmax(0, 1fr);
-    gap: 40px;
-    max-width: 1080px;
-    margin: 0 auto;
-    padding: 28px 40px 120px;
-}
-.settings__nav {
-    position: sticky;
-    top: 0;
-    align-self: start;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-.settings__nav h1 {
-    margin: 0 0 18px 10px;
-    font-size: 30px;
-    font-weight: 500;
-    letter-spacing: -0.02em;
-}
-.settings__nav button {
-    height: 36px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 14.5px;
-    text-align: left;
-    cursor: pointer;
-    transition: background-color 120ms ease, color 120ms ease;
-}
-.settings__nav button:hover {
-    background: var(--accent-soft);
-    color: var(--ink);
-}
-.settings__nav button[aria-current="page"] {
-    background: var(--line-2);
-    color: var(--ink);
-}
-.settings__body {
-    min-width: 0;
-    padding-top: 56px;
-}
-.settings__section > header {
-    margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--line);
-}
-.settings__section h2 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 500;
-}
-.settings__section header p {
-    margin: 4px 0 0;
-    font-size: 14px;
-    color: var(--ink-3);
-}
-.settings__content {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-}
-.settings__content .pcard {
-    border: 0;
-    box-shadow: none;
-    background: transparent;
-    padding: 0;
-}
-.settings__people {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-.settings__people li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 48px;
-    border-bottom: 1px solid var(--line);
-}
-.settings__row {
-    display: flex;
-    align-items: flex-end;
-    gap: 14px;
-}
-.settings__field {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--ink-3);
-}
-.settings__field input {
-    height: 40px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: var(--r-sm);
-    box-shadow: inset 0 0 0 1px var(--line-2);
-    background: var(--paper);
-    color: var(--ink);
-    font: inherit;
-    font-size: 15px;
-    outline: none;
-}
-.settings__field input:focus {
-    box-shadow: inset 0 0 0 1px var(--accent-line);
-}
-.settings__save {
-    height: 40px;
-    padding: 0 18px;
-    border: 0;
-    border-radius: 999px;
-    background: var(--accent);
-    color: var(--on-accent);
-    font: inherit;
-    font-size: 14px;
-    cursor: pointer;
-}
-.settings__save:disabled {
-    background: var(--line-2);
-    color: var(--ink-3);
-    cursor: default;
-}
-.settings__error {
-    margin: 8px 0 0;
-    color: var(--bad);
-    font-size: 13px;
-}
-@media (max-width: 800px) {
-    .settings {
-        grid-template-columns: minmax(0, 1fr);
-        gap: 12px;
-        padding: 20px 16px 100px;
-    }
-    .settings__nav {
-        position: static;
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 4px;
-    }
-    .settings__nav h1 {
-        width: 100%;
-        margin-left: 2px;
-    }
-    .settings__body {
-        padding-top: 8px;
-    }
-}
 
 .workflows-page__note {
     margin: -18px 0 24px;
@@ -2411,72 +2234,7 @@ samp,
     border-radius: calc(var(--r-sm) - 1px);
 }
 
-/* Settings, tightened: a smaller title, a narrower list, the section
-   starting level with the title, and less air between parts. */
-.settings {
-    grid-template-columns: 172px minmax(0, 1fr);
-    gap: 36px;
-    max-width: 1180px;
-    padding: 20px 32px 96px;
-}
-.settings__nav h1 {
-    margin: 2px 0 12px 10px;
-    font-size: 22px;
-    letter-spacing: -0.015em;
-}
-.settings__nav button {
-    height: 34px;
-    font-size: 14px;
-}
-.settings__body {
-    padding-top: 0;
-}
-.settings__section + .settings__section {
-    margin-top: 40px;
-}
-.settings__section > header {
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-}
-.settings__section h2 {
-    font-size: 18px;
-}
-.settings__section header p {
-    font-size: 13.5px;
-}
-.settings__content {
-    gap: 16px;
-}
 
-/* Skills as a grid of their cards, not a carousel to scroll through. */
-.settings .skill-track {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-    gap: 12px;
-    overflow: visible;
-    padding: 0;
-    scroll-snap-type: none;
-}
-.settings .skill-card {
-    flex: none;
-    width: auto;
-}
-.settings .skill-oars {
-    display: none;
-}
-
-/* Settings starts where the stage starts, not centred in it: on a wide
-   screen the centred column left a strip of nothing down the left. */
-.settings {
-    max-width: none;
-    margin: 0;
-    padding: 20px 28px 96px 24px;
-    grid-template-columns: 164px minmax(0, 1fr);
-    gap: 28px;
-}
-.settings__body {
-    max-width: 1040px;
-}
 
 /* ── Home: what is owed, ways to start, and a plain box ──────────────── */
 .home {
@@ -2987,37 +2745,6 @@ samp,
     grid-template-columns: 7px minmax(0, auto) minmax(0, 1fr) auto auto auto;
 }
 
-/* ── About › Hands work to: one list, flush with its heading ────────── */
-.settings__heading {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-.settings__heading h2 {
-    margin-right: auto;
-}
-.settings__action {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 14px;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--line-2);
-    color: var(--ink);
-    font-size: 13.5px;
-    cursor: pointer;
-}
-.settings__action:hover {
-    background: var(--accent-soft);
-}
-.settings__quiet {
-    margin: 0;
-    font-size: 14px;
-    color: var(--ink-3);
-}
 .agentlist {
     margin: -8px 0 0;
     padding: 0;
@@ -6845,20 +6572,15 @@ samp,
 }
 /* Home lands level with the first face on the rail: the rail's mark (40),
    the rule and its gaps (17) and the list's inset (2), less the difference
-   between a 36px row and a 40px face slot. At the foot, no inset of its own,
-   so Settings ends where the rail's avatar does and the two share a line.
-   The places get space to breathe; chats sit well below them, a list you
-   scan rather than a continuation of the places. */
+   between a 36px row and a 40px face slot. The places get space to breathe;
+   chats sit well below them, a list you scan rather than a continuation of
+   the places. */
 .side__space .snav {
     padding: 21px 0 0;
     gap: 36px;
 }
 .side__space .snav__group {
     gap: 2px;
-}
-/* The avatar's height, so the two share a centre as well as a floor. */
-.side__space .snav__foot .side__item {
-    height: 32px;
 }
 /* A section's name is a heading over the words, so it sits on the same edge
    they do. */
@@ -7532,17 +7254,11 @@ samp,
     color: var(--ink-3);
     font-variant-numeric: tabular-nums;
 }
-.aboutpage__foot {
-    margin: 36px 0 0;
-    padding-top: 16px;
-    border-top: 1px solid var(--line);
-    font-size: 13px;
-    color: var(--ink-3);
-}
-/* Deleting sits clear of the footnote above it, so it reads as its own
-   decision rather than one more line about Settings. Only the button is
-   red: a red heading and rule would shout at everybody who scrolls to the
-   bottom, and most of them came for something else. */
+/* Deleting sits at the very foot of the page, after everything that says how
+   the teammate works, so it reads as its own decision rather than one more
+   section. Only the button is red: a red heading and rule would shout at
+   everybody who scrolls to the bottom, and most of them came for something
+   else. */
 .aboutpage__delete {
     margin-top: 40px;
 }
@@ -7643,32 +7359,6 @@ samp,
     flex: none;
     font-size: 12.5px;
     color: var(--ink-3);
-}
-
-.settings__elsewhere {
-    margin: 18px 10px 0;
-    font-size: 13px;
-    line-height: 1.45;
-    color: var(--ink-3);
-}
-/* A link in a sentence, not another item in the list above it. */
-.settings__nav .settings__elsewhere button {
-    display: inline;
-    width: auto;
-    height: auto;
-    margin: 0;
-    padding: 0;
-    border-radius: 0;
-    background: none;
-    color: var(--ink-2);
-    font-size: inherit;
-    text-decoration: underline;
-    text-decoration-color: var(--line-2);
-    text-underline-offset: 3px;
-}
-.settings__nav .settings__elsewhere button:hover {
-    background: none;
-    color: var(--ink);
 }
 
 /* Hiring is how a teammate arrives, so it wears the app's ink rather than
