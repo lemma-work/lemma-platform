@@ -22,6 +22,7 @@ from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.services.contact_follow_ups import (
+    FollowUpChannel,
     FollowUpRefused,
     handle_for_unsubscribe,
     send_follow_up,
@@ -34,6 +35,15 @@ public_router = APIRouter(prefix="/public/contacts", tags=["Contacts"])
 
 class FollowUpRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+    channel: FollowUpChannel = Field(
+        default=FollowUpChannel.LATEST,
+        description=(
+            "`latest` writes in the contact's most recent conversation. "
+            "`email` sends to their verified email address: in that "
+            "conversation when it is an email thread, otherwise in a new thread "
+            "from the pod's email address that answers contacts."
+        ),
+    )
 
 
 class FollowUpResponse(BaseModel):
@@ -62,10 +72,14 @@ async def follow_up_contact(
 ) -> FollowUpResponse:
     """Write to a contact in their most recent conversation, where the channel allows.
 
+    With ``channel: email``, to their verified email address instead, which
+    reaches a web chat contact who is not on the page.
+
     Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-    has closed, or when they have never written to the pod; 429 past the day's
-    follow-ups for this contact; 502 when the platform did not take it, which
-    the conversation then shows as not sent.
+    has closed, when they have never written to the pod, or, for email, when
+    they have no verified address or the pod no email address answering
+    contacts; 429 past the day's follow-ups for this contact; 502 when the
+    platform did not take it, which the conversation then shows as not sent.
     """
     sent = await send_follow_up(
         uow_factory,
@@ -73,6 +87,7 @@ async def follow_up_contact(
         contact_id=contact_id,
         message=request.message,
         sent_by_user_id=user.id,
+        channel=request.channel,
     )
     return FollowUpResponse(
         conversation_id=sent.conversation_id,
