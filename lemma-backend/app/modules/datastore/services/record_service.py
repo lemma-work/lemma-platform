@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -9,9 +10,15 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.domain.datastore_entities import DatastoreDataType
-from app.modules.datastore.domain.ports import DatastoreRecordRepositoryPort
+from app.modules.datastore.domain.ports import (
+    DatastoreRecordRepositoryPort,
+    RecordEventFactory,
+)
 from app.modules.datastore.domain.row_security import CONTACT_COLUMN, RowPrincipal
-from app.modules.datastore.services.authorization import DatastoreAuthorization
+from app.modules.datastore.services.authorization import (
+    DatastoreAuthorization,
+    outside_writer,
+)
 from app.modules.datastore.infrastructure.record_bulk_delete import (
     bulk_delete_records as write_bulk_deletes,
 )
@@ -184,15 +191,9 @@ class RecordService:
         await self._reject_unknown_user_references(
             self._user_references(ctx, sanitized_data)
         )
-        if ctx.events_enabled:
-            event_factory = partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.INSERT,
-                user_id=user_id,
-            )
-        else:
-            event_factory = None
+        event_factory = self._event_factory(
+            ctx, DatastoreRecordOperation.INSERT, user_id
+        )
         record = await self.record_repository.create_record(
             ctx,
             sanitized_data,
@@ -362,15 +363,8 @@ class RecordService:
         await self._reject_unknown_user_references(
             self._user_references(ctx, sanitized_data)
         )
-        event_factory = (
-            partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.UPDATE,
-                user_id=user_id,
-            )
-            if ctx.events_enabled
-            else None
+        event_factory = self._event_factory(
+            ctx, DatastoreRecordOperation.UPDATE, user_id
         )
         return await self.record_repository.update_record(
             ctx,
@@ -401,7 +395,9 @@ class RecordService:
             record_id,
             user_id,
             enforce_user_scope=enforce_user_scope,
-            event_factory=self._delete_event_factory(ctx, user_id),
+            event_factory=self._event_factory(
+                ctx, DatastoreRecordOperation.DELETE, user_id
+            ),
         )
         if ctx.events_enabled:
             await self.events.dispatch()
@@ -446,15 +442,9 @@ class RecordService:
         # it actually wrote — the same contract as a single create. Building
         # them here from the submitted data would leave out the generated id and
         # anything the database defaulted, which a match condition may test.
-        if ctx.events_enabled:
-            event_factory = partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.INSERT,
-                user_id=user_id,
-            )
-        else:
-            event_factory = None
+        event_factory = self._event_factory(
+            ctx, DatastoreRecordOperation.INSERT, user_id
+        )
 
         write_records = (
             self.record_repository.bulk_upsert_records
@@ -518,15 +508,8 @@ class RecordService:
 
         await self._reject_unknown_user_references(user_references)
 
-        event_factory = (
-            partial(
-                self.events.required_for_record,
-                ctx=ctx,
-                operation=DatastoreRecordOperation.UPDATE,
-                user_id=user_id,
-            )
-            if ctx.events_enabled
-            else None
+        event_factory = self._event_factory(
+            ctx, DatastoreRecordOperation.UPDATE, user_id
         )
         count = await write_bulk_updates(
             self.record_repository,
@@ -544,14 +527,27 @@ class RecordService:
             await self.events.dispatch()
         return count
 
-    def _delete_event_factory(self, ctx: TableContext, user_id: UUID):
-        """The DELETE event builder both delete paths stage their rows through."""
+    def _event_factory(
+        self,
+        ctx: TableContext,
+        operation: DatastoreRecordOperation,
+        user_id: UUID,
+    ) -> RecordEventFactory | None:
+        """The builder every write path stages its rows' events through.
+
+        It names whoever outside the pod the write is for (``outside_writer``),
+        so a contact's function writing a row raises the same OUTSIDE event a
+        visitor's form row does, and a DATASTORE schedule treats the two alike.
+        """
         if not ctx.events_enabled:
             return None
+        writer = outside_writer(ctx)
+        if writer != ctx.outside_actor:
+            ctx = replace(ctx, outside_actor=writer)
         return partial(
             self.events.required_for_record,
             ctx=ctx,
-            operation=DatastoreRecordOperation.DELETE,
+            operation=operation,
             user_id=user_id,
         )
 
@@ -584,7 +580,9 @@ class RecordService:
             record_ids,
             user_id,
             enforce_user_scope=enforce_user_scope,
-            event_factory=self._delete_event_factory(ctx, user_id),
+            event_factory=self._event_factory(
+                ctx, DatastoreRecordOperation.DELETE, user_id
+            ),
         )
         # One dispatch for the batch, as with bulk update: the repository
         # stages a DELETE event per row and flushes none of them.

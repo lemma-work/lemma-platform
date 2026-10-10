@@ -15,6 +15,22 @@ from app.modules.datastore.services.table_context import TableContext, TableHydr
 logger = get_logger(__name__)
 
 
+def outside_writer(ctx: TableContext) -> str | None:
+    """Who outside the pod a write to ``ctx`` is for, as its events name them.
+
+    A table opened to visitors says so on ``ctx``. Work done for a contact -- a
+    function they called, or their own run -- writes under a context carrying
+    their id, whatever table it reaches: the run is the function's, the words
+    are the contact's, passed through a model.
+    """
+    if ctx.outside_actor is not None:
+        return ctx.outside_actor
+    auth_ctx = get_current_context()
+    if auth_ctx is None or auth_ctx.contact_id is None:
+        return None
+    return f"contact:{auth_ctx.contact_id}"
+
+
 class DatastoreAuthorization:
     """Datastore-facing authorization gateway.
 
