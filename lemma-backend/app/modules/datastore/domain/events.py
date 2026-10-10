@@ -26,8 +26,9 @@ class RecordOrigin(str, Enum):
     """Whose hand a row change came from."""
 
     MEMBER = "MEMBER"
-    #: Somebody outside the pod, through a table opened to them. The write ran
-    #: as the member who opened it; the content is the outsider's.
+    #: Somebody outside the pod, through a table opened to them or a function
+    #: they called. The write ran as the member who opened the table, or as the
+    #: function; the content is the outsider's.
     OUTSIDE = "OUTSIDE"
 
 

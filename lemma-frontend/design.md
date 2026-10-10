@@ -4,7 +4,8 @@
 - Use shared tokens in `src/styles/tokens.css` and `accents.css` for both themes.
   Keep the page neutral; concentrate identity color in teammate cards and marks.
 - Schibsted Grotesk for UI, Newsreader for documents, DM Mono for code and
-  metadata. Font weight stays at or below 500 except documented allowances.
+  metadata. Font weight stays at or below 500 except documented allowances:
+  the badge wordmark, and bold inside a page's prose.
 - Pair fills with their ink tokens: `--field-ink`, `--on-accent`, `--on-ok`,
   `--on-bad`. Measure contrast in both themes; never assume white text works.
 - The Lemma mark is the three rising bars of `app/icon.svg`, in
@@ -239,7 +240,8 @@ for every place, as one set; `SpaceEmpty` draws them.
   finishes them, or sends them. The run that follows refreshes the space's
   lists as it ends, so what it made appears where the empty state was.
 - Files take files: the empty state and the list accept a drop, and New has
-  Upload files.
+  Upload files and New folder. A folder dropped from the desktop is read, not
+  refused: its folders are made and what is inside them is uploaded.
 
 ## The tour
 

@@ -63,7 +63,11 @@ def _payload(
             "id": 279147437,
             "number": 42,
             "title": "Teach the parser about trailing commas",
-            "head": {"sha": head_sha, "ref": "feature/commas"},
+            "head": {
+                "sha": head_sha,
+                "ref": "feature/commas",
+                "repo": {"id": REPOSITORY_ID},
+            },
             "base": {"ref": "main"},
         },
         "repository": {

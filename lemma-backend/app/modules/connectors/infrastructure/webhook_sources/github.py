@@ -45,12 +45,20 @@ SUPPORTED_EVENTS = frozenset(
     {
         "push",
         "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
         "issues",
         "issue_comment",
         "workflow_run",
         "check_suite",
+        "check_run",
         "release",
     }
+)
+
+# Events whose subject is one pull request, and so whose branch is its head.
+_PULL_REQUEST_EVENTS = frozenset(
+    {"pull_request", "pull_request_review", "pull_request_review_comment"}
 )
 
 
@@ -65,6 +73,25 @@ def _pull_request_key(payload: WebhookPayload) -> str | None:
     pull_request = payload.get("pull_request") or {}
     head_sha = (pull_request.get("head") or {}).get("sha")
     return f"{pull_request.get('id')}:{payload.get('action')}:{head_sha}"
+
+
+def _review_key(payload: WebhookPayload) -> str | None:
+    # A review is submitted once and dismissed once, but its body can be edited
+    # any number of times, and the body is the only thing an edit changes -- a
+    # review carries no `updated_at`. Without it the second edit would collapse
+    # onto the first and never fire.
+    review = payload.get("review") or {}
+    return (
+        f"{review.get('id')}:{payload.get('action')}:{review.get('state')}"
+        f":{review.get('body')}"
+    )
+
+
+def _review_comment_key(payload: WebhookPayload) -> str | None:
+    # `updated_at` moves on every edit, so each edit is its own event, while a
+    # redelivery -- the same payload, byte for byte -- names the same instant.
+    comment = payload.get("comment") or {}
+    return f"{comment.get('id')}:{payload.get('action')}:{comment.get('updated_at')}"
 
 
 def _issue_key(payload: WebhookPayload) -> str | None:
@@ -83,6 +110,22 @@ def _check_suite_key(payload: WebhookPayload) -> str | None:
     return f"{suite.get('id')}:{suite.get('status')}"
 
 
+def _check_run_key(payload: WebhookPayload) -> str | None:
+    # Unlike a suite, a run's status is not enough on its own: `rerequested`
+    # and `requested_action` arrive for a run that has already completed, with
+    # the same status and conclusion as the `completed` delivery before them,
+    # and two different buttons on one run differ only by their identifier.
+    # An App may also re-run a check in place, and it can finish with the
+    # conclusion it had before; `completed_at` is what tells that second
+    # completion from a redelivery of the first.
+    run = payload.get("check_run") or {}
+    button = (payload.get("requested_action") or {}).get("identifier")
+    return (
+        f"{run.get('id')}:{payload.get('action')}:{run.get('status')}"
+        f":{run.get('conclusion')}:{run.get('completed_at')}:{button}"
+    )
+
+
 def _release_key(payload: WebhookPayload) -> str | None:
     release = payload.get("release") or {}
     return f"{release.get('id')}:{payload.get('action')}"
@@ -94,10 +137,13 @@ def _release_key(payload: WebhookPayload) -> str | None:
 _EVENT_KEYS: dict[str, Callable[[WebhookPayload], str | None]] = {
     "push": _push_key,
     "pull_request": _pull_request_key,
+    "pull_request_review": _review_key,
+    "pull_request_review_comment": _review_comment_key,
     "issues": _issue_key,
     "issue_comment": _issue_key,
     "workflow_run": _workflow_run_key,
     "check_suite": _check_suite_key,
+    "check_run": _check_run_key,
     "release": _release_key,
 }
 
@@ -247,13 +293,21 @@ class GitHubWebhookSource:
 def _ref_for(payload: WebhookPayload, event: str) -> str | None:
     """The branch the agent should be standing on.
 
-    A pull request event is about its *head*: an agent asked to review one and
-    dropped on `main` is looking at the wrong code. Everything else is about
-    wherever the repository's default branch is, which is what a clone gives you
-    without asking.
+    A pull request event -- including a review or a comment on its diff -- is
+    about its *head*: an agent asked to review one and dropped on `main` is
+    looking at the wrong code. Everything else is about wherever the
+    repository's default branch is, which is what a clone gives you without
+    asking.
+
+    A pull request from a fork binds no branch. Its head lives in the fork,
+    and the checkout clones the base repository: `--branch` with the fork's
+    branch either fails the clone outright or, when the base happens to have a
+    branch of the same name -- a fork's `main` -- silently checks out the
+    wrong code. The default branch is at least the right repository, and
+    `gh pr checkout` gets the head from there.
     """
-    if event == "pull_request":
-        return ((payload.get("pull_request") or {}).get("head") or {}).get("ref")
+    if event in _PULL_REQUEST_EVENTS:
+        return _head_ref(payload.get("pull_request"), payload.get("repository"))
     if event == "push":
         # `refs/heads/topic` -> `topic`. A tag push gives `refs/tags/...`, which
         # this deliberately does not turn into a branch name.
@@ -261,7 +315,45 @@ def _ref_for(payload: WebhookPayload, event: str) -> str | None:
         return (
             ref.removeprefix("refs/heads/") if ref.startswith("refs/heads/") else None
         )
+    if event == "check_run":
+        return _check_run_ref(payload)
     return None
+
+
+def _check_run_ref(payload: WebhookPayload) -> str | None:
+    """The branch holding the commit the run checked.
+
+    An agent asked why a check failed needs the code that failed it. The
+    suite's `head_branch` names that branch, and where it is null a pull
+    request the run is attached to is the only other name for it. GitHub
+    documents both as missing for a push to a fork, which binds no branch and
+    leaves the clone on the default one.
+    """
+    run = payload.get("check_run") or {}
+    branch = (run.get("check_suite") or {}).get("head_branch")
+    if branch:
+        return str(branch)
+    pull_requests = run.get("pull_requests") or []
+    if not pull_requests:
+        return None
+    return _head_ref(pull_requests[0], payload.get("repository"))
+
+
+def _head_ref(pull_request: object, repository: object) -> str | None:
+    """A pull request's head branch, if it lives in the repository cloned.
+
+    A head with no repository is a fork that has since been deleted, which is
+    no more cloneable than a live one.
+    """
+    if not isinstance(pull_request, dict) or not isinstance(repository, dict):
+        return None
+    head = pull_request.get("head") or {}
+    head_repository = head.get("repo") or {}
+    if head_repository.get("id") is None or head_repository.get("id") != repository.get(
+        "id"
+    ):
+        return None
+    return head.get("ref")
 
 
 def _repo_context(payload: WebhookPayload, event: str) -> WebhookPayload:

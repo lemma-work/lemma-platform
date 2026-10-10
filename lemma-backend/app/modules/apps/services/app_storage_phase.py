@@ -37,6 +37,11 @@ mimetypes.add_type("application/wasm", ".wasm")
 mimetypes.add_type("image/svg+xml", ".svg")
 
 
+def guess_media_type(path: str) -> str:
+    media_type, _encoding = mimetypes.guess_type(path)
+    return media_type or "application/octet-stream"
+
+
 @dataclass(frozen=True, slots=True)
 class _AssetReadInputs:
     """Storage-read inputs resolved from the DB, carried out of the short UoW.
@@ -96,11 +101,6 @@ class AppStoragePhase:
     def __init__(self, file_manager_factory: AppStorageFactoryPort):
         self.file_manager_factory = file_manager_factory
 
-    @staticmethod
-    def _guess_media_type(path: str) -> str:
-        media_type, _encoding = mimetypes.guess_type(path)
-        return media_type or "application/octet-stream"
-
     async def read_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
         """Read the asset bytes for resolved inputs. Holds NO DB connection."""
         storage = self.file_manager_factory(inputs.app_id)
@@ -150,7 +150,7 @@ class AppStoragePhase:
             )
         return AppAssetDocument(
             content=content,
-            media_type=self._guess_media_type(
+            media_type=guess_media_type(
                 requested_storage_path if not is_entrypoint else "index.html"
             ),
             etag=inputs.quoted_etag,

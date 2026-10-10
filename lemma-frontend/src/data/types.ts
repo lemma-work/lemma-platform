@@ -351,7 +351,7 @@ export interface SharedLink {
 
 /** A view of the space's own contents, filtered by kind — and `about`, the
  *  teammate the space belongs to. */
-export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "contacts" | "settings" | "about";
+export type SpaceView = "home" | "chats" | "all" | "pages" | "apps" | "tables" | "files" | "workflows" | "groups" | "contacts" | "about";
 
 export type Tab =
     | { id: string; kind: "space"; label: string; view: SpaceView }

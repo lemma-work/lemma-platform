@@ -45,7 +45,8 @@ the organization's contacts cap for any agent work a row starts.
 What a stranger's row may set off:
 
 - **Its insert event is marked as from outside** and names the visitor
-  (`visitor:{session}`) or contact, not the member who opened the table.
+  (`visitor:{session}`) or contact, not the member who opened the table. A row
+  a contact's function writes is marked the same way, naming the contact.
 - **A DATASTORE schedule ignores it** unless the schedule asks for outside rows
   (`include_outside_rows`, off by default). When one does, its LLM filter and
   the run it starts are both told the row's content is untrusted.
