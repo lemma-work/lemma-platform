@@ -1,4 +1,5 @@
 import type { GeneratedClientAdapter } from "../generated.js";
+import type { FollowUpChannel } from "../openapi_client/models/FollowUpChannel.js";
 import type { WebWidgetCreateRequest } from "../openapi_client/models/WebWidgetCreateRequest.js";
 import type { WebWidgetUpdateRequest } from "../openapi_client/models/WebWidgetUpdateRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
@@ -43,10 +44,20 @@ export class ContactsNamespace {
 
   /** Write to a contact in their latest conversation, where the channel allows:
    *  never where they unsubscribed, on WhatsApp only within 24 hours of their
-   *  last message, and a few times a day at most. Takes `contact.message`. */
-  followUp(podId: string, contactId: string, message: string) {
+   *  last message, and a few times a day at most. Takes `contact.message`.
+   *  `channel: "email"` sends to their verified email address instead, from
+   *  the pod's email address when their latest conversation is a web chat. */
+  followUp(
+    podId: string,
+    contactId: string,
+    message: string,
+    options: { channel?: FollowUpChannel | `${FollowUpChannel}` } = {},
+  ) {
     return this.client.request(() =>
-      ContactsService.contactFollowUp(podId, contactId, { message }),
+      ContactsService.contactFollowUp(podId, contactId, {
+        message,
+        channel: options.channel as FollowUpChannel | undefined,
+      }),
     );
   }
 

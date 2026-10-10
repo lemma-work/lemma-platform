@@ -178,6 +178,7 @@ export type { FileSummaryResponse } from './models/FileSummaryResponse.js';
 export type { FileUrlResponse } from './models/FileUrlResponse.js';
 export type { FirstWorkspaceRequest } from './models/FirstWorkspaceRequest.js';
 export { FirstWorkspaceResponse } from './models/FirstWorkspaceResponse.js';
+export { FollowUpChannel } from './models/FollowUpChannel.js';
 export type { FollowUpRequest } from './models/FollowUpRequest.js';
 export type { FollowUpResponse } from './models/FollowUpResponse.js';
 export type { ForeignKeySpec } from './models/ForeignKeySpec.js';

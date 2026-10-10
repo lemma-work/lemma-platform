@@ -240,7 +240,8 @@ for every place, as one set; `SpaceEmpty` draws them.
   finishes them, or sends them. The run that follows refreshes the space's
   lists as it ends, so what it made appears where the empty state was.
 - Files take files: the empty state and the list accept a drop, and New has
-  Upload files.
+  Upload files and New folder. A folder dropped from the desktop is read, not
+  refused: its folders are made and what is inside them is uploaded.
 
 ## The tour
 

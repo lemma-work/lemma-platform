@@ -22,7 +22,7 @@ reply is ever seen again can be tested without a mail provider or a database.
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -58,6 +58,16 @@ def cold_thread_seed_id(*, notification_id: UUID, surface: AgentSurfaceEntity) -
     conversation on somebody who has not even replied to the first.
     """
     seed = f"<lemma-notification-{notification_id}@{_domain_of(surface.surface_identity_email)}>"
+    return seed[:MAX_THREAD_ID_LENGTH]
+
+
+def follow_up_seed_id(surface: AgentSurfaceEntity) -> str:
+    """The Message-ID planted for a member's follow-up that opens a thread.
+
+    Random, unlike a notification's: a follow-up is sent once and never
+    re-delivered, so there is no second send to land on the same thread.
+    """
+    seed = f"<lemma-follow-up-{uuid4()}@{_domain_of(surface.surface_identity_email)}>"
     return seed[:MAX_THREAD_ID_LENGTH]
 
 
@@ -106,4 +116,5 @@ __all__ = [
     "build_cold_email_thread",
     "cold_email_channel_id",
     "cold_thread_seed_id",
+    "follow_up_seed_id",
 ]
