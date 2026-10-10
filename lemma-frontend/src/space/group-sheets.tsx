@@ -45,7 +45,7 @@ export type GroupSheet =
  *  and pointed at the link when it arrives. */
 export function openTelegramLink(podId: string, surfaceName: string): Promise<TelegramLink> {
     const link = source.groupLink(podId, surfaceName);
-    void openExternalWhenReady(link.then((made) => made.url)).catch(() => undefined);
+    void openExternalWhenReady(link.then((made) => made.url), "Telegram").catch(() => undefined);
     return link;
 }
 

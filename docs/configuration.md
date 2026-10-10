@@ -757,7 +757,8 @@ DECISION_PROVIDER=model       # model | typesafe
 DECISION_MODEL=
 
 # Typesafe System One, a classifier built for this. Opt-in: nothing is sent to
-# it unless DECISION_PROVIDER=typesafe.
+# it unless DECISION_PROVIDER=typesafe. Chosen without its key, the `model`
+# provider answers instead (with a warning), so decisions keep working.
 TYPESAFE_API_KEY=
 TYPESAFE_MODEL=jev-latest
 # Set so its calls count toward the spend limits below.
@@ -765,11 +766,19 @@ TYPESAFE_PRICE_PER_MILLION_INPUT_TOKENS_USD=
 
 DECISION_INTERACTIVE_TIMEOUT_SECONDS=8
 DECISION_BACKGROUND_TIMEOUT_SECONDS=25
-DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization; 0 for none
+DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization and priority; 0 for none
 ```
 
 Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
 wherever your deployment names the processors its users' data reaches.
+
+Live voice calls route everything the caller says through this API, with
+`priority: interactive`: whether it is conversation, a question about work
+already running, or new work, and for which conversation. Someone is waiting
+on every one of those, so `typesafe` is the recommended provider for a
+deployment with calls: it answers in about a third of a second, a language
+model in several. With no provider able to answer, a call carries on with the
+voice alone and dispatches nothing.
 
 ## Spend limits
 

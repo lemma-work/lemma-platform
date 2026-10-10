@@ -191,6 +191,10 @@ _NAME_TO_MODULE = {
     'DecisionNodePositionType0': 'decision_node_position_type_0',
     'DecisionNodeResponse': 'decision_node_response',
     'DecisionNodeResponsePositionType0': 'decision_node_response_position_type_0',
+    'DecisionQuestion': 'decision_question',
+    'DecisionQuestionAnswer': 'decision_question_answer',
+    'DecisionQuestionExample': 'decision_question_example',
+    'DecisionQuestionRoutes': 'decision_question_routes',
     'DecisionResponse': 'decision_response',
     'DecisionResponseAnswers': 'decision_response_answers',
     'DecisionRule': 'decision_rule',
@@ -801,6 +805,10 @@ if TYPE_CHECKING:
     from .decision_node_position_type_0 import DecisionNodePositionType0
     from .decision_node_response import DecisionNodeResponse
     from .decision_node_response_position_type_0 import DecisionNodeResponsePositionType0
+    from .decision_question import DecisionQuestion
+    from .decision_question_answer import DecisionQuestionAnswer
+    from .decision_question_example import DecisionQuestionExample
+    from .decision_question_routes import DecisionQuestionRoutes
     from .decision_response import DecisionResponse
     from .decision_response_answers import DecisionResponseAnswers
     from .decision_rule import DecisionRule
@@ -1424,6 +1432,10 @@ __all__ = [
     'DecisionNodePositionType0',
     'DecisionNodeResponse',
     'DecisionNodeResponsePositionType0',
+    'DecisionQuestion',
+    'DecisionQuestionAnswer',
+    'DecisionQuestionExample',
+    'DecisionQuestionRoutes',
     'DecisionResponse',
     'DecisionResponseAnswers',
     'DecisionRule',
