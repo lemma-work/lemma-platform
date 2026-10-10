@@ -321,6 +321,12 @@ one:
   the contact's rows. At most `FUNCTION_CONTACT_CALLS_PER_DAY` calls per
   contact per function; a tool call is never run twice; a run still going at
   the wait deadline is cancelled and reported as such.
+  What such a run writes is the contact's, not a member's: every row event it
+  raises, insert, update or delete, on any table, is marked from outside and
+  names `contact:{id}`, as a form row does. A DATASTORE schedule ignores it
+  unless it asks for `include_outside_rows`, and when it does, its LLM filter
+  and the run it starts are told the row is untrusted
+  ([forms-and-chat.md](forms-and-chat.md)).
 - **Web widgets.** `/pods/{pod_id}/web-widgets` (a chat; public key,
   encrypted signing secret shown once and rotatable, allowed origins, answer,
   looked-after-by). Public endpoints under `/public/web/{public_key}`: session,
