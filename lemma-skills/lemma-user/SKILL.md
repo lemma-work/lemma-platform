@@ -501,6 +501,7 @@ to outside rows. There is no `lemma` CLI command for them yet; use the Python SD
 pod = Lemma().pod()
 pod.contacts.list()                        # who has written; handles say who vouched
 pod.contacts.follow_up(contact_id, "Your order shipped.")   # refused outside WhatsApp's 24h window or after an unsubscribe
+pod.contacts.follow_up(contact_id, "It's back in stock.", channel="email")  # to their verified email, even from a web chat
 pod.contacts.export(contact_id)            # their words and the bot's answers
 pod.tables.list_public_rows()              # tables taking rows from outside, and from whom
 ```

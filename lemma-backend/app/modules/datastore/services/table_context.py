@@ -53,7 +53,8 @@ class TableContext:
     contact_owned: bool = False
     #: Who outside the pod is writing, when somebody is -- ``visitor:{session}``
     #: or ``contact:{id}``. The write still runs as the member who opened the
-    #: table; this is what its events say instead of naming that member.
+    #: table, or as the function a contact called; this is what its events say
+    #: instead of naming either.
     outside_actor: str | None = None
     _column_map: Dict[str, ColumnSchema] = field(default_factory=dict, init=False)
 

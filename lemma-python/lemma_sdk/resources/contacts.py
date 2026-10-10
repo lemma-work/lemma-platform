@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from ..openapi_client.api.contacts import (
@@ -61,18 +62,30 @@ class PodContacts(BoundResource):
             body_model=ContactUpdateRequest,
         )
 
-    def follow_up(self, contact_id: str | UUID, message: str) -> FollowUpResponse:
+    def follow_up(
+        self,
+        contact_id: str | UUID,
+        message: str,
+        *,
+        channel: Literal["latest", "email"] = "latest",
+    ) -> FollowUpResponse:
         """Write to a contact in their latest conversation, where the channel allows.
+
+        ``channel="email"`` sends to their verified email address instead: from
+        the pod's email address that answers contacts, in a new thread, when
+        their latest conversation is a web chat or another platform's.
 
         Takes ``contact.message`` (editors and up). Refused when they
         unsubscribed there, when WhatsApp's 24-hour window has closed, when
-        they never wrote to the pod, or past the day's follow-ups to them.
+        they never wrote to the pod, or past the day's follow-ups to them; for
+        email, when they have no verified address or the pod has no email
+        address answering contacts.
         """
         return self._call(
             contact_follow_up,
             self._pod_uuid(),
             as_uuid(contact_id),
-            body={"message": message},
+            body={"message": message, "channel": channel},
             body_model=FollowUpRequest,
         )
 
