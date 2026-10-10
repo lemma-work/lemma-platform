@@ -50,6 +50,8 @@ export default defineConfig(({ mode }) => {
   // Optional same-origin dev proxy (opt in with `lemma apps init --proxy`). When
   // LEMMA_DEV_PROXY_TARGET is set, the SDK talks to a same-origin '/api' path and
   // Vite forwards it to the backend, so there is no cross-origin CORS in dev.
+  // `ws` forwards WebSocket upgrades too: without it the datastore change stream
+  // (`useLiveRecords`, `watchChanges`) never connects in dev.
   const proxyTarget = env.LEMMA_DEV_PROXY_TARGET
   const server = proxyTarget
     ? {
@@ -58,6 +60,7 @@ export default defineConfig(({ mode }) => {
             target: proxyTarget,
             changeOrigin: true,
             secure: false,
+            ws: true,
             rewrite: (path: string) => path.replace(/^\/api/, ''),
           },
         },

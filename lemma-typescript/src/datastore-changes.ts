@@ -109,6 +109,25 @@ function reconnectDelayMs(attempt: number): number {
   return Math.random() * ceiling;
 }
 
+/**
+ * `apiUrl` as an absolute URL. A relative one ("/api", which `lemma apps init
+ * --proxy` writes for the same-origin Vite dev proxy) works for `fetch`, which
+ * resolves against the page, but a WebSocket URL has to be built whole, so it is
+ * resolved against the page origin here. Throws when there is no page to
+ * resolve against: no retry can fix that.
+ */
+function absoluteApiUrl(apiUrl: string): string {
+  if (/^[a-z][a-z\d+.-]*:/i.test(apiUrl)) return apiUrl;
+  const origin = globalThis.location?.origin;
+  // An opaque origin (about:blank, file://) serialises as the string "null".
+  if (!origin || origin === "null") {
+    throw new Error(
+      `Datastore change stream: apiUrl "${apiUrl}" is relative and there is no page origin to resolve it against; pass an absolute URL`,
+    );
+  }
+  return new URL(apiUrl, origin).toString();
+}
+
 function changesWsUrl(
   apiUrl: string,
   podId: string,
@@ -116,7 +135,9 @@ function changesWsUrl(
   since: string | undefined,
   token: string | null,
 ): string {
-  const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
+  const root = absoluteApiUrl(apiUrl)
+    .replace(/\/$/, "")
+    .replace(/^http(s?):\/\//, "ws$1://");
   const url = new URL(`${root}/pods/${podId}/datastore/changes`);
   if (table) url.searchParams.set("table", table);
   if (since) url.searchParams.set("since", since);
@@ -184,9 +205,17 @@ export function watchDatastoreChanges(
     }
     if (stopped) return;
 
+    let url: string;
+    try {
+      url = changesWsUrl(apiUrl, podId, options.table, cursor, token);
+    } catch (error) {
+      fail(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+
     let ws: WebSocket;
     try {
-      ws = new WebSocket(changesWsUrl(apiUrl, podId, options.table, cursor, token));
+      ws = new WebSocket(url);
     } catch (error) {
       options.onError?.(error instanceof Error ? error : new Error(String(error)));
       scheduleReconnect();
