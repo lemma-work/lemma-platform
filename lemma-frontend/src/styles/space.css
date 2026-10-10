@@ -6225,6 +6225,12 @@ samp,
     gap: 6px;
 }
 
+/* What a connected app is told about, one line each under its name. */
+.access__listens {
+    display: block;
+    margin-top: 2px;
+}
+
 /* Why a New page or a template did not happen, where it was asked for. */
 .all__error {
     display: flex;

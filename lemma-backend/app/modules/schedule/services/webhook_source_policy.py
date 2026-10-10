@@ -19,7 +19,11 @@ from __future__ import annotations
 
 from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
 from app.modules.schedule.domain.errors import ScheduleValidationError
-from app.modules.schedule.domain.schedule import ScheduleCreateEntity, ScheduleEntity
+from app.modules.schedule.domain.schedule import (
+    MCP_EVENT_SOURCE,
+    ScheduleCreateEntity,
+    ScheduleEntity,
+)
 
 
 def validate_webhook_source(
@@ -46,11 +50,18 @@ def validate_webhook_source(
     never None; having nothing to check against is not the same as having found
     something wrong, so that case passes rather than refuses.
     """
+    named = (schedule.config or {}).get("source")
+    if named == MCP_EVENT_SOURCE and not schedule.account_id:
+        # Subscribed on an account or not at all: with none, nothing would
+        # ever be asked to deliver.
+        raise ScheduleValidationError(
+            "An MCP server's events reach a schedule through a connected "
+            "account. Name the account it listens through."
+        )
     if sources is None:
         return
     if schedule.account_id and schedule.connector_trigger_id:
         return
-    named = (schedule.config or {}).get("source")
     if named is None:
         return
     if isinstance(named, str) and sources.for_source(named) is not None:

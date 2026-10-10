@@ -19,6 +19,7 @@ from app.modules.connectors.infrastructure.models.connector_trigger import (
 from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
+from app.modules.test_support.e2e.schedule_binding import bind_schedule_to_account
 from app.modules.test_support.e2e.waiters import eventually, wait_for_status
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
@@ -1000,6 +1001,7 @@ async def test_wait_until_resumes_from_a_timer_that_carries_no_owner(
 async def test_composio_webhook_schedule_starts_event_workflow_from_logged_payload(
     authenticated_client: AsyncClient,
     fixed_test_org,
+    fixed_test_user,
     db_session: AsyncSession,
     monkeypatch,
     worker,
@@ -1022,11 +1024,23 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
     )
     payload = _composio_log_payload()
     provider_id = payload["metadata"]["trigger_id"]
-    await _create_schedule(
+    schedule = await _create_schedule(
         authenticated_client,
         pod_id,
         schedule_type=ScheduleType.WEBHOOK.value,
         workflow_name=workflow["name"],
+        config={"source": "composio", "provider_trigger_id": provider_id},
+    )
+    # A typed-in trigger id is not kept: only provisioning writes one, on the
+    # account it subscribed through. Bind the row the way that leaves it --
+    # provisioning itself would call Composio.
+    assert "provider_trigger_id" not in schedule["config"]
+    await bind_schedule_to_account(
+        db_session,
+        schedule_id=schedule["id"],
+        org_id=fixed_test_org["id"],
+        user_id=fixed_test_user["id"],
+        connector_id="composio",
         config={"source": "composio", "provider_trigger_id": provider_id},
     )
 

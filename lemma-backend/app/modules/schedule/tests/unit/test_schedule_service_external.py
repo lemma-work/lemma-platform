@@ -82,22 +82,58 @@ async def test_create_external_schedule_success():
         visibility="PERSONAL",
     )
 
-    created_schedule = ScheduleEntity(id=uuid4(), **schedule_create.model_dump())
-    schedule_repo.create.return_value = created_schedule
-    external_writer.create_provider_trigger.return_value = ProvisionedTrigger(
-        provider_trigger_id="provider_123"
-    )
+    order: list[str] = []
 
-    updated_schedule = created_schedule.model_copy(deep=True)
-    updated_schedule.config["provider_trigger_id"] = "provider_123"
-    schedule_repo.update.return_value = updated_schedule
+    async def provision(schedule):
+        order.append("provision")
+        return ProvisionedTrigger(provider_trigger_id="provider_123")
+
+    async def write(schedule):
+        order.append("write")
+        return schedule
+
+    external_writer.create_provider_trigger.side_effect = provision
+    schedule_repo.create.side_effect = write
 
     result = await service.create_schedule(schedule_create)
 
     assert result.schedule_type == ScheduleType.WEBHOOK
     assert result.config["provider_trigger_id"] == "provider_123"
-    external_writer.create_provider_trigger.assert_called_once_with(created_schedule)
-    schedule_repo.update.assert_called_once()
+    assert order == ["provision", "write"], (
+        "subscribed before the row is written, so the row is written once, routed"
+    )
+    schedule_repo.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_row_that_fails_to_write_drops_the_subscription_just_made():
+    uow = AsyncMock()
+    schedule_repo = AsyncMock()
+    external_writer = AsyncMock()
+    service = ScheduleService(
+        uow=uow,
+        schedule_repository=schedule_repo,
+        external_schedule_writer=external_writer,
+    )
+    external_writer.create_provider_trigger.return_value = ProvisionedTrigger(
+        provider_trigger_id="provider_123"
+    )
+    schedule_repo.create.side_effect = RuntimeError("database went away")
+
+    with pytest.raises(RuntimeError):
+        await service.create_schedule(
+            ScheduleCreateEntity(
+                user_id=uuid4(),
+                schedule_type=ScheduleType.WEBHOOK,
+                connector_trigger_id="gmail_new_email",
+                account_id=uuid4(),
+                config={"some": "config"},
+                visibility="PERSONAL",
+            )
+        )
+
+    [call] = external_writer.delete_provider_trigger.await_args_list
+    assert call.args[0].config["provider_trigger_id"] == "provider_123"
 
 
 @pytest.mark.asyncio

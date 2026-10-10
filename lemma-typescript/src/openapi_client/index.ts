@@ -147,6 +147,9 @@ export type { EndNode } from './models/EndNode.js';
 export type { EndNodeConfig } from './models/EndNodeConfig.js';
 export type { EndNodeResponse } from './models/EndNodeResponse.js';
 export type { ErrorResponse } from './models/ErrorResponse.js';
+export type { EventCatalogResponse } from './models/EventCatalogResponse.js';
+export type { EventDescriptorResponse } from './models/EventDescriptorResponse.js';
+export type { EventSubscriptionResponse } from './models/EventSubscriptionResponse.js';
 export type { EventWorkflowStartConfigInput } from './models/EventWorkflowStartConfigInput.js';
 export type { EventWorkflowStartConfigOutput } from './models/EventWorkflowStartConfigOutput.js';
 export type { EventWorkflowStartInput } from './models/EventWorkflowStartInput.js';
@@ -240,6 +243,7 @@ export type { InstallRequestInitiateSchema } from './models/InstallRequestInitia
 export type { InstallRequestResponseSchema } from './models/InstallRequestResponseSchema.js';
 export type { JsonObject } from './models/JsonObject.js';
 export type { JsonValue } from './models/JsonValue.js';
+export { ListeningResponse } from './models/ListeningResponse.js';
 export type { LiteralInputBinding } from './models/LiteralInputBinding.js';
 export type { LoopNode } from './models/LoopNode.js';
 export type { LoopNodeConfig } from './models/LoopNodeConfig.js';

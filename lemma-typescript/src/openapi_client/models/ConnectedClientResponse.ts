@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { EventSubscriptionResponse } from './EventSubscriptionResponse.js';
 import type { Scope } from './Scope.js';
 export type ConnectedClientResponse = {
     client_id: string;
@@ -10,6 +11,7 @@ export type ConnectedClientResponse = {
     connected_at: string;
     grant_id: string;
     last_used_at: (string | null);
+    listens_to?: Array<EventSubscriptionResponse>;
     pod_id: string;
     scopes: Array<Scope>;
     /**

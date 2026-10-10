@@ -211,6 +211,12 @@ _NAME_TO_MODULE = {
     'EndNodeResponse': 'end_node_response',
     'EndNodeResponsePositionType0': 'end_node_response_position_type_0',
     'ErrorResponse': 'error_response',
+    'EventCatalogResponse': 'event_catalog_response',
+    'EventDescriptorResponse': 'event_descriptor_response',
+    'EventDescriptorResponseInputSchema': 'event_descriptor_response_input_schema',
+    'EventDescriptorResponsePayloadSchema': 'event_descriptor_response_payload_schema',
+    'EventSubscriptionResponse': 'event_subscription_response',
+    'EventSubscriptionResponseArguments': 'event_subscription_response_arguments',
     'EventWorkflowStartConfigInput': 'event_workflow_start_config_input',
     'EventWorkflowStartConfigInputTriggerConfig': 'event_workflow_start_config_input_trigger_config',
     'EventWorkflowStartConfigOutput': 'event_workflow_start_config_output',
@@ -315,6 +321,8 @@ _NAME_TO_MODULE = {
     'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
+    'ListeningResponse': 'listening_response',
+    'ListeningResponseState': 'listening_response_state',
     'LiteralInputBinding': 'literal_input_binding',
     'LoopNode': 'loop_node',
     'LoopNodeConfig': 'loop_node_config',
@@ -829,6 +837,12 @@ if TYPE_CHECKING:
     from .end_node_response import EndNodeResponse
     from .end_node_response_position_type_0 import EndNodeResponsePositionType0
     from .error_response import ErrorResponse
+    from .event_catalog_response import EventCatalogResponse
+    from .event_descriptor_response import EventDescriptorResponse
+    from .event_descriptor_response_input_schema import EventDescriptorResponseInputSchema
+    from .event_descriptor_response_payload_schema import EventDescriptorResponsePayloadSchema
+    from .event_subscription_response import EventSubscriptionResponse
+    from .event_subscription_response_arguments import EventSubscriptionResponseArguments
     from .event_workflow_start_config_input import EventWorkflowStartConfigInput
     from .event_workflow_start_config_input_trigger_config import EventWorkflowStartConfigInputTriggerConfig
     from .event_workflow_start_config_output import EventWorkflowStartConfigOutput
@@ -933,6 +947,8 @@ if TYPE_CHECKING:
     from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
+    from .listening_response import ListeningResponse
+    from .listening_response_state import ListeningResponseState
     from .literal_input_binding import LiteralInputBinding
     from .loop_node import LoopNode
     from .loop_node_config import LoopNodeConfig
@@ -1460,6 +1476,12 @@ __all__ = [
     'EndNodeResponse',
     'EndNodeResponsePositionType0',
     'ErrorResponse',
+    'EventCatalogResponse',
+    'EventDescriptorResponse',
+    'EventDescriptorResponseInputSchema',
+    'EventDescriptorResponsePayloadSchema',
+    'EventSubscriptionResponse',
+    'EventSubscriptionResponseArguments',
     'EventWorkflowStartConfigInput',
     'EventWorkflowStartConfigInputTriggerConfig',
     'EventWorkflowStartConfigOutput',
@@ -1564,6 +1586,8 @@ __all__ = [
     'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
+    'ListeningResponse',
+    'ListeningResponseState',
     'LiteralInputBinding',
     'LoopNode',
     'LoopNodeConfig',

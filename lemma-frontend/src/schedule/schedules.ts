@@ -28,6 +28,9 @@ export const SCHEDULE_REMOVE = "schedule.delete";
  *  not a bug — the row still draws, it just cannot say more than the word. */
 export type ScheduleKind = "TIME" | "WEBHOOK" | "DATASTORE" | "UNKNOWN";
 
+/** The webhook source a connected MCP server's events arrive as. */
+export const MCP_SOURCE = "mcp";
+
 /** The outcome of the last fire attempt. `FILTERED` is not a failure: the AI
  *  filter read the event and said it did not matter. */
 export type FireStatus = "TRIGGERED" | "FILTERED" | "ERROR" | "";
@@ -87,6 +90,9 @@ export interface StandingJob {
     scope: Scope;
     /** What is missing before it can fire, in words — empty when nothing is. */
     needsSetup: string;
+    /** For a schedule on a connected server's event: whether it is still
+     *  hearing from the server. Null for every other schedule. */
+    listening: Listening | null;
     /** Who made it, and so who it runs as (`user_id`). */
     ownerId: string;
     /** PERSONAL | POD | RESTRICTED | PUBLIC, upper-cased; "" when absent. */
@@ -96,6 +102,19 @@ export interface StandingJob {
 }
 
 export type Scope = "space" | "person" | "mine";
+
+export interface Listening {
+    state: "listening" | "retrying" | "lapsed" | "pending";
+    lastError: string;
+    server: string;
+}
+
+function listeningOf(raw: unknown): Listening | null {
+    const row = record(raw);
+    const state = text(row["state"]);
+    if (state !== "listening" && state !== "retrying" && state !== "lapsed" && state !== "pending") return null;
+    return { state, lastError: text(row["last_error"]), server: text(row["server"]) };
+}
 
 export const SCOPE_LABEL: Record<Scope, string> = { space: "Admin", person: "Each person", mine: "Only you" };
 export const SCOPE_NOTE: Record<Scope, string> = {
@@ -113,9 +132,12 @@ export function scopeOf(kind: ScheduleKind, visibility: string): Scope {
 /** A WEBHOOK schedule listens through a connected account and a connector
  *  trigger; without both it is a schedule that can never fire, and nothing
  *  else on the row says so. */
-export function setupOf(kind: ScheduleKind, accountId: string, connectorTriggerId: string): string {
+export function setupOf(kind: ScheduleKind, accountId: string, connectorTriggerId: string, source = ""): string {
     if (kind !== "WEBHOOK") return "";
     if (!accountId) return "Needs an account connected before it can listen.";
+    /* A connected MCP server's event is subscribed when the row is made; it
+       names no catalog trigger. */
+    if (source === MCP_SOURCE) return "";
     if (!connectorTriggerId) return "Needs its trigger installed on the connected account.";
     return "";
 }
@@ -216,6 +238,14 @@ export function triggerOf(kind: ScheduleKind, config: Record<string, unknown>, c
         if (once) return { trigger: "Once", literal: once };
         return { trigger: "On a schedule", literal: "" };
     }
+    if (kind === "WEBHOOK" && text(config["source"]) === MCP_SOURCE) {
+        /* A connected server's own event, narrowed by its arguments. */
+        const event = text(config["event"]);
+        const narrowed = Object.entries(record(config["arguments"]))
+            .map(([key, value]) => key + " = " + text(value))
+            .join(", ");
+        return { trigger: "When " + (event || "an event") + " happens", literal: narrowed };
+    }
     if (kind === "WEBHOOK") {
         const source = text(config["source"]);
         const said = source ? "When " + humanizeName(source).toLowerCase() + " sends something" : "When something arrives";
@@ -282,7 +312,8 @@ export function readSchedule(raw: unknown): StandingJob {
         ownerId: text(row["user_id"]),
         visibility: text(row["visibility"]).toUpperCase(),
         raw: row,
-        needsSetup: setupOf(kind, text(row["account_id"]), text(row["connector_trigger_id"])),
+        needsSetup: setupOf(kind, text(row["account_id"]), text(row["connector_trigger_id"]), text(config["source"])),
+        listening: listeningOf(row["listening"]),
     };
 }
 
@@ -327,9 +358,27 @@ export function healthOf(job: StandingJob): { tone: Tone; line: string } {
             line: "Stopped by itself after " + job.failures + " failures in a row. Resuming clears the count.",
         };
     }
+    /* Turned off by the system for a reason it wrote down -- its author left,
+       or its server stopped listening. That is a fault to read, not a pause. */
+    if (!job.active && job.lastError.startsWith("Turned off:")) return { tone: "bad", line: job.lastError };
     if (!job.active) return { tone: "off", line: "It will not fire until somebody resumes it." };
     if (job.target.kind === "none") return { tone: "bad", line: "No agent or workflow is assigned to this schedule." };
     if (job.needsSetup) return { tone: "warn", line: job.needsSetup };
+    if (job.listening?.state === "lapsed") {
+        return {
+            tone: "bad",
+            line: (job.listening.server || "The server") + " has stopped telling it about events" +
+                (job.listening.lastError ? ": " + job.listening.lastError : "") + ".",
+        };
+    }
+    if (job.listening?.state === "retrying") {
+        return {
+            tone: "warn",
+            line: "Could not renew its subscription to " + (job.listening.server || "the server") + "; trying again" +
+                (job.listening.lastError ? " (" + job.listening.lastError + ")" : "") + ".",
+        };
+    }
+    if (job.listening?.state === "pending") return { tone: "warn", line: "Waiting for the server to confirm it will send events." };
     if (job.failures > 0) {
         const times = job.failures === 1 ? "once" : job.failures + " times in a row";
         return { tone: "bad", line: "Failed " + times + "." };
@@ -489,21 +538,131 @@ export function agoOf(iso: string, now: number = Date.now()): string {
 
 /* ── making one ─────────────────────────────────────────────────────── */
 
-/** A new TIME schedule, as this app lets one be written.
- *
- *  Only TIME. A WEBHOOK schedule needs a connected account and a connector
- *  trigger id, and a DATASTORE one needs a table plus an explicit operation
- *  set the workflow is built to handle — neither is a form this section can
- *  put in front of somebody honestly, so neither is offered.
- */
+/** What starts a new schedule: a time, a row added to a table, or an event on
+ *  an MCP server you connected (`server`, with `serverEvent` set). A catalog
+ *  connector trigger needs an id nothing here can offer honestly, so it is not
+ *  in the form. */
+export type DraftWhen = "time" | "record.created" | "server";
+
+/** An event on an MCP server someone connected, as the pod's catalog offers
+ *  it: listened to through that person's account, so it is theirs to pick. */
+export interface ServerEvent {
+    /** The picker's value; unique across servers and accounts. */
+    key: string;
+    accountId: string;
+    /** Which of your accounts it listens through, in words; may be empty. */
+    accountLabel: string;
+    server: string;
+    event: string;
+    description: string;
+    /** The arguments the server takes, each a field on the form: the
+     *  required ones first. */
+    asks: EventArgument[];
+}
+
+/** One argument an event takes, as much of its JSON Schema as a form needs. */
+export interface EventArgument {
+    name: string;
+    description: string;
+    type: "string" | "integer" | "number" | "boolean";
+    /** Its `enum`, as text, when it has one: a choice, not a text box. */
+    options: string[];
+    required: boolean;
+}
+
+function argumentOf(name: string, schema: Record<string, unknown>, required: boolean): EventArgument {
+    const declared = Array.isArray(schema["type"]) ? (schema["type"] as unknown[]).map(text) : [text(schema["type"])];
+    const type = (["integer", "number", "boolean"] as const).find((kind) => declared.includes(kind)) ?? "string";
+    const options = Array.isArray(schema["enum"]) ? (schema["enum"] as unknown[]).map(text).filter(Boolean) : [];
+    return { name, description: text(schema["description"]), type, options, required };
+}
+
+/** The connected-server events in `GET /pods/{id}/events`; the platform's own
+ *  hook points there are offered by `WHENS` instead. */
+export function readServerEvents(raw: unknown): ServerEvent[] {
+    const items = Array.isArray(record(raw)["items"]) ? (record(raw)["items"] as unknown[]) : [];
+    return items.flatMap((item) => {
+        const row = record(item);
+        const accountId = text(row["account_id"]);
+        const event = text(row["event"]);
+        if (!accountId || !event) return [];
+        const schema = record(row["input_schema"]);
+        const properties = record(schema["properties"]);
+        const required = new Set(Array.isArray(schema["required"]) ? (schema["required"] as unknown[]).map(text).filter(Boolean) : []);
+        const names = [...new Set([...required, ...Object.keys(properties)])];
+        return [{
+            key: MCP_SOURCE + ":" + accountId + ":" + event,
+            accountId,
+            accountLabel: text(row["account_label"]),
+            server: text(row["server"]),
+            event,
+            description: text(row["description"]),
+            asks: names
+                .map((name) => argumentOf(name, record(properties[name]), required.has(name)))
+                .sort((a, b) => Number(b.required) - Number(a.required)),
+        }];
+    });
+}
+
+/** The picker's groups: one per server, and per account when you have more
+ *  than one on the same server — the events are the same, the account is
+ *  the difference. */
+export function serverGroups(events: ServerEvent[]): { label: string; events: ServerEvent[] }[] {
+    const accountsOn = new Map<string, Set<string>>();
+    for (const one of events) (accountsOn.get(one.server) ?? accountsOn.set(one.server, new Set()).get(one.server)!).add(one.accountId);
+    const groups = new Map<string, { label: string; events: ServerEvent[] }>();
+    for (const one of events) {
+        const several = (accountsOn.get(one.server)?.size ?? 0) > 1;
+        const key = one.server + (several ? "\u0000" + one.accountId : "");
+        const label = "From " + one.server + (several ? " (" + (one.accountLabel || "account " + one.accountId.slice(0, 8)) + ")" : "");
+        (groups.get(key) ?? groups.set(key, { label, events: [] }).get(key)!).events.push(one);
+    }
+    return [...groups.values()];
+}
+
+/** What a typed argument is sent as, or why it cannot be. Text in a form is
+ *  always a string; the server is owed the type its schema declares. */
+export function argumentValue(ask: EventArgument, typed: string): { value?: unknown; problem?: string } {
+    const raw = typed.trim();
+    if (!raw) return {};
+    if (ask.options.length && !ask.options.includes(raw)) return { problem: ask.name + " is one of " + ask.options.join(", ") + "." };
+    if (ask.type === "boolean") {
+        if (raw !== "true" && raw !== "false") return { problem: ask.name + " is true or false." };
+        return { value: raw === "true" };
+    }
+    if (ask.type === "integer") {
+        const value = Number(raw);
+        /* Past 2^53 a JavaScript number is not the integer that was typed. */
+        if (!/^-?\d+$/.test(raw) || !Number.isSafeInteger(value)) return { problem: ask.name + " is a whole number." };
+        return { value };
+    }
+    if (ask.type === "number") {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return { problem: ask.name + " is a number." };
+        return { value };
+    }
+    return { value: raw };
+}
+
+export const WHENS: { value: DraftWhen; label: string }[] = [
+    { value: "time", label: "On a schedule" },
+    { value: "record.created", label: "When a row is added to a table" },
+];
+
 export interface ScheduleDraft {
     name: string;
+    when: DraftWhen;
+    /** For `record.created`: which table. */
+    table: string;
     cron: string;
     timezone: string;
     target: "agent" | "workflow";
     agentName: string;
     workflowName: string;
     instruction: string;
+    /** For `server`: which event, and what was typed for its arguments. */
+    serverEvent: ServerEvent | null;
+    eventArguments: Record<string, string>;
 }
 
 /** Something a new schedule could be pointed at. The name is what the request
@@ -515,7 +674,10 @@ export interface TargetChoice {
 }
 
 export function blankDraft(): ScheduleDraft {
-    return { name: "", cron: "0 9 * * 1-5", timezone: "", target: "agent", agentName: "", workflowName: "", instruction: "" };
+    return {
+        name: "", when: "time", table: "", cron: "0 9 * * 1-5", timezone: "", target: "agent", agentName: "", workflowName: "", instruction: "",
+        serverEvent: null, eventArguments: {},
+    };
 }
 
 /** The floor the platform enforces, from `schedule_minimum_interval_minutes`
@@ -535,8 +697,22 @@ export const MINIMUM_MINUTES = 15;
 export function draftProblems(draft: ScheduleDraft): Record<string, string> {
     const wrong: Record<string, string> = {};
     if (!draft.name.trim()) wrong.name = "Give it a name. It is what this row will be called.";
+    if (draft.when === "record.created" && !draft.table.trim()) wrong.table = "Pick the table to watch.";
+    if (draft.when === "server") {
+        const asks = draft.serverEvent?.asks ?? [];
+        const missing = asks.filter((ask) => ask.required && !(draft.eventArguments[ask.name] ?? "").trim());
+        const unfit = asks.map((ask) => argumentValue(ask, draft.eventArguments[ask.name] ?? "").problem).filter(Boolean);
+        if (!draft.serverEvent) wrong.event = "Pick the event to listen for.";
+        else if (missing.length) wrong.event = "Fill in " + missing.map((ask) => ask.name).join(", ") + ".";
+        else if (unfit.length) wrong.event = unfit.join(" ");
+        /* The server's event wakes an agent; a workflow listens to the app
+           event its own start names, and refuses to be told another. */
+        if (draft.target === "workflow") wrong.target = "An event from a connected server wakes an agent, not a workflow.";
+    }
     const fields = draft.cron.trim().split(/\s+/).filter(Boolean);
-    if (!draft.cron.trim()) {
+    if (draft.when !== "time") {
+        /* No cron to check: an event says when it fires. */
+    } else if (!draft.cron.trim()) {
         wrong.cron = "A cron expression says when it fires.";
     } else if (fields.length !== 5) {
         wrong.cron = "Five fields: minute, hour, day of month, month, day of week. This has " + fields.length + ".";
@@ -560,20 +736,34 @@ export function draftProblems(draft: ScheduleDraft): Record<string, string> {
  *  than sent as null, which would count as present.
  */
 export function createRequest(draft: ScheduleDraft): Record<string, unknown> {
+    const body: Record<string, unknown> = { name: draft.name.trim(), ...startOf(draft) };
+    if (draft.when === "server" && draft.serverEvent) body.account_id = draft.serverEvent.accountId;
+    if (draft.target === "workflow") body.workflow_name = draft.workflowName.trim();
+    else body.agent_name = draft.agentName.trim();
+    if (draft.instruction.trim()) body.instruction = draft.instruction.trim();
+    return body;
+}
+
+/** The schedule type and config a draft's "when" becomes. */
+function startOf(draft: ScheduleDraft): { schedule_type: string; config: Record<string, unknown> } {
+    if (draft.when === "server" && draft.serverEvent) {
+        const args = Object.fromEntries(
+            draft.serverEvent.asks.flatMap((ask) => {
+                const { value } = argumentValue(ask, draft.eventArguments[ask.name] ?? "");
+                return value === undefined ? [] : [[ask.name, value]];
+            }),
+        );
+        return { schedule_type: "WEBHOOK", config: { source: MCP_SOURCE, event: draft.serverEvent.event, arguments: args } };
+    }
+    if (draft.when === "record.created") {
+        return { schedule_type: "DATASTORE", config: { table_name: draft.table.trim(), operations: ["INSERT"] } };
+    }
     const config: Record<string, unknown> = { cron: draft.cron.trim() };
     /* An absent `timezone` means UTC and stays absent: `resolve_zone` reads
        None as UTC, and writing "UTC" into the config would give every schedule
        a diff to no effect. */
     if (draft.timezone.trim()) config.timezone = draft.timezone.trim();
-    const body: Record<string, unknown> = {
-        name: draft.name.trim(),
-        schedule_type: "TIME",
-        config,
-    };
-    if (draft.target === "workflow") body.workflow_name = draft.workflowName.trim();
-    else body.agent_name = draft.agentName.trim();
-    if (draft.instruction.trim()) body.instruction = draft.instruction.trim();
-    return body;
+    return { schedule_type: "TIME", config };
 }
 
 /** A few cadences worth offering, each with the cron it actually produces.
@@ -611,6 +801,14 @@ export function copyNeedOf(job: StandingJob): CopyNeed {
     return "impossible";
 }
 
+/** Your accounts a copy of this server-event schedule could listen through:
+ *  those on the server it listens to that offer its event. */
+export function accountsOffering(events: ServerEvent[], job: Pick<StandingJob, "listening" | "raw">): Set<string> {
+    const event = text(record(job.raw["config"])["event"]);
+    const server = job.listening?.server ?? "";
+    return new Set(events.filter((one) => one.event === event && (!server || one.server === server)).map((one) => one.accountId));
+}
+
 /** The create request for your own copy — personal, so it is yours alone. */
 export function copyRequest(job: StandingJob, accountId?: string): Record<string, unknown> | null {
     const need = copyNeedOf(job);
@@ -633,7 +831,14 @@ export function copyRequest(job: StandingJob, accountId?: string): Record<string
         const schema = row["filter_output_schema"];
         if (schema && typeof schema === "object") body.filter_output_schema = schema;
     }
-    if (job.kind === "WEBHOOK") {
+    if (job.kind === "WEBHOOK" && text(record(row["config"])["source"]) === MCP_SOURCE) {
+        /* Subscribed afresh on your account; the original's subscription id
+           is not carried over. */
+        body.account_id = accountId;
+        body.config = Object.fromEntries(
+            Object.entries(record(row["config"])).filter(([key]) => key !== "provider_trigger_id"),
+        );
+    } else if (job.kind === "WEBHOOK") {
         body.account_id = accountId;
         /* An agent's webhook names its trigger; a workflow's derives it and
            refuses to be told (`schedule_target_policy.py`). */

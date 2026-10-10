@@ -26,6 +26,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
     ScheduleType,
     ScheduleUpdateEntity,
+    authored_config,
     normalize_datastore_schedule_config,
 )
 from app.modules.schedule.contracts.webhook_source import WebhookSourceRegistry
@@ -50,6 +51,7 @@ from app.modules.schedule.services.schedule_target_policy import (
     workflow_target_fields,
 )
 from app.modules.schedule.services.schedule_naming import schedule_name_for
+from app.modules.schedule.services import trigger_resubscription as resub
 from app.modules.schedule.services.schedule_update_policy import (
     is_explicit_reactivation,
     validate_schedule_update_policies,
@@ -128,14 +130,16 @@ class ScheduleService:
         """Create a new schedule and schedule/provider-create side effects."""
 
         schedule_create = schedule_create.model_copy(
-            update={
-                "name": schedule_name_for(schedule_create),
-            }
+            update={"name": schedule_name_for(schedule_create)}
         )
         schedule_create = await self._resolve_create_target(schedule_create)
+        # After the target: a workflow's start merges its own trigger config
+        # in, and that is no more a provisioned routing key than what the
+        # author sent.
         schedule_create = schedule_create.model_copy(
             update={
-                "visibility": await self._resolve_create_visibility(schedule_create)
+                "visibility": await self._resolve_create_visibility(schedule_create),
+                "config": authored_config(schedule_create.config),
             }
         )
         await self._validate_name_available(schedule_create)
@@ -153,36 +157,9 @@ class ScheduleService:
         elif schedule_create.schedule_type == ScheduleType.WEBHOOK:
             validate_webhook_source(schedule_create, self.webhook_sources)
         schedule = ScheduleEntity(**schedule_create.model_dump())
-        created = await self.schedule_repository.create(schedule)
-
-        if (
-            created.schedule_type == ScheduleType.WEBHOOK
-            and created.connector_trigger_id
-            and created.account_id
-        ):
-            try:
-                provisioned = (
-                    await self.external_schedule_writer.create_provider_trigger(created)
-                )
-                # A source needing no subscription still supplies a routing key.
-                if provisioned.apply_to(created.config):
-                    updated = await self.schedule_repository.update(
-                        created.id,
-                        config=created.config,
-                    )
-                    if updated:
-                        created = updated
-            except Exception as exc:
-                logger.debug(
-                    "schedule.schedule_service.create_external_schedule_s.propagated",
-                    exc_info=True,
-                )
-                await self.schedule_repository.delete(created.id)
-                raise ScheduleValidationError(
-                    f"Failed to create external schedule: {exc}"
-                ) from exc
-
-        return created
+        if not schedule.listens_through_account:
+            return await self.schedule_repository.create(schedule)
+        return await resub.create_listening(schedule, self)
 
     async def _resolve_create_target(
         self, schedule_create: ScheduleCreateEntity
@@ -340,19 +317,14 @@ class ScheduleService:
         return workflow is not None and workflow.is_global_workflow
 
     async def _get_workflow_by_name(self, *, pod_id: UUID, workflow_name: str):
-        workflow = await self.target_resolver.get_workflow_by_name(
-            pod_id,
-            normalize_resource_name(workflow_name),
-        )
+        name = normalize_resource_name(workflow_name)
+        workflow = await self.target_resolver.get_workflow_by_name(pod_id, name)
         if workflow is None:
             raise ScheduleValidationError("Workflow target not found in pod")
         return workflow
 
     async def _get_agent_by_name(self, *, pod_id: UUID, agent_name: str):
-        agent = await self.target_resolver.get_agent_by_name(
-            pod_id,
-            agent_name.strip(),
-        )
+        agent = await self.target_resolver.get_agent_by_name(pod_id, agent_name.strip())
         if agent is None:
             raise ScheduleValidationError("Agent target not found in pod")
         return agent
@@ -441,7 +413,12 @@ class ScheduleService:
                 validate_global_workflow_is_unclaimed(
                     [item for item in existing_for_workflow if item.id != schedule_id]
                 )
-        updated = await self.schedule_repository.update(schedule_id, **update_data)
+        updated = await resub.update_schedule_resubscribing(
+            existing,
+            update_data,
+            self,
+            caller_id=ctx.user_id if ctx is not None else None,
+        )
 
         if is_explicit_reactivation(existing, updated, update_data):
             # Reactivating a schedule clears its circuit-breaker failure streak so
@@ -457,11 +434,20 @@ class ScheduleService:
         if not existing:
             return False
 
-        if (
-            existing.schedule_type == ScheduleType.WEBHOOK
-            and existing.connector_trigger_id
-            and existing.account_id
-            and existing.config.get("provider_trigger_id")
+        if existing.listens_to_mcp and existing.config.get("provider_trigger_id"):
+            # Unsubscribed once the row is gone for certain. Unsubscribing
+            # first and then failing to commit left a schedule pointing at a
+            # subscription whose secret was deleted, refusing every delivery
+            # without a word. If this after-commit step fails, the subscription
+            # is an orphan the reconciler finds and drops.
+            deleted = await self.schedule_repository.delete(schedule_id)
+            if deleted:
+                writer = self.external_schedule_writer
+                self.uow.after_commit(lambda: resub.drop_subscription(existing, writer))
+            return deleted
+
+        if existing.listens_through_account and existing.config.get(
+            "provider_trigger_id"
         ):
             try:
                 await self.external_schedule_writer.delete_provider_trigger(existing)

@@ -146,6 +146,7 @@ async def _connect(
     scope: str,
     *,
     spell_resource=lambda resource: resource,
+    answer: dict | None = None,
 ):
     resource, _ = await client.discover(pod_id)
     resource = spell_resource(resource)
@@ -156,7 +157,9 @@ async def _connect(
     assert shown.json()["client_name"] == "E2E Client"
     assert shown.json()["redirect_host"] == "127.0.0.1:53682"
 
-    answered = await person.post(f"/oauth/consent/{request_id}", json={"allow": True})
+    answered = await person.post(
+        f"/oauth/consent/{request_id}", json=answer or {"allow": True}
+    )
     assert answered.status_code == 200, answered.text
     back = urlsplit(answered.json()["redirect_to"])
     query = parse_qs(back.query)

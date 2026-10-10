@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from uuid import UUID
 
 from app.core.config import settings
@@ -198,90 +197,53 @@ def build_display_resource_url(
 ) -> str | None:
     """Build the deep link a surface user follows to open a resource in Lemma.
 
-    NOTE: this is the single place that encodes lemma-os frontend route shapes
-    (``/widgets/view``, ``/data``, ``/agents/{name}``, ``/app/view``,
-    ``/schedules``, ``/conversations/{id}``, …). These MUST stay in sync with the
-    frontend router; changing a route there without updating here produces dead
-    links. Keep all route construction in this function so the contract is
-    auditable in one place. (Verify ``/widgets/view`` and ``/app/view`` against
-    the current lemma-os routes — they changed with the widget/app unification +
-    host-based app routing.)
+    The one place backend code spells the workspace's routes -- `/t/{pod}/...`,
+    read by `lemma-frontend/src/shell/address.ts`. A route changed there and not
+    here is a dead link in every chat app, so keep all of them in this function.
+
+    A resource that was only ever drawn in a conversation -- an inline widget, a
+    filtered or queried table -- links to that conversation, because there is
+    no other page that shows the same thing. ``tool_call_id`` stays in the
+    signature for callers; no current route can scroll to one call.
     """
+    del tool_call_id
     if request.type is DisplayResourceType.BROWSER:
         output = _as_record(tool_output)
         return _as_nonempty_string(output.get("url"))
 
     base = settings.frontend_url.rstrip("/")
-    pod_base = f"{base}/pod/{quote(str(pod_id), safe='')}"
-
-    if request.type is DisplayResourceType.WIDGET:
-        return _widget_resource_url(
-            pod_base,
-            request,
-            conversation_id=conversation_id,
-            tool_call_id=tool_call_id,
-        )
-    if request.type is DisplayResourceType.FILE:
-        return _file_resource_url(pod_base, request)
-    if request.type is DisplayResourceType.TABLE:
-        if request.query:
-            return _conversation_url(pod_base, conversation_id, tool_call_id)
-        return _table_resource_url(pod_base, request, conversation_id)
-    if request.type is DisplayResourceType.AGENT:
-        return _append_conversation(
-            f"{pod_base}/agents/{quote(request.name, safe='')}"
-            if request.name
-            else f"{pod_base}/ai",
-            conversation_id,
-        )
-    if request.type is DisplayResourceType.FUNCTION:
-        return _append_conversation(
-            f"{pod_base}/functions/{quote(request.name, safe='')}"
-            if request.name
-            else f"{pod_base}/functions",
-            conversation_id,
-        )
-    if request.type is DisplayResourceType.WORKFLOW:
-        return _append_conversation(
-            f"{pod_base}/flows/{quote(request.name, safe='')}"
-            if request.name
-            else f"{pod_base}/flows",
-            conversation_id,
-        )
-    if request.type is DisplayResourceType.APP:
-        # `page` carries the app's resource name, not a slug, on purpose. The
-        # workspace addresses an app page by the slug of its name and
-        # canonicalizes whatever the link carries on arrival, so the name
-        # resolves. Slugifying here instead would need this module to reproduce
-        # the frontend's slug rule exactly -- `normalize_public_slug` does not
-        # (`Ledger 2.0` -> `ledger-2-0` there, `ledger20` in the index) -- and a
-        # slug built by the wrong rule is one the workspace cannot resolve back.
-        return _append_conversation(
-            f"{pod_base}/app/view?{urlencode({'page': request.name})}"
-            if request.name
-            else f"{pod_base}/app/pages",
-            conversation_id,
-        )
-    if request.type is DisplayResourceType.SCHEDULE:
-        return _append_conversation(
-            f"{pod_base}/schedules",
-            conversation_id,
-        )
-    return _conversation_url(pod_base, conversation_id, tool_call_id)
-
-
-def _widget_resource_url(
-    pod_base: str,
-    request: DisplayResourceRequest,
-    *,
-    conversation_id: UUID | None,
-    tool_call_id: str | None,
-) -> str:
-    return request.public_url or _append_tool_context(
-        f"{pod_base}/widgets/view",
-        conversation_id=conversation_id,
-        tool_call_id=tool_call_id,
+    space = f"{base}/t/{quote(str(pod_id), safe='')}"
+    conversation = (
+        f"{space}/conversation/{quote(str(conversation_id), safe='')}"
+        if conversation_id is not None
+        else None
     )
+    name = quote(request.name, safe="") if request.name else None
+
+    match request.type:
+        case DisplayResourceType.WIDGET:
+            return request.public_url or conversation or space
+        case DisplayResourceType.FILE:
+            return _file_resource_url(space, request)
+        case DisplayResourceType.TABLE:
+            if (request.query or request.filters) and conversation:
+                return conversation
+            return f"{space}/table/{name}" if name else f"{space}/tables"
+        case DisplayResourceType.AGENT:
+            return f"{space}/profile/{name}" if name else f"{space}/about"
+        case DisplayResourceType.WORKFLOW:
+            return f"{space}/workflow/{name}" if name else f"{space}/workflows"
+        case DisplayResourceType.APP:
+            # The app's resource name, not a slug, on purpose: the workspace
+            # canonicalizes whatever the link carries on arrival, and a slug
+            # built here by a different rule is one it cannot resolve back.
+            return f"{space}/app/{name}" if name else f"{space}/apps"
+        case DisplayResourceType.SCHEDULE:
+            return f"{space}/about?section=schedules"
+        case _:
+            # A function has no page of its own in the workspace: the
+            # conversation that showed it, else the teammate's space.
+            return conversation or space
 
 
 def _display_resource_title(request: DisplayResourceRequest) -> str:
@@ -338,6 +300,12 @@ _SUMMARY_BY_TYPE: dict[DisplayResourceType, str] = {
 
 
 def _display_resource_summary(request: DisplayResourceRequest) -> str | None:
+    if request.fallback:
+        # The agent's own words for what the resource shows beat any sentence
+        # about where it opens: a chat app cannot draw a widget, and "Opens in
+        # Lemma" told the person nothing they could act on without leaving.
+        lines = sanitize_user_visible_text(request.fallback).splitlines()
+        return "\n".join(" ".join(line.split()) for line in lines if line.strip())
     if request.type is DisplayResourceType.TABLE:
         return None if request.query else _table_summary(request)
     if request.type is DisplayResourceType.WIDGET:
@@ -411,96 +379,18 @@ def _display_resource_kind(request: DisplayResourceRequest) -> str:
     return request.type.value.lower().replace("_", " ").title()
 
 
-def _file_resource_url(pod_base: str, request: DisplayResourceRequest) -> str:
-    # A bare ``?file=<path>`` deep link is intentional. The in-app document
-    # viewer opens the file straight from the path and derives the parent folder
-    # from it, so ``folder`` is redundant. ``assistantConversationId`` is
-    # deliberately omitted too: when present it switches the viewer into a
-    # header-less "assistant presentation" mode, whereas the plain path opens the
-    # full file viewer (with header + back nav) — the better reading experience.
+def _file_resource_url(space: str, request: DisplayResourceRequest) -> str:
+    """`/t/{pod}/file/<path>`, each segment encoded on its own: the slashes in a
+    pod path are structure, and everything else in a file name -- a `#`, a `?`,
+    a space -- must not reach the URL raw."""
     if not request.path:
-        return f"{pod_base}/files"
-    file_path = _normalize_pod_file_path(request.path)
-    return f"{pod_base}/files?{urlencode({'file': file_path})}"
-
-
-def _table_resource_url(
-    pod_base: str,
-    request: DisplayResourceRequest,
-    conversation_id: UUID | None,
-) -> str:
-    href = (
-        f"{pod_base}/data?{urlencode({'tab': request.name})}"
-        if request.name
-        else f"{pod_base}/data"
-    )
-    if request.filters:
-        href = _append_repeated_params(
-            href,
-            [
-                (
-                    "filter",
-                    json.dumps(
-                        item.model_dump(mode="json", exclude_none=True),
-                        separators=(",", ":"),
-                    ),
-                )
-                for item in request.filters
-            ],
-        )
-    return _append_conversation(href, conversation_id)
-
-
-def _conversation_url(
-    pod_base: str,
-    conversation_id: UUID | None,
-    tool_call_id: str | None,
-) -> str | None:
-    if conversation_id is None:
-        return None
-    return _append_query(
-        f"{pod_base}/conversations/{quote(str(conversation_id), safe='')}",
-        {"toolCallId": tool_call_id},
-    )
-
-
-def _append_tool_context(
-    href: str,
-    *,
-    conversation_id: UUID | None,
-    tool_call_id: str | None,
-) -> str:
-    return _append_query(
-        href,
-        {
-            "toolCallId": tool_call_id,
-            "assistantConversationId": str(conversation_id)
-            if conversation_id
-            else None,
-        },
-    )
-
-
-def _append_conversation(href: str, conversation_id: UUID | None) -> str:
-    return _append_query(
-        href,
-        {"assistantConversationId": str(conversation_id) if conversation_id else None},
-    )
-
-
-def _append_repeated_params(href: str, params: list[tuple[str, str]]) -> str:
-    if not params:
-        return href
-    separator = "&" if "?" in href else "?"
-    return href + separator + urlencode(params)
-
-
-def _append_query(href: str, params: dict[str, str | None]) -> str:
-    cleaned = {key: value for key, value in params.items() if value}
-    if not cleaned:
-        return href
-    separator = "&" if "?" in href else "?"
-    return href + separator + urlencode(cleaned)
+        return f"{space}/files"
+    segments = [
+        quote(segment, safe="")
+        for segment in _normalize_pod_file_path(request.path).split("/")
+        if segment
+    ]
+    return f"{space}/file/{'/'.join(segments)}" if segments else f"{space}/files"
 
 
 def _normalize_pod_file_path(path: str) -> str:

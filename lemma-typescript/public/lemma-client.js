@@ -17822,6 +17822,28 @@ var LemmaClient = (() => {
   // src/openapi_client/services/SchedulesService.ts
   var SchedulesService = class {
     /**
+     * List Events
+     * What standing work here can start on: the platform's own events, then
+     * every event on an MCP server the caller connected in this organization.
+     * A connected app's catalog triggers are listed per install
+     * (`connector.trigger.list`).
+     * @param podId
+     * @returns EventCatalogResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleEventList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/events",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Schedules
      * List pod schedules.
      * @param podId

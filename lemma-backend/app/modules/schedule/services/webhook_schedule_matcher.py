@@ -2,14 +2,32 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Dict, List
 
-from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
+from app.modules.schedule.domain.schedule import (
+    PROVISIONED_CONFIG_KEYS,
+    ScheduleEntity,
+    ScheduleType,
+)
 from app.modules.schedule.contracts.webhook_source import WebhookPayload
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+
+def _provisioned_only(
+    schedules: List[ScheduleEntity], criteria: Mapping[str, object]
+) -> List[ScheduleEntity]:
+    """A routing key only provisioning writes matches only schedules that were
+    provisioned -- those bound to an account. Create and update already drop
+    such keys from what an author sends; this holds for any row that got one
+    another way, so a typed-in trigger or installation id never routes another
+    tenant's events into it."""
+    if not PROVISIONED_CONFIG_KEYS & set(criteria):
+        return schedules
+    return [schedule for schedule in schedules if schedule.account_id is not None]
 
 
 class WebhookScheduleMatcher:
@@ -34,9 +52,12 @@ class WebhookScheduleMatcher:
                 )
                 return []
 
-            return await self.schedule_repository.find_by_config(
-                schedule_type=ScheduleType.WEBHOOK,
-                criteria={"provider_trigger_id": provider_id},
+            criteria = {"provider_trigger_id": provider_id}
+            return _provisioned_only(
+                await self.schedule_repository.find_by_config(
+                    schedule_type=ScheduleType.WEBHOOK, criteria=criteria
+                ),
+                criteria,
             )
 
         return []
@@ -54,7 +75,10 @@ class WebhookScheduleMatcher:
         """
         if not criteria:
             return []
-        return await self.schedule_repository.find_by_config(
-            schedule_type=ScheduleType.WEBHOOK,
-            criteria=criteria,
+        return _provisioned_only(
+            await self.schedule_repository.find_by_config(
+                schedule_type=ScheduleType.WEBHOOK,
+                criteria=criteria,
+            ),
+            criteria,
         )

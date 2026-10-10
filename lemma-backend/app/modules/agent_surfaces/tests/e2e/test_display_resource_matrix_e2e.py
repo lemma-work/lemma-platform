@@ -426,7 +426,7 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     # Every Lemma-owned resource gets a frontend deep link. BROWSER is the one
     # exception: it intentionally opens the short-lived sandbox settings asserted
     # separately below.
-    assert rendered.count("https://app.example.test/pod/") >= len(resource_calls) - 1
+    assert rendered.count("https://app.example.test/t/") >= len(resource_calls) - 1
     assert "incidents" in rendered
     assert "/port-access/" in rendered
     assert "incident-triage" in rendered
@@ -434,7 +434,7 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     assert "incident-response" in rendered
     assert "incident-dashboard" in rendered
     assert "daily-triage" in rendered
-    assert "%2Freports%2Fquarterly.pdf" in rendered
+    assert "/file/reports/quarterly.pdf" in rendered
     delivered = await wait_for_slack_text(
         message_store, "The incident catalog is ready."
     )

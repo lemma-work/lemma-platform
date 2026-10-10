@@ -2,9 +2,10 @@
 
 ## Purpose
 
-`app/modules/schedule` turns time, webhooks, datastore changes, and application
-events into normalized `schedule.fired` events. Targets are agents, workflows,
-or surfaces; target modules decide how to execute the fire.
+`app/modules/schedule` turns time, webhooks and datastore changes into
+normalized `schedule.fired` events. Targets are agents (the pod's own assistant
+included) or workflows, exactly one per schedule; target modules decide how to
+execute the fire.
 
 ## Runtime contributions
 
@@ -33,9 +34,18 @@ standing one to fall back on. `schedule_runs` is the
 durable idempotency/delivery ledger keyed by schedule plus source event; it
 records the run's single user owner, attempts, target run, payload, and terminal
 outcome. RLS datastore events assign that ownership to the row owner; other
-schedule sources assign it to the schedule owner. Supported logical
-types include time/cron or once, webhook, datastore, and application-triggered
-schedules.
+schedule sources assign it to the schedule owner. The three types are TIME
+(cron, or once with `scheduled_at`), WEBHOOK and DATASTORE.
+
+`GET /pods/{pod_id}/events` lists what a schedule can start on, in the MCP
+Events descriptor shape (`domain/event_catalog.py`): `time`, `record.*`, and the
+events of every MCP server the caller connected, each with the schedule type
+that serves it.
+
+A DATASTORE schedule can narrow what fires it with `when` conditions over the
+written row (`domain/match_conditions.py`: equals, not equals, in, not in,
+changed, written, from, to). They are checked before any LLM filter, so a row
+that fails them costs no model call.
 
 A TIME schedule's config carries `cron` or `scheduled_at`, and optionally
 `timezone` — an IANA name the wall-clock times are read in. The key absent
@@ -65,10 +75,29 @@ claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
 ## Webhook sources
 
 `POST /webhooks/{source}` takes its source from the URL, so the *sender* picks
-it. The registry in `app/modules/schedule/domain/webhook_source.py` is the
+it. The registry in `app/modules/schedule/contracts/webhook_source.py` is the
 allow-list that makes that safe: a source with no plugin is refused before
 anything reaches matching, a run, or an agent's first message. Plugins live in
-`app/composition/webhook_sources/` — `composio` and `github` today.
+`app/modules/connectors/infrastructure/webhook_sources/` — `composio`,
+`github` and `mcp` today.
+
+`mcp` is a connected MCP server's events. Every subscription has its own
+secret, so the delivery names the subscription in the callback URL's query
+(`?subscription=`, carried as `WebhookDelivery.query`) and the plugin verifies
+against that one secret. The server proves the callback with a signed
+challenge before it answers `events/subscribe`; the plugin returns it as
+`VerifiedDelivery.reply`, which the endpoint echoes without matching anything.
+An occurrence routes by `{"provider_trigger_id": <our subscription id>}`, the
+same key a Composio trigger uses, and a digest of its `eventId` makes the
+`source_event_id`. The plugin also names the account whose secret verified the
+delivery (`NormalizedWebhook.account_id`), and only that account's schedules
+fire.
+
+**Routing keys only provisioning writes.** `provider_trigger_id` and
+`installation_id` (`PROVISIONED_CONFIG_KEYS`) are dropped from whatever config
+an author sends, on create and on update, and a match on either keeps only
+schedules bound to an account. Matching searches every tenant's schedules, so a
+schedule that could type one in would receive someone else's events.
 
 Each plugin does two things, and they are separate because they fail
 differently. `verify` proves the delivery came from the source and parses it; a
@@ -90,8 +119,10 @@ delivery id: providers issue a new delivery id when they retry, and
 
 ## Provisioning
 
-Creating a webhook schedule that names a connector trigger asks
-`ExternalScheduleWriter` to provision it. There are three outcomes and they are
+Creating a webhook schedule that names a connector trigger — or, with
+`config.source` `mcp`, a connected MCP server's event — asks
+`ExternalScheduleWriter` to provision it (`ScheduleEntity.listens_through_account`
+says which do). There are three outcomes and they are
 now distinguishable, which they were not:
 
 - a provider subscription is created, and its id is stored;
@@ -102,6 +133,20 @@ now distinguishable, which they were not:
   look like success: the row was written, nothing was subscribed, and the
   schedule could never fire. Slack's three triggers were inert for years for
   exactly that reason.
+
+Provisioning runs before the row is written, with the request's connection
+handed back (an MCP server proves our callback while we wait); a row that then
+fails to write drops the subscription. Only the schedule's author may change
+what their account listens for, and a schedule that listens through an account
+cannot be edited into one that does not. An MCP schedule is unsubscribed after
+its delete commits.
+
+`McpListeningReconciler` (every 15 minutes) unsubscribes what no schedule
+holds, and turns a schedule off -- emailing its author why, clearing its
+routing key -- when its author has left the pod or the server has stopped
+renewing its subscription. Turning it back on subscribes afresh, by its author
+only. Schedule responses carry `listening` for an MCP schedule: listening,
+retrying, lapsed or pending, with the server's last error.
 
 ### Declared defaults
 
@@ -128,11 +173,13 @@ flowchart LR
     J -- provider down --> R["retry, then DEAD_LETTERED"]
     E --> A["agent target"]
     E --> W["workflow target"]
-    E --> S["surface target"]
 ```
 
 The service mirrors provider-backed webhook schedules into the connector through
-an adapter. Each `schedule.fired` trigger claims one durable schedule run;
+an adapter. Editing such a schedule's config makes a new subscription from it
+before the row is written and drops the old one after the commit
+(`services/trigger_resubscription.py`); keys provisioning wrote into the config
+(`provider_trigger_id`, a GitHub routing key) survive an edit that left them out. Each `schedule.fired` trigger claims one durable schedule run;
 PostgreSQL deduplicates target dispatch and tracks retry/dead-letter state.
 `DISPATCHED` means the target run was created, not that the target completed.
 Consecutive-failure policy is durable on the schedule row, and a

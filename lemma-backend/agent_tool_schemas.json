@@ -546,6 +546,20 @@
           "maxItems": 4,
           "type": "array"
         },
+        "fallback": {
+          "anyOf": [
+            {
+              "maxLength": 600,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What this shows, as plain text, for chat apps that cannot draw it (Slack, WhatsApp, Teams, email): one or two lines carrying the names and numbers that matter. Write one for every WIDGET."
+        },
         "filters": {
           "anyOf": [
             {

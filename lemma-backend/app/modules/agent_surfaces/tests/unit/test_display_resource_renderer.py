@@ -15,7 +15,9 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
 )
 
 
-def test_display_resource_renderer_builds_table_filter_url(monkeypatch):
+def test_a_filtered_table_links_to_the_conversation_that_showed_it(monkeypatch):
+    """The workspace has no route for a filtered table, so the link goes where
+    that exact view was drawn rather than to the unfiltered table."""
     monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
     pod_id = uuid4()
     conversation_id = uuid4()
@@ -35,37 +37,30 @@ def test_display_resource_renderer_builds_table_filter_url(monkeypatch):
 
     assert plan.title == "Table: deals"
     assert plan.primary_action is not None
-    assert plan.primary_action.url.startswith(
-        f"https://app.example.test/pod/{pod_id}/data?tab=deals&filter="
+    assert plan.primary_action.url == (
+        f"https://app.example.test/t/{pod_id}/conversation/{conversation_id}"
     )
-    assert "assistantConversationId=" in plan.primary_action.url
     assert "stage" in plan.to_plain_text()
 
 
-def test_display_resource_renderer_file_url_is_bare_path(monkeypatch):
+def test_a_file_link_spells_the_pod_path_as_route_segments(monkeypatch):
     monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
     pod_id = uuid4()
-    conversation_id = uuid4()
 
     plan = build_display_resource_render_plan(
         pod_id=pod_id,
-        conversation_id=conversation_id,
+        conversation_id=uuid4(),
         tool_call_id="tool-file-1",
         request=DisplayResourceRequest.model_validate(
-            {"type": "FILE", "path": "/LEDFLEX_SKILLS/product-catalog-reference.md"}
+            {"type": "FILE", "path": "/LEDFLEX_SKILLS/product catalog #2.md"}
         ),
     )
 
     assert plan.primary_action is not None
-    url = plan.primary_action.url
-    # File links carry ONLY the file path: no folder (the viewer derives it) and
-    # no assistantConversationId (which would trigger the header-less viewer).
-    assert url == (
-        f"https://app.example.test/pod/{pod_id}/files"
-        "?file=%2FLEDFLEX_SKILLS%2Fproduct-catalog-reference.md"
+    assert plan.primary_action.url == (
+        f"https://app.example.test/t/{pod_id}/file/LEDFLEX_SKILLS/"
+        "product%20catalog%20%232.md"
     )
-    assert "assistantConversationId" not in url
-    assert "folder=" not in url
 
 
 def test_display_resource_renderer_reads_browser_url_from_model_output():
@@ -104,7 +99,9 @@ def test_display_resource_renderer_links_external_widget_directly():
     assert plan.summary == "Opens in your browser."
 
 
-def test_display_resource_renderer_links_inline_widget_to_lemma(monkeypatch):
+def test_display_resource_renderer_links_inline_widget_to_its_conversation(
+    monkeypatch,
+):
     monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
     pod_id = uuid4()
     conversation_id = uuid4()
@@ -119,14 +116,9 @@ def test_display_resource_renderer_links_inline_widget_to_lemma(monkeypatch):
     )
 
     assert plan.primary_action is not None
-    parsed = urlparse(plan.primary_action.url)
-    assert parsed.scheme == "https"
-    assert parsed.netloc == "app.example.test"
-    assert parsed.path == f"/pod/{pod_id}/widgets/view"
-    assert parse_qs(parsed.query) == {
-        "assistantConversationId": [str(conversation_id)],
-        "toolCallId": ["tool-widget-inline"],
-    }
+    assert plan.primary_action.url == (
+        f"https://app.example.test/t/{pod_id}/conversation/{conversation_id}"
+    )
     assert plan.summary == "Opens in Lemma."
 
 
@@ -135,43 +127,37 @@ def test_display_resource_renderer_links_inline_widget_to_lemma(monkeypatch):
     [
         (
             {"type": "AGENT", "name": "incident triage"},
-            "/agents/incident%20triage",
+            "/profile/incident%20triage",
             {},
         ),
-        ({"type": "AGENT"}, "/ai", {}),
-        (
-            {"type": "FUNCTION", "name": "summarize/incident"},
-            "/functions/summarize%2Fincident",
-            {},
-        ),
-        ({"type": "FUNCTION"}, "/functions", {}),
+        ({"type": "AGENT"}, "/about", {}),
+        ({"type": "FUNCTION", "name": "summarize/incident"}, "", {}),
         (
             {"type": "WORKFLOW", "name": "incident response"},
-            "/flows/incident%20response",
+            "/workflow/incident%20response",
             {},
         ),
-        ({"type": "WORKFLOW"}, "/flows", {}),
+        ({"type": "WORKFLOW"}, "/workflows", {}),
         (
             {"type": "APP", "name": "incident dashboard"},
-            "/app/view",
-            {"page": ["incident dashboard"]},
-        ),
-        ({"type": "APP"}, "/app/pages", {}),
-        (
-            {"type": "SCHEDULE", "name": "daily triage"},
-            "/schedules",
+            "/app/incident%20dashboard",
             {},
         ),
-        ({"type": "SCHEDULE"}, "/schedules", {}),
-        ({"type": "TABLE", "name": "incident log"}, "/data", {"tab": ["incident log"]}),
-        ({"type": "TABLE"}, "/data", {}),
+        ({"type": "APP"}, "/apps", {}),
+        (
+            {"type": "SCHEDULE", "name": "daily triage"},
+            "/about",
+            {"section": ["schedules"]},
+        ),
+        ({"type": "TABLE", "name": "incident log"}, "/table/incident%20log", {}),
+        ({"type": "TABLE"}, "/tables", {}),
         (
             {"type": "FILE", "path": "/me/reports/incident review.pdf"},
-            "/files",
-            {"file": ["/me/reports/incident review.pdf"]},
+            "/file/me/reports/incident%20review.pdf",
+            {},
         ),
         ({"type": "FILE"}, "/files", {}),
-        ({"type": "WIDGET", "content": "<div>Ready</div>"}, "/widgets/view", {}),
+        ({"type": "WIDGET", "content": "<div>Ready</div>"}, "", {}),
     ],
 )
 def test_display_resource_internal_urls_match_frontend_route_contract(
@@ -180,7 +166,8 @@ def test_display_resource_internal_urls_match_frontend_route_contract(
     path_suffix,
     expected_query,
 ):
-    """Every internal link shared by all surface adapters targets a real UI route."""
+    """Every internal link shared by all surface adapters is a `/t/{pod}/...`
+    route that `lemma-frontend/src/shell/address.ts` reads."""
     monkeypatch.setattr(settings, "frontend_url", "https://app.example.test/")
     pod_id = uuid4()
 
@@ -193,7 +180,7 @@ def test_display_resource_internal_urls_match_frontend_route_contract(
     parsed = urlparse(plan.primary_action.url)
     assert parsed.scheme == "https"
     assert parsed.netloc == "app.example.test"
-    assert parsed.path == f"/pod/{pod_id}{path_suffix}"
+    assert parsed.path == f"/t/{pod_id}{path_suffix}"
     assert parse_qs(parsed.query) == expected_query
 
 
@@ -314,3 +301,38 @@ def test_every_button_names_what_it_opens(monkeypatch):
     assert "Open resource" not in set(named.values())
     assert named["AGENT"] == "Open agent"
     assert named["APP"] == "Open app"
+
+
+def test_a_widget_tells_a_chat_app_what_it_shows_when_the_agent_said(monkeypatch):
+    """A chat app cannot draw HTML; the agent's own lines are what it can show."""
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
+
+    plan = build_display_resource_render_plan(
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        tool_call_id="tool-widget-fallback",
+        request=DisplayResourceRequest.model_validate(
+            {
+                "type": "WIDGET",
+                "content": "<div>chart</div>",
+                "fallback": "Pipeline: 12 open deals, $340k.\n\n  Acme   is the largest.",
+            }
+        ),
+    )
+
+    assert plan.summary == "Pipeline: 12 open deals, $340k.\nAcme is the largest."
+    assert "Opens in Lemma." not in plan.to_plain_text()
+
+
+def test_a_widget_without_a_fallback_still_says_where_it_opens(monkeypatch):
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test")
+
+    plan = build_display_resource_render_plan(
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        request=DisplayResourceRequest.model_validate(
+            {"type": "WIDGET", "content": "<div>chart</div>"}
+        ),
+    )
+
+    assert plan.summary == "Opens in Lemma."

@@ -25,8 +25,10 @@ import {
     readRuns,
     readSchedule,
     readSchedules,
+    readServerEvents,
     type ScheduleDraft,
     type ScheduleRun,
+    type ServerEvent,
     type StandingJob,
     type TargetChoice,
 } from "@/schedule/schedules";
@@ -1621,6 +1623,10 @@ export const liveSource: PodSource = {
             { body: createRequest(draft) },
         );
         return readSchedule(made);
+    },
+
+    async serverEvents(podId: string): Promise<ServerEvent[]> {
+        return readServerEvents(await lemma(podId).request("GET", `/pods/${podId}/events`));
     },
 
     async scheduleTargets(podId: string): Promise<TargetChoice[]> {

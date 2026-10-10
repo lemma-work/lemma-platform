@@ -3498,6 +3498,13 @@
             ],
             "title": "Last Used At"
           },
+          "listens_to": {
+            "items": {
+              "$ref": "#/components/schemas/EventSubscriptionResponse"
+            },
+            "title": "Listens To",
+            "type": "array"
+          },
           "pod_id": {
             "format": "uuid",
             "title": "Pod Id",
@@ -6347,6 +6354,193 @@
           "code"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "EventCatalogResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventDescriptorResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "EventCatalogResponse",
+        "type": "object"
+      },
+      "EventDescriptorResponse": {
+        "description": "An MCP Events descriptor, plus the schedule type that serves it.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "account_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Label"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "input_schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Input Schema",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "payload_schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Payload Schema",
+            "type": "object"
+          },
+          "schedule_type": {
+            "$ref": "#/components/schemas/ScheduleType"
+          },
+          "server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "description",
+          "schedule_type",
+          "input_schema",
+          "payload_schema"
+        ],
+        "title": "EventDescriptorResponse",
+        "type": "object"
+      },
+      "EventSubscriptionResponse": {
+        "description": "Something a connected app asked to be told about.",
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_delivery_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Delivery At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "paused_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When delivery gave up on a callback that kept failing. The app's next refresh resumes it.",
+            "title": "Paused At"
+          },
+          "refresh_before": {
+            "format": "date-time",
+            "title": "Refresh Before",
+            "type": "string"
+          },
+          "stopped_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the person pressed Stop. The app's refresh is refused until it is resumed.",
+            "title": "Stopped At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "arguments",
+          "last_delivery_at",
+          "last_error",
+          "refresh_before"
+        ],
+        "title": "EventSubscriptionResponse",
         "type": "object"
       },
       "EventWorkflowStartConfigInput": {
@@ -10511,6 +10705,74 @@
         "type": "object"
       },
       "JsonValue": {},
+      "ListeningResponse": {
+        "description": "How a schedule on a connected MCP server's event is hearing from it.",
+        "properties": {
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "refresh_before": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Before"
+          },
+          "server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The connected server it listens to, by name.",
+            "title": "Server"
+          },
+          "state": {
+            "description": "listening: the server holds the subscription. retrying: renewing it failed and is being retried. lapsed: the server no longer tells us anything. pending: the server has not answered yet.",
+            "enum": [
+              "listening",
+              "retrying",
+              "lapsed",
+              "pending"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "ListeningResponse",
+        "type": "object"
+      },
       "LiteralInputBinding": {
         "description": "Pass a literal JSON value into the target input without resolution.",
         "properties": {
@@ -14782,6 +15044,17 @@
             ],
             "title": "Last Run Id"
           },
+          "listening": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ListeningResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a schedule on an MCP server's event: whether it is still hearing from the server. Absent for every other schedule."
+          },
           "name": {
             "anyOf": [
               {
@@ -15215,10 +15488,11 @@
         "type": "object"
       },
       "Scope": {
-        "description": "What a grant lets a client do in its pod.\n\nTwo, because the tools split cleanly in two: those that only read and those\nthat write. A finer set would ask a person to reason about tools they have\nnever seen, on a consent screen they will read once.",
+        "description": "What a grant lets a client do in its pod.\n\nThe tools split cleanly in two: those that only read and those that write.\nA finer set would ask a person to reason about tools they have never seen,\non a consent screen they will read once.\n\nEvents are the third, and not a kind of reading. A read happens while the\nperson uses the app; a subscription sends rows to a server the app chose,\nas they are added, for as long as it keeps refreshing -- including while\nthe person is away. So it is asked for by name and agreed to separately,\nand a connection made before it existed does not have it.",
         "enum": [
           "pod:read",
-          "pod:write"
+          "pod:write",
+          "pod:events"
         ],
         "title": "Scope",
         "type": "string"
@@ -22219,6 +22493,138 @@
           "resource": "mcp_access.grants",
           "result": "void",
           "verb": "revoke"
+        }
+      }
+    },
+    "/oauth/grants/{grant_id}/subscriptions/{subscription_id}": {
+      "delete": {
+        "description": "The app keeps its connection and stops receiving this event. It stays\nstopped -- the app's refresh is refused -- until it is resumed.",
+        "operationId": "mcp_access.grants.subscription.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such subscription"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop telling a connected app about an event",
+        "tags": [
+          "MCP Access"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "mcp_access.grants.subscription"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "mcp_access.grants.subscription",
+          "result": "void",
+          "verb": "delete"
+        }
+      }
+    },
+    "/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume": {
+      "post": {
+        "description": "Lifts a Stop. Delivery starts again when the app next refreshes.",
+        "operationId": "mcp_access.grants.subscription.resume",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Grant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such subscription"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Let a connected app be told about an event again",
+        "tags": [
+          "MCP Access"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "mcp_access.grants.subscription"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "mcp_access.grants.subscription",
+          "result": "void",
+          "verb": "resume"
         }
       }
     },
@@ -32454,6 +32860,57 @@
           "resource": "decision",
           "result": "entity",
           "verb": "make"
+        }
+      }
+    },
+    "/pods/{pod_id}/events": {
+      "get": {
+        "description": "What standing work here can start on: the platform's own events, then\nevery event on an MCP server the caller connected in this organization.\nA connected app's catalog triggers are listed per install\n(`connector.trigger.list`).",
+        "operationId": "schedule.event.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Events",
+        "tags": [
+          "Schedules"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "schedule.event",
+          "result": "collection",
+          "verb": "list"
         }
       }
     },

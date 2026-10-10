@@ -57,6 +57,20 @@ REGISTRY: list[EncryptedColumn] = [
     EncryptedColumn(
         "agent_surfaces", "webhook_secret", "str", "agent_surfaces.webhook_secret"
     ),
+    # Webhook signing secrets for MCP Events: the client's, for deliveries a
+    # pod sends it, and ours, for deliveries a connected server sends us.
+    EncryptedColumn(
+        "mcp_event_subscriptions",
+        "secret_ciphertext",
+        "str",
+        "mcp_event_subscriptions.secret_ciphertext",
+    ),
+    EncryptedColumn(
+        "connector_event_subscriptions",
+        "secret_ciphertext",
+        "str",
+        "connector_event_subscriptions.secret_ciphertext",
+    ),
 ]
 
 

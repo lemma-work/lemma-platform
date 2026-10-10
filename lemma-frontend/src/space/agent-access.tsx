@@ -8,6 +8,9 @@ import {
     TOOLS,
     accessLabel,
     disconnectClient,
+    listeningLine,
+    listeningStatus,
+    setListening,
     fetchMcpUrl,
     loadConnections,
     reachableFromInternet,
@@ -110,6 +113,9 @@ function McpAccess({ pod }: { pod: Pod }) {
     const [clientId, setClientId] = useState("claude");
     /* A failed disconnect. A failed read of the list is the query's own. */
     const [problem, setProblem] = useState<string | null>(null);
+    /* A Stop or Resume in flight, by subscription, and the last one that failed. */
+    const [changing, setChanging] = useState<string | null>(null);
+    const [listenProblem, setListenProblem] = useState<string | null>(null);
     /* Someone else's connection, asked about once before it is ended. */
     const [confirming, setConfirming] = useState<string | null>(null);
     const me = useMe();
@@ -174,6 +180,21 @@ function McpAccess({ pod }: { pod: Pod }) {
         userId === me ? "you"
             : pod.members.find(member => member.userId === userId)?.name ?? "a former member";
 
+    const listen = async (grantId: string, subscriptionId: string, on: boolean) => {
+        if (changing) return;
+        setChanging(subscriptionId);
+        try {
+            await setListening(apiUrl, grantId, subscriptionId, on);
+            setListenProblem(null);
+        } catch (error) {
+            setListenProblem(error instanceof Error ? error.message : "That did not work.");
+        } finally {
+            // Read back either way: a 404 may mean it changed underneath us.
+            await cache.invalidateQueries({ queryKey: ["mcp-grants", pod.id] });
+            setChanging(null);
+        }
+    };
+
     const disconnect = async (grantId: string) => {
         setConfirming(null);
         try {
@@ -223,6 +244,7 @@ function McpAccess({ pod }: { pod: Pod }) {
 
             <div className="access__label">{everyone ? "Connected to " + pod.name : "Connected by you"}</div>
             {shownProblem && <div className="access__head"><small role="alert">{shownProblem}</small></div>}
+            {listenProblem && <div className="access__head"><small role="alert">{listenProblem}</small></div>}
             {connected !== null && connected.length === 0 && (
                 <div className="access__head"><small>Nothing is connected to {pod.name} yet.</small></div>
             )}
@@ -241,6 +263,18 @@ function McpAccess({ pod }: { pod: Pod }) {
                                         {everyone ? "by " + whoConnected(item.user_id) + " · " : ""}
                                         {accessLabel(item.scopes)} · {item.last_used_at ? "used " + agoOf(item.last_used_at) : "connected " + agoOf(item.connected_at)}
                                     </small>
+                                    {(item.listens_to ?? []).map(subscription => (
+                                        <small key={subscription.id} className="access__listens">
+                                            Told about: {listeningLine(subscription)} · {listeningStatus(subscription, agoOf)}{" "}
+                                            <button
+                                                className="linkish"
+                                                disabled={changing === subscription.id}
+                                                onClick={() => void listen(item.grant_id, subscription.id, Boolean(subscription.stopped_at))}
+                                            >
+                                                {subscription.stopped_at ? "Resume" : "Stop"}
+                                            </button>
+                                        </small>
+                                    ))}
                                 </span>
                                 <span className="access__actions">
                                     {asking ? (

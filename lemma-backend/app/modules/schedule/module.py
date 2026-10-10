@@ -45,11 +45,14 @@ def _routers():
     from app.modules.schedule.api.controllers.schedule_controller import (
         router as schedule,
     )
+    from app.modules.schedule.api.controllers.event_catalog_controller import (
+        router as events,
+    )
     from app.modules.schedule.api.controllers.webhook_controller import (
         router as webhook,
     )
 
-    return [schedule, webhook]
+    return [schedule, events, webhook]
 
 
 def _event_routers():

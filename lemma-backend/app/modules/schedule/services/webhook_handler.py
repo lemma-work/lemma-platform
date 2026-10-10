@@ -27,6 +27,20 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
+def _narrowed(
+    schedules: list[ScheduleEntity], normalized: NormalizedWebhook
+) -> list[ScheduleEntity]:
+    """What the source says about the delivery beyond its routing key."""
+    if normalized.refine is not None:
+        # The routing key is deliberately coarse -- see `match_criteria`.
+        # Schedules that scoped themselves further are filtered here.
+        schedules = [s for s in schedules if normalized.refine(s.config or {})]
+    if normalized.account_id is not None:
+        # Verified with one account's own secret: only that account's.
+        schedules = [s for s in schedules if str(s.account_id) == normalized.account_id]
+    return schedules
+
+
 class WebhookHandler:
     """Service for handling webhooks and matching them to schedules."""
 
@@ -100,10 +114,8 @@ class WebhookHandler:
             else:
                 schedules = await matcher.match(source, metadata)
 
-        if normalized is not None and normalized.refine is not None:
-            # The routing key is deliberately coarse -- see `match_criteria`.
-            # Schedules that scoped themselves further are filtered here.
-            schedules = [s for s in schedules if normalized.refine(s.config or {})]
+        if normalized is not None:
+            schedules = _narrowed(schedules, normalized)
 
         if not schedules:
             return []

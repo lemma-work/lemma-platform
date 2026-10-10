@@ -331,6 +331,70 @@ test("an empty instruction is left off, not sent as an empty string", () => {
     assert.equal(createRequest({ ...blankDraft(), name: "D", agentName: "a", instruction: "Do it" }).instruction, "Do it");
 });
 
+test("standing work can start on a new row, not only a time", async () => {
+    const { blankDraft, createRequest, draftProblems } = await import("../src/schedule/schedules.ts");
+    const rows = { ...blankDraft(), name: "new leads", when: "record.created" as const, agentName: "pod_default" };
+    assert.ok(draftProblems(rows).table, "a row event needs its table");
+    assert.deepEqual(draftProblems({ ...rows, table: "leads", cron: "" }), {}, "a row event needs no cron");
+    assert.deepEqual(createRequest({ ...rows, table: "leads" }), {
+        name: "new leads",
+        schedule_type: "DATASTORE",
+        config: { table_name: "leads", operations: ["INSERT"] },
+        agent_name: "pod_default",
+    });
+});
+
+test("standing work can start on an event from an MCP server you connected", async () => {
+    const { blankDraft, copyRequest, createRequest, draftProblems, readSchedule, readServerEvents, triggerOf } =
+        await import("../src/schedule/schedules.ts");
+    const [issue, ...rest] = readServerEvents({
+        items: [
+            { name: "time", schedule_type: "TIME", input_schema: {} },
+            {
+                name: "mcp.tracker.issue.created",
+                schedule_type: "WEBHOOK",
+                description: "An issue was opened in a project.",
+                account_id: "acc1",
+                server: "tracker",
+                event: "issue.created",
+                input_schema: {
+                    type: "object",
+                    properties: { project: { type: "string", description: "Which project" } },
+                    required: ["project"],
+                },
+            },
+        ],
+    });
+    assert.equal(rest.length, 0, "the platform's own events are offered by WHENS, not here");
+    assert.deepEqual(issue.asks, [{ name: "project", description: "Which project", type: "string", options: [], required: true }]);
+
+    const draft = { ...blankDraft(), name: "triage", when: "server" as const, serverEvent: issue, agentName: "pod_default" };
+    assert.match(draftProblems(draft).event ?? "", /project/, "a required argument is asked for");
+    assert.ok(draftProblems({ ...draft, eventArguments: { project: "web" }, target: "workflow" as const }).target);
+
+    const body = createRequest({ ...draft, eventArguments: { project: " web ", stray: "x" } });
+    assert.deepEqual(body, {
+        name: "triage",
+        schedule_type: "WEBHOOK",
+        config: { source: "mcp", event: "issue.created", arguments: { project: "web" } },
+        account_id: "acc1",
+        agent_name: "pod_default",
+    });
+
+    const config = { source: "mcp", event: "issue.created", arguments: { project: "web" }, provider_trigger_id: "sub1" };
+    assert.deepEqual(triggerOf("WEBHOOK", config, ""), { trigger: "When issue.created happens", literal: "project = web" });
+    const row = readSchedule({
+        id: "s9", name: "triage", schedule_type: "WEBHOOK", agent_name: "pod_default", agent_id: "a1",
+        account_id: "acc1", connector_trigger_id: null, config,
+    });
+    assert.equal(row.needsSetup, "", "no catalog trigger is missing: the event is the server's");
+
+    const copy = copyRequest(row, "acc2");
+    assert.deepEqual(copy?.config, { source: "mcp", event: "issue.created", arguments: { project: "web" } });
+    assert.equal(copy?.account_id, "acc2");
+    assert.equal("connector_trigger_id" in (copy ?? {}), false);
+});
+
 test("a skipped event says what the filter concluded, and how sure it was", () => {
     const skip = readRun({
         id: "r9",
@@ -365,4 +429,85 @@ test("the demo's skipped run says what the filter decided", async () => {
     const { fixtureSource } = await import("../src/data/fixtures.ts");
     const [skip] = await fixtureSource.listScheduleRuns("pod-1", "s2", { skipped: true });
     assert.equal(skip?.judgement, "The filter said no (94% sure).");
+});
+
+
+test("an event's arguments are sent as the type the server declares, optional ones too", async () => {
+    const { blankDraft, createRequest, draftProblems, readServerEvents } = await import("../src/schedule/schedules.ts");
+    const [event] = readServerEvents({
+        items: [{
+            name: "mcp.tracker.issue.created", schedule_type: "WEBHOOK", account_id: "acc1", server: "tracker", event: "issue.created",
+            input_schema: {
+                type: "object",
+                properties: {
+                    project: { type: "string" },
+                    limit: { type: "integer" },
+                    urgent: { type: "boolean" },
+                    state: { type: "string", enum: ["open", "closed"] },
+                },
+                required: ["project"],
+            },
+        }],
+    });
+    assert.deepEqual(event.asks.map((ask) => [ask.name, ask.type, ask.required]), [
+        ["project", "string", true], ["limit", "integer", false], ["urgent", "boolean", false], ["state", "string", false],
+    ], "required first, optional ones offered");
+    assert.deepEqual(event.asks[3].options, ["open", "closed"]);
+
+    const draft = { ...blankDraft(), name: "triage", when: "server" as const, serverEvent: event, agentName: "pod_default" };
+    assert.match(draftProblems({ ...draft, eventArguments: { project: "web", limit: "five" } }).event ?? "", /limit is a whole number/);
+    assert.match(draftProblems({ ...draft, eventArguments: { project: "web", limit: "90071992547409930" } }).event ?? "", /limit is a whole number/,
+        "a number past 2^53 would reach the server as a different number");
+    assert.match(draftProblems({ ...draft, eventArguments: { project: "web", state: "merged" } }).event ?? "", /one of open, closed/);
+    assert.deepEqual(draftProblems({ ...draft, eventArguments: { project: "web", limit: "5", urgent: "true" } }), {});
+
+    const body = createRequest({ ...draft, eventArguments: { project: "web", limit: " 5 ", urgent: "false", state: "" } });
+    assert.deepEqual((body.config as { arguments: unknown }).arguments, { project: "web", limit: 5, urgent: false },
+        "a number is sent as a number, a boolean as a boolean, and a blank optional not at all");
+});
+
+test("two accounts on one server are two groups, named by account", async () => {
+    const { readServerEvents, serverGroups } = await import("../src/schedule/schedules.ts");
+    const offer = (account: string, label: string, server: string) => ({
+        name: "x", schedule_type: "WEBHOOK", account_id: account, account_label: label, server, event: "issue.created", input_schema: {},
+    });
+    const events = readServerEvents({ items: [offer("a1", "me@work", "tracker"), offer("a2", "me@home", "tracker"), offer("a3", "", "wiki")] });
+    assert.deepEqual(serverGroups(events).map((group) => group.label), [
+        "From tracker (me@work)", "From tracker (me@home)", "From wiki",
+    ]);
+});
+
+test("a schedule that stopped hearing from its server says so", async () => {
+    const { healthOf, readSchedule } = await import("../src/schedule/schedules.ts");
+    const base = {
+        id: "s1", name: "triage", schedule_type: "WEBHOOK", agent_name: "pod_default", agent_id: "a1", account_id: "acc1",
+        config: { source: "mcp", event: "issue.created", provider_trigger_id: "sub" }, last_fired_at: "2026-10-01T00:00:00Z",
+    };
+    const lapsed = healthOf(readSchedule({ ...base, listening: { state: "lapsed", last_error: "account needs signing in", server: "tracker" } }));
+    assert.equal(lapsed.tone, "bad");
+    assert.equal(lapsed.line, "tracker has stopped telling it about events: account needs signing in.");
+    assert.equal(healthOf(readSchedule({ ...base, listening: { state: "retrying", server: "tracker" } })).tone, "warn");
+    assert.equal(healthOf(readSchedule({ ...base, listening: { state: "listening", server: "tracker" } })).tone, "ok");
+});
+
+test("a copy of a server-event schedule is offered only accounts on that server", async () => {
+    const { accountsOffering, readSchedule, readServerEvents } = await import("../src/schedule/schedules.ts");
+    const job = readSchedule({
+        id: "s1", name: "triage", schedule_type: "WEBHOOK", agent_name: "pod_default", agent_id: "a1", account_id: "theirs",
+        config: { source: "mcp", event: "issue.created" }, listening: { state: "listening", server: "tracker" },
+    });
+    const offer = (account: string, server: string, event: string) => ({ name: "x", schedule_type: "WEBHOOK", account_id: account, server, event, input_schema: {} });
+    const mine = readServerEvents({ items: [offer("t1", "tracker", "issue.created"), offer("w1", "wiki", "issue.created"), offer("t2", "tracker", "page.edited")] });
+    assert.deepEqual([...accountsOffering(mine, job)], ["t1"]);
+});
+
+test("a schedule the system turned off says why, rather than reading as paused", async () => {
+    const { healthOf, readSchedule } = await import("../src/schedule/schedules.ts");
+    const why = "Turned off: the person whose account it listened through is no longer in this space.";
+    const job = readSchedule({
+        id: "s1", name: "triage", schedule_type: "WEBHOOK", agent_name: "pod_default", agent_id: "a1", account_id: "acc1",
+        config: { source: "mcp", event: "issue.created" }, is_active: false, last_error: why,
+    });
+    assert.deepEqual(healthOf(job), { tone: "bad", line: why });
+    assert.equal(healthOf(readSchedule({ ...job.raw, last_error: null })).tone, "off", "a plain pause is still just off");
 });

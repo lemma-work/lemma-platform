@@ -21,6 +21,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
+from app.mcp_events import AdvertiseEvents, PodEventsExtension
 from app.modules.agent.infrastructure.mcp import LEMMA_MCP_SERVER_NAME
 from app.modules.agent.services.pod_mcp_service import pod_mcp_service
 from app.modules.agent.services.pod_mcp_apps import app_view_template
@@ -168,6 +169,9 @@ def build_pod_mcp_server() -> PodFastMCP:
     for view in POD_MCP_VIEWS:
         mcp_server.add_resource(view.resource())
     mcp_server.add_template(app_view_template())
+    # `events/*` for outside clients; see `app/mcp_events.py`.
+    mcp_server.add_extension(PodEventsExtension(_verified_principal))
+    mcp_server.add_middleware(AdvertiseEvents())
     return mcp_server
 
 

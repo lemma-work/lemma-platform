@@ -85,6 +85,36 @@ about it when it eventually cannot.
 
 **Contracts:** `schedule.create`, `record.create`, `record.update`, `record.delete`
 
+### PS-SCHED-013 — Work starts on an event from a server a person connected
+**Status:** planned
+
+- When a person has connected an MCP server that offers events, the system
+  shall offer those events as something standing work can start on, with a
+  field for each argument the event takes.
+- When the server reports one of those events, the system shall start the work
+  once, carrying what the server sent.
+- If the server reports the same event again, then the system shall not start
+  the work a second time.
+- The system shall listen to the server through the account of the person who
+  set the work up, and through no one else's.
+- If someone other than that person changes what the work listens for, then
+  the system shall refuse the change.
+- If a report claims to come from the server but cannot prove it, then the
+  system shall ignore it.
+- If a report names a listener in another pod, then the system shall not start
+  work in this one.
+- While the server keeps the work's subscription, the system shall keep it
+  renewed without the person doing anything.
+- If the server stops accepting the subscription, then the system shall show
+  the work as no longer hearing from it.
+- If the server stops accepting the subscription for good, then the system
+  shall turn the work off and tell its author why.
+- If the person who set the work up leaves the pod, then the system shall turn
+  the work off and tell them why.
+- When the work is deleted, the system shall stop listening to the server.
+
+**Contracts:** `schedule.event.list`, `schedule.create`, `schedule.update`, `schedule.get`, `schedule.delete`
+
 ### PS-SCHED-012 — A person can narrow what actually triggers
 **Status:** covered
 
@@ -159,7 +189,7 @@ about it when it eventually cannot.
 ## Capability: Choose what the trigger does
 
 ### PS-SCHED-030 — A schedule can drive an agent, a workflow, or a message
-**Status:** covered
+**Status:** gap
 
 - When a schedule fires at an agent, the system shall start a conversation with
   it carrying whatever triggered the schedule.
@@ -170,6 +200,9 @@ about it when it eventually cannot.
 - If a schedule's target no longer exists, then the system shall record the
   firing as failed and shall say the target is missing, rather than failing
   silently.
+
+> **Gap:** a schedule can target an agent or a workflow only; firing at a
+> surface was removed with the polled email surfaces. See DEV-SCHED-001.
 
 **Contracts:** `schedule.create`, `workflow.run.create`, `agent.conversation.create`, `agent.surface.send`
 

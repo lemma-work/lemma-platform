@@ -47,6 +47,11 @@ class WebhookDelivery:
     source: str
     raw_body: bytes
     headers: Mapping[str, str]
+    #: The callback URL's query. A source whose secret is per subscription
+    #: names the subscription here, in a URL it chose itself, because the
+    #: provider's own id for it may not exist yet when the first request
+    #: arrives -- an MCP server's challenge comes before its answer.
+    query: Mapping[str, str] = field(default_factory=dict)
 
     def header(self, name: str) -> str | None:
         """A header by name, case-insensitively.
@@ -69,6 +74,13 @@ class VerifiedDelivery:
 
     delivery: WebhookDelivery
     payload: WebhookPayload
+    #: Set when the delivery is a handshake rather than an event: the body to
+    #: answer with, and nothing is matched or run. An MCP server proves our
+    #: callback by sending a signed challenge it expects echoed back.
+    reply: WebhookPayload | None = None
+    #: The account whose own secret verified this delivery, for a source whose
+    #: secret is per subscription. Carried into `NormalizedWebhook.account_id`.
+    account_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +113,10 @@ class NormalizedWebhook:
     #: something about the delivery that the run needs to know: for GitHub, the
     #: repository the event happened in, so the agent wakes up standing in it.
     context: WebhookPayload = field(default_factory=dict)
+    #: When set, only schedules listening through this account match. A source
+    #: that verified the delivery with one account's secret knows whose event it
+    #: is, and no other schedule may claim it whatever its config says.
+    account_id: str | None = None
 
 
 class WebhookNotVerified(Exception):

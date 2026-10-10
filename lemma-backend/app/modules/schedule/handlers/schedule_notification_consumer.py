@@ -9,6 +9,8 @@ own subscriber without touching the breaker.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from uuid import UUID
 
 from faststream import Depends, Logger
@@ -70,6 +72,24 @@ def render_schedule_paused_email(
         "SCHEDULE_REJECTED": (
             "was paused because the scheduler rejected it",
             "Lemma paused this scheduled automation because the scheduler could not accept its configuration.",
+        ),
+        "MCP_AUTHOR_LEFT_POD": (
+            "was turned off because the person who set it up left the space",
+            (
+                "Lemma turned off this automation because it listened to a connected "
+                "server through the account of someone who is no longer in the "
+                "space. Someone still in the space can set it up again on their own "
+                "account."
+            ),
+        ),
+        "MCP_SUBSCRIPTION_LAPSED": (
+            "was turned off because its server stopped telling us about events",
+            (
+                "Lemma turned off this automation because the connected server "
+                "stopped accepting its subscription, so it could never start again. "
+                "Reconnect the account if it needs signing in again, then turn the "
+                "automation back on."
+            ),
         ),
         "SCHEDULE_VALIDATION_ERROR": (
             "was paused because its configuration is invalid",
@@ -148,7 +168,10 @@ async def on_schedule_deactivated(
 
         review_url = settings.frontend_url.rstrip("/")
         if schedule and schedule.pod_id:
-            review_url = f"{review_url}/pod/{schedule.pod_id}/schedules"
+            review_url = (
+                f"{review_url}/t/{quote(str(schedule.pod_id), safe='')}"
+                "/about?section=schedules"
+            )
         subject, rendered = render_schedule_paused_email(
             schedule_name=schedule.name if schedule else None,
             schedule_id=parsed.schedule_id,

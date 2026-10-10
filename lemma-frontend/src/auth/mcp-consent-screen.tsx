@@ -5,6 +5,7 @@ import { LoadingIndicator } from "@/ui/loading";
 import { Screen } from "./screens";
 import { accountAccess, completionDestination, signedInEmail } from "./completion";
 import {
+    EVENTS_SCOPE,
     WRITE_SCOPE,
     answerConsentRequest,
     dropConsentRequest,
@@ -29,6 +30,8 @@ export function McpConsent() {
     /* Starts at what the app asked for; the person can narrow it here, and
        only narrow it. */
     const [readOnly, setReadOnly] = useState(false);
+    /* Off until ticked: rows leave for the app's server as they are added. */
+    const [events, setEvents] = useState(false);
     const id = useRef<string | null>(null);
 
     useEffect(() => {
@@ -73,7 +76,7 @@ export function McpConsent() {
         if (!current) return;
         setState("answering");
         try {
-            const next = await answerConsentRequest(current, { allow, readOnly });
+            const next = await answerConsentRequest(current, { allow, readOnly, events });
             dropConsentRequest();
             window.location.assign(next);
         } catch (problem) {
@@ -101,6 +104,7 @@ export function McpConsent() {
         case "asking": {
             if (!request) return null;
             const asksToWrite = request.scopes.includes(WRITE_SCOPE);
+            const asksForEvents = request.scopes.includes(EVENTS_SCOPE);
             const who = whoIsAsking(request);
             return (
                 <Screen
@@ -134,6 +138,14 @@ export function McpConsent() {
                     ) : (
                         <p>It asks to read tables and files only.</p>
                     )}
+                    {asksForEvents ? (
+                        <label className="auth__choice">
+                            <input type="checkbox" checked={events} onChange={(e) => setEvents(e.target.checked)} />{" "}
+                            Also tell it when rows are added to tables you can read. Each new row is sent to the
+                            app’s own server as it is added, including while you are away. You can stop this in
+                            the space’s settings.
+                        </label>
+                    ) : null}
                     <div className="screen__actions">
                         <button className="btn btn--primary" onClick={() => void answer(true)}>
                             Allow

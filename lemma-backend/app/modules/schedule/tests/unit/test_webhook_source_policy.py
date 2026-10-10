@@ -98,7 +98,22 @@ def test_every_source_this_deployment_accepts_may_be_named_by_a_schedule():
 
     assert registry.sources, "a deployment that accepts no webhook source"
     for accepted in registry.sources:
-        validate_webhook_source(_webhook_create(config={"source": accepted}), registry)
+        # Named with an account, which is how an MCP server's events are
+        # listened to; the sources that need none do not mind one.
+        validate_webhook_source(
+            _webhook_create(config={"source": accepted}, account_id=uuid4()),
+            registry,
+        )
+
+
+def test_an_mcp_event_schedule_with_no_account_is_refused():
+    """It is subscribed on an account or not at all, so with none it could
+    never be delivered to."""
+    with pytest.raises(ScheduleValidationError, match="account"):
+        validate_webhook_source(
+            _webhook_create(config={"source": "mcp", "event": "issue.created"}),
+            default_webhook_sources(),
+        )
 
 
 def test_a_source_is_matched_the_way_the_ingress_matches_it():

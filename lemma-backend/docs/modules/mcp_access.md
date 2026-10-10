@@ -18,12 +18,22 @@ what each client requires, is in
   portal's `/auth/authorize` page with the person's session. Portal-only, so
   out of the public schema.
 - Grants: `GET /oauth/grants` and `DELETE /oauth/grants/{id}`, the person's
-  connected clients and how they end one.
+  connected clients and how they end one; Stop and Resume on one of a
+  connection's event subscriptions (`DELETE` / `POST .../resume` under
+  `/oauth/grants/{id}/subscriptions/{sub}`).
 - Checking an access token on a pod's MCP endpoint, and the per-grant and
   per-IP rate limits.
 
+- Event subscriptions for connected clients (`events/list`, `events/subscribe`,
+  `events/unsubscribe`, served through `app/mcp_events.py`), their verification,
+  and signed webhook delivery with a re-check of the grant and the row on every
+  send. Subscribing needs the separate `pod:events` scope. Deliveries are rate
+  capped per subscription and pause after repeated failures; an hourly sweep
+  removes lapsed subscriptions and those of revoked connections. The wire
+  format and its limits are in the architecture doc's Events section.
+
 Tables: `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens` (digests
-only). Pending authorizations and codes are short-lived Redis keys.
+only), `mcp_event_subscriptions` (secrets encrypted). Pending authorizations and codes are short-lived Redis keys.
 
 ## What it does not own
 

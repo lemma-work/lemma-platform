@@ -272,8 +272,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/oauth/grants/{grant_id}` | `mcp_access.grants.revoke` | Disconnect an MCP client |
+| DELETE | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}` | `mcp_access.grants.subscription.delete` | Stop telling a connected app about an event |
 | GET | `/oauth/grants` | `mcp_access.grants.list` | MCP clients you have connected |
 | GET | `/oauth/mcp-endpoint/{pod_id}` | `mcp_access.endpoint.get` | The MCP URL for a pod |
+| POST | `/oauth/grants/{grant_id}/subscriptions/{subscription_id}/resume` | `mcp_access.grants.subscription.resume` | Let a connected app be told about an event again |
 
 ## pod
 
@@ -332,6 +334,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.delete` | Delete Schedule |
+| GET | `/pods/{pod_id}/events` | `schedule.event.list` | List Events |
 | GET | `/pods/{pod_id}/schedules` | `schedule.list` | List Schedules |
 | GET | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.get` | Get Schedule |
 | GET | `/pods/{pod_id}/schedules/{schedule_id}/runs` | `schedule.run.list` | List Schedule Runs |

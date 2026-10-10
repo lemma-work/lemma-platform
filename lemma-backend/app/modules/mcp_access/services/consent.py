@@ -135,14 +135,23 @@ class ConsentService:
         )
 
     async def answer(
-        self, *, request_id: str, user_id: UUID, allow: bool, read_only: bool = False
+        self,
+        *,
+        request_id: str,
+        user_id: UUID,
+        allow: bool,
+        read_only: bool = False,
+        events: bool = False,
     ) -> str:
         """The URL to send the browser to: the client's redirect URI, with a
         code or with ``access_denied``, and always with ``state`` and ``iss``.
 
         ``read_only`` is the person answering "allow reading only": the
         connection reads and does nothing else, whatever the client asked
-        for. The person's standing in the pod is checked
+        for. ``events`` is the person agreeing, separately, to the app being
+        told about new rows (`Scope.EVENTS`); it is granted only when the app
+        asked for it and the person said yes, never by default. The person's
+        standing in the pod is checked
         before the request is used up, so somebody who has learned a request id
         but cannot read the pod cannot spend it.
         """
@@ -171,7 +180,10 @@ class ConsentService:
         await self._clients.persist(client)
         # Reading only is reading, whatever the client asked for: an app that
         # asked only to write, answered "read only", can read.
-        scopes = {Scope.READ} if read_only else parse_scopes(pending.scopes)
+        asked = parse_scopes(pending.scopes)
+        scopes = {Scope.READ} if read_only else set(asked - {Scope.EVENTS})
+        if events and Scope.EVENTS in asked:
+            scopes.add(Scope.EVENTS)
         granted = sorted(scope.value for scope in scopes)
         async with self._uow_factory() as uow:
             grant_id = await McpAccessRepository(uow).create_grant(

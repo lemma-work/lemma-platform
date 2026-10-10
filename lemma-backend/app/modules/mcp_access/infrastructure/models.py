@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     text,
@@ -123,4 +124,68 @@ class McpOAuthToken(UUIDCreatedBase):
     )
     superseded_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class McpEventSubscription(UUIDAuditBase):
+    """One outside client's subscription to one pod event, delivered by webhook.
+
+    Its identity is `(grant, url, name, arguments)`, the draft's: subscribing
+    again with the same four refreshes this row rather than adding one. The
+    grant's, so ending the connection ends it -- deleted with the grant, and
+    refused at delivery the moment the grant is revoked. The client's signing
+    secret is stored encrypted; it is what makes a delivery believable to the
+    receiver, and it is never shown back.
+
+    `stopped_at` is the person's Stop, kept as a tombstone so the client's next
+    refresh is refused instead of re-creating it. `paused_at` is delivery
+    giving up on a receiver that kept failing, until the client refreshes.
+    """
+
+    __tablename__ = "mcp_event_subscriptions"
+    __table_args__ = (
+        Index(
+            "uq_mcp_event_subscriptions_identity",
+            "grant_id",
+            "url",
+            "name",
+            "arguments_key",
+            unique=True,
+        ),
+        Index("ix_mcp_event_subscriptions_pod_name", "pod_id", "name"),
+    )
+
+    public_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    grant_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mcp_oauth_grants.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    pod_id: Mapped[UUID] = mapped_column(
+        ForeignKey("pods.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    arguments: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    arguments_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    secret_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_before: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_delivery_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
     )
