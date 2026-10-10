@@ -759,8 +759,9 @@ Public, the way a group's people from outside it are.
 - The system shall write on WhatsApp only within 24 hours of the contact's last
   message there, and shall leave a web visitor's message for their next visit.
 - When the member asks for email, the system shall send the follow-up to the
-  contact's verified email address from the pod's own address, and shall
-  bring the contact's reply back to the same conversation.
+  contact's verified email address from the pod's own address.
+- When the contact replies to an emailed follow-up, the system shall bring the
+  reply to the conversation that holds that follow-up.
 - The system shall end every email follow-up with a way to stop, and once the
   contact uses it, shall write to that address no more until they write again.
 - The system shall not unsubscribe anybody for opening the link; only the
