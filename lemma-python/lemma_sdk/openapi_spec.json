@@ -7462,8 +7462,22 @@
         "title": "FirstWorkspaceResponse",
         "type": "object"
       },
+      "FollowUpChannel": {
+        "description": "Where a follow-up goes.\n\n``latest``: the contact's most recent conversation, on its own channel.\n``email``: their verified email address -- that conversation when it is\nan email thread, a new thread from the pod's address when it is not.",
+        "enum": [
+          "latest",
+          "email"
+        ],
+        "title": "FollowUpChannel",
+        "type": "string"
+      },
       "FollowUpRequest": {
         "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/FollowUpChannel",
+            "default": "latest",
+            "description": "`latest` writes in the contact's most recent conversation. `email` sends to their verified email address: in that conversation when it is an email thread, otherwise in a new thread from the pod's email address that answers contacts."
+          },
           "message": {
             "maxLength": 4000,
             "minLength": 1,
@@ -28286,7 +28300,7 @@
     },
     "/pods/{pod_id}/contacts/{contact_id}/messages": {
       "post": {
-        "description": "Write to a contact in their most recent conversation, where the channel allows.\n\nRefused (409) when they unsubscribed there, when WhatsApp's 24-hour window\nhas closed, or when they have never written to the pod; 429 past the day's\nfollow-ups for this contact; 502 when the platform did not take it, which\nthe conversation then shows as not sent.",
+        "description": "Write to a contact in their most recent conversation, where the channel allows.\n\nWith ``channel: email``, to their verified email address instead, which\nreaches a web chat contact who is not on the page.\n\nRefused (409) when they unsubscribed there, when WhatsApp's 24-hour window\nhas closed, when they have never written to the pod, or, for email, when\nthey have no verified address or the pod no email address answering\ncontacts; 429 past the day's follow-ups for this contact; 502 when the\nplatform did not take it, which the conversation then shows as not sent.",
         "operationId": "contact.follow_up",
         "parameters": [
           {

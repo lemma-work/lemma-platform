@@ -351,6 +351,23 @@ one:
   (`unsubscribed_at`); writing again opts them back in, except a message that
   is only "STOP" or "unsubscribe", which unsubscribes the handle instead. A bot
   for known contacts gives a stranger one short refusal a day.
+  `channel` on the request is `latest` (the default, all of the above) or
+  `email`: to the contact's most recently verified email handle (strength
+  `CHANNEL`, `HOST` or `CODE`, never `MEMBER`; refused as `unsubscribed` when
+  any email handle is, `no_verified_email` when none qualifies). When the
+  latest conversation is already an email thread it is that thread. Otherwise
+  (a web chat, or another platform) the send is a cold open from the pod's
+  oldest active email surface whose `contacts.answer` is not `off` and whose
+  `looked_after_by` is still a member (`no_email_surface` when there is none),
+  through `open_cold_email_thread` with a random `References` seed
+  (`follow_up_seed_id`). Only after the provider accepts it is a conversation
+  opened for the contact (owned by `looked_after_by`, `audience: contact`) and
+  linked under `~contact:{id}` with the seed as `external_thread_id`, so the
+  reply, authenticated and matched to the contact by its email identity, binds
+  to it in `ContactDoor`. Same daily cap and unsubscribe line; a failed send is
+  written as not sent into the latest conversation, and no link is made. The
+  web chat is left untouched, and the email thread becomes the latest
+  conversation for the next `latest` follow-up.
 - **Unverified email** is parked as an inbox note to the member who looks after
   contacts, once an hour per sender and at most
   `SURFACE_PARKED_MAIL_NOTES_PER_SURFACE_PER_HOUR` notes a bot, then one

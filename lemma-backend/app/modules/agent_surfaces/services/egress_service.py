@@ -25,6 +25,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from app.core.file_types import is_untyped_mime
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
@@ -121,14 +122,18 @@ class SurfaceEgress:
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
             return None
-        sent = await adapter.send_cold_email(
-            credentials=await self.delivery.egress_credentials(surface),
-            recipient_email=recipient_email,
-            subject=subject,
-            message=clean_message,
-            thread_seed_id=thread_seed_id,
-            metadata=metadata,
-        )
+        credentials = await self.delivery.egress_credentials(surface)
+        # The send is the provider's round trip and asks nothing of the
+        # database; the caller writes the thread down afterwards.
+        async with connection_released(self.uow.session):
+            sent = await adapter.send_cold_email(
+                credentials=credentials,
+                recipient_email=recipient_email,
+                subject=subject,
+                message=clean_message,
+                thread_seed_id=thread_seed_id,
+                metadata=metadata,
+            )
         if sent is None:
             return None
         return build_cold_email_thread(
