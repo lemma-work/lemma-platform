@@ -530,7 +530,7 @@ async def _send_success(
                     [
                         {
                             "text": "Open your bot",
-                            "url": runtime.bot_launch_url(setup),
+                            "url": await runtime.bot_launch_url(setup),
                         }
                     ]
                 ]

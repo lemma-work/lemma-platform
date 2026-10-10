@@ -38,18 +38,26 @@ router = APIRouter(
 )
 
 
-def _response(service, setup) -> TelegramManagedBotSetupResponse:
+async def _response(service, setup) -> TelegramManagedBotSetupResponse:
+    """One setup, as the sheet reads it.
+
+    The manager bot's username is resolved once: it is both what the link points
+    at and what the sheet names, and two answers there would send somebody to a
+    bot the page did not name.
+    """
+    manager_username = await service.manager_username()
+    launch_url = service.launch_url(setup, manager_username=manager_username)
     return TelegramManagedBotSetupResponse(
         setup_id=setup.setup_id,
         status=setup.status.value,
-        launch_url=service.launch_url(setup),
-        manager_bot_username=service.manager_username,
+        launch_url=launch_url,
+        manager_bot_username=manager_username or "",
         expires_at=setup.expires_at.isoformat(),
         account_id=setup.account_id,
         surface_id=setup.surface_id,
         bot_username=setup.bot_username,
         bot_launch_url=(
-            service.bot_launch_url(setup)
+            await service.bot_launch_url(setup)
             if setup.status.value == "COMPLETE" and setup.bot_username
             else None
         ),
@@ -130,7 +138,7 @@ async def start_telegram_managed_bot_setup(
             is_enabled=request.is_enabled,
             pod_name=pod_name,
         )
-    return _response(service, setup)
+    return await _response(service, setup)
 
 
 @router.get(
@@ -149,4 +157,4 @@ async def get_telegram_managed_bot_setup(
         user_id=user.id,
         pod_id=pod_id,
     )
-    return _response(service, setup)
+    return await _response(service, setup)
