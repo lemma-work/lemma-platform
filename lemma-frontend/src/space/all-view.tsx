@@ -360,7 +360,7 @@ export function AllView({ podId, spaceName, botName, members, view, apps, appsPe
                         })();
                     }}>
                         <input autoFocus aria-label="Folder name" placeholder="Folder name" value={newFolder}
-                            onChange={(event) => setNewFolder(event.target.value)}
+                            onChange={(event) => { setNewFolder(event.target.value); if (writes.problem) writes.clearProblem(); }}
                             onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setNewFolder(null); writes.clearProblem(); } }} />
                         <button className="btn btn--primary" type="submit" disabled={Boolean(writes.busy)}>Create</button>
                         <button className="btn" type="button" onClick={() => { setNewFolder(null); writes.clearProblem(); }}>Cancel</button>
