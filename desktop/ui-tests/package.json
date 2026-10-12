@@ -7,7 +7,7 @@
     "test:browser": "node --test tests/*.browser.mjs"
   },
   "devDependencies": {
-    "playwright": "1.60.0"
+    "playwright": "1.63.0"
   },
   "engines": {
     "node": ">=24 <25"
