@@ -260,6 +260,22 @@ async def test_managed_setup_offered_only_where_a_manager_bot_exists(monkeypatch
     )
 
 
+async def test_managed_setup_offered_from_the_manager_bot_token_alone(monkeypatch):
+    # The token is what makes the deployment's bot a manager; the username the
+    # setup link is built from comes from Telegram when the link is minted, so a
+    # deployment that configures only the token still offers the path. Nothing
+    # here depends on the native credential, so it is left as the deployment has
+    # it.
+    monkeypatch.setattr(
+        mod.surface_settings, "telegram_manager_bot_token", "123:abc", raising=False
+    )
+    monkeypatch.setattr(
+        mod.surface_settings, "telegram_manager_bot_username", None, raising=False
+    )
+    surfaces = _by_platform(await build_available_surfaces(read_connector=_catalog()))
+    assert surfaces[SurfacePlatform.TELEGRAM].managed_setup_available is True
+
+
 async def test_managed_setup_hidden_without_a_manager_bot(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
     monkeypatch.setattr(
