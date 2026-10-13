@@ -1,0 +1,23 @@
+<!-- Source for features-light.png / features-dark.png in the README. Replace THEME with light or dark, then: chrome --headless=new --hide-scrollbars --force-device-scale-factor=2 --default-background-color=00000000 --window-size=1200,150 --screenshot=features-light.png features.html -->
+<!doctype html><html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{--card:#fbfaf7;--line:#e7e3da;--ink:#1b1a17;--p:#5a3fd4;--t:#e6e0fb}
+.dark{--card:#151a21;--line:#2a313b;--ink:#e9edf2;--p:#a796f7;--t:#2c2550}
+*{box-sizing:border-box;margin:0}
+html,body{width:1200px;height:150px;overflow:hidden;background:transparent}
+body{font-family:Inter,sans-serif;font-weight:500;color:var(--ink);padding:8px;-webkit-font-smoothing:antialiased}
+.row{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;height:100%}
+.t{background:var(--card);border:1px solid var(--line);border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+svg{width:44px;height:44px}
+.s{fill:none;stroke:var(--p);stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.f{fill:var(--t)}
+span{font-size:17px;letter-spacing:-.01em}
+</style></head><body class="THEME"><div class="row">
+<div class="t"><svg viewBox="0 0 32 32"><path class="f" d="M14 4l2.6 7.4L24 14l-7.4 2.6L14 24l-2.6-7.4L4 14l7.4-2.6z"/><path class="s" d="M14 4l2.6 7.4L24 14l-7.4 2.6L14 24l-2.6-7.4L4 14l7.4-2.6z"/><path class="s" d="M25 20l1 2.6 2.6 1-2.6 1L25 27.6l-1-2.6-2.6-1 2.6-1z"/></svg><span>Agents</span></div>
+<div class="t"><svg viewBox="0 0 32 32"><rect class="f" x="4" y="5" width="24" height="22" rx="4"/><rect class="s" x="4" y="5" width="24" height="22" rx="4"/><path class="s" d="M4 11h24M13 11v16"/><path class="s" d="M17 16h7M17 21h5"/></svg><span>Apps</span></div>
+<div class="t"><svg viewBox="0 0 32 32"><circle class="f" cx="21" cy="11" r="4.5"/><path class="f" d="M14 26c0-4.4 3.1-8 7-8s7 3.6 7 8z"/><circle class="s" cx="12" cy="11" r="4.5"/><path class="s" d="M4 26c0-4.4 3.6-8 8-8s8 3.6 8 8"/><path class="s" d="M21 6.5a4.5 4.5 0 0 1 0 9M24 18.6c2.4 1.2 4 4 4 7.4"/></svg><span>People</span></div>
+<div class="t"><svg viewBox="0 0 32 32"><rect class="f" x="9" y="4" width="18" height="22" rx="3"/><rect class="s" x="9" y="4" width="18" height="22" rx="3"/><path class="s" d="M5 9v16a3 3 0 0 0 3 3h14"/><path class="s" d="M14 11h8M14 16h8M14 21h5"/></svg><span>Context</span></div>
+<div class="t"><svg viewBox="0 0 32 32"><path class="f" d="M12 21h11l5 4V12a3 3 0 0 0-3-3h-2v9a3 3 0 0 1-3 3z"/><path class="s" d="M12 21h11l5 4V12a3 3 0 0 0-3-3h-2"/><path class="s" d="M4 7a3 3 0 0 1 3-3h13a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H9l-5 4z"/></svg><span>Surfaces</span></div>
+<div class="t"><svg viewBox="0 0 32 32"><rect class="f" x="19" y="19" width="9" height="9" rx="2.5"/><rect class="s" x="4" y="4" width="9" height="9" rx="2.5"/><rect class="s" x="19" y="19" width="9" height="9" rx="2.5"/><path class="s" d="M8.5 13v6a4 4 0 0 0 4 4H19"/><path class="s" d="M21.2 23.5l1.8 1.8 3.2-3.4"/></svg><span>Workflows</span></div>
+</div></body></html>

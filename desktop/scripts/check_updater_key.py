@@ -19,7 +19,7 @@ without the private key ever being decrypted or leaving the runner:
     signature file    Ed | key id (8) | signature (64)
 
 Rotation is a real operation with a real order, and it is written down in
-docs/installation.md under "Rotating the update signing key". The short version
+desktop/README.md under "Rotating the update signing key". The short version
 is that the new public key has to reach installed apps in a release signed by
 the *old* private key, because an app only trusts the key it was built with.
 """
@@ -119,7 +119,7 @@ def check(config: Path, signature: str, *, rotating: bool = False) -> str:
             f"apps verify with key {expected}. Every update from this release "
             f"would be rejected. Rotating the signing key is a two-release "
             f'operation -- see "Rotating the update signing key" in '
-            f"docs/installation.md, and declare it with "
+            f"desktop/README.md, and declare it with "
             f"LEMMA_UPDATER_KEY_ROTATION=1."
         )
     return expected
