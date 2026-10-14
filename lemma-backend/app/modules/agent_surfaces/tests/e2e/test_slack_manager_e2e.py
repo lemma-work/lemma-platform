@@ -87,6 +87,9 @@ async def _separate_slack_account(
         .where(OrganizationMember.user_id == UUID(user_id))
         .limit(1)
     )
+    # Unique per call: install names are unique per organization, and a test
+    # may hold several of Lemma's or a teammate's.
+    install_name = f"{install_name}-{uuid4().hex[:6]}"
     install = AuthConfig(
         organization_id=organization_id,
         connector_id="slack",
@@ -636,6 +639,10 @@ async def _slack_accepts_an_orgs_own_app(db_session: AsyncSession):
                 "authorization_url": "https://slack.com/oauth/v2/authorize",
                 "token_url": "https://slack.com/api/oauth.v2.access",
                 "default_scopes": ["chat:write"],
+            },
+            "system_oauth": {
+                "client_id_env": "SLACK_CLIENT_ID",
+                "client_secret_env": "SLACK_CLIENT_SECRET",
             },
         }
     ]

@@ -83,6 +83,8 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # their App Home shows. Browser steps by design.
     "agent.surface.slack_manager",
     "agent.surface.slack_person",
+    # "Add to Slack" from outside the app: answers with Slack's consent page.
+    "agent.surface.slack_install",
     # Widget/app unification endpoints pending facade adoption
     "app.create_from_widget",
     "widget.embed_token",

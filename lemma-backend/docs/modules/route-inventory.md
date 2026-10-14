@@ -103,6 +103,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
 | POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
+| POST | `/surface-setup/slack/install` | `agent.surface.slack_install.start` | Start Slack Install Flow |
 | POST | `/surface-setup/slack/people` | `agent.surface.slack_person.link` | Link Slack Person |
 | POST | `/surface-setup/slack/people/preview` | `agent.surface.slack_person.preview` | Preview Slack Person Link |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |

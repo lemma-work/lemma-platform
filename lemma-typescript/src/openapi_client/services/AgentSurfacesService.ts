@@ -19,6 +19,7 @@ import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js
 import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
 import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
 import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
+import type { SlackInstallResponse } from '../models/SlackInstallResponse.js';
 import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
 import type { SlackManagedWorkspaceResponse } from '../models/SlackManagedWorkspaceResponse.js';
 import type { SlackManagerBindRequest } from '../models/SlackManagerBindRequest.js';
@@ -799,6 +800,23 @@ export class AgentSurfacesService {
             errors: {
                 422: `Validation Error`,
             },
+        });
+    }
+    /**
+     * Start Slack Install Flow
+     * Add Lemma to a Slack workspace, from "Add to Slack" rather than from a pod.
+     *
+     * Gives the signed-in person an organization and a first teammate if they
+     * have neither, and answers with Slack's consent page for Lemma's own app.
+     * When the grant comes back, the workspace becomes the organization's and
+     * Lemma's app says hello there.
+     * @returns SlackInstallResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackInstallStart(): CancelablePromise<SlackInstallResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/install',
         });
     }
     /**

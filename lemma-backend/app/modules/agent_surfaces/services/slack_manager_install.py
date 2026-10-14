@@ -37,6 +37,8 @@ _SYSTEM_DEFAULT = "SYSTEM_DEFAULT"
 class ManagedWorkspace:
     team_id: str
     team_name: str | None
+    #: True only for the binding that made it: the one a welcome follows.
+    created: bool = False
 
 
 def _raw(credentials: dict[str, object]) -> dict[str, object]:
@@ -82,6 +84,25 @@ async def _lemma_app_grant(
     return account.id, raw
 
 
+async def lemma_app_grant(
+    uow: SqlAlchemyUnitOfWork, *, user_id: UUID, organization_id: UUID, account_id: UUID
+) -> dict[str, object] | None:
+    """Slack's OAuth answer when this account is this person's grant of Lemma's
+    own app; None for any other account, which there is nothing to adopt from."""
+    try:
+        _, raw = await _lemma_app_grant(
+            uow, user_id=user_id, organization_id=organization_id, account_id=account_id
+        )
+    except AgentSurfaceValidationError:
+        return None
+    return raw
+
+
+def installer_of(raw: dict[str, object]) -> str:
+    """The Slack user whose OAuth grant this was."""
+    return _nested_id(raw, "authed_user")
+
+
 def _workspace_of(raw: dict[str, object]) -> tuple[str, str | None, str]:
     """``(team_id, team_name, bot_user_id)`` from Slack's OAuth answer."""
     team = raw.get("team")
@@ -114,7 +135,7 @@ async def bind_manager(
     )
     team_id, team_name, bot_user_id = _workspace_of(raw)
     repo = SlackManagerRepository(uow.session)
-    await repo.save_install(
+    _, created = await repo.save_install(
         team_id=team_id,
         team_name=team_name,
         organization_id=organization_id,
@@ -128,7 +149,7 @@ async def bind_manager(
             team_id=team_id, slack_user_id=installer, user_id=user_id
         )
     await uow.commit()
-    return ManagedWorkspace(team_id=team_id, team_name=team_name)
+    return ManagedWorkspace(team_id=team_id, team_name=team_name, created=created)
 
 
 async def manages_workspace(uow: SqlAlchemyUnitOfWork, team_id: str) -> bool:

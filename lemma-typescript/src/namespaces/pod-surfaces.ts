@@ -225,4 +225,15 @@ export class PodSurfacesNamespace {
       AgentSurfacesService.agentSurfaceSlackPersonLink(request),
     );
   }
+
+  /**
+   * Add Lemma to a Slack workspace from "Add to Slack" rather than from a pod.
+   * Gives the signed-in person an organization and a first teammate if they
+   * have neither, and answers with Slack's consent page for Lemma's own app.
+   */
+  startSlackInstall() {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackInstallStart(),
+    );
+  }
 }

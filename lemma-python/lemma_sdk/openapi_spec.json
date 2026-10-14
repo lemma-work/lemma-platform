@@ -16596,6 +16596,20 @@
         "title": "SlackConfigurationTokenRequest",
         "type": "object"
       },
+      "SlackInstallResponse": {
+        "description": "Slack's consent page for Lemma's own app, to send the browser to.",
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "SlackInstallResponse",
+        "type": "object"
+      },
       "SlackManagedWorkspaceListResponse": {
         "properties": {
           "items": {
@@ -41519,6 +41533,38 @@
           "resource": "public.web.table",
           "result": "entity",
           "verb": "read"
+        }
+      }
+    },
+    "/surface-setup/slack/install": {
+      "post": {
+        "description": "Add Lemma to a Slack workspace, from \"Add to Slack\" rather than from a pod.\n\nGives the signed-in person an organization and a first teammate if they\nhave neither, and answers with Slack's consent page for Lemma's own app.\nWhen the grant comes back, the workspace becomes the organization's and\nLemma's app says hello there.",
+        "operationId": "agent.surface.slack_install.start",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackInstallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Start Slack Install Flow",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_install"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_install",
+          "result": "entity",
+          "verb": "start"
         }
       }
     },

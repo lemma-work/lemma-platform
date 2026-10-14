@@ -394,6 +394,43 @@ def not_handed_over(
     return text, [{"type": "section", "text": _text(text)}]
 
 
+def welcome(
+    *, team_name: str | None, first: tuple[str, str] | None
+) -> tuple[str, list[dict[str, object]]]:
+    """The manager's first word to whoever installed it.
+
+    ``first`` is ``(pod_id, name)`` of a teammate not in Slack yet: the one
+    thing worth doing next, as a button, rather than a tour.
+    """
+    where = team_name or "your workspace"
+    text = (
+        f"Lemma is in {where}. Teammates answer here under their own names, and "
+        "I set them up."
+    )
+    blocks: list[dict[str, object]] = [{"type": "section", "text": _text(text)}]
+    if first is not None:
+        pod_id, name = first
+        blocks.append(
+            {
+                "type": "section",
+                "text": _text(
+                    f"*{name}* is your first teammate. Add it, and it answers here."
+                ),
+                "accessory": {
+                    "type": "button",
+                    "style": "primary",
+                    "text": _plain(f"Add {name}"[:75]),
+                    "action_id": ADD_ACTION_ID,
+                    "value": pod_id,
+                },
+            }
+        )
+    blocks.append(
+        {"type": "context", "elements": [_text("My Home tab has every teammate.")]}
+    )
+    return text, blocks
+
+
 def manager_reply(*, bot_user_ids: Sequence[str]) -> str:
     """What the manager says when someone talks to it as if it answered."""
     if not bot_user_ids:

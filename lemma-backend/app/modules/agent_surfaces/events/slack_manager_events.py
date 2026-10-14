@@ -1,10 +1,14 @@
-"""A teammate's Slack app, allowed: make its surface from the new account.
+"""A Slack grant arrived: finish what it was for.
 
-The manager makes a teammate's app from inside Slack and hands the person
-Slack's Allow. Allowing happens on Slack's page, and its callback lands in the
-connectors module, which says only that an account was connected. This listens
-for that and finishes the job, so the teammate is in Slack without anybody
-coming back to Lemma.
+Grants happen on Slack's page, and their callback lands in the connectors
+module, which says only that an account was connected. Two things wait on one:
+
+* a teammate's own app the manager made from inside Slack, awaiting its Allow --
+  make the teammate's surface from the new account;
+* Lemma's own app, authorised for a workspace no organization holds yet -- adopt
+  the workspace, and let the manager say hello.
+
+Either way nobody has to come back to Lemma to finish.
 """
 
 from __future__ import annotations
@@ -54,12 +58,25 @@ async def on_connector_connected(
     account_id: UUID = parsed.account_id
 
     async def process() -> None:
+        # Here, not at the top: it reaches into identity's onboarding, which the
+        # worker's every other subscriber would otherwise pay to import.
+        from app.modules.agent_surfaces.services.slack_install import adopt_workspace
+
         async with uow_factory() as uow:
-            await bind_allowed_app(
+            if await bind_allowed_app(
                 uow,
                 auth_config_id=auth_config_id,
                 account_id=account_id,
                 user_id=parsed.user_id,
+            ):
+                return
+            # Not a teammate's app awaiting its Allow: perhaps Lemma's own,
+            # authorised for a workspace no organization holds yet.
+            await adopt_workspace(
+                uow,
+                user_id=parsed.user_id,
+                organization_id=parsed.organization_id,
+                account_id=account_id,
             )
 
     await inbox.process(

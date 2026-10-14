@@ -10,13 +10,18 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.core.api.dependencies import CurrentUser, UoWDep
+from app.core.api.dependencies import CurrentUser, UoWDep, get_uow_factory
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+from app.modules.agent_surfaces.services.slack_install import (
+    start_slack_install,
+    welcome,
+)
 from app.modules.agent_surfaces.services.slack_manager import show_home
 from app.modules.agent_surfaces.services.slack_manager_context import load_context
 from app.modules.agent_surfaces.services.slack_manager_install import (
@@ -98,6 +103,8 @@ async def bind_slack_manager(
         organization_id=await _organization(uow, pod_id),
         account_id=request.account_id,
     )
+    if bound.created:
+        await welcome(uow, team_id=bound.team_id, user_id=user.id)
     return _response(bound)
 
 
@@ -132,6 +139,28 @@ async def preview_slack_person_link(
         team_id=preview.team_id,
         team_name=preview.team_name,
         slack_user_name=preview.slack_user_name,
+    )
+
+
+class SlackInstallResponse(BaseModel):
+    """Slack's consent page for Lemma's own app, to send the browser to."""
+
+    authorization_url: str
+
+
+@people_router.post("/install", operation_id="agent.surface.slack_install.start")
+async def start_slack_install_flow(
+    user: CurrentUser, uow_factory: UnitOfWorkFactory = Depends(get_uow_factory)
+) -> SlackInstallResponse:
+    """Add Lemma to a Slack workspace, from "Add to Slack" rather than from a pod.
+
+    Gives the signed-in person an organization and a first teammate if they
+    have neither, and answers with Slack's consent page for Lemma's own app.
+    When the grant comes back, the workspace becomes the organization's and
+    Lemma's app says hello there.
+    """
+    return SlackInstallResponse(
+        authorization_url=await start_slack_install(uow_factory, user_id=user.id)
     )
 
 

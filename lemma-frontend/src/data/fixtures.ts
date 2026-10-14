@@ -3432,6 +3432,10 @@ export const fixtureSource: PodSource = {
         await wait(300);
         return { teamName: "Sample workspace", slackUserName: "Sam Rivera" };
     },
+    async startSlackInstall() {
+        await wait(400);
+        return "/slack/installed";
+    },
     async linkSlackPerson(link: SlackPersonLink) {
         await wait(400);
         if (link.expires * 1000 < Date.now()) {

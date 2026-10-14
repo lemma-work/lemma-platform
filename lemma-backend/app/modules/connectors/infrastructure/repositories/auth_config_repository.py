@@ -126,6 +126,27 @@ class AuthConfigRepository(
         instance = result.scalars().first()
         return await self._to_entity(instance) if instance else None
 
+    async def get_active_by_org_app_and_source(
+        self, organization_id: UUID, connector_id: str, config_source: str
+    ) -> AuthConfigEntity | None:
+        """The org's active install of this connector from this source -- Lemma's
+        own app (``SYSTEM_DEFAULT``) rather than one the org brought. Ordered as
+        `get_active_by_org_and_app` is, so the answer is stable."""
+        stmt = (
+            select(AuthConfig)
+            .where(
+                AuthConfig.organization_id == organization_id,
+                AuthConfig.connector_id == connector_id,
+                AuthConfig.config_source == config_source,
+                AuthConfig.status == AuthConfigStatus.ACTIVE.value,
+            )
+            .order_by(AuthConfig.is_default.desc(), AuthConfig.created_at.asc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return await self._to_entity(instance) if instance else None
+
     async def get_active_by_org_and_name(
         self, organization_id: UUID, name: str
     ) -> AuthConfigEntity | None:

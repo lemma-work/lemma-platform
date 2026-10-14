@@ -31,6 +31,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.slack_app_creation.forget` | DELETE | `/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}` | Forget Slack Configuration Token |
 | `agent.surface.slack_app_creation.list` | GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | List Slack App Workspaces |
 | `agent.surface.slack_app_creation.save` | PUT | `/pods/{pod_id}/surface-setup/slack/app-creation` | Save Slack Configuration Token |
+| `agent.surface.slack_install.start` | POST | `/surface-setup/slack/install` | Start Slack Install Flow |
 | `agent.surface.slack_manager.bind` | PUT | `/pods/{pod_id}/surface-setup/slack/manager` | Bind Slack Manager |
 | `agent.surface.slack_manager.list` | GET | `/pods/{pod_id}/surface-setup/slack/manager` | List Slack Managed Workspaces |
 | `agent.surface.slack_manifest` | GET | `/surface-setup/slack/manifest` | Get Slack App Manifest |

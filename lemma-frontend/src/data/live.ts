@@ -1115,6 +1115,11 @@ export const liveSource: PodSource = {
         return { teamName: preview.team_name ?? null, slackUserName: preview.slack_user_name ?? null };
     },
 
+    async startSlackInstall(): Promise<string> {
+        const started = await lemma().podSurfaces.startSlackInstall();
+        return started.authorization_url;
+    },
+
     async linkSlackPerson(link: SlackPersonLink): Promise<SlackManagedWorkspace> {
         const linked = await lemma().podSurfaces.linkSlackPerson({
             team_id: link.teamId,

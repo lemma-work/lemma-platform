@@ -16345,6 +16345,23 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Start Slack Install Flow
+     * Add Lemma to a Slack workspace, from "Add to Slack" rather than from a pod.
+     *
+     * Gives the signed-in person an organization and a first teammate if they
+     * have neither, and answers with Slack's consent page for Lemma's own app.
+     * When the grant comes back, the workspace becomes the organization's and
+     * Lemma's app says hello there.
+     * @returns SlackInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackInstallStart() {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/install"
+      });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -16585,6 +16602,16 @@ var LemmaClient = (() => {
     linkSlackPerson(request2) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackPersonLink(request2)
+      );
+    }
+    /**
+     * Add Lemma to a Slack workspace from "Add to Slack" rather than from a pod.
+     * Gives the signed-in person an organization and a first teammate if they
+     * have neither, and answers with Slack's consent page for Lemma's own app.
+     */
+    startSlackInstall() {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackInstallStart()
       );
     }
   };

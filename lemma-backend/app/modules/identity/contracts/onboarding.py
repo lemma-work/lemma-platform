@@ -58,6 +58,7 @@ __all__ = [
     "complete_chat_account",
     "ensure_chat_workspace",
     "ensure_chat_organization",
+    "ensure_signed_in_workspace",
     "current_verified_phone",
     "active_chat_user",
 ]
@@ -142,6 +143,32 @@ async def ensure_chat_workspace(
             email=email,
             full_name=name or None,
             arrived_through_organization_id=installation_organization_id,
+        )
+
+
+async def ensure_signed_in_workspace(
+    uow_factory: UnitOfWorkFactory, *, user_id: UUID
+) -> ProvisionedWorkspace:
+    """An organization and a first teammate for someone signed in to the web app.
+
+    The same provisioning a first sign-in gets -- invitations honoured, an
+    existing membership reused, otherwise an organization made -- for a flow
+    that starts somewhere else, such as adding Lemma to Slack.
+    """
+    from app.modules.identity.api.dependencies import get_organization_service
+
+    async with uow_factory() as uow:
+        user = await uow.session.get(User, user_id)
+        if user is None or not user.is_active or user.is_deleted:
+            raise ChallengeRejected("A signed-in active account is required")
+        email = user.email
+        name = " ".join(part for part in (user.first_name, user.last_name) if part)
+        return await ensure_first_workspace(
+            uow,
+            organization_service=get_organization_service(uow),
+            user_id=user_id,
+            email=email,
+            full_name=name or None,
         )
 
 

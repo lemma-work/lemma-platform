@@ -53,8 +53,11 @@ class SlackManagerRepository:
         account_id: UUID,
         bot_user_id: str,
         installed_by_user_id: UUID | None,
-    ) -> SlackManagerInstallModel:
+    ) -> tuple[SlackManagerInstallModel, bool]:
         """Bind the workspace to the organization, or refresh the binding.
+
+        Returns the row and whether this made it -- the first binding is the
+        one worth a welcome; a reauthorisation is not.
 
         One organization per workspace: a second organization installing Lemma
         into a workspace already bound is refused, not quietly moved, because
@@ -66,6 +69,7 @@ class SlackManagerRepository:
                 "This Slack workspace already belongs to another Lemma "
                 "organization. Remove Lemma from it there first."
             )
+        created = row is None
         if row is None:
             row = SlackManagerInstallModel(team_id=team_id)
             self.session.add(row)
@@ -77,7 +81,7 @@ class SlackManagerRepository:
             row.installed_by_user_id = installed_by_user_id
         row.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
-        return row
+        return row, created
 
     async def delete_install(self, team_id: str) -> bool:
         result = await self.session.execute(
@@ -95,6 +99,19 @@ class SlackManagerRepository:
                 SlackWorkspacePersonModel.team_id == team_id,
                 SlackWorkspacePersonModel.slack_user_id == slack_user_id,
             )
+        )
+        return result.scalar_one_or_none()
+
+    async def slack_user_for(self, *, team_id: str, user_id: UUID) -> str | None:
+        """This person's Slack user in the workspace, the most recently proven."""
+        result = await self.session.execute(
+            select(SlackWorkspacePersonModel.slack_user_id)
+            .where(
+                SlackWorkspacePersonModel.team_id == team_id,
+                SlackWorkspacePersonModel.user_id == user_id,
+            )
+            .order_by(SlackWorkspacePersonModel.updated_at.desc())
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
