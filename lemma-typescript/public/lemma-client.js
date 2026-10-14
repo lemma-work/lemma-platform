@@ -15848,6 +15848,90 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Slack App Workspaces
+     * The Slack workspaces this pod's organization lets Lemma create apps in.
+     * @param podId
+     * @returns SlackAppWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreationList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Save Slack Configuration Token
+     * Let Lemma create Slack apps in the workspace this token is for.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreationSave(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Forget Slack Configuration Token
+     * Stop Lemma creating apps there. Apps it already made are not touched.
+     * @param podId
+     * @param teamId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreationForget(podId, teamId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}",
+        path: {
+          "pod_id": podId,
+          "team_id": teamId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Slack App
+     * Create this pod's own Slack app. What is left is authorising it.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppCreateResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/surface-setup/slack/apps",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth
      * prerequisites) — works before any surface of this platform exists.
@@ -16346,6 +16430,42 @@ var LemmaClient = (() => {
     slackManifest(agentName) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackManifest(agentName)
+      );
+    }
+    /**
+     * The Slack workspaces this pod's organization lets Lemma create apps in --
+     * one per saved app configuration token. Carries no token.
+     */
+    slackAppWorkspaces(podId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationList(podId)
+      );
+    }
+    /**
+     * Let Lemma create Slack apps in a workspace, from the refresh token of an
+     * app configuration token (api.slack.com/apps → Your App Configuration
+     * Tokens). Lemma rotates it at once, which proves it works and names the
+     * workspace. Needs the right to add the org's connector installs.
+     */
+    saveSlackConfigurationToken(podId, request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationSave(podId, request2)
+      );
+    }
+    /** Stop Lemma creating apps in that workspace. Apps it made are untouched. */
+    forgetSlackConfigurationToken(podId, teamId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationForget(podId, teamId)
+      );
+    }
+    /**
+     * Create this pod's own Slack app and register its credentials as the org's
+     * own install. Authorise that install (`auth_config_id`) to finish: the one
+     * step only a person can take.
+     */
+    createSlackApp(podId, request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request2)
       );
     }
   };

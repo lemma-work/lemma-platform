@@ -810,6 +810,16 @@ export interface PodSource {
     /** The Slack app manifest for a bot that answers as this teammate alone.
      *  One Slack app is one bot user, so the name is set here or not at all. */
     slackManifest(agentName: string): Promise<Record<string, unknown>>;
+    /** Slack workspaces where Lemma may create a teammate's app itself, one
+     *  per configuration token the organization saved. Empty until someone
+     *  saves one. */
+    slackAppWorkspaces(podId: string): Promise<SlackAppWorkspace[]>;
+    /** Save the refresh token of a Slack app configuration token. Lemma
+     *  rotates it at once, so a wrong paste fails here, not later. */
+    saveSlackConfigurationToken(podId: string, refreshToken: string): Promise<SlackAppWorkspace>;
+    /** Create this teammate's own Slack app. Returns the install to authorise,
+     *  which is the one step left. */
+    createSlackApp(podId: string, teamId: string, appName: string): Promise<{ appId: string; authConfigId: string }>;
     /** Register an app the organization made itself, so its credentials are
      *  what the authorisation runs against. Returns the auth config to
      *  authorise. */
@@ -918,4 +928,10 @@ export interface PodSource {
     /** `into` is a conversation id, `null` for the one already open, or
      *  NEW_CONVERSATION to start a fresh one with this first message. */
     send(podId: string, text: string, teammate?: Persona, into?: string | null): Promise<Conversation>;
+}
+
+/** A Slack workspace Lemma can create apps in. */
+export interface SlackAppWorkspace {
+    teamId: string;
+    teamName: string | null;
 }

@@ -74,6 +74,10 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "workflow.visualize",
     "workflow.run.visualize",
     "workflow.run.waiting_assigned_to_me",
+    # Setting up a teammate's own Slack app: a web reach sheet and Slack's
+    # own Home tab drive it, with a browser consent at the end. Not a
+    # scripted operation.
+    "agent.surface.slack_app",
     # Widget/app unification endpoints pending facade adoption
     "app.create_from_widget",
     "widget.embed_token",

@@ -27,6 +27,10 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.set_my_default` | PUT | `/surfaces/me/default` | Set My Default Surface |
 | `agent.surface.setup` | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | Get Surface Setup |
 | `agent.surface.setup_guide` | GET | `/pods/{pod_id}/surface-setup/{platform}` | Get Surface Setup Guide |
+| `agent.surface.slack_app.create` | POST | `/pods/{pod_id}/surface-setup/slack/apps` | Create Slack App |
+| `agent.surface.slack_app_creation.forget` | DELETE | `/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}` | Forget Slack Configuration Token |
+| `agent.surface.slack_app_creation.list` | GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | List Slack App Workspaces |
+| `agent.surface.slack_app_creation.save` | PUT | `/pods/{pod_id}/surface-setup/slack/app-creation` | Save Slack Configuration Token |
 | `agent.surface.slack_manifest` | GET | `/surface-setup/slack/manifest` | Get Slack App Manifest |
 | `agent.surface.teams_admin_consent_callback` | GET | `/surfaces/teams/admin-consent/callback` | Teams Admin Consent Callback |
 | `agent.surface.telegram_managed.get` | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | Get Telegram Managed Bot Setup |

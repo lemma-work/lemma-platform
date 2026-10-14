@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { source } from "@/data";
-import type { AccountConnect, Connectable, Pod } from "@/data";
+import type { AccountConnect, Connectable, Pod, SlackAppWorkspace } from "@/data";
 import { CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
 import { completionPath, hereWith, openAuthorization } from "@/connect/round-trip";
 import { copyText } from "@/desktop/clipboard";
@@ -43,7 +43,216 @@ function Copyable({ text, label }: { text: string; label: string }) {
     );
 }
 
+/** Where the bot comes from: Lemma makes the app when the organization has let
+ *  it, and otherwise the person does, by hand. Asking for the configuration
+ *  token sits between the two, because saving it once is what turns every
+ *  later teammate's four steps into one click. */
 export function OwnBot({
+    entry,
+    pod,
+    onDone,
+}: {
+    entry: Connectable;
+    pod: Pod;
+    onDone: () => void;
+}) {
+    const [byHand, setByHand] = useState(false);
+    const workspaces = useQuery({
+        queryKey: ["slack-app-workspaces", pod.id],
+        queryFn: () => source.slackAppWorkspaces(pod.id),
+    });
+    const handIt = <button className="linkish" onClick={() => setByHand(true)}>Make the app by hand instead</button>;
+
+    if (byHand || workspaces.isError) return <ByHand entry={entry} pod={pod} onDone={onDone} />;
+    if (workspaces.isPending) {
+        return <p className="guided__wait" role="status"><RefreshIcon size={13} /> Checking what Lemma can do here…</p>;
+    }
+    if (!workspaces.data.length) {
+        return <>
+            <LetLemmaMakeApps pod={pod} onSaved={() => void workspaces.refetch()} />
+            {handIt}
+        </>;
+    }
+    return <>
+        <MadeByLemma entry={entry} pod={pod} workspaces={workspaces.data} onDone={onDone} />
+        {handIt}
+    </>;
+}
+
+/** Once per workspace: the token that lets Lemma create apps there. Only the
+ *  refresh token is asked for, since the access token beside it on Slack's
+ *  page lasts hours and Lemma rotates its own. */
+function LetLemmaMakeApps({ pod, onSaved }: { pod: Pod; onSaved: () => void }) {
+    const [refreshToken, setRefreshToken] = useState("");
+    const save = useMutation({
+        mutationFn: () => source.saveSlackConfigurationToken(pod.id, refreshToken),
+        onSuccess: () => {
+            setRefreshToken("");
+            onSaved();
+        },
+    });
+    return (
+        <div className="ownbot">
+            <p>
+                Let Lemma make Slack apps in your workspace, and {pod.teammate.name}&rsquo;s bot is one click. On
+                Slack&rsquo;s app page, under <em>Your App Configuration Tokens</em>, choose <em>Generate Token</em>,
+                pick the workspace, and paste the refresh token here. You do this once per workspace.
+            </p>
+            <div className="ownbot__fields">
+                <label>
+                    <span>Refresh token</span>
+                    <input
+                        type="password"
+                        value={refreshToken}
+                        autoComplete="off"
+                        placeholder="xoxe-1-…"
+                        onChange={(event) => setRefreshToken(event.target.value)}
+                    />
+                </label>
+            </div>
+            <div className="ownbot__acts">
+                <a className="btn" href={SLACK_APPS} target="_blank" rel="noreferrer">
+                    Open Slack apps <ExternalIcon size={13} />
+                </a>
+                <button
+                    className="btn btn--primary"
+                    disabled={!refreshToken.trim() || save.isPending}
+                    onClick={() => save.mutate()}
+                >
+                    {save.isPending ? "Checking with Slack…" : "Save"}
+                </button>
+            </div>
+            {save.isError && <p className="approval__error">{save.error.message}</p>}
+        </div>
+    );
+}
+
+/** Lemma creates the app and registers it; the person authorises it. */
+function MadeByLemma({
+    entry,
+    pod,
+    workspaces,
+    onDone,
+}: {
+    entry: Connectable;
+    pod: Pod;
+    workspaces: SlackAppWorkspace[];
+    onDone: () => void;
+}) {
+    const [teamId, setTeamId] = useState(workspaces[0].teamId);
+    const [made, setMade] = useState<{ appId: string; authorization: AccountConnect } | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const where = (one: SlackAppWorkspace) => one.teamName || one.teamId;
+    const chosen = workspaces.find((one) => one.teamId === teamId) ?? workspaces[0];
+
+    const create = useMutation({
+        mutationFn: async () => {
+            const app = await source.createSlackApp(pod.id, teamId, pod.teammate.name);
+            const authorization = await source.startAccount(
+                pod.orgId, entry.connectorId, app.authConfigId, completionPath(hereWith({ reach: "1" })),
+            );
+            return { appId: app.appId, authorization };
+        },
+        onSuccess: (result) => {
+            setMade(result);
+            if (!result.authorization.authorizeUrl) setError("Made, but this deployment cannot start the authorisation.");
+        },
+        onError: (problem) => setError(problem instanceof Error ? problem.message : "Slack did not make the app."),
+    });
+
+    return (
+        <div className="ownbot">
+            <ol className="ownbot__steps">
+                <li data-done={made ? "" : undefined} data-now={made ? undefined : ""}>
+                    <b>Create {pod.teammate.name}&rsquo;s app in {where(chosen)}</b>
+                    <p>Lemma makes it from the manifest, names it {pod.teammate.name}, and keeps its credentials.</p>
+                    {!made && (
+                        <div className="ownbot__acts">
+                            {workspaces.length > 1 && (
+                                <select value={teamId} onChange={(event) => setTeamId(event.target.value)}>
+                                    {workspaces.map((one) => <option key={one.teamId} value={one.teamId}>{where(one)}</option>)}
+                                </select>
+                            )}
+                            <button
+                                className="btn btn--primary"
+                                disabled={create.isPending}
+                                onClick={() => { setError(null); create.mutate(); }}
+                            >
+                                {create.isPending ? "Creating…" : "Create the app"}
+                            </button>
+                        </div>
+                    )}
+                </li>
+                <li data-now={made ? "" : undefined}>
+                    <b>Authorise it</b>
+                    <p>The one step only you can take, and the one that hands {pod.name} the bot.</p>
+                    {made?.authorization.authorizeUrl && (
+                        <Authorise
+                            entry={entry}
+                            pod={pod}
+                            authorization={made.authorization}
+                            onDone={onDone}
+                            onError={setError}
+                        />
+                    )}
+                    {made && (
+                        <p className="smanage__quiet">
+                            Slack takes the bot&rsquo;s picture only on its own page.{" "}
+                            <a className="linkish" href={`${SLACK_APPS}/${made.appId}/general`} target="_blank" rel="noreferrer">
+                                Add {pod.teammate.name}&rsquo;s picture <ExternalIcon size={12} />
+                            </a>
+                        </p>
+                    )}
+                </li>
+            </ol>
+            {error && <p className="approval__error">{error}</p>}
+        </div>
+    );
+}
+
+/** Open the provider's consent page, then bind the account it makes. */
+function Authorise({
+    entry,
+    pod,
+    authorization,
+    onDone,
+    onError,
+}: {
+    entry: Connectable;
+    pod: Pod;
+    authorization: AccountConnect;
+    onDone: () => void;
+    onError: (message: string) => void;
+}) {
+    const finish = useMutation({
+        mutationFn: async () => {
+            const id = await source.findAccount(pod.orgId, entry.connectorId, authorization.before, authorization.authConfigId);
+            if (!id) throw new Error("Authorization is not complete yet. Finish in Slack, then check again.");
+            await source.connectAccount(pod.id, entry.platform, id);
+        },
+        onSuccess: onDone,
+        onError: (problem) => onError(problem.message),
+    });
+    return (
+        <div className="ownbot__acts">
+            <button
+                className="btn btn--primary"
+                /* With an opener, so the finished tab reports
+                   back and closes instead of reloading the app. */
+                onClick={() => openAuthorization(authorization.authorizeUrl, entry.title)}
+            >
+                Authorise <ExternalIcon size={13} />
+            </button>
+            <button className="btn" disabled={finish.isPending} onClick={() => finish.mutate()}>
+                <RefreshIcon size={13} /> {finish.isPending ? "Connecting…" : "Finish connection"}
+            </button>
+        </div>
+    );
+}
+
+/** The app made by hand: copy the manifest, create it, paste its credentials,
+ *  authorise it. What every Slack bot took before Lemma could make the app. */
+function ByHand({
     entry,
     pod,
     onDone,
@@ -58,8 +267,6 @@ export function OwnBot({
     const [signingSecret, setSigningSecret] = useState("");
     const [authorization, setAuthorization] = useState<AccountConnect | null>(null);
     const [installId, setInstallId] = useState<string | null>(null);
-    const [accountId, setAccountId] = useState<string | null>(null);
-    const authorizeUrl = authorization?.authorizeUrl;
     const [error, setError] = useState<string | null>(null);
 
     const manifest = useQuery({
@@ -88,18 +295,6 @@ export function OwnBot({
         },
         onError: (problem) =>
             setError(problem instanceof Error ? problem.message : "Those credentials were not accepted."),
-    });
-
-    const finish = useMutation({
-        mutationFn: async () => {
-            if (!authorization) throw new Error("Start authorization first.");
-            const id = accountId ?? await source.findAccount(pod.orgId, entry.connectorId, authorization.before, authorization.authConfigId);
-            if (!id) throw new Error("Authorization is not complete yet. Finish in Slack, then check again.");
-            setAccountId(id);
-            await source.connectAccount(pod.id, entry.platform, id);
-        },
-        onSuccess: onDone,
-        onError: problem => setError(problem.message),
     });
 
     const text = manifest.data ? JSON.stringify(manifest.data, null, 2) : "";
@@ -191,20 +386,8 @@ export function OwnBot({
                 <li data-now={step === 3 ? "" : undefined}>
                     <b>Authorise it</b>
                     <p>The last step, and the one that hands {pod.name} the bot.</p>
-                    {step === 3 && authorizeUrl && (
-                        <div className="ownbot__acts">
-                            <button
-                                className="btn btn--primary"
-                                /* With an opener, so the finished tab reports
-                                   back and closes instead of reloading the app. */
-                                onClick={() => openAuthorization(authorizeUrl, entry.title)}
-                            >
-                                Authorise <ExternalIcon size={13} />
-                            </button>
-                            <button className="btn" disabled={finish.isPending} onClick={() => { setError(null); finish.mutate(); }}>
-                                <RefreshIcon size={13} /> {finish.isPending ? "Connecting…" : "Finish connection"}
-                            </button>
-                        </div>
+                    {step === 3 && authorization?.authorizeUrl && (
+                        <Authorise entry={entry} pod={pod} authorization={authorization} onDone={onDone} onError={setError} />
                     )}
                 </li>
             </ol>

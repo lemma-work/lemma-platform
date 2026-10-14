@@ -14,6 +14,11 @@ import type { GroupResponse } from '../models/GroupResponse.js';
 import type { GroupStartRequest } from '../models/GroupStartRequest.js';
 import type { GroupTimelineResponse } from '../models/GroupTimelineResponse.js';
 import type { GroupUpdateRequest } from '../models/GroupUpdateRequest.js';
+import type { SlackAppCreateRequest } from '../models/SlackAppCreateRequest.js';
+import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js';
+import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
+import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
+import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -220,6 +225,101 @@ export class AgentSurfacesService {
             query: {
                 'limit': limit,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Slack App Workspaces
+     * The Slack workspaces this pod's organization lets Lemma create apps in.
+     * @param podId
+     * @returns SlackAppWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationList(
+        podId: string,
+    ): CancelablePromise<SlackAppWorkspaceListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Save Slack Configuration Token
+     * Let Lemma create Slack apps in the workspace this token is for.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationSave(
+        podId: string,
+        requestBody: SlackConfigurationTokenRequest,
+    ): CancelablePromise<SlackAppWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Forget Slack Configuration Token
+     * Stop Lemma creating apps there. Apps it already made are not touched.
+     * @param podId
+     * @param teamId
+     * @returns void
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationForget(
+        podId: string,
+        teamId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}',
+            path: {
+                'pod_id': podId,
+                'team_id': teamId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create Slack App
+     * Create this pod's own Slack app. What is left is authorising it.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppCreateResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreate(
+        podId: string,
+        requestBody: SlackAppCreateRequest,
+    ): CancelablePromise<SlackAppCreateResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/surface-setup/slack/apps',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

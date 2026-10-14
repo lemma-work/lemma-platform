@@ -3,7 +3,7 @@ import { readOrigins, type Contact, type ContactReach, type ContactsCap, type We
 import type { Audience, OfferedColumn, TableOpening } from "./public-rows";
 import { NEW_CONVERSATION } from "./types";
 import type { AgentSurfaceResponse, AvailableSurfaceChannelsResponse, SurfaceSetupResponse } from "lemma-sdk";
-import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, Surface, Tab } from "./types";
+import type { Conversation, FileContent, Invitation, LibraryItem, LinkShare, Member, Message, NewOrg, Org, Profile, Pod, PodSource, SharedLink, SlackAppWorkspace, Surface, Tab } from "./types";
 import { displayAgentName, isPodDefaultAgent } from "./agent-names";
 import { originOf } from "@/thread/conversation-origin";
 import { sampleListing } from "@/thread/memory-notes";
@@ -1917,6 +1917,7 @@ const ASKS: Conversation = {
 let guidedStartedAt = 0;
 let accountStartedAt = 0;
 let accountPending = "";
+let slackAppWorkspaces: SlackAppWorkspace[] = [];
 
 /* The authorisation lands on the backend, not here, so in the sample it lands
    on a timer: anything that reads accounts settles a pending one first. Both
@@ -3398,6 +3399,23 @@ export const fixtureSource: PodSource = {
                 },
             },
         } as Record<string, unknown>;
+    },
+    async slackAppWorkspaces() {
+        await wait(200);
+        return slackAppWorkspaces.slice();
+    },
+    async saveSlackConfigurationToken(_podId: string, refreshToken: string) {
+        await wait(500);
+        if (!refreshToken.trim().startsWith("xoxe-")) {
+            throw new Error("Slack did not accept that refresh token (invalid_refresh_token). Generate a new configuration token on api.slack.com/apps and paste its refresh token.");
+        }
+        const saved = { teamId: "T0SAMPLE", teamName: "Sample workspace" };
+        slackAppWorkspaces = [saved];
+        return saved;
+    },
+    async createSlackApp() {
+        await wait(900);
+        return { appId: "A0SAMPLE", authConfigId: "authcfg-sample" };
     },
     async addCustomApp() {
         await wait(600);

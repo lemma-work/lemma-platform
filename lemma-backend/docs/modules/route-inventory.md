@@ -53,6 +53,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}` | `agent.surface.slack_app_creation.forget` | Forget Slack Configuration Token |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
 | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.delete` | Delete Widget |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
@@ -61,6 +62,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/groups/{group_id}/timeline` | `agent.group.timeline` | Group Timeline |
 | GET | `/pods/{pod_id}/notifications` | `notification.list` | List My Notifications |
 | GET | `/pods/{pod_id}/notifications/unread-count` | `notification.unread_count` | Count My Unread Notifications |
+| GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.list` | List Slack App Workspaces |
 | GET | `/pods/{pod_id}/surface-setup/{platform}` | `agent.surface.setup_guide` | Get Surface Setup Guide |
 | GET | `/pods/{pod_id}/surfaces` | `agent.surface.list` | List Surfaces |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.get` | Get Surface |
@@ -89,6 +91,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/notifications/{notification_id}/acknowledge` | `notification.acknowledge` | Acknowledge A Notification |
 | POST | `/pods/{pod_id}/notifications/{notification_id}/read` | `notification.mark_read` | Mark Notification Read |
 | POST | `/pods/{pod_id}/notifications/{notification_id}/respond` | `notification.respond` | Respond To A Notification |
+| POST | `/pods/{pod_id}/surface-setup/slack/apps` | `agent.surface.slack_app.create` | Create Slack App |
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
@@ -103,6 +106,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
 | POST | `/surfaces/{surface_id}/webhook` | `surface.webhook.handle_surface` | Handle surface-level webhook |
+| PUT | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.save` | Save Slack Configuration Token |
 | PUT | `/surfaces/me/default` | `agent.surface.set_my_default` | Set My Default Surface |
 
 ## apps

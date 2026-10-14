@@ -628,7 +628,7 @@ function Focused({
                     <p>
                         {taken
                             ? "That Slack account already answers under another name in this organization. One account answers under one name, and one Slack app is one bot user — so this one needs an app of its own."
-                            : "One Slack app is one bot user, so " + pod.name + " needs an app under its own name. Four steps, and the manifest does most of them."}
+                            : "One Slack app is one bot user, so " + pod.name + " needs an app under its own name."}
                     </p>
                     <OwnBot entry={entry} pod={pod} onDone={onDone} />
                 </>

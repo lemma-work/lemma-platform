@@ -3,6 +3,8 @@ import type { SurfaceCreateRequest } from "../openapi_client/models/SurfaceCreat
 import type { SurfaceUpdateRequest } from "../openapi_client/models/SurfaceUpdateRequest.js";
 import type { SurfaceSendRequest } from "../openapi_client/models/SurfaceSendRequest.js";
 import type { TelegramManagedBotSetupRequest } from "../openapi_client/models/TelegramManagedBotSetupRequest.js";
+import type { SlackAppCreateRequest } from "../openapi_client/models/SlackAppCreateRequest.js";
+import type { SlackConfigurationTokenRequest } from "../openapi_client/models/SlackConfigurationTokenRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 
 /**
@@ -137,6 +139,46 @@ export class PodSurfacesNamespace {
   slackManifest(agentName?: string) {
     return this.client.request(() =>
       AgentSurfacesService.agentSurfaceSlackManifest(agentName),
+    );
+  }
+
+  /**
+   * The Slack workspaces this pod's organization lets Lemma create apps in --
+   * one per saved app configuration token. Carries no token.
+   */
+  slackAppWorkspaces(podId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackAppCreationList(podId),
+    );
+  }
+
+  /**
+   * Let Lemma create Slack apps in a workspace, from the refresh token of an
+   * app configuration token (api.slack.com/apps → Your App Configuration
+   * Tokens). Lemma rotates it at once, which proves it works and names the
+   * workspace. Needs the right to add the org's connector installs.
+   */
+  saveSlackConfigurationToken(podId: string, request: SlackConfigurationTokenRequest) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackAppCreationSave(podId, request),
+    );
+  }
+
+  /** Stop Lemma creating apps in that workspace. Apps it made are untouched. */
+  forgetSlackConfigurationToken(podId: string, teamId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackAppCreationForget(podId, teamId),
+    );
+  }
+
+  /**
+   * Create this pod's own Slack app and register its credentials as the org's
+   * own install. Authorise that install (`auth_config_id`) to finish: the one
+   * step only a person can take.
+   */
+  createSlackApp(podId: string, request: SlackAppCreateRequest) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request),
     );
   }
 }

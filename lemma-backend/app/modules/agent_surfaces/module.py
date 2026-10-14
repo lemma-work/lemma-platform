@@ -17,6 +17,9 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.slack_setup_controller import (
         platform_router as surface_platform_setup,
     )
+    from app.modules.agent_surfaces.api.controllers.slack_app_creation_controller import (
+        router as slack_app_creation,
+    )
     from app.modules.agent_surfaces.api.controllers.space_group_controller import (
         router as space_groups,
     )
@@ -51,6 +54,7 @@ def _routers():
         space_groups,
         surface_setup_guide,
         surface_platform_setup,
+        slack_app_creation,
         surface_catalog,
         telegram_manager,
         user_surfaces,

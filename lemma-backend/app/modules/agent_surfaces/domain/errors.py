@@ -249,6 +249,35 @@ class OutsideAnswerNeedsApproval(AgentSurfaceError):
         self.details = {"notification_id": str(notification_id)}
 
 
+class SlackAppCreationForbiddenError(AgentSurfaceError):
+    """Only someone who may add the org's connector installs may make Slack apps."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message=(
+                "Only an organization owner or editor can let Lemma create "
+                "Slack apps, or create one."
+            ),
+            code="SLACK_APP_CREATION_FORBIDDEN",
+            status_code=403,
+        )
+
+
+class SlackAppCreationNotSetUpError(AgentSurfaceError):
+    """No configuration token is saved for that Slack workspace."""
+
+    def __init__(self, team_id: str) -> None:
+        super().__init__(
+            message=(
+                "Lemma cannot create Slack apps in that workspace yet. Save a "
+                "configuration token for it first."
+            ),
+            code="SLACK_APP_CREATION_NOT_SET_UP",
+            status_code=409,
+        )
+        self.details = {"team_id": team_id}
+
+
 class TelegramManagerNotConfiguredError(AgentSurfaceError):
     def __init__(self):
         super().__init__(
