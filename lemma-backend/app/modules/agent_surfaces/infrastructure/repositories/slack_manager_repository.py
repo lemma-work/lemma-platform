@@ -102,6 +102,21 @@ class SlackManagerRepository:
         )
         return result.scalar_one_or_none()
 
+    async def people(self, team_id: str, slack_user_ids: list[str]) -> dict[str, UUID]:
+        """The proven Lemma person behind each of these Slack users, in one query."""
+        if not slack_user_ids:
+            return {}
+        result = await self.session.execute(
+            select(
+                SlackWorkspacePersonModel.slack_user_id,
+                SlackWorkspacePersonModel.user_id,
+            ).where(
+                SlackWorkspacePersonModel.team_id == team_id,
+                SlackWorkspacePersonModel.slack_user_id.in_(slack_user_ids),
+            )
+        )
+        return {str(slack_user): user_id for slack_user, user_id in result.all()}
+
     async def slack_user_for(self, *, team_id: str, user_id: UUID) -> str | None:
         """This person's Slack user in the workspace, the most recently proven."""
         result = await self.session.execute(

@@ -13,6 +13,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.group.get` | GET | `/pods/{pod_id}/groups/{group_id}` | Get Group |
 | `agent.group.link` | POST | `/pods/{pod_id}/groups/links` | Group Link |
 | `agent.group.list` | GET | `/pods/{pod_id}/groups` | List Groups |
+| `agent.group.slack_people` | GET | `/pods/{pod_id}/groups/{group_id}/slack-people` | Slack Group People |
 | `agent.group.start` | POST | `/pods/{pod_id}/groups` | Start Group |
 | `agent.group.timeline` | GET | `/pods/{pod_id}/groups/{group_id}/timeline` | Group Timeline |
 | `agent.group.update` | PATCH | `/pods/{pod_id}/groups/{group_id}` | Update Group |

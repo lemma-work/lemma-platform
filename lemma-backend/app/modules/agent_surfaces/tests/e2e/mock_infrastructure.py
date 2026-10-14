@@ -188,6 +188,8 @@ class FakeSlackServer:
         #: ``users.info`` answers for particular users: someone who is not the
         #: test user, or a guest (``is_restricted``). Anybody else is the test user.
         self.user_overrides: dict[str, dict[str, Any]] = {}
+        #: ``conversations.members`` per channel.
+        self.channel_members: dict[str, list[str]] = {}
 
     async def start(self) -> None:
         app = web.Application()
@@ -228,6 +230,9 @@ class FakeSlackServer:
             "*", "/api/conversations.invite", self._conversations_invite
         )
         app.router.add_route("*", "/api/conversations.leave", self._conversations_leave)
+        app.router.add_route(
+            "*", "/api/conversations.members", self._conversations_members
+        )
         app.router.add_route("*", "/api/conversations.info", self._conversations_info)
         app.router.add_route(
             "*", "/api/files.getUploadURLExternal", self._files_get_upload_url_external
@@ -530,6 +535,11 @@ class FakeSlackServer:
         params = await self._collect_params(request)
         self._store.add("SLACK_INVITE", params)
         return web.json_response({"ok": True, "channel": {"id": params.get("channel")}})
+
+    async def _conversations_members(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        members = self.channel_members.get(str(params.get("channel") or ""), [])
+        return web.json_response({"ok": True, "members": members})
 
     async def _conversations_leave(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)

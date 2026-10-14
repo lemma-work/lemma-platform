@@ -85,6 +85,8 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "agent.surface.slack_person",
     # "Add to Slack" from outside the app: answers with Slack's consent page.
     "agent.surface.slack_install",
+    # A Slack channel's people for the group page, read from Slack on view.
+    "agent.group.slack_people",
     # Widget/app unification endpoints pending facade adoption
     "app.create_from_widget",
     "widget.embed_token",

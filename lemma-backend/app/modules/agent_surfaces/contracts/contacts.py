@@ -31,7 +31,17 @@ _PLATFORM_FOR_KIND = {
     IdentityKind.PHONE: SurfacePlatform.WHATSAPP.value,
     IdentityKind.TELEGRAM: SurfacePlatform.TELEGRAM.value,
     IdentityKind.EMAIL: SurfacePlatform.RESEND.value,
+    IdentityKind.SLACK: SurfacePlatform.SLACK.value,
 }
+
+
+def _sender_of(kind: IdentityKind, value: str) -> tuple[str | None, str]:
+    """``(tenant, external user)`` a handle names. A Slack handle is the pair
+    ``team:user``, because a Slack user id is only unique in its workspace."""
+    if kind is IdentityKind.SLACK:
+        team, _, user = value.partition(":")
+        return team or None, user
+    return None, value
 
 
 async def forget_contact_senders(
@@ -59,12 +69,16 @@ async def forget_contact_senders(
         platform = _PLATFORM_FOR_KIND.get(kind)
         if platform is None or platform not in platforms:
             continue
+        tenant, external_user_id = _sender_of(kind, value)
+        where = [
+            AgentSurfaceExternalUser.platform == platform,
+            AgentSurfaceExternalUser.external_user_id == external_user_id,
+            AgentSurfaceExternalUser.resolved_user_id.is_(None),
+        ]
+        if tenant is not None:
+            where.append(AgentSurfaceExternalUser.tenant_id == tenant)
         result = await uow.session.execute(
-            delete(AgentSurfaceExternalUser).where(
-                AgentSurfaceExternalUser.platform == platform,
-                AgentSurfaceExternalUser.external_user_id == value,
-                AgentSurfaceExternalUser.resolved_user_id.is_(None),
-            )
+            delete(AgentSurfaceExternalUser).where(*where)
         )
         deleted += int(result.rowcount or 0)
     return deleted

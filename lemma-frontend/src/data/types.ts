@@ -174,6 +174,22 @@ export interface GroupPerson {
     inSpace: boolean;
 }
 
+/** One person in a Slack channel, and which of three they are: one of the
+ *  space's people, one of the workspace's (answered as the public is, never a
+ *  seat), or from outside the workspace (a guest, or another company). */
+export interface SlackChannelPerson {
+    slackUserId: string;
+    name: string;
+    standing: "in" | "workspace" | "outside";
+    userId: string | null;
+}
+
+export interface SlackChannelPeople {
+    people: SlackChannelPerson[];
+    /** How many more are in the channel than were looked at. */
+    more: number;
+}
+
 /** A question people outside the space asked in a group and the bot could
  *  not answer from what is Public, passed on to the reader. Answered through
  *  the notification it arrived as; the bot relays the answer in the group. */
@@ -655,6 +671,9 @@ export interface PodSource {
     /** What was said in a group, oldest first. Empty for a Slack channel,
      *  whose history is Slack's. */
     groupTimeline(podId: string, groupId: string): Promise<GroupLine[]>;
+    /** Who is in a Slack channel, asked of Slack: the space's people, the
+     *  workspace's, and those from outside it. */
+    groupSlackPeople(podId: string, groupId: string): Promise<SlackChannelPeople>;
     /** Start a WhatsApp group with the space's bot in it, the caller
      *  answering for its people outside the space. Comes back `pending`:
      *  WhatsApp confirms it, with its invite link, moments later. */

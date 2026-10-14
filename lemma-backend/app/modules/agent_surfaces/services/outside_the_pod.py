@@ -22,7 +22,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 )
 from app.modules.agent_surfaces.services.contacts import ContactDoor
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
-from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
+from app.modules.agent_surfaces.services.outsiders import outsider_door
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 
 
@@ -51,7 +51,7 @@ async def answer_outside_the_pod(
     context is the one refusal a bot for known contacts gives a stranger.
     """
     membership = router.pod_membership_port
-    outsiders = OutsiderDoor(uow=uow, membership=membership)
+    outsiders = outsider_door(uow, membership)
     group = await outsiders.group_welcoming(
         surface=surface, parsed=parsed, sender=sender
     )

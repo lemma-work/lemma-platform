@@ -29,6 +29,9 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.services.slack_workspace_people import (
+    WorkspaceHeld,
+)
 from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     AgentSurfaceEntity,
@@ -79,7 +82,9 @@ class OutsiderDoor:
         uow: SqlAlchemyUnitOfWork,
         membership: SurfacePodMembershipPort,
         limiter: OutsiderTurnLimiter | None = None,
+        workspace_held: WorkspaceHeld | None = None,
     ) -> None:
+        self.workspace_held = workspace_held
         self.groups = SurfaceGroupRepository(uow.session)
         self.membership = membership
         self.limiter = limiter or OutsiderTurnLimiter()
@@ -155,7 +160,14 @@ class OutsiderDoor:
         if not surface.config.groups.answers_outsiders:
             return None
         if parsed.platform is SurfacePlatform.SLACK and not answers_slack_outsider(
-            group.shared_externally, parsed
+            group.shared_externally,
+            parsed,
+            # A workspace the pod's organization holds: its people outside the
+            # pod are answered here too, not nudged to join.
+            workspace_held=bool(
+                self.workspace_held
+                and await self.workspace_held(surface, parsed.tenant_id)
+            ),
         ):
             return None
         # A member who has left the pod answers for nobody: every question
@@ -209,3 +221,16 @@ class OutsiderDoor:
             created_conversation_title=created_title,
             audience=Audience.outsiders(),
         )
+
+
+def outsider_door(
+    uow: SqlAlchemyUnitOfWork, membership: SurfacePodMembershipPort
+) -> OutsiderDoor:
+    """The door as ingress uses it: knowing which Slack workspaces the pod holds."""
+    from app.modules.agent_surfaces.services.slack_workspace_people import (
+        workspace_held_by,
+    )
+
+    return OutsiderDoor(
+        uow=uow, membership=membership, workspace_held=workspace_held_by(uow)
+    )

@@ -39,6 +39,17 @@ export class PodGroupsNamespace {
     );
   }
 
+  /**
+   * Who is in a Slack channel, read from Slack, and which of them are the
+   * pod's own, the workspace's (answered as the public is), or from outside
+   * the workspace. Lemma keeps no log of a Slack channel, so this asks Slack.
+   */
+  slackPeople(podId: string, groupId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentGroupSlackPeople(podId, groupId),
+    );
+  }
+
   /** Start a WhatsApp group with the pod's bot in it. */
   start(podId: string, payload: GroupStartRequest) {
     return this.client.request(() =>

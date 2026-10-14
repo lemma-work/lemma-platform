@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 
+from app.modules.agent_surfaces.services.slack_workspace_people import (
+    ManagedWorkspaceCheck,
+    default_workspace_contacts,
+)
 from app.modules.agent_surfaces.platforms.common import (
     public_https_api_url_available,
     receives_without_public_link,
@@ -92,6 +96,7 @@ class AgentSurfaceService(
         auth_config_port: SurfaceAuthConfigPort | None = None,
         credential_resolver: "SurfaceCredentialResolver | None" = None,
         adapter_registry: "SurfacePlatformAdapterRegistry | None" = None,
+        managed_workspace: ManagedWorkspaceCheck | None = None,
     ):
         self.surface_repository = surface_repository
         self.account_binding_resolver = account_binding_resolver
@@ -99,6 +104,7 @@ class AgentSurfaceService(
         self._auth_config_port = auth_config_port
         self._credential_resolver = credential_resolver
         self._adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
+        self._managed_workspace = managed_workspace
 
     @property
     def credential_resolver(self) -> "SurfaceCredentialResolver | None":
@@ -203,6 +209,12 @@ class AgentSurfaceService(
                     "readable one and retries when it is taken."
                 )
             entity.surface_identity_email = surface_identity_email
+        if platform is SurfacePlatform.SLACK and self._managed_workspace is not None:
+            await default_workspace_contacts(
+                entity,
+                owner_user_id=await self._account_owner(account_id),
+                is_managed=self._managed_workspace,
+            )
         self._validate_runtime_supported(entity)
         await self.activate_if_tenant_consented(entity)
         await ensure_one_surface_per_agent(
@@ -220,6 +232,12 @@ class AgentSurfaceService(
             )
         await self._notify_receivers_after_commit(created.id)
         return created
+
+    async def _account_owner(self, account_id: UUID | None) -> UUID | None:
+        if account_id is None or self._account_port is None:
+            return None
+        account = await self._account_port.get_account(account_id)
+        return account.user_id if account is not None else None
 
     async def _notify_receivers_after_commit(self, surface_id: UUID | None) -> None:
         """Wake the receiver coordinators once the change has actually committed.

@@ -503,6 +503,8 @@ _NAME_TO_MODULE = {
     'SlackAppCreateResponse': 'slack_app_create_response',
     'SlackAppWorkspaceListResponse': 'slack_app_workspace_list_response',
     'SlackAppWorkspaceResponse': 'slack_app_workspace_response',
+    'SlackChannelPeopleResponse': 'slack_channel_people_response',
+    'SlackChannelPersonResponse': 'slack_channel_person_response',
     'SlackConfigurationTokenRequest': 'slack_configuration_token_request',
     'SlackInstallResponse': 'slack_install_response',
     'SlackManagedWorkspaceListResponse': 'slack_managed_workspace_list_response',
@@ -1151,6 +1153,8 @@ if TYPE_CHECKING:
     from .slack_app_create_response import SlackAppCreateResponse
     from .slack_app_workspace_list_response import SlackAppWorkspaceListResponse
     from .slack_app_workspace_response import SlackAppWorkspaceResponse
+    from .slack_channel_people_response import SlackChannelPeopleResponse
+    from .slack_channel_person_response import SlackChannelPersonResponse
     from .slack_configuration_token_request import SlackConfigurationTokenRequest
     from .slack_install_response import SlackInstallResponse
     from .slack_managed_workspace_list_response import SlackManagedWorkspaceListResponse
@@ -1812,6 +1816,8 @@ __all__ = [
     'SlackAppCreateResponse',
     'SlackAppWorkspaceListResponse',
     'SlackAppWorkspaceResponse',
+    'SlackChannelPeopleResponse',
+    'SlackChannelPersonResponse',
     'SlackConfigurationTokenRequest',
     'SlackInstallResponse',
     'SlackManagedWorkspaceListResponse',

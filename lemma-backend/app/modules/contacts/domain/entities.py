@@ -27,6 +27,9 @@ class IdentityKind(StrEnum):
     PHONE = "PHONE"
     EMAIL = "EMAIL"
     TELEGRAM = "TELEGRAM"
+    #: A person in a Slack workspace the pod's organization holds, as
+    #: ``{team id}:{user id}`` -- the pair that names one person in Slack.
+    SLACK = "SLACK"
     #: A signed-in user of the customer's own product, as named in a token
     #: their server signed: ``host:{their user id}``. Keyed by the pod, not the
     #: widget, so the same customer reached through another of the pod's

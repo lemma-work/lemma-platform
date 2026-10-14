@@ -10,7 +10,7 @@ import type {
     WebWidgetResponse,
 } from "lemma-sdk";
 
-export type HandleKind = "PHONE" | "EMAIL" | "TELEGRAM" | "HOST";
+export type HandleKind = "PHONE" | "EMAIL" | "TELEGRAM" | "HOST" | "SLACK";
 
 export interface ContactHandle {
     kind: HandleKind;
@@ -65,7 +65,7 @@ export interface WidgetDraft {
 
 export const EMPTY_WIDGET_DRAFT: WidgetDraft = { name: "", origins: "", answer: "anyone" };
 
-const KINDS: HandleKind[] = ["PHONE", "EMAIL", "TELEGRAM", "HOST"];
+const KINDS: HandleKind[] = ["PHONE", "EMAIL", "TELEGRAM", "HOST", "SLACK"];
 
 export function readContact(wire: ContactResponse): Contact {
     return {
@@ -136,6 +136,9 @@ export function handleText(handle: ContactHandle): string {
     if (handle.kind === "PHONE") return "+" + handle.value.replace(/^\+/, "");
     if (handle.kind === "TELEGRAM") return "Telegram " + handle.value;
     if (handle.kind === "HOST") return "Signed in on your site";
+    /* `team:user` names one person to Slack and nobody to a reader; their
+       name is on the contact itself. */
+    if (handle.kind === "SLACK") return "In your Slack workspace";
     return handle.value;
 }
 

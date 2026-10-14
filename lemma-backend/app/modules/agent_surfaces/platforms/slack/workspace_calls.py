@@ -9,6 +9,8 @@ here has something better to say to a person than a stack trace.
 
 from __future__ import annotations
 
+import asyncio
+
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -191,6 +193,51 @@ async def open_dm(credentials: Credentials, user_id: str) -> str | None:
         if isinstance(channel, dict) and channel.get("id")
         else None
     )
+
+
+async def channel_member_ids(
+    credentials: Credentials, channel: str, *, limit: int
+) -> list[str] | None:
+    """Who is in the channel, by Slack id, up to ``limit``. None when Slack refused:
+    "nobody here" and "Slack would not say" are different answers."""
+    try:
+        client = await build_slack_client(credentials)
+        response = await client.conversations_members(channel=channel, limit=limit)
+    except slack_api_error() as exc:
+        logger.info("agent_surfaces.slack_manager.members_refused", error=_error(exc))
+        return None
+    data = response.data if isinstance(response.data, dict) else {}
+    members = data.get("members")
+    return (
+        [str(member) for member in members[:limit]]
+        if isinstance(members, list)
+        else None
+    )
+
+
+async def user_profiles(
+    credentials: Credentials, user_ids: Sequence[str], *, at_once: int = 8
+) -> dict[str, dict[str, object]]:
+    """``users.info`` for each of these people, a few at a time on one client.
+
+    A person Slack would not describe is absent from the answer, so a caller can
+    tell "unknown" from a profile that says something.
+    """
+    client = await build_slack_client(credentials)
+    gate = asyncio.Semaphore(at_once)
+
+    async def one(user_id: str) -> tuple[str, dict[str, object]]:
+        async with gate:
+            try:
+                response = await client.users_info(user=user_id)
+            except slack_api_error():
+                return user_id, {}
+        data = response.data if isinstance(response.data, dict) else {}
+        user = data.get("user")
+        return user_id, user if isinstance(user, dict) else {}
+
+    answers = await asyncio.gather(*(one(user_id) for user_id in user_ids))
+    return {user_id: profile for user_id, profile in answers if profile}
 
 
 async def user_profile(credentials: Credentials, user_id: str) -> dict[str, object]:

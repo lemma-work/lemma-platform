@@ -116,13 +116,23 @@ def build_surface_repository(uow: SqlAlchemyUnitOfWork) -> SurfaceRepository:
 
 
 def build_surface_service(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceService:
+    from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
+        SlackManagerRepository,
+    )
+
     account_adapter = SqlAlchemySurfaceAccountAdapter(uow)
+    managers = SlackManagerRepository(uow.session)
+
+    async def managed_workspace(team_id: str) -> bool:
+        return await managers.install_for_team(team_id) is not None
+
     return AgentSurfaceService(
         surface_repository=build_surface_repository(uow),
         account_binding_resolver=SurfaceAccountBindingResolver(account_adapter),
         account_port=account_adapter,
         auth_config_port=SqlAlchemySurfaceAuthConfigAdapter(uow),
         credential_resolver=SurfaceCredentialResolver(uow=uow),
+        managed_workspace=managed_workspace,
     )
 
 

@@ -9,5 +9,6 @@ export enum IdentityKind {
     PHONE = 'PHONE',
     EMAIL = 'EMAIL',
     TELEGRAM = 'TELEGRAM',
+    SLACK = 'SLACK',
     HOST = 'HOST',
 }

@@ -528,6 +528,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.slack_manager.ephemeral_failed': EventSpec('info', frozenset({'error'})),
     'agent_surfaces.slack_manager.handoff_failed': EventSpec('info', frozenset({'error', 'private', 'team_id'})),
     'agent_surfaces.slack_manager.home_publish_failed': EventSpec('info', frozenset({'error'})),
+    'agent_surfaces.slack_manager.members_refused': EventSpec('info', frozenset({'error'})),
     'agent_surfaces.slack_manager.message_failed': EventSpec('info', frozenset({'error'})),
     'agent_surfaces.slack_manager.modal_open_failed': EventSpec('info', frozenset({'error'})),
     'agent_surfaces.slack_manager.no_install': EventSpec('info', frozenset({'team_id'})),

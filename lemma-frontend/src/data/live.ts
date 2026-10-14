@@ -683,6 +683,18 @@ export const liveSource: PodSource = {
     async groupTimeline(podId, groupId) {
         return readTimeline(await lemma(podId).podGroups.timeline(podId, groupId, { limit: 100 }));
     },
+    async groupSlackPeople(podId, groupId) {
+        const read = await lemma(podId).podGroups.slackPeople(podId, groupId);
+        return {
+            people: (read.items ?? []).map((item) => ({
+                slackUserId: item.slack_user_id,
+                name: item.name,
+                standing: item.standing === "in" || item.standing === "outside" ? item.standing : "workspace",
+                userId: item.user_id ?? null,
+            })),
+            more: read.more ?? 0,
+        };
+    },
     async startGroup(podId, start) {
         const group = readGroup(await lemma(podId).podGroups.start(podId, {
             surface_name: start.surfaceName,

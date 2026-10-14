@@ -35,6 +35,9 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.services.slack_workspace_people import (
+    workspace_belongs_to_pod,
+)
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -106,10 +109,14 @@ class SenderHandle:
 def contact_handle(parsed: ParsedInboundSurfaceEvent) -> SenderHandle | None:
     """The handle this private message names its sender by, if it has one.
 
-    Slack and Teams are not here: a person writing to a workspace bot is in
-    that workspace, which is the pod's own people, not its customers. A handle
-    with nothing left once normalised -- a "number" of punctuation -- names
-    nobody, and is dropped rather than opened as a contact.
+    Teams is not here: a person writing to a workspace bot is in that
+    workspace, which is the pod's own people, not its customers. Slack is,
+    for one case: a workspace Lemma's own app manages for the organization,
+    whose people are known by their Slack id rather than signed up
+    (``slack_workspace_people``). ``ContactDoor`` decides that case; the handle
+    is only ever its name. A handle with nothing left once normalised -- a
+    "number" of punctuation -- names nobody, and is dropped rather than opened
+    as a contact.
     """
     found = _raw_handle(parsed)
     if found is None:
@@ -136,6 +143,10 @@ def _raw_handle(
     if platform is SurfacePlatform.TELEGRAM:
         value = parsed.sender_external_user_id
         return (IdentityKind.TELEGRAM, value, True) if value else None
+    if platform is SurfacePlatform.SLACK:
+        # Vouched for: the event that names them is signed by Slack.
+        team, user = parsed.tenant_id, parsed.sender_external_user_id
+        return (IdentityKind.SLACK, f"{team}:{user}", True) if team and user else None
     if platform.is_email:
         value = parsed.sender_email or parsed.sender_external_user_id
         if not value:
@@ -296,9 +307,29 @@ class ContactDoor:
             or contact_handle(parsed) is None
         ):
             return False
+        if (
+            parsed.platform is SurfacePlatform.SLACK
+            and not await self._workspace_person(surface, parsed, sender)
+        ):
+            return False
         if sender.internal_user_id is None:
             return True
         return not await self._in_pod(sender.internal_user_id, surface.pod_id)
+
+    async def _workspace_person(
+        self,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        sender: ResolvedSurfaceUser,
+    ) -> bool:
+        """One of the people of a Slack workspace this pod's organization holds.
+
+        Not a guest and not from another company: those are outsiders, who are
+        answered only where a group welcomes them.
+        """
+        if sender.is_guest or parsed.metadata.get("sender_is_external"):
+            return False
+        return await workspace_belongs_to_pod(self.uow, surface, parsed.tenant_id)
 
     async def prepare(
         self,

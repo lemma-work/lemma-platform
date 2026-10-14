@@ -266,6 +266,9 @@ class ResolvedSurfaceUser(BaseModel):
     email: str | None = None
     phone: str | None = None
     display_name: str | None = None
+    #: A Slack guest (single- or multi-channel): in the workspace, but let in
+    #: from outside it. Answered as an outsider, never as one of its people.
+    is_guest: bool = False
 
 
 class AgentSurfaceStatus(StrEnum):

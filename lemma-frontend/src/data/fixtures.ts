@@ -2995,6 +2995,17 @@ export const fixtureSource: PodSource = {
         if (!group) throw new Error("That group is not here any more.");
         return group;
     },
+    async groupSlackPeople() {
+        await wait(220);
+        return {
+            people: [
+                { slackUserId: "U01", name: "Priya", standing: "in" as const, userId: "u-sample" },
+                { slackUserId: "U02", name: "Sam from Finance", standing: "workspace" as const, userId: null },
+                { slackUserId: "U03", name: "Agency contractor", standing: "outside" as const, userId: null },
+            ],
+            more: 0,
+        };
+    },
     async groupTimeline(_podId: string, groupId: string) {
         await wait(160);
         const entry = sampleGroup(groupId);

@@ -20,6 +20,9 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.slack_app_creation_controller import (
         router as slack_app_creation,
     )
+    from app.modules.agent_surfaces.api.controllers.slack_group_people_controller import (
+        router as slack_group_people,
+    )
     from app.modules.agent_surfaces.api.controllers.slack_manager_controller import (
         people_router as slack_people,
         router as slack_manager,
@@ -61,6 +64,7 @@ def _routers():
         slack_app_creation,
         slack_manager,
         slack_people,
+        slack_group_people,
         surface_catalog,
         telegram_manager,
         user_surfaces,

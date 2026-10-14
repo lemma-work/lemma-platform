@@ -79,12 +79,19 @@ def slack_group_title(
 
 
 def answers_slack_outsider(
-    group_shared: bool, parsed: ParsedInboundSurfaceEvent
+    group_shared: bool,
+    parsed: ParsedInboundSurfaceEvent,
+    *,
+    workspace_held: bool = False,
 ) -> bool:
     """Whether a Slack sender outside the pod is an outsider to answer.
 
-    Only in a channel shared with another company, and only a sender from that
-    company. A colleague in the pod's own workspace who is not in the pod is
-    somebody to invite, and gets the private nudge to join instead.
+    In a channel shared with another company, a sender from that company. And
+    in a workspace Lemma's own app manages for the pod's organization, anyone
+    outside the pod: that workspace's people are the organization's to answer,
+    not strangers. Elsewhere a colleague who is not in the pod is somebody to
+    invite, and gets the private nudge to join instead.
     """
+    if workspace_held:
+        return True
     return group_shared and bool(parsed.metadata.get("sender_is_external"))

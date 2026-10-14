@@ -18,6 +18,7 @@ import type { SlackAppCreateRequest } from '../models/SlackAppCreateRequest.js';
 import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js';
 import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
 import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
+import type { SlackChannelPeopleResponse } from '../models/SlackChannelPeopleResponse.js';
 import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
 import type { SlackInstallResponse } from '../models/SlackInstallResponse.js';
 import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
@@ -197,6 +198,30 @@ export class AgentSurfacesService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Slack Group People
+     * Who is in this Slack channel, and which of them are the pod's own.
+     * @param podId
+     * @param groupId
+     * @returns SlackChannelPeopleResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentGroupSlackPeople(
+        podId: string,
+        groupId: string,
+    ): CancelablePromise<SlackChannelPeopleResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/groups/{group_id}/slack-people',
+            path: {
+                'pod_id': podId,
+                'group_id': groupId,
+            },
             errors: {
                 422: `Validation Error`,
             },

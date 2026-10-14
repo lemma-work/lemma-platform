@@ -10528,6 +10528,7 @@
           "PHONE",
           "EMAIL",
           "TELEGRAM",
+          "SLACK",
           "HOST"
         ],
         "title": "IdentityKind",
@@ -16578,6 +16579,62 @@
           "saved_at"
         ],
         "title": "SlackAppWorkspaceResponse",
+        "type": "object"
+      },
+      "SlackChannelPeopleResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SlackChannelPersonResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "more": {
+            "default": 0,
+            "title": "More",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SlackChannelPeopleResponse",
+        "type": "object"
+      },
+      "SlackChannelPersonResponse": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slack_user_id": {
+            "title": "Slack User Id",
+            "type": "string"
+          },
+          "standing": {
+            "title": "Standing",
+            "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "slack_user_id",
+          "name",
+          "standing"
+        ],
+        "title": "SlackChannelPersonResponse",
         "type": "object"
       },
       "SlackConfigurationTokenRequest": {
@@ -35249,6 +35306,67 @@
           "resource": "agent.group",
           "result": "entity",
           "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/groups/{group_id}/slack-people": {
+      "get": {
+        "description": "Who is in this Slack channel, and which of them are the pod's own.",
+        "operationId": "agent.group.slack_people",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackChannelPeopleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Slack Group People",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.group",
+          "result": "entity",
+          "verb": "slack_people"
         }
       }
     },

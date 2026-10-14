@@ -46,7 +46,7 @@ from app.modules.agent_surfaces.services.outside_the_pod import (
     NOT_OUTSIDE,
     answer_outside_the_pod,
 )
-from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
+from app.modules.agent_surfaces.services.outsiders import OutsiderDoor, outsider_door
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
     arrival_number,
@@ -509,7 +509,7 @@ class SurfaceInboundMixin:
 
     def _outsiders(self) -> OutsiderDoor:
         """Built per use: it holds nothing but this session and the router's port."""
-        return OutsiderDoor(uow=self.uow, membership=self.router.pod_membership_port)
+        return outsider_door(self.uow, self.router.pod_membership_port)
 
     async def _sender_refusal(
         self,

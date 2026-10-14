@@ -117,6 +117,8 @@ async def resolve_onboarding_transport(
         parsed = await adapter.parse_inbound_event(request.payload, request.headers)
     if parsed is None or (not parsed.is_dm and not parsed.mentioned_agent):
         return None
+    if await _workspace_is_managed(parsed, uow_factory):
+        return None
     surfaces = [
         surface
         for surface in surfaces
@@ -129,6 +131,28 @@ async def resolve_onboarding_transport(
             request, surfaces, parsed, receiver_ids, uow_factory
         )
     return await _installation_transport(surfaces, parsed, uow_factory, receiver_ids)
+
+
+async def _workspace_is_managed(
+    parsed: ParsedInboundSurfaceEvent, uow_factory: UnitOfWorkFactory
+) -> bool:
+    """A Slack workspace Lemma's own app manages for an organization.
+
+    Its people are that organization's to know, not strangers to sign up: a
+    proven person routes as themselves, and anyone else is answered as a
+    contact or an outsider. Nobody there is asked for an email address first.
+    """
+    if parsed.platform is not SurfacePlatform.SLACK or not parsed.tenant_id:
+        return False
+    from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
+        SlackManagerRepository,
+    )
+
+    async with uow_factory() as uow:
+        install = await SlackManagerRepository(uow.session).install_for_team(
+            parsed.tenant_id
+        )
+    return install is not None
 
 
 async def _transport_candidates(

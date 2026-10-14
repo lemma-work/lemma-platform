@@ -337,7 +337,11 @@ function People({ pod, group, onInvite }: { pod: Pod; group: GroupDetail; onInvi
         <section className="gside">
             <h2 className="gside__head">People in this group</h2>
             {group.platform === "SLACK" ? (
-                <p className="gside__text">Slack keeps who is in the channel.</p>
+                /* Who is in a channel -- guests and other companies' people
+                   included -- is for whoever runs the group. */
+                group.canManage
+                    ? <SlackPeople pod={pod} group={group} onInvite={onInvite} />
+                    : <p className="gside__text">Slack keeps who is in the channel.</p>
             ) : people.length === 0 ? (
                 <p className="gside__text">Nobody has spoken here yet.</p>
             ) : (
@@ -366,6 +370,52 @@ function People({ pod, group, onInvite }: { pod: Pod; group: GroupDetail; onInvi
                 <p className="gside__fine">Not recognised: Lemma can’t tell who they are, so they count as outside {pod.name}.</p>
             )}
         </section>
+    );
+}
+
+const SLACK_STANDING = {
+    in: (space: string) => "In " + space,
+    workspace: () => "In your Slack workspace",
+    outside: () => "Outside your workspace",
+} as const;
+
+/** A Slack channel's people, asked of Slack: Lemma keeps no log of a Slack
+ *  channel. Anyone in the workspace who is not in the space is answered as
+ *  the public is and costs nothing; inviting them is what makes them a seat. */
+function SlackPeople({ pod, group, onInvite }: { pod: Pod; group: GroupDetail; onInvite: () => void }) {
+    const me = useMe();
+    const read = useQuery({
+        queryKey: ["group-slack-people", pod.id, group.id],
+        queryFn: () => source.groupSlackPeople(pod.id, group.id),
+        staleTime: 60_000,
+    });
+    if (read.isPending) return <p className="gside__text" role="status">Asking Slack who is here…</p>;
+    if (read.isError) return <p className="gside__text">Slack didn’t say who is in the channel.</p>;
+    if (read.data.people.length === 0) return <p className="gside__text">Nobody else is in the channel yet.</p>;
+    return (
+        <>
+            <ul className="gpeople">
+                {read.data.people.map((person) => {
+                    const you = Boolean(me && person.userId === me);
+                    return (
+                        <li key={person.slackUserId}>
+                            <span className="gface" aria-hidden="true">{personInitials(person.name, person.standing === "in" ? "in" : "outside")}</span>
+                            <span className="gpeople__who">
+                                <span>{you ? "You" : person.name}</span>
+                                <small>{SLACK_STANDING[person.standing](pod.name)}</small>
+                            </span>
+                            {person.standing === "workspace" && (
+                                <button type="button" className="ghost-pill gpeople__invite" onClick={onInvite} aria-label={"Invite " + person.name + " to " + pod.name}>
+                                    Invite
+                                </button>
+                            )}
+                        </li>
+                    );
+                })}
+            </ul>
+            {read.data.more > 0 && <p className="gside__fine">And {read.data.more} more in the channel.</p>}
+            <p className="gside__fine">People in your Slack workspace are answered as the public is. Inviting one makes them part of {pod.name}.</p>
+        </>
     );
 }
 

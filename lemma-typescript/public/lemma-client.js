@@ -15818,6 +15818,27 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Slack Group People
+     * Who is in this Slack channel, and which of them are the pod's own.
+     * @param podId
+     * @param groupId
+     * @returns SlackChannelPeopleResponse Successful Response
+     * @throws ApiError
+     */
+    static agentGroupSlackPeople(podId, groupId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/groups/{group_id}/slack-people",
+        path: {
+          "pod_id": podId,
+          "group_id": groupId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Group Timeline
      * What was said in the group, oldest first, as far as the pod kept it.
      *
@@ -16638,6 +16659,16 @@ var LemmaClient = (() => {
           var _a;
           return AgentSurfacesService.agentGroupTimeline(podId, groupId, (_a = options.limit) != null ? _a : 60);
         }
+      );
+    }
+    /**
+     * Who is in a Slack channel, read from Slack, and which of them are the
+     * pod's own, the workspace's (answered as the public is), or from outside
+     * the workspace. Lemma keeps no log of a Slack channel, so this asks Slack.
+     */
+    slackPeople(podId, groupId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentGroupSlackPeople(podId, groupId)
       );
     }
     /** Start a WhatsApp group with the pod's bot in it. */

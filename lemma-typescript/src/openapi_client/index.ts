@@ -396,6 +396,8 @@ export type { SlackAppCreateRequest } from './models/SlackAppCreateRequest.js';
 export type { SlackAppCreateResponse } from './models/SlackAppCreateResponse.js';
 export type { SlackAppWorkspaceListResponse } from './models/SlackAppWorkspaceListResponse.js';
 export type { SlackAppWorkspaceResponse } from './models/SlackAppWorkspaceResponse.js';
+export type { SlackChannelPeopleResponse } from './models/SlackChannelPeopleResponse.js';
+export type { SlackChannelPersonResponse } from './models/SlackChannelPersonResponse.js';
 export type { SlackConfigurationTokenRequest } from './models/SlackConfigurationTokenRequest.js';
 export type { SlackInstallResponse } from './models/SlackInstallResponse.js';
 export type { SlackManagedWorkspaceListResponse } from './models/SlackManagedWorkspaceListResponse.js';

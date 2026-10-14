@@ -344,6 +344,22 @@ class PodMemberRepository(PodMemberRepositoryPort):
         await self._attach_member_roles([entity])
         return entity
 
+    async def user_ids_in_pod(
+        self, pod_id: UUID, user_ids: Sequence[UUID]
+    ) -> set[UUID]:
+        """Which of these people are members of the pod, in one query."""
+        if not user_ids:
+            return set()
+        result = await self.session.execute(
+            select(OrganizationMember.user_id)
+            .join(PodMember, PodMember.organization_member_id == OrganizationMember.id)
+            .where(
+                PodMember.pod_id == pod_id,
+                OrganizationMember.user_id.in_(list(user_ids)),
+            )
+        )
+        return set(result.scalars().all())
+
     async def get_by_pod_and_user_id(
         self, pod_id: UUID, user_id: UUID
     ) -> Optional[PodMemberEntity]:

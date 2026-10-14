@@ -59,6 +59,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
 | GET | `/pods/{pod_id}/groups` | `agent.group.list` | List Groups |
 | GET | `/pods/{pod_id}/groups/{group_id}` | `agent.group.get` | Get Group |
+| GET | `/pods/{pod_id}/groups/{group_id}/slack-people` | `agent.group.slack_people` | Slack Group People |
 | GET | `/pods/{pod_id}/groups/{group_id}/timeline` | `agent.group.timeline` | Group Timeline |
 | GET | `/pods/{pod_id}/notifications` | `notification.list` | List My Notifications |
 | GET | `/pods/{pod_id}/notifications/unread-count` | `notification.unread_count` | Count My Unread Notifications |

@@ -46,6 +46,11 @@ async def pod_member_id(uow, pod_id: UUID, user_id: UUID) -> UUID | None:
     return member.id if member is not None else None
 
 
+async def pod_members_among(uow, pod_id: UUID, user_ids: list[UUID]) -> set[UUID]:
+    """Which of these people are in this pod, asked once rather than per person."""
+    return await PodMemberRepository(uow).user_ids_in_pod(pod_id, user_ids)
+
+
 @dataclass(frozen=True, slots=True)
 class PodAdministrator:
     user_id: UUID

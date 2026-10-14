@@ -139,6 +139,28 @@ class SurfaceIdentityResolutionService:
 
         return await live_user_id(self.uow, user_id)
 
+    async def _proven_slack_person(
+        self, event: ParsedInboundSurfaceEvent
+    ) -> ResolvedSurfaceUser | None:
+        if (
+            event.platform is not SurfacePlatform.SLACK
+            or not event.tenant_id
+            or not event.sender_external_user_id
+        ):
+            return None
+        from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (
+            SlackManagerRepository,
+        )
+
+        user_id = await SlackManagerRepository(self.uow.session).person(
+            event.tenant_id, event.sender_external_user_id
+        )
+        if user_id is None or await self._live_user_lookup(user_id) is None:
+            return None
+        return ResolvedSurfaceUser(
+            internal_user_id=user_id, external_user_id=event.sender_external_user_id
+        )
+
     async def _resolve_verified_identity(
         self, event: ParsedInboundSurfaceEvent
     ) -> ResolvedSurfaceUser | None:
@@ -159,6 +181,31 @@ class SurfaceIdentityResolutionService:
     ) -> ResolvedSurfaceUser:
         """``profile_unavailable``: the platform could not be asked who sent
         this, so a miss here is not an answer and is not remembered as one."""
+        resolved = await self._resolve(
+            event=event,
+            sender_profile=sender_profile,
+            installation_id=installation_id,
+            require_proven_identity=require_proven_identity,
+            profile_unavailable=profile_unavailable,
+        )
+        if event.platform is SurfacePlatform.SLACK and _is_slack_guest(sender_profile):
+            return resolved.model_copy(update={"is_guest": True})
+        return resolved
+
+    async def _resolve(
+        self,
+        *,
+        event: ParsedInboundSurfaceEvent,
+        sender_profile: SurfaceSenderProfile | None,
+        installation_id: UUID | None,
+        require_proven_identity: bool,
+        profile_unavailable: bool,
+    ) -> ResolvedSurfaceUser:
+        # A Slack user proven to be a Lemma person through Lemma's own app in
+        # this workspace is them to every teammate here: proof, not an email.
+        proven = await self._proven_slack_person(event)
+        if proven is not None:
+            return proven
         if installation_id is not None and event.platform in (
             SurfacePlatform.SLACK,
             SurfacePlatform.TEAMS,
@@ -437,3 +484,11 @@ class SurfaceIdentityResolutionService:
                 candidate_count=len(unverified_ids),
             )
         return _UserMatch(None)
+
+
+def _is_slack_guest(profile: SurfaceSenderProfile | None) -> bool:
+    """Slack's own word for a guest: a restricted or ultra-restricted member."""
+    raw = profile.raw_profile if profile is not None else None
+    if not isinstance(raw, dict):
+        return False
+    return bool(raw.get("is_restricted") or raw.get("is_ultra_restricted"))
