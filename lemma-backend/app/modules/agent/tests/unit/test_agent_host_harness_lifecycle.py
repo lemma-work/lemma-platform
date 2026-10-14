@@ -33,6 +33,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host import (
 from app.modules.agent.infrastructure.harnesses.agent_host import (
     harness_events as harness_events_module,
 )
+from app.modules.agent.infrastructure.agent_host.recovery import BusyHost
 from app.modules.agent.infrastructure.harnesses.agent_host.harness import RemoteHarness
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
@@ -421,3 +422,111 @@ class TestATurnEndedForASleepingAgent:
         events = [event async for event in await _drive(harness, agent_run_id)]
 
         assert events[-1].type is AgentEventType.ERROR
+
+
+class TestARunQueuedBehindAFullComputer:
+    """A computer with every slot taken is busy, not missing.
+
+    The run used to fail at its wait deadline -- "No Agent Host received the
+    run" -- because two other runs on the same machine went long, after showing
+    nothing at all for those minutes. It waits now, and says what on.
+    """
+
+    @staticmethod
+    def _queued_repository(*, busy: bool, expired: list):
+        class _Repository:
+            def __init__(self, _uow) -> None:
+                pass
+
+            async def reconcile_expired_run(self, *, run_id):
+                del run_id
+
+            async def get_run_lease(self, *, run_id):
+                del run_id
+                return SimpleNamespace(
+                    state=AgentHostRunState.QUEUED_FOR_HOST.value,
+                    accepted_at=None,
+                    error_detail=None,
+                )
+
+            async def hold_for_busy_host(self, *, run_id, wait_seconds):
+                del run_id, wait_seconds
+                return BusyHost(name="My Mac", active_runs=2) if busy else None
+
+            async def expire_unaccepted_run(self, *, run_id):
+                expired.append(run_id)
+                return AgentHostRunState.FAILED
+
+        return _Repository
+
+    async def _events(
+        self, monkeypatch: pytest.MonkeyPatch, *, busy: bool, stopped: bool = False
+    ):
+        expired: list = []
+        harness = _harness(
+            _RecordingStream(),
+            uow_factory=_uow_factory,
+            # Outlives the one-second wait, so a run that is not held fails
+            # on the wait and one that is held runs into this instead.
+            event_timeout_seconds=1.5,
+            lease_check_seconds=0.0,
+            stream_block_ms=1,
+        )
+        _stub_dispatch(harness, monkeypatch)
+        repository = self._queued_repository(busy=busy, expired=expired)
+        monkeypatch.setattr(harness_module, "AgentHostDispatchRepository", repository)
+
+        async def _cancel(_run_id) -> None:
+            return None
+
+        monkeypatch.setattr(harness, "_enqueue_host_cancel", _cancel)
+        options = _options()
+        options.runtime_profile.config["host_wait_timeout_seconds"] = 1
+        if stopped:
+
+            async def _stop() -> bool:
+                return True
+
+            options.should_stop = _stop
+        run = harness.run(
+            agent=SimpleNamespace(),
+            conversation=SimpleNamespace(id=uuid7()),
+            messages=[],
+            ctx=SimpleNamespace(),
+            options=options,
+            agent_run_id=uuid7(),
+        )
+        return [event async for event in run], expired
+
+    async def test_it_waits_past_the_deadline_and_says_so_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        events, expired = await self._events(monkeypatch, busy=True)
+
+        assert expired == []
+        notices = [event for event in events if event.type is AgentEventType.STATUS]
+        assert [notice.data["detail"] for notice in notices] == [
+            "Waiting for a free slot on My Mac: 2 runs already going"
+        ]
+        # The run's own deadline still ends the wait.
+        assert events[-1].type is AgentEventType.ERROR
+
+    async def test_a_computer_that_is_not_full_still_fails_the_wait(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        events, expired = await self._events(monkeypatch, busy=False)
+
+        assert len(expired) == 1
+        assert not any(event.type is AgentEventType.STATUS for event in events)
+        assert events[-1].data == (
+            "No Agent Host received the run before its wait deadline"
+        )
+
+    async def test_a_stopped_run_does_not_keep_its_place(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Held, it would be handed out once a slot freed -- after its cancel."""
+        events, expired = await self._events(monkeypatch, busy=True, stopped=True)
+
+        assert len(expired) == 1
+        assert not any(event.type is AgentEventType.STATUS for event in events)

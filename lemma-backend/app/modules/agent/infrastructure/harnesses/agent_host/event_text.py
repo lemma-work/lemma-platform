@@ -255,6 +255,29 @@ def error_event(agent_run_id: UUID, message: str) -> AgentEvent:
     )
 
 
+#: The status a run queued behind a full computer reports. Not one of the
+#: lifecycle words the SDK maps (``waiting`` would read as "paused on you"),
+#: so the SDK hands it on as a notice carrying ``detail``.
+WAITING_FOR_SLOT_STATUS = "agent_host.waiting_for_slot"
+
+
+def waiting_for_slot_event(
+    agent_run_id: UUID, *, host_name: str, active_runs: int
+) -> AgentEvent:
+    """Say the run is queued on a computer whose run slots are all taken."""
+    going = f"{active_runs} run{'' if active_runs == 1 else 's'} already going"
+    return AgentEvent(
+        type=AgentEventType.STATUS,
+        data={
+            "status": WAITING_FOR_SLOT_STATUS,
+            "detail": f"Waiting for a free slot on {host_name}: {going}",
+            "host_name": host_name,
+            "active_runs": active_runs,
+        },
+        agent_run_id=agent_run_id,
+    )
+
+
 def terminal_event(
     *,
     agent_run_id: UUID,

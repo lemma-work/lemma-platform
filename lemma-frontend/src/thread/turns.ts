@@ -307,6 +307,9 @@ export interface Streaming {
      *  agent's `comment`, which is the only thing that can say what this step
      *  is *for* while it is still happening. */
     tool: { toolName: string; toolCallId?: string; args?: Record<string, unknown> } | null;
+    /** What the run is waiting on before it can start, in the server's words:
+     *  "Waiting for a free slot on My Mac: 2 runs already going". */
+    waiting?: string | null;
 }
 
 /** What the run is doing right now, as one more step rather than a row of its
@@ -345,6 +348,9 @@ export function liveNote(streaming: Streaming, landed: Note[] = []): Note[] {
         }];
     }
     if (streaming.thinking) return [{ kind: "thought", label: "Thought", detail: streaming.thinking }];
+    /* A run queued behind others on the person's computer has done nothing
+       yet, and "Working" alone over minutes of that reads as stuck. */
+    if (streaming.waiting) return [{ kind: "tool", label: streaming.waiting, detail: "" }];
     return [];
 }
 
