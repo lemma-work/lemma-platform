@@ -15932,6 +15932,48 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Slack Managed Workspaces
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * @param podId
+     * @returns SlackManagedWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackManagerList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/surface-setup/slack/manager",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Bind Slack Manager
+     * Make Lemma's own app this workspace's manager. The workspace becomes the
+     * organization's, and the person who authorised it is known in Slack.
+     * @param podId
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackManagerBind(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/surface-setup/slack/manager",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Surface Setup Guide
      * The static pre-creation checklist for a platform (env/OAuth
      * prerequisites) — works before any surface of this platform exists.
@@ -16330,6 +16372,45 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Link Slack Person
+     * Say that the signed-in person is the Slack user whose App Home showed the link.
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackPersonLink(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/people",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Preview Slack Person Link
+     * Say whose Slack account this link would connect to the signed-in person.
+     *
+     * Connects nothing. The page shows it and asks first, so a link somebody
+     * else sent cannot connect their Slack account to yours unannounced.
+     * @param requestBody
+     * @returns SlackPersonLinkPreviewResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackPersonPreview(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/people/preview",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/pod-surfaces.ts
@@ -16466,6 +16547,44 @@ var LemmaClient = (() => {
     createSlackApp(podId, request2) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request2)
+      );
+    }
+    /**
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * Lemma's app answers nobody: it is where a workspace sees its teammates,
+     * adds one, and hands one a channel.
+     */
+    slackManagedWorkspaces(podId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackManagerList(podId)
+      );
+    }
+    /**
+     * Make Lemma's own app the manager of the workspace an account authorised it
+     * in. The workspace becomes the organization's, and the person who
+     * authorised it is known in Slack from then on.
+     */
+    bindSlackManager(podId, request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackManagerBind(podId, request2)
+      );
+    }
+    /**
+     * Prove the signed-in person is the Slack user whose App Home showed the
+     * "Connect your Lemma account" link these values came from.
+     */
+    /**
+     * Whose Slack account a "Connect your Lemma account" link would connect,
+     * checked and named without connecting anything -- so the page can ask first.
+     */
+    previewSlackPerson(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackPersonPreview(request2)
+      );
+    }
+    linkSlackPerson(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackPersonLink(request2)
       );
     }
   };

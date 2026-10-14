@@ -15,6 +15,11 @@ from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (  # 
 from app.modules.agent_surfaces.infrastructure.slack_configuration_models import (  # noqa: F401
     SlackConfigurationTokenModel,
 )
+from app.modules.agent_surfaces.infrastructure.slack_manager_models import (  # noqa: F401
+    SlackManagerInstallModel,
+    SlackPendingAppBindingModel,
+    SlackWorkspacePersonModel,
+)
 from app.modules.agent_surfaces.infrastructure.group_models import (  # noqa: F401
     AgentSurfaceGroupMessageModel,
     AgentSurfaceGroupModel,

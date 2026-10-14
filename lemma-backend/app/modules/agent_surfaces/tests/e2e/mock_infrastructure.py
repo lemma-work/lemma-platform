@@ -182,6 +182,12 @@ class FakeSlackServer:
         self._port: int | None = None
         self.chat_post_blocks_error: str | None = None
         self.conversations_open_error: str | None = None
+        #: Channels ``conversations.info`` reports as private, so a test can
+        #: send the manager down its invite path rather than a join.
+        self.private_channels: set[str] = set()
+        #: ``users.info`` answers for particular users: someone who is not the
+        #: test user, or a guest (``is_restricted``). Anybody else is the test user.
+        self.user_overrides: dict[str, dict[str, Any]] = {}
 
     async def start(self) -> None:
         app = web.Application()
@@ -216,6 +222,12 @@ class FakeSlackServer:
         )
         app.router.add_route("*", "/api/views.open", self._views_open)
         app.router.add_route("*", "/api/views.publish", self._views_publish)
+        app.router.add_route("*", "/api/views.update", self._views_update)
+        app.router.add_route("*", "/api/conversations.join", self._conversations_join)
+        app.router.add_route(
+            "*", "/api/conversations.invite", self._conversations_invite
+        )
+        app.router.add_route("*", "/api/conversations.leave", self._conversations_leave)
         app.router.add_route("*", "/api/conversations.info", self._conversations_info)
         app.router.add_route(
             "*", "/api/files.getUploadURLExternal", self._files_get_upload_url_external
@@ -270,6 +282,23 @@ class FakeSlackServer:
 
     async def _users_info(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)
+        override = self.user_overrides.get(str(params.get("user") or ""))
+        if override is not None:
+            return web.json_response(
+                {
+                    "ok": True,
+                    "user": {
+                        "id": params.get("user"),
+                        "is_restricted": bool(override.get("is_restricted")),
+                        "is_bot": bool(override.get("is_bot")),
+                        "team_id": override.get("team_id"),
+                        "profile": {
+                            "email": override.get("email"),
+                            "display_name": override.get("display_name", "Someone"),
+                        },
+                    },
+                }
+            )
         return web.json_response(
             {
                 "ok": True,
@@ -484,6 +513,29 @@ class FakeSlackServer:
             {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
         )
 
+    async def _views_update(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_VIEWS_UPDATE", params)
+        view_id = str(params.get("view_id") or "V-UPDATED")
+        return web.json_response(
+            {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
+        )
+
+    async def _conversations_join(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_JOIN", params)
+        return web.json_response({"ok": True, "channel": {"id": params.get("channel")}})
+
+    async def _conversations_invite(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_INVITE", params)
+        return web.json_response({"ok": True, "channel": {"id": params.get("channel")}})
+
+    async def _conversations_leave(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_LEAVE", params)
+        return web.json_response({"ok": True})
+
     def _view_envelope(self, raw_view: Any, view_id: str) -> dict[str, Any]:
         return {
             **self._parse_view(raw_view),
@@ -524,7 +576,7 @@ class FakeSlackServer:
                     "is_channel": True,
                     "is_group": False,
                     "is_im": False,
-                    "is_private": False,
+                    "is_private": channel_id in self.private_channels,
                     "is_archived": False,
                     "is_member": True,
                 },

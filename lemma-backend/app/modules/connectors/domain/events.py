@@ -29,3 +29,8 @@ class ConnectorConnectedEvent(ConnectorDomainEvent):
     connector_id: str
     organization_id: UUID
     user_id: UUID
+    #: Which account, and the install it was authorised against. Optional, as
+    #: events already on the stream carry neither; a consumer that finishes
+    #: something a connect request started matches on the install.
+    account_id: UUID | None = None
+    auth_config_id: UUID | None = None

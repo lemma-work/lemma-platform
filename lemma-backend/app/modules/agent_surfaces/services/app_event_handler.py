@@ -45,8 +45,8 @@ from app.modules.agent_surfaces.domain.adapter_port import (
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedSurfaceLifecycleEvent,
-    SurfaceChannelRoute,
     SurfaceLifecycleKind,
+    SurfacePlatform,
     platform_value_for_source,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -71,9 +71,12 @@ from app.modules.agent_surfaces.services.configuration_prompt import (
     prompt_for_configuration,
 )
 from app.modules.agent_surfaces.services.app_uninstall import retire_uninstalled_app
+from app.modules.agent_surfaces.services.channel_allow import (
+    allow_channel,
+    welcome_in_channel,
+)
 from app.modules.agent_surfaces.services.group_hello import say_hello_in_group
 from app.modules.agent_surfaces.services.group_registry import (
-    adopt_connected_channel,
     adopt_joined_group,
 )
 from app.modules.agent_surfaces.services.configuration_access import (
@@ -357,31 +360,14 @@ class AppEventHandler:
     async def _allow_channel(
         self, *, surface, channel_id: str, owner_user_id: UUID | None = None
     ) -> None:
-        """Add one channel to the list this surface's agent answers in.
-
-        It used to point the channel at a chosen agent. A surface has one agent
-        now, so a channel is a place rather than a choice, and adding it twice
-        is the same as adding it once. The channel is one of the pod's groups
-        from here on, and whoever connected it answers for any people outside
-        the pod in it.
-        """
-        if not channel_id:
-            return
-        routes = [
-            route
-            for route in surface.config.channels
-            if str(route.channel_id or "") != channel_id
-        ]
-        routes.append(SurfaceChannelRoute(channel_id=channel_id))
-        surface.config.channels = routes
-        await self.surface_repository.update(surface)
-        await adopt_connected_channel(
+        """Add one channel to the list this surface's agent answers in."""
+        await allow_channel(
             self.uow,
+            surfaces=self.surface_repository,
             surface=surface,
             channel_id=channel_id,
             owner_user_id=owner_user_id,
         )
-        await self.uow.commit()
 
     def _adapter_for_request(self, request):
         if isinstance(request, SurfaceDirectWebhookIngress):
@@ -462,7 +448,9 @@ class AppEventHandler:
 
         surface, ctx = selected
         try:
-            await self._handle_lifecycle_event(surface=surface, parsed=parsed, ctx=ctx)
+            await self._handle_lifecycle_event(
+                surface=surface, parsed=parsed, ctx=ctx, sole=len(authorized) == 1
+            )
         except SQLAlchemyError:
             logger.warning(
                 "agent_surfaces.app_event_handler.lifecycle_event_failed.failed",
@@ -509,6 +497,7 @@ class AppEventHandler:
         surface,
         parsed: ParsedSurfaceLifecycleEvent,
         ctx,
+        sole: bool = False,
     ) -> None:
         """React to the app's own situation changing.
 
@@ -556,6 +545,18 @@ class AppEventHandler:
         if setup is None or surface.channel_route_for(
             channel_id=parsed.external_channel_id, channel_name=""
         ):
+            return
+        # A teammate's own Slack bot, invited by someone who may set it up: the
+        # invite was the yes. Asking again is only for a bot several pods share.
+        if sole and parsed.platform is SurfacePlatform.SLACK:
+            await welcome_in_channel(
+                self.uow,
+                surfaces=self.surface_repository,
+                surface=surface,
+                credentials=credentials,
+                channel_id=parsed.external_channel_id,
+                owner_user_id=ctx.user_id,
+            )
             return
         async with connection_released(self.uow.session):
             await setup.send_channel_setup_prompt(

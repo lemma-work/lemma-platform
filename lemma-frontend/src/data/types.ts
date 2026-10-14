@@ -820,6 +820,16 @@ export interface PodSource {
     /** Create this teammate's own Slack app. Returns the install to authorise,
      *  which is the one step left. */
     createSlackApp(podId: string, teamId: string, appName: string): Promise<{ appId: string; authConfigId: string }>;
+    /** Slack workspaces Lemma's own app manages for this pod's organization. */
+    slackManagedWorkspaces(podId: string): Promise<SlackManagedWorkspace[]>;
+    /** Make Lemma's own app the manager of the workspace this account
+     *  authorised it in. */
+    bindSlackManager(podId: string, accountId: string): Promise<SlackManagedWorkspace>;
+    /** Whose Slack account a link would connect, before connecting it. */
+    previewSlackPerson(link: SlackPersonLink): Promise<{ teamName: string | null; slackUserName: string | null }>;
+    /** Prove the signed-in person is the Slack user whose App Home showed the
+     *  link these values came from. */
+    linkSlackPerson(link: SlackPersonLink): Promise<SlackManagedWorkspace>;
     /** Register an app the organization made itself, so its credentials are
      *  what the authorisation runs against. Returns the auth config to
      *  authorise. */
@@ -934,4 +944,18 @@ export interface PodSource {
 export interface SlackAppWorkspace {
     teamId: string;
     teamName: string | null;
+}
+
+/** A Slack workspace Lemma's own app manages. */
+export interface SlackManagedWorkspace {
+    teamId: string;
+    teamName: string | null;
+}
+
+/** The values in the "Connect your Lemma account" link from Slack. */
+export interface SlackPersonLink {
+    teamId: string;
+    slackUserId: string;
+    expires: number;
+    signature: string;
 }

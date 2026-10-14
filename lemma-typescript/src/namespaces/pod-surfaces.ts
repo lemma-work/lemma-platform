@@ -5,6 +5,8 @@ import type { SurfaceSendRequest } from "../openapi_client/models/SurfaceSendReq
 import type { TelegramManagedBotSetupRequest } from "../openapi_client/models/TelegramManagedBotSetupRequest.js";
 import type { SlackAppCreateRequest } from "../openapi_client/models/SlackAppCreateRequest.js";
 import type { SlackConfigurationTokenRequest } from "../openapi_client/models/SlackConfigurationTokenRequest.js";
+import type { SlackManagerBindRequest } from "../openapi_client/models/SlackManagerBindRequest.js";
+import type { SlackPersonLinkRequest } from "../openapi_client/models/SlackPersonLinkRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 
 /**
@@ -179,6 +181,48 @@ export class PodSurfacesNamespace {
   createSlackApp(podId: string, request: SlackAppCreateRequest) {
     return this.client.request(() =>
       AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request),
+    );
+  }
+
+  /**
+   * The Slack workspaces Lemma's own app manages for this pod's organization.
+   * Lemma's app answers nobody: it is where a workspace sees its teammates,
+   * adds one, and hands one a channel.
+   */
+  slackManagedWorkspaces(podId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackManagerList(podId),
+    );
+  }
+
+  /**
+   * Make Lemma's own app the manager of the workspace an account authorised it
+   * in. The workspace becomes the organization's, and the person who
+   * authorised it is known in Slack from then on.
+   */
+  bindSlackManager(podId: string, request: SlackManagerBindRequest) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackManagerBind(podId, request),
+    );
+  }
+
+  /**
+   * Prove the signed-in person is the Slack user whose App Home showed the
+   * "Connect your Lemma account" link these values came from.
+   */
+  /**
+   * Whose Slack account a "Connect your Lemma account" link would connect,
+   * checked and named without connecting anything -- so the page can ask first.
+   */
+  previewSlackPerson(request: SlackPersonLinkRequest) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackPersonPreview(request),
+    );
+  }
+
+  linkSlackPerson(request: SlackPersonLinkRequest) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceSlackPersonLink(request),
     );
   }
 }

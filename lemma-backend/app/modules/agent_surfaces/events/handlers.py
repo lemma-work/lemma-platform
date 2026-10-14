@@ -28,6 +28,9 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
+from app.modules.agent_surfaces.services.slack_manager import (
+    handle_event as handle_manager_event,
+)
 from app.modules.agent_surfaces.composition import (
     build_app_event_handler,
     build_surface_egress,
@@ -304,6 +307,11 @@ async def _process_surface_webhook(
             headers=event.headers or {},
             receiver_surface_ids=event.receiver_surface_ids,
         )
+
+    # Lemma's own Slack app managing a workspace answers nobody: its Home, its
+    # invites and its "Add to Slack" are handled there and go no further.
+    if await handle_manager_event(uow_factory, ingress_request):
+        return
 
     adapters = SurfacePlatformAdapterRegistry()
     # The bot added to a Telegram group through a Lemma link: its

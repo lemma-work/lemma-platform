@@ -16596,6 +16596,133 @@
         "title": "SlackConfigurationTokenRequest",
         "type": "object"
       },
+      "SlackManagedWorkspaceListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SlackManagedWorkspaceResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "SlackManagedWorkspaceListResponse",
+        "type": "object"
+      },
+      "SlackManagedWorkspaceResponse": {
+        "description": "A Slack workspace Lemma's own app manages for this organization.",
+        "properties": {
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Name"
+          }
+        },
+        "required": [
+          "team_id"
+        ],
+        "title": "SlackManagedWorkspaceResponse",
+        "type": "object"
+      },
+      "SlackManagerBindRequest": {
+        "properties": {
+          "account_id": {
+            "description": "The account made by authorising Lemma's own Slack app.",
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "SlackManagerBindRequest",
+        "type": "object"
+      },
+      "SlackPersonLinkPreviewResponse": {
+        "description": "Whose Slack account a link would connect, before it is connected.",
+        "properties": {
+          "slack_user_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slack User Name"
+          },
+          "team_id": {
+            "title": "Team Id",
+            "type": "string"
+          },
+          "team_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Name"
+          }
+        },
+        "required": [
+          "team_id"
+        ],
+        "title": "SlackPersonLinkPreviewResponse",
+        "type": "object"
+      },
+      "SlackPersonLinkRequest": {
+        "description": "The values in the link a Slack user's App Home showed them.",
+        "properties": {
+          "expires": {
+            "title": "Expires",
+            "type": "integer"
+          },
+          "signature": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Signature",
+            "type": "string"
+          },
+          "slack_user_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Slack User Id",
+            "type": "string"
+          },
+          "team_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Team Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "team_id",
+          "slack_user_id",
+          "expires",
+          "signature"
+        ],
+        "title": "SlackPersonLinkRequest",
+        "type": "object"
+      },
       "StepRecordResponse": {
         "properties": {
           "completed_at": {
@@ -38286,6 +38413,119 @@
         }
       }
     },
+    "/pods/{pod_id}/surface-setup/slack/manager": {
+      "get": {
+        "description": "The Slack workspaces Lemma's own app manages for this pod's organization.",
+        "operationId": "agent.surface.slack_manager.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackManagedWorkspaceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Slack Managed Workspaces",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.slack_manager",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "put": {
+        "description": "Make Lemma's own app this workspace's manager. The workspace becomes the\norganization's, and the person who authorised it is known in Slack.",
+        "operationId": "agent.surface.slack_manager.bind",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackManagerBindRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackManagedWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bind Slack Manager",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_manager"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_manager",
+          "result": "entity",
+          "verb": "bind"
+        }
+      }
+    },
     "/pods/{pod_id}/surface-setup/{platform}": {
       "get": {
         "description": "The static pre-creation checklist for a platform (env/OAuth\nprerequisites) — works before any surface of this platform exists.",
@@ -41341,6 +41581,110 @@
           "resource": "agent.surface",
           "result": "entity",
           "verb": "slack_manifest"
+        }
+      }
+    },
+    "/surface-setup/slack/people": {
+      "post": {
+        "description": "Say that the signed-in person is the Slack user whose App Home showed the link.",
+        "operationId": "agent.surface.slack_person.link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackPersonLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackManagedWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Link Slack Person",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_person"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_person",
+          "result": "entity",
+          "verb": "link"
+        }
+      }
+    },
+    "/surface-setup/slack/people/preview": {
+      "post": {
+        "description": "Say whose Slack account this link would connect to the signed-in person.\n\nConnects nothing. The page shows it and asks first, so a link somebody\nelse sent cannot connect their Slack account to yours unannounced.",
+        "operationId": "agent.surface.slack_person.preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackPersonLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackPersonLinkPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Slack Person Link",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.slack_person"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.slack_person",
+          "result": "entity",
+          "verb": "preview"
         }
       }
     },

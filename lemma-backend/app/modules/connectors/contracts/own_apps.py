@@ -50,3 +50,28 @@ async def create_own_app_install(
         name=name,
     )
     return install.id
+
+
+async def start_authorization(
+    uow,
+    *,
+    user_id: UUID,
+    organization_id: UUID,
+    connector_id: str,
+    auth_config_id: UUID,
+    return_to: str | None = None,
+) -> str:
+    """Begin authorising an account against this install; the consent page's URL.
+
+    For a flow that starts somewhere other than Lemma's web app -- a button in
+    Slack -- and so has no browser of ours to call the connect-request route.
+    The callback that ends it is the ordinary one.
+    """
+    request = await get_connector_service(uow).initiate_connect_request(
+        user_id=user_id,
+        organization_id=organization_id,
+        connector_id=connector_id,
+        auth_config_id=auth_config_id,
+        return_to=return_to,
+    )
+    return str(request.authorization_url or "")

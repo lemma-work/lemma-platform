@@ -59,6 +59,8 @@ import type {
     AccountConnect,
     AskablePod,
     SlackAppWorkspace,
+    SlackManagedWorkspace,
+    SlackPersonLink,
     LinkShare,
     PodLink,
     Conversation,
@@ -1091,6 +1093,36 @@ export const liveSource: PodSource = {
     async createSlackApp(podId: string, teamId: string, appName: string): Promise<{ appId: string; authConfigId: string }> {
         const made = await lemma().podSurfaces.createSlackApp(podId, { team_id: teamId, app_name: appName });
         return { appId: made.app_id, authConfigId: String(made.auth_config_id) };
+    },
+
+    async slackManagedWorkspaces(podId: string): Promise<SlackManagedWorkspace[]> {
+        const listed = await lemma().podSurfaces.slackManagedWorkspaces(podId);
+        return (listed.items ?? []).map((item) => ({ teamId: item.team_id, teamName: item.team_name ?? null }));
+    },
+
+    async bindSlackManager(podId: string, accountId: string): Promise<SlackManagedWorkspace> {
+        const bound = await lemma().podSurfaces.bindSlackManager(podId, { account_id: accountId });
+        return { teamId: bound.team_id, teamName: bound.team_name ?? null };
+    },
+
+    async previewSlackPerson(link: SlackPersonLink) {
+        const preview = await lemma().podSurfaces.previewSlackPerson({
+            team_id: link.teamId,
+            slack_user_id: link.slackUserId,
+            expires: link.expires,
+            signature: link.signature,
+        });
+        return { teamName: preview.team_name ?? null, slackUserName: preview.slack_user_name ?? null };
+    },
+
+    async linkSlackPerson(link: SlackPersonLink): Promise<SlackManagedWorkspace> {
+        const linked = await lemma().podSurfaces.linkSlackPerson({
+            team_id: link.teamId,
+            slack_user_id: link.slackUserId,
+            expires: link.expires,
+            signature: link.signature,
+        });
+        return { teamId: linked.team_id, teamName: linked.team_name ?? null };
     },
 
     async addCustomApp(

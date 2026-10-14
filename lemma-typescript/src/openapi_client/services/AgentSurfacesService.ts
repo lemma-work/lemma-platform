@@ -19,6 +19,11 @@ import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js
 import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
 import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
 import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
+import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
+import type { SlackManagedWorkspaceResponse } from '../models/SlackManagedWorkspaceResponse.js';
+import type { SlackManagerBindRequest } from '../models/SlackManagerBindRequest.js';
+import type { SlackPersonLinkPreviewResponse } from '../models/SlackPersonLinkPreviewResponse.js';
+import type { SlackPersonLinkRequest } from '../models/SlackPersonLinkRequest.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -315,6 +320,53 @@ export class AgentSurfacesService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/pods/{pod_id}/surface-setup/slack/apps',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Slack Managed Workspaces
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * @param podId
+     * @returns SlackManagedWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackManagerList(
+        podId: string,
+    ): CancelablePromise<SlackManagedWorkspaceListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/surface-setup/slack/manager',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Bind Slack Manager
+     * Make Lemma's own app this workspace's manager. The workspace becomes the
+     * organization's, and the person who authorised it is known in Slack.
+     * @param podId
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackManagerBind(
+        podId: string,
+        requestBody: SlackManagerBindRequest,
+    ): CancelablePromise<SlackManagedWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/surface-setup/slack/manager',
             path: {
                 'pod_id': podId,
             },
@@ -774,6 +826,49 @@ export class AgentSurfacesService {
             query: {
                 'agent_name': agentName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Link Slack Person
+     * Say that the signed-in person is the Slack user whose App Home showed the link.
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackPersonLink(
+        requestBody: SlackPersonLinkRequest,
+    ): CancelablePromise<SlackManagedWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/people',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Preview Slack Person Link
+     * Say whose Slack account this link would connect to the signed-in person.
+     *
+     * Connects nothing. The page shows it and asks first, so a link somebody
+     * else sent cannot connect their Slack account to yours unannounced.
+     * @param requestBody
+     * @returns SlackPersonLinkPreviewResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackPersonPreview(
+        requestBody: SlackPersonLinkRequest,
+    ): CancelablePromise<SlackPersonLinkPreviewResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/people/preview',
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

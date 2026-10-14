@@ -2,14 +2,20 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from uuid import UUID
+from pydantic import JsonValue
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.core.config import reveal_secret
 from app.core.api.callback_page import (
     message_html,
     render_callback_page,
     safe_provider_error,
+)
+from app.modules.agent_surfaces.services.slack_manager import (
+    ManagerSync,
+    handle_sync as handle_manager_sync,
+    is_manager_delivery,
 )
 from app.modules.agent_surfaces.config import (
     surface_settings,
@@ -157,15 +163,13 @@ async def handle_platform_webhook(
     ):
         return {"message": "Verification message received"}
 
-    if resolved is SurfacePlatform.SLACK and await open_onboarding_modal(
-        payload, receiver_surface_ids, uow_factory
-    ):
-        return Response(status_code=200)
-
-    if resolved is SurfacePlatform.SLACK and await _handled_slack_modal(
-        payload, headers, receiver_surface_ids, uow_factory
-    ):
-        return Response(status_code=200)
+    manager = None
+    if resolved is SurfacePlatform.SLACK:
+        answered, manager = await _answered_by_slack_fast_lane(
+            payload, headers, receiver_surface_ids, uow_factory
+        )
+        if answered is not None:
+            return answered
 
     source_event_id = webhook_source_event_id(
         source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
@@ -179,6 +183,8 @@ async def handle_platform_webhook(
         receiver_surface_ids=receiver_surface_ids,
     )
     await EventPublisher.publish(event.stream_name(), event)
+    if manager is not None and manager.body:
+        return JSONResponse(manager.body)
 
     # A Slack modal submission is the one webhook whose *body* is protocol, not
     # acknowledgement: Slack parses it as a response_action and shows the user
@@ -552,3 +558,29 @@ async def teams_admin_consent_callback(
             "The Lemma bot is installed and ready to use in your workspace."
         ),
     )
+
+
+async def _answered_by_slack_fast_lane(
+    payload: dict[str, JsonValue],
+    headers: dict[str, str],
+    receiver_surface_ids: list[UUID] | None,
+    uow_factory: UnitOfWorkFactory,
+) -> tuple[Response | None, ManagerSync | None]:
+    """What a Slack delivery needs answered inside the request, if anything.
+
+    A trigger lives 3 seconds, so opening a modal and answering one cannot wait
+    for a worker. Returns the response to send now, if this request is fully
+    answered here, and the manager's result when the delivery was Lemma's own
+    app managing the workspace -- none of the teammate lanes apply to it.
+    """
+    if is_manager_delivery(payload, receiver_surface_ids):
+        manager = await handle_manager_sync(payload, uow_factory)
+        if manager.publish:
+            return None, manager
+        body = JSONResponse(manager.body) if manager.body else Response(status_code=200)
+        return body, manager
+    if await open_onboarding_modal(payload, receiver_surface_ids, uow_factory):
+        return Response(status_code=200), None
+    if await _handled_slack_modal(payload, headers, receiver_surface_ids, uow_factory):
+        return Response(status_code=200), None
+    return None, None

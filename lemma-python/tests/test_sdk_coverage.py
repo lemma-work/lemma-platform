@@ -78,6 +78,11 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # own Home tab drive it, with a browser consent at the end. Not a
     # scripted operation.
     "agent.surface.slack_app",
+    # Lemma's own Slack app as a workspace's manager: binding it after the
+    # reach sheet's authorisation, and proving a Slack user from the link
+    # their App Home shows. Browser steps by design.
+    "agent.surface.slack_manager",
+    "agent.surface.slack_person",
     # Widget/app unification endpoints pending facade adoption
     "app.create_from_widget",
     "widget.embed_token",

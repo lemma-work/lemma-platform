@@ -318,11 +318,16 @@ function Account({
     entry,
     pod,
     onDone,
+    bind,
 }: {
     entry: Connectable;
     pod: Pod;
     onDone: () => void;
+    /** What to do with the account once it exists. A surface on it, unless
+     *  told otherwise: Slack makes Lemma's own app the workspace's manager. */
+    bind?: (accountId: string) => Promise<unknown>;
 }) {
+    const attach = bind ?? ((accountId: string) => source.connectAccount(pod.id, entry.platform, accountId));
     const [link, setLink] = useState<AccountConnect | null>(null);
     const [stage, setStage] = useState<"idle" | "starting" | "waiting" | "binding">("idle");
     const [error, setError] = useState<string | null>(null);
@@ -377,7 +382,7 @@ function Account({
                     setStage("binding");
                     setPendingAccount(accountId);
                     try {
-                        await source.connectAccount(pod.id, entry.platform, accountId);
+                        await attach(accountId);
                         onDone();
                     } catch (problem) {
                         setStage("idle");
@@ -403,7 +408,7 @@ function Account({
         <p role="alert">{error}</p>
         <button className="btn" onClick={async () => {
             setStage("binding"); setError(null);
-            try { await source.connectAccount(pod.id, entry.platform, pendingAccount); onDone(); }
+            try { await attach(pendingAccount); onDone(); }
             catch (problem) { setStage("idle"); setError(problem instanceof Error ? problem.message : "Could not connect."); }
         }}>Retry connection</button>
     </div>;
@@ -502,7 +507,10 @@ function ConnectRow({
        button whose only outcome is a 409. The backend is the authority and
        still gets the last word; this just stops the UI promising ahead of it. */
     const held = entry.effort === "account" ? bestAccount(accounts, entry.connectorId) : null;
-    const ready = elsewhere ? null : held;
+    /* Not for Slack: an account there is Lemma's app or a teammate's own, and
+       neither is one to hand this teammate. Lemma's app manages the
+       workspace; this teammate gets an app of its own, from the focused view. */
+    const ready = elsewhere || entry.platform === "SLACK" ? null : held;
     const guiding = entry.effort === "guided";
     const machine = useFixableHere();
     /* Said instead of the blurb: what the channel is matters less than why it
@@ -632,6 +640,8 @@ function Focused({
                     </p>
                     <OwnBot entry={entry} pod={pod} onDone={onDone} />
                 </>
+            ) : entry.platform === "SLACK" && entry.account ? (
+                <SlackManagerStep entry={entry} pod={pod} onReady={() => setOwnBot(true)} />
             ) : entry.guided ? (
                 <>
                     <h3>Give {pod.name} a bot of its own</h3>
@@ -680,6 +690,43 @@ function Focused({
                 </>
             )}
         </div>
+    );
+}
+
+/** Lemma's own app in the workspace first, then this teammate's own bot.
+ *
+ *  Lemma's app manages a Slack workspace's teammates -- it is where people see
+ *  them, add one, and hand one a channel -- and answers nobody. So connecting
+ *  Slack is two steps the first time and one after: add Lemma to the
+ *  workspace, then give this teammate an app of its own. */
+function SlackManagerStep({ entry, pod, onReady }: { entry: Connectable; pod: Pod; onReady: () => void }) {
+    const managed = useQuery({
+        queryKey: ["slack-managers", pod.id],
+        queryFn: () => source.slackManagedWorkspaces(pod.id),
+    });
+    useEffect(() => {
+        if (managed.data?.length) onReady();
+    }, [managed.data, onReady]);
+    if (managed.isPending || managed.data?.length) {
+        return <p className="guided__wait" role="status"><RefreshIcon size={13} /> Checking your Slack workspace…</p>;
+    }
+    return (
+        <>
+            <h3>Add Lemma to your Slack workspace</h3>
+            <p>
+                Lemma&rsquo;s app is where your workspace sees its teammates, adds them and gives them channels.
+                It answers nobody itself. Then {pod.teammate.name} gets a Slack bot of its own.
+            </p>
+            <Account
+                entry={entry}
+                pod={pod}
+                onDone={onReady}
+                bind={(accountId) => source.bindSlackManager(pod.id, accountId)}
+            />
+            <button className="linkish focused__alt" onClick={onReady}>
+                Skip this, and give {pod.teammate.name} its bot now
+            </button>
+        </>
     );
 }
 

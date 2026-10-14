@@ -17,6 +17,10 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.services.slack_manager_install import (
+    manages_workspace,
+)
 from app.modules.agent_surfaces.contracts.whatsapp import (
     deployment_owns_whatsapp_number,
 )
@@ -176,6 +180,7 @@ async def _slack_candidates(uow_factory: UnitOfWorkFactory, payload: dict):
         return await slack_candidates_for_workspace(
             service=get_surface_service(uow),
             team_id=slack_team_id(payload),
+            is_managed=lambda team_id: manages_workspace(uow, team_id),
             also_paused=is_uninstall_delivery(payload),
         )
 
@@ -208,7 +213,17 @@ async def _verify_inbound_request(
             api_app_id=slack_api_app_id(payload),
             candidates=await _slack_candidates(uow_factory, payload),
         )
-        return list(verified.receiver_surface_ids) or None
+        receivers = list(verified.receiver_surface_ids)
+        # Empty is a real answer only for Lemma's own app managing the
+        # workspace: verified, with no teammate's surface receiving. Any other
+        # empty result means what it always did, an unscoped fan-in -- with
+        # verification off, a workspace with no candidates still fans in.
+        if receivers or (
+            surface_settings.slack_app_id
+            and verified.app_id == surface_settings.slack_app_id
+        ):
+            return receivers
+        return None
     await security_service.verify_platform_request(
         platform=platform,
         headers=headers,

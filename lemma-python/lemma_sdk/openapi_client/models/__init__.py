@@ -504,6 +504,11 @@ _NAME_TO_MODULE = {
     'SlackAppWorkspaceListResponse': 'slack_app_workspace_list_response',
     'SlackAppWorkspaceResponse': 'slack_app_workspace_response',
     'SlackConfigurationTokenRequest': 'slack_configuration_token_request',
+    'SlackManagedWorkspaceListResponse': 'slack_managed_workspace_list_response',
+    'SlackManagedWorkspaceResponse': 'slack_managed_workspace_response',
+    'SlackManagerBindRequest': 'slack_manager_bind_request',
+    'SlackPersonLinkPreviewResponse': 'slack_person_link_preview_response',
+    'SlackPersonLinkRequest': 'slack_person_link_request',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -1146,6 +1151,11 @@ if TYPE_CHECKING:
     from .slack_app_workspace_list_response import SlackAppWorkspaceListResponse
     from .slack_app_workspace_response import SlackAppWorkspaceResponse
     from .slack_configuration_token_request import SlackConfigurationTokenRequest
+    from .slack_managed_workspace_list_response import SlackManagedWorkspaceListResponse
+    from .slack_managed_workspace_response import SlackManagedWorkspaceResponse
+    from .slack_manager_bind_request import SlackManagerBindRequest
+    from .slack_person_link_preview_response import SlackPersonLinkPreviewResponse
+    from .slack_person_link_request import SlackPersonLinkRequest
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1801,6 +1811,11 @@ __all__ = [
     'SlackAppWorkspaceListResponse',
     'SlackAppWorkspaceResponse',
     'SlackConfigurationTokenRequest',
+    'SlackManagedWorkspaceListResponse',
+    'SlackManagedWorkspaceResponse',
+    'SlackManagerBindRequest',
+    'SlackPersonLinkPreviewResponse',
+    'SlackPersonLinkRequest',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',
