@@ -202,6 +202,15 @@ its `needs:` list again.
 Both workflows are path-filtered. A PR that touches only the frontend runs
 neither, and both report green.
 
+All three workflows also run on `merge_group`, so `main` can take changes
+through a merge queue instead of asking every branch to be brought up to date
+by hand. A merge group is the queued pull request on top of the latest `main`
+and of anything queued ahead of it, and it runs everything a pull request runs,
+including every e2e shard. Its filters see only that pull request's own change,
+so the queue's grouping strategy (in the same `protect-main` ruleset) has to be
+ALLGREEN, where every entry's run must pass; under HEADGREEN a later entry that
+skipped a suite could carry an earlier entry's failure into `main`.
+
 Coverage is one number with one floor. The `coverage` job in `e2e.yml`
 combines the unit lane with every e2e shard, from the same checkout in the same
 run, and fails if the total drops below `lemma-backend/coverage-floor.txt` **as

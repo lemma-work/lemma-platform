@@ -2,6 +2,15 @@ name: CI
 
 on:
   pull_request:
+  # The merge queue. A queued pull request is tested again on top of the
+  # latest main, and of anything queued ahead of it, and lands only if
+  # "CI passed" goes green there -- which is what lets a branch merge without
+  # first being brought up to date by hand. A merge group is treated as a
+  # pull request throughout: it tests, and what a push to main adds on top --
+  # Developer ID signing, the always-built DMG and NSIS bundles, the host
+  # pack -- does not run for it.
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   workflow_dispatch:
@@ -10,6 +19,8 @@ permissions:
   contents: read
   pull-requests: read
 
+# A merge group runs on its own `gh-readonly-queue/main/pr-<n>-<sha>` ref, so
+# it never cancels the pull request's run or another group's.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -33,6 +44,17 @@ jobs:
       app_template: ${{ steps.filter.outputs.app_template }}
     steps:
       - uses: actions/checkout@v7
+      # On a merge group the action diffs `merge_group.base_sha..head_sha` by
+      # itself (since v4.0.1). `base_sha` is the group's parent -- main's tip,
+      # or the entry queued ahead -- so the diff is the queued pull request's
+      # own change, the same files its pull request run filtered on. What must
+      # never happen here is an empty diff: every suite would skip and "CI
+      # passed" would go green on a merge that tested nothing.
+      #
+      # Because each queue entry filters on its own change only, the queue's
+      # grouping strategy has to be ALLGREEN (every entry's run must pass), not
+      # HEADGREEN: under HEADGREEN a later entry that skipped the backend could
+      # carry an earlier entry's backend failure into main.
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -863,6 +885,8 @@ jobs:
           # GitHub scopes PR caches to their merge ref: subsequent pushes can
           # reuse dependencies without making them available to main/releases.
 
+      # The ref test is what keeps a merge group ad-hoc signed: its ref is the
+      # queue's `gh-readonly-queue/main/...` branch, not main.
       - name: Import Developer ID certificate
         id: apple-signing
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
