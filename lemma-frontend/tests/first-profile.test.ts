@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { UserResponse } from "lemma-sdk";
 import {
-    asksFirstProfile, firstProfileNeeds, needsTimezoneSync, NEW_ACCOUNT_MS, settledKey, syncDetectedTimezone,
+    asksFirstProfile, canDismissFirstProfile, firstProfileNeeds, needsTimezoneSync, NEW_ACCOUNT_MS, settledKey, syncDetectedTimezone,
 } from "../src/session/first-profile.ts";
 
 const NOW = Date.parse("2026-09-25T12:00:00Z");
@@ -62,14 +62,23 @@ test("a new account with no timezone is synced only while the dialog is closed",
     assert.equal(needsTimezoneSync(fresh, { dialogOpen: false, now: NOW }), true);
 });
 
+test("profile dismissal stays closed to every path while saving", () => {
+    assert.equal(canDismissFirstProfile(true), false);
+    assert.equal(canDismissFirstProfile(false), true);
+});
+
 test("an account that already has a timezone is not overwritten", () => {
     assert.equal(
         needsTimezoneSync(user({ timezone: "Europe/Berlin" }), { dialogOpen: false, now: NOW }),
         false,
     );
     assert.equal(
+        needsTimezoneSync(user({ timezone: "" }), { dialogOpen: false, now: NOW }),
+        false,
+    );
+    assert.equal(
         needsTimezoneSync(user({ timezone: "   " }), { dialogOpen: false, now: NOW }),
-        true,
+        false,
     );
 });
 

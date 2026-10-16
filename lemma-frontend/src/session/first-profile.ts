@@ -22,6 +22,7 @@ import { key } from "./storage";
  *  using the app without one and can add it in Settings. A week is enough to
  *  cover somebody who signed up and came back a few days later. */
 export const NEW_ACCOUNT_MS = 7 * 24 * 60 * 60 * 1000;
+/** Delays between the initial timezone write and its bounded retries. */
 export const TIMEZONE_RETRY_DELAYS = [1_000, 2_000, 4_000] as const;
 
 export interface FirstProfileNeeds {
@@ -60,19 +61,24 @@ export function asksFirstProfile(
 /** Whether to write the browser's zone onto a new account that still has none.
  *
  *  The dialog owns the field while it is open. Outside it — OAuth already
- *  named them, or they skipped — a blank zone leaves every schedule and run
- *  stamp without a conversion target. Older accounts that cleared the zone in
- *  Settings are left alone.
+ *  named them, or they skipped — a never-set zone leaves every schedule and
+ *  run stamp without a conversion target. An explicit empty timezone from
+ *  Settings is left alone.
  */
 export function needsTimezoneSync(
     user: Pick<UserResponse, "timezone" | "created_at">,
     { dialogOpen, now = Date.now() }: { dialogOpen: boolean; now?: number },
 ): boolean {
     if (dialogOpen) return false;
-    if ((user.timezone ?? "").trim()) return false;
+    if (user.timezone !== null && user.timezone !== undefined) return false;
     const created = Date.parse(user.created_at);
     if (Number.isNaN(created) || now - created > NEW_ACCOUNT_MS) return false;
     return true;
+}
+
+/** Dismissal is disabled while the profile save is in flight. */
+export function canDismissFirstProfile(savePending: boolean): boolean {
+    return !savePending;
 }
 
 /** Save a detected timezone with bounded retries until the owning effect ends. */

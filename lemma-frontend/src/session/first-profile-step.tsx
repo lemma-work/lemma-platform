@@ -9,7 +9,7 @@ import { isLandingPreview } from "@/marketing/preview-mode";
 import { Modal } from "@/shell/modal";
 import { CheckCircleIcon, RefreshIcon } from "@/ui/icons";
 import { lemma } from "./client";
-import { asksFirstProfile, firstProfileNeeds, needsTimezoneSync, settledKey, syncDetectedTimezone } from "./first-profile";
+import { asksFirstProfile, canDismissFirstProfile, firstProfileNeeds, needsTimezoneSync, settledKey, syncDetectedTimezone } from "./first-profile";
 import { Code, Countdown, OpenWhatsApp } from "./mobile-verification";
 import { changes, draftOf, localTimezone, timezones } from "./profile-edit";
 import { useWhatsAppMobileVerification, useWhatsAppVerificationConfig } from "./use-mobile-verification";
@@ -22,6 +22,7 @@ function readSettled(userId: string): boolean {
     }
 }
 
+/** Remember that this account's first-profile dialog has been dismissed. */
 function writeSettled(userId: string) {
     try {
         localStorage.setItem(settledKey(userId), "1");
@@ -98,6 +99,7 @@ export function FirstProfileStep() {
     );
 }
 
+/** Collect the first-profile answers; every dismissal shares the same guard. */
 function FirstProfileDialog({
     user,
     askPhone,
@@ -133,12 +135,13 @@ function FirstProfileDialog({
             onDone();
         },
     });
+    const canDismiss = canDismissFirstProfile(save.isPending);
 
     return (
         <Modal
             title="Before you start"
             subtitle={`Your ${MATE}s call you by this name.`}
-            onClose={onDone}
+            onClose={() => { if (canDismiss) onDone(); }}
         >
             <form
                 className="profile-form firstprofile"
@@ -192,7 +195,7 @@ function FirstProfileDialog({
                     </p>
                 )}
                 <div className="modal__acts">
-                    <button className="linkish" type="button" onClick={onDone}>Skip for now</button>
+                    <button className="linkish" type="button" onClick={onDone} disabled={!canDismiss}>Skip for now</button>
                     <button className="btn btn--primary" type="submit" disabled={!first.trim() || !timezone || save.isPending}>
                         {save.isPending ? "Saving…" : "Continue"}
                     </button>

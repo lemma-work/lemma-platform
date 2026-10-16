@@ -38,13 +38,13 @@ export function draftOf(user: UserResponse | null | undefined): ProfileDraft {
     };
 }
 
-/** Only what actually changed, and `null` where it was deliberately emptied.
+/** Only what actually changed, and an empty value where timezone was cleared.
  *
  *  The distinction is the point. Sending every field back means a form that
  *  loaded while one value was still in flight can write a stale copy over the
- *  newer one; sending nothing for an emptied field leaves it set forever, so
- *  clearing a phone number would silently not work. Unchanged is omitted,
- *  cleared is an explicit null.
+ *  newer one; sending nothing for an emptied field leaves it set forever.
+ *  Most cleared fields use `null`; timezone uses an empty string so signup can
+ *  tell it apart from a timezone that has never been set.
  */
 export function changes(before: ProfileDraft, after: ProfileDraft): UserProfileRequest {
     const patch: Record<string, string | null> = {};
@@ -52,7 +52,9 @@ export function changes(before: ProfileDraft, after: ProfileDraft): UserProfileR
         const was = before[field];
         const now = after[field].trim();
         if (was === now) continue;
-        patch[field] = now === "" ? null : now;
+        /* Keep an intentional timezone clear distinct from a never-set
+           timezone: signup may fill the latter, but must respect the former. */
+        patch[field] = now === "" ? (field === "timezone" ? "" : null) : now;
     }
     return patch as UserProfileRequest;
 }
