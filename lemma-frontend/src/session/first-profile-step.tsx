@@ -9,12 +9,10 @@ import { isLandingPreview } from "@/marketing/preview-mode";
 import { Modal } from "@/shell/modal";
 import { CheckCircleIcon, RefreshIcon } from "@/ui/icons";
 import { lemma } from "./client";
-import { asksFirstProfile, firstProfileNeeds, needsTimezoneSync, settledKey } from "./first-profile";
+import { asksFirstProfile, firstProfileNeeds, needsTimezoneSync, settledKey, syncDetectedTimezone } from "./first-profile";
 import { Code, Countdown, OpenWhatsApp } from "./mobile-verification";
 import { changes, draftOf, localTimezone, timezones } from "./profile-edit";
 import { useWhatsAppMobileVerification, useWhatsAppVerificationConfig } from "./use-mobile-verification";
-
-const TIMEZONE_RETRY_DELAYS = [1_000, 2_000, 4_000] as const;
 
 function readSettled(userId: string): boolean {
     try {
@@ -74,31 +72,15 @@ export function FirstProfileStep() {
         const zone = localTimezone();
         if (!zone) return;
 
-        let active = true;
-        let retryTimer: ReturnType<typeof setTimeout> | undefined;
-        let retryCount = 0;
-        const sync = () => {
-            if (!active) return;
-            syncedZone.current = true;
-            void lemma().users.upsertProfile({ timezone: zone }).then(
-                (next) => {
-                    if (active) queryClient.setQueryData(["current-user"], next);
-                },
-                () => {
-                    if (!active) return;
-                    syncedZone.current = false;
-                    const delay = TIMEZONE_RETRY_DELAYS[retryCount];
-                    if (delay === undefined) return;
-                    retryCount += 1;
-                    retryTimer = setTimeout(sync, delay);
-                },
-            );
-        };
-        sync();
+        syncedZone.current = true;
+        const stop = syncDetectedTimezone(
+            () => lemma().users.upsertProfile({ timezone: zone }),
+            (next) => { queryClient.setQueryData(["current-user"], next); },
+            () => { syncedZone.current = false; },
+        );
         return () => {
-            active = false;
+            stop();
             syncedZone.current = false;
-            if (retryTimer !== undefined) clearTimeout(retryTimer);
         };
     }, [decision, user.data, queryClient]);
 

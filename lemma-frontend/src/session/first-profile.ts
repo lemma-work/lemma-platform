@@ -22,6 +22,7 @@ import { key } from "./storage";
  *  using the app without one and can add it in Settings. A week is enough to
  *  cover somebody who signed up and came back a few days later. */
 export const NEW_ACCOUNT_MS = 7 * 24 * 60 * 60 * 1000;
+export const TIMEZONE_RETRY_DELAYS = [1_000, 2_000, 4_000] as const;
 
 export interface FirstProfileNeeds {
     /** No first name on the account. The step still offers the name when this
@@ -72,6 +73,39 @@ export function needsTimezoneSync(
     const created = Date.parse(user.created_at);
     if (Number.isNaN(created) || now - created > NEW_ACCOUNT_MS) return false;
     return true;
+}
+
+/** Save a detected timezone with bounded retries until the owning effect ends. */
+export function syncDetectedTimezone<T>(
+    save: () => Promise<T>,
+    onSuccess: (next: T) => void,
+    onFailure: () => void,
+): () => void {
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryCount = 0;
+
+    const sync = () => {
+        if (!active) return;
+        void save().then(
+            (next) => {
+                if (active) onSuccess(next);
+            },
+            () => {
+                if (!active) return;
+                onFailure();
+                const delay = TIMEZONE_RETRY_DELAYS[retryCount];
+                if (delay === undefined) return;
+                retryCount += 1;
+                retryTimer = setTimeout(sync, delay);
+            },
+        );
+    };
+    sync();
+    return () => {
+        active = false;
+        if (retryTimer !== undefined) clearTimeout(retryTimer);
+    };
 }
 
 /** Continued or skipped, per person and per browser. Kept here rather than on
