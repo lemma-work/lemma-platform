@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { UserResponse } from "lemma-sdk";
-import { asksFirstProfile, firstProfileNeeds, NEW_ACCOUNT_MS, settledKey } from "../src/session/first-profile.ts";
+import {
+    asksFirstProfile, firstProfileNeeds, needsTimezoneSync, NEW_ACCOUNT_MS, settledKey,
+} from "../src/session/first-profile.ts";
 
 const NOW = Date.parse("2026-09-25T12:00:00Z");
 
@@ -52,4 +54,29 @@ test("an unreadable sign-up date is treated as old, not new", () => {
 
 test("what was skipped is remembered per person", () => {
     assert.notEqual(settledKey("u1"), settledKey("u2"));
+});
+
+test("a new account with no timezone is synced only while the dialog is closed", () => {
+    const fresh = user();
+    assert.equal(needsTimezoneSync(fresh, { dialogOpen: true, now: NOW }), false);
+    assert.equal(needsTimezoneSync(fresh, { dialogOpen: false, now: NOW }), true);
+});
+
+test("an account that already has a timezone is not overwritten", () => {
+    assert.equal(
+        needsTimezoneSync(user({ timezone: "Europe/Berlin" }), { dialogOpen: false, now: NOW }),
+        false,
+    );
+    assert.equal(
+        needsTimezoneSync(user({ timezone: "   " }), { dialogOpen: false, now: NOW }),
+        true,
+    );
+});
+
+test("only new accounts get a background timezone: older ones keep an empty zone", () => {
+    const old = user({ created_at: new Date(NOW - NEW_ACCOUNT_MS - 1).toISOString() });
+    const recent = user({ created_at: new Date(NOW - NEW_ACCOUNT_MS + 60_000).toISOString() });
+    assert.equal(needsTimezoneSync(old, { dialogOpen: false, now: NOW }), false);
+    assert.equal(needsTimezoneSync(recent, { dialogOpen: false, now: NOW }), true);
+    assert.equal(needsTimezoneSync(user({ created_at: "not a date" }), { dialogOpen: false, now: NOW }), false);
 });

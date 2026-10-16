@@ -12,6 +12,9 @@ import { key } from "./storage";
  *  So this asks for exactly what is missing and nothing that is not, which is
  *  also why it is decided here from state rather than remembered as a step
  *  somebody reached. An account that already has both is never shown it.
+ *  Timezone is confirmed in the dialog when it opens, or written from the
+ *  browser in the background when OAuth already supplied a name — it is never
+ *  itself a reason to interrupt.
  */
 
 /** Only new accounts. The step belongs to the first days of an account, not
@@ -51,6 +54,24 @@ export function asksFirstProfile(
     if (Number.isNaN(created) || now - created > NEW_ACCOUNT_MS) return false;
     const needs = firstProfileNeeds(user, { whatsApp });
     return needs.name || needs.phone;
+}
+
+/** Whether to write the browser's zone onto a new account that still has none.
+ *
+ *  The dialog owns the field while it is open. Outside it — OAuth already
+ *  named them, or they skipped — a blank zone leaves every schedule and run
+ *  stamp without a conversion target. Older accounts that cleared the zone in
+ *  Settings are left alone.
+ */
+export function needsTimezoneSync(
+    user: Pick<UserResponse, "timezone" | "created_at">,
+    { dialogOpen, now = Date.now() }: { dialogOpen: boolean; now?: number },
+): boolean {
+    if (dialogOpen) return false;
+    if ((user.timezone ?? "").trim()) return false;
+    const created = Date.parse(user.created_at);
+    if (Number.isNaN(created) || now - created > NEW_ACCOUNT_MS) return false;
+    return true;
 }
 
 /** Continued or skipped, per person and per browser. Kept here rather than on
