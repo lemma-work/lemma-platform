@@ -1916,6 +1916,8 @@ button svg, a svg { flex-shrink:0; }
 
 @media(max-width:560px) {
     .firstprofile__send { grid-template-columns:minmax(0,1fr); }
+    .firstprofile__number { white-space:normal; overflow-wrap:anywhere; }
+    .firstprofile .modal__acts { flex-wrap:wrap; }
 }
 
 @media (max-width: 767px) {
