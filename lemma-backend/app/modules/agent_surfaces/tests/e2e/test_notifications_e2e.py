@@ -241,6 +241,7 @@ async def test_only_the_recipient_can_see_their_notifications(
     assert created["id"]
 
 
+@pytest.mark.drives_work
 async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -259,10 +260,14 @@ async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
     """
     from sqlalchemy import select
 
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work import WorkClass, WorkRegistry
+    from app.core.infrastructure.work.testing import run_until_idle
     from app.modules.pod.infrastructure.models.pod_models import PodMember
     from app.modules.identity.infrastructure.models.organization_models import (
         OrganizationMember,
     )
+    from app.modules.workflow.events.step_jobs import register_step_jobs
 
     pod_id = test_pod["id"]
 
@@ -321,6 +326,14 @@ async def test_a_workflow_form_assignment_notifies_and_closes_on_submit(
     )
     assert run.status_code == 201, run.text
     run_id = run.json()["id"]
+
+    # The wait is written with its `workflow.notify_form` job; the notification
+    # is that job's doing, so run it.
+    notify_work = WorkRegistry()
+    register_step_jobs(notify_work)
+    await run_until_idle(
+        async_session_maker, registry=notify_work, classes=[WorkClass.DELIVERY]
+    )
 
     inbox = await authenticated_client.get(f"/pods/{pod_id}/notifications")
     assert inbox.status_code == 200, inbox.text

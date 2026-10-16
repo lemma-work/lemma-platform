@@ -6,10 +6,17 @@ from datetime import datetime, timedelta, timezone
 import hmac
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 
+from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import facts
 from app.modules.function.config import execution_budget_seconds
+from app.modules.function.contracts.run_facts import FunctionRunFinished
+from app.modules.function.application.dispatch_failures import PodAtCapacity
+from app.modules.function.domain.run_deadline import expired_run_error
+from app.modules.function.events.run_deadline import add_function_deadline
+from app.modules.function.events.run_work import add_function_cancel
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
@@ -21,11 +28,6 @@ from app.modules.function.domain.entities import (
     FunctionRunStatus,
     FunctionSessionPrincipal,
     FunctionType,
-)
-from app.modules.function.domain.events import (
-    FunctionRunCompletedEvent,
-    FunctionRunFailedEvent,
-    FunctionRunStartedEvent,
 )
 from app.modules.function.domain.types import JsonObject
 from app.modules.function.infrastructure.models import FunctionModel, FunctionRunModel
@@ -77,11 +79,19 @@ class FunctionExecutionRepository:
         self,
         dispatch: FunctionExecutionDispatch,
         now: datetime | None = None,
+        *,
+        max_running_per_pod: int | None = None,
     ) -> FunctionRunRuntimeContext | None:
         """Atomically move the backend-authorized run into RUNNING.
 
         The runtime is admitted through the sandbox and receives the complete
         immutable context after this transition; it never claims the run back.
+
+        ``max_running_per_pod`` is the pod's gate: its RUNNING runs are counted
+        under a lock on the pod, so two starts cannot both take the last slot,
+        and a full pod raises ``PodAtCapacity`` with the run left PENDING. The
+        same transaction writes the ``function.deadline`` item that ends the
+        run if nothing else has by its deadline.
         """
 
         timestamp = now or datetime.now(timezone.utc)
@@ -102,24 +112,47 @@ class FunctionExecutionRepository:
         ):
             return None
 
+        if max_running_per_pod is not None:
+            await self._lock_pod(function.pod_id)
+            if await self.running_on_pod(function.pod_id) >= max_running_per_pod:
+                raise PodAtCapacity(str(function.pod_id))
+
         run.status = FunctionRunStatus.RUNNING
         run.started_at = timestamp
         # The execution budget starts now, not when the run was created: time
         # spent queued, waiting for a pod slot, or on a cold start is not the
         # function's to lose.
         run.deadline_at = timestamp + timedelta(seconds=dispatch.execution_seconds)
-        self.uow.collect_events(
-            [
-                FunctionRunStartedEvent(
-                    run_id=run.id,
-                    function_id=run.function_id,
-                    started_at=timestamp,
-                    user_email=run.user_email,
-                )
-            ]
-        )
         await self.session.flush()
+        await add_function_deadline(
+            self.session,
+            pod_id=function.pod_id,
+            run_id=run.id,
+            deadline_at=run.deadline_at,
+        )
         return self._runtime_context(run, function)
+
+    async def running_on_pod(self, pod_id: UUID) -> int:
+        """How many of the pod's runs hold a slot now."""
+        count = await self.session.scalar(
+            select(func.count())
+            .select_from(FunctionRunModel)
+            .join(FunctionModel, FunctionModel.id == FunctionRunModel.function_id)
+            .where(
+                FunctionModel.pod_id == pod_id,
+                FunctionRunModel.status == FunctionRunStatus.RUNNING,
+            )
+        )
+        return int(count or 0)
+
+    async def _lock_pod(self, pod_id: UUID) -> None:
+        # Transaction-scoped: released by the commit that makes this start
+        # visible, so the next start on the pod counts it.
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"function-pod:{pod_id}"},
+        )
+        mark_transaction_scoped_lock(self.session)
 
     async def authorized_runtime_context(
         self,
@@ -226,25 +259,8 @@ class FunctionExecutionRepository:
         run.error = error
         run.logs = logs
         run.completed_at = timestamp
-        event = (
-            FunctionRunCompletedEvent(
-                run_id=run.id,
-                function_id=run.function_id,
-                output_data=run.output_data,
-                logs=logs,
-                completed_at=timestamp,
-            )
-            if completed
-            else FunctionRunFailedEvent(
-                run_id=run.id,
-                function_id=run.function_id,
-                error=error,
-                logs=logs,
-                completed_at=timestamp,
-            )
-        )
-        self.uow.collect_events([event])
         await self.session.flush()
+        await self._announce_finished(run, pod_id=context.pod_id)
         return run.to_entity(), True, False
 
     async def fail_dispatch(
@@ -317,7 +333,81 @@ class FunctionExecutionRepository:
             self._mark_finished(run, run_status=FunctionRunStatus.FAILED, error=error)
         if runs:
             await self.session.flush()
+        for run in runs:
+            await self._announce_finished(run, pod_id=pod_id)
         return [run.id for run in runs]
+
+    async def fail_pending(self, run_id: UUID, *, error: str) -> bool:
+        """Fail a run that never started; a started or ended one is left alone."""
+        rows = await self._run_and_function(run_id, for_update=True)
+        if rows is None or rows[0].status != FunctionRunStatus.PENDING:
+            return False
+        run, function = rows
+        self._mark_finished(run, run_status=FunctionRunStatus.FAILED, error=error)
+        await self.session.flush()
+        await self._announce_finished(run, pod_id=function.pod_id)
+        return True
+
+    async def cancel_open(self, run_id: UUID, *, error: str) -> bool:
+        """Cancel a run nobody is waiting for any more, in this transaction.
+
+        A run that had started gets a ``function.cancel`` item too, so its
+        sandbox is asked to stop once this commits; the cancellation itself
+        does not wait for that.
+        """
+        rows = await self._run_and_function(run_id, for_update=True)
+        if rows is None or rows[0].status in TERMINAL_RUN_STATES:
+            return False
+        run, function = rows
+        was_running = run.status == FunctionRunStatus.RUNNING
+        self._mark_finished(run, run_status=FunctionRunStatus.CANCELLED, error=error)
+        await self.session.flush()
+        await self._announce_finished(run, pod_id=function.pod_id)
+        if was_running:
+            await add_function_cancel(
+                self.session, pod_id=function.pod_id, run_id=run.id
+            )
+        return True
+
+    async def fail_if_overdue(
+        self, run_id: UUID, *, now: datetime, grace: timedelta
+    ) -> datetime | None:
+        """Fail the run if its window closed more than ``grace`` ago.
+
+        Returns when to look again for a run whose window is still open -- its
+        deadline moves when it starts -- and None otherwise.
+        """
+        rows = await self._run_and_function(run_id, for_update=True)
+        if rows is None:
+            return None
+        run, function = rows
+        if run.status in TERMINAL_RUN_STATES or run.deadline_at is None:
+            return None
+        due = run.deadline_at + grace
+        if now < due:
+            return due
+        self._mark_finished(
+            run,
+            run_status=FunctionRunStatus.FAILED,
+            error=expired_run_error(
+                started_at=run.started_at, deadline_at=run.deadline_at, now=now
+            ),
+        )
+        await self.session.flush()
+        await self._announce_finished(run, pod_id=function.pod_id)
+        return None
+
+    async def dispatch_of(
+        self, run_id: UUID, *, mode: FunctionDispatchMode
+    ) -> FunctionExecutionDispatch | None:
+        """The run's dispatch whatever its state -- enough to reach its sandbox."""
+        rows = await self._run_and_function(run_id)
+        if rows is None:
+            return None
+        run, function = rows
+        if run.deadline_at is None or run.revision_hash is None:
+            return None
+        return self._dispatch(run, function, mode=mode)
 
     async def _finish_without_result(
         self,
@@ -326,18 +416,16 @@ class FunctionExecutionRepository:
         run_status: FunctionRunStatus,
         error: str,
     ) -> FunctionRunEntity | None:
-        run = await self.session.scalar(
-            select(FunctionRunModel)
-            .where(FunctionRunModel.id == run_id)
-            .with_for_update()
-        )
-        if run is None:
+        rows = await self._run_and_function(run_id, for_update=True)
+        if rows is None:
             return None
+        run, function = rows
         if run.status in TERMINAL_RUN_STATES:
             return run.to_entity()
 
         self._mark_finished(run, run_status=run_status, error=error)
         await self.session.flush()
+        await self._announce_finished(run, pod_id=function.pod_id)
         return run.to_entity()
 
     def _mark_finished(
@@ -347,20 +435,24 @@ class FunctionExecutionRepository:
         run_status: FunctionRunStatus,
         error: str,
     ) -> None:
-        timestamp = datetime.now(timezone.utc)
         run.status = run_status
         run.error = error
-        run.completed_at = timestamp
-        self.uow.collect_events(
-            [
-                FunctionRunFailedEvent(
-                    run_id=run.id,
-                    function_id=run.function_id,
-                    error=error,
-                    logs=run.logs,
-                    completed_at=timestamp,
-                )
-            ]
+        run.completed_at = datetime.now(timezone.utc)
+
+    async def _announce_finished(self, run: FunctionRunModel, *, pod_id: UUID) -> None:
+        """Every terminal transition says so, in its own transaction.
+
+        Whatever waits on the run -- a workflow step -- gets its work item
+        committed with the outcome, so nothing can be lost between the two.
+        """
+        await facts.emit(
+            self.uow,
+            FunctionRunFinished(
+                function_run_id=run.id,
+                pod_id=pod_id,
+                function_id=run.function_id,
+                status=FunctionRunStatus(run.status).value,
+            ),
         )
 
     async def _run_and_function(

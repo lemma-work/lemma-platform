@@ -3,6 +3,7 @@ from __future__ import annotations
 from sandbox_runtime.errors import SandboxUnavailable
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -30,13 +31,19 @@ from app.modules.function.domain.entities import (
     FunctionRunRuntimeContext,
     FunctionRunStatus,
 )
-from app.modules.function.tests.fakes import InMemoryPodRunSlots
+
+
+class _IdlePod:
+    """A session over a pod with nothing running: the gate's count is zero."""
+
+    async def scalar(self, _statement):
+        return 0
 
 
 class _UowFactory:
     @asynccontextmanager
     async def __call__(self):
-        yield object()
+        yield SimpleNamespace(session=_IdlePod())
 
 
 async def _token_minter(**_kwargs) -> FunctionSessionToken:
@@ -112,9 +119,7 @@ def _run(
     )
 
 
-def _dispatcher(
-    runtime_client, *, pod_runs: InMemoryPodRunSlots | None = None
-) -> FunctionDispatcher:
+def _dispatcher(runtime_client) -> FunctionDispatcher:
     return FunctionDispatcher(
         uow_factory=_UowFactory(),
         sandbox_client_factory=AsyncMock,
@@ -124,7 +129,7 @@ def _dispatcher(
         runtime_http_client_factory=lambda: runtime_client,
         organization_resolver=_organization_resolver,
         delegated_tokens_enabled=True,
-        pod_runs=pod_runs or InMemoryPodRunSlots(),
+        max_running_per_pod=1_000,
     )
 
 
@@ -153,8 +158,7 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
                 },
             )
 
-    pod_runs = InMemoryPodRunSlots()
-    dispatcher = _dispatcher(_Runtime(), pod_runs=pod_runs)
+    dispatcher = _dispatcher(_Runtime())
     endpoint = _endpoint("https://sandbox.test/runtime/")
     monkeypatch.setattr(
         dispatcher,
@@ -190,9 +194,6 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
     assert observed["json"]["input"] == dispatch.input_data
     assert observed["json"]["config"] == dispatch.config
     assert observed["json"]["identity"]["function_id"] == str(dispatch.function_id)
-    # Settled inline, so the pod's slot is free for the next run.
-    assert pod_runs.released == [dispatch.run_id]
-    assert pod_runs.held[dispatch.pod_id] == set()
 
 
 @pytest.mark.asyncio
@@ -213,8 +214,7 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
                 json={"accepted": True, "run_id": str(dispatch.run_id)},
             )
 
-    pod_runs = InMemoryPodRunSlots()
-    dispatcher = _dispatcher(_Runtime(), pod_runs=pod_runs)
+    dispatcher = _dispatcher(_Runtime())
     monkeypatch.setattr(
         dispatcher,
         "_resolve_dispatch",
@@ -238,10 +238,6 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
     )
 
     assert result.status == FunctionRunStatus.RUNNING
-    # Accepted asynchronously: the runtime holds the run, so its pod slot stays
-    # taken until the terminal callback gives it back.
-    assert pod_runs.held[dispatch.pod_id] == {dispatch.run_id}
-    assert pod_runs.released == []
     assert observed["headers"]["Prefer"] == "respond-async"
     assert observed["headers"]["Authorization"] == "Bearer delegated-function-token"
     assert observed["headers"]["E2B-Traffic-Access-Token"] == "provider-secret"

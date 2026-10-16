@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.modules.function.infrastructure.run_repository import _expired_run_error
+from app.modules.function.domain.run_deadline import expired_run_error
 
 pytestmark = pytest.mark.unit
 
@@ -24,6 +24,12 @@ def _run(*, budget_seconds: int, started_ago: int):
     return SimpleNamespace(
         started_at=started,
         deadline_at=started + timedelta(seconds=budget_seconds),
+    )
+
+
+def _expired_run_error(run, *, now: datetime) -> str:
+    return expired_run_error(
+        started_at=run.started_at, deadline_at=run.deadline_at, now=now
     )
 
 
@@ -39,12 +45,12 @@ def test_it_states_the_budget_because_nothing_else_does() -> None:
     assert "660s" in message
 
 
-def test_it_says_the_sweep_ended_it_not_the_function() -> None:
+def test_it_says_the_platform_ended_it_not_the_function() -> None:
     message = _expired_run_error(
         _run(budget_seconds=600, started_ago=700), now=datetime.now(timezone.utc)
     )
 
-    assert "sweep" in message
+    assert "ended by the platform" in message
     assert "never reported" in message
 
 

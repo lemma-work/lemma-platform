@@ -162,6 +162,12 @@ async def _surface_event_receiver(context):
         await _close_dedup_store()
 
 
+def _register_work() -> None:
+    # Every process: pod deletions and member removals (API) write these
+    # through the pod lifecycle facts.
+    import app.modules.agent_surfaces.events.pod_lifecycle_work  # noqa: F401
+
+
 def _register_streaq() -> None:
     import app.modules.agent_surfaces.events.owed_reply_sweep  # noqa: F401
     import app.modules.agent_surfaces.events.visitor_retention  # noqa: F401
@@ -172,6 +178,7 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     register_streaq=_register_streaq,
+    register_work=_register_work,
     api_lifespans=(
         _dedup_store_lifespan,
         _telegram_manager_webhook_lifespan,
@@ -180,7 +187,6 @@ module = LemmaModule(
     stream_groups=(
         ("surface_events", "surface-webhook-events"),
         ("surface_events", "agent-surfaces.onboarding"),
-        ("pod_events", "surface-pod-deletion-events"),
         ("identity_events", "surface-identity-events"),
     ),
 )

@@ -92,8 +92,20 @@ def configure_namespace_directory(modules: Sequence[LemmaModule]) -> None:
     declare_namespace_directory(provider() if provider is not None else None)
 
 
+def register_module_work(modules: Sequence[LemmaModule]) -> None:
+    """Import every module's work kinds and fact subscriptions.
+
+    Both the API and the worker need them: the API enqueues kinds and emits
+    facts, the worker claims them. Idempotent, because importing is.
+    """
+    for module in modules:
+        if module.register_work is not None:
+            module.register_work()
+
+
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
     """Include every module's API routers, in module-list then thunk order."""
+    register_module_work(modules)
     configure_stream_topology(modules)
     configure_resource_names(modules)
     configure_pod_liveness(modules)
@@ -128,6 +140,7 @@ def import_module_tasks(modules: Sequence[LemmaModule]) -> None:
     *publishes* jobs needs the same imports to know which lane each task runs
     on, but has no broker to include the routers on — so it comes here instead.
     """
+    register_module_work(modules)
     for module in modules:
         if module.register_streaq is not None:
             module.register_streaq()
@@ -137,6 +150,7 @@ def import_module_tasks(modules: Sequence[LemmaModule]) -> None:
 
 def wire_module_events(modules: Sequence[LemmaModule], broker: "RedisBroker") -> None:
     """Register streaq tasks then include every module's FastStream routers."""
+    register_module_work(modules)
     configure_stream_topology(modules)
     configure_resource_names(modules)
     configure_pod_liveness(modules)

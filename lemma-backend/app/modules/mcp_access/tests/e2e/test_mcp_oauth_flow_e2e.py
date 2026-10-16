@@ -25,6 +25,8 @@ import pytest
 from sqlalchemy import text
 from httpx import ASGITransport, AsyncClient
 
+from app.core.infrastructure.work import WorkClass
+from app.core.infrastructure.work.testing import run_until_idle
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.mcp_access.domain.entities import TokenKind
 from app.modules.mcp_access.infrastructure.repositories import McpAccessRepository
@@ -420,6 +422,7 @@ async def test_the_cancelled_token_still_ends_the_grant_after_the_winner_rotates
     assert after.status_code == 401
 
 
+@pytest.mark.drives_work
 async def test_a_deleted_pod_refuses_its_clients_and_ends_their_grants(
     mcp_client, authenticated_client, test_pod, db_manager
 ):
@@ -434,13 +437,15 @@ async def test_a_deleted_pod_refuses_its_clients_and_ends_their_grants(
     refreshed = await mcp_client.refresh(tokens["refresh_token"])
     assert refreshed.json()["error"] == "invalid_grant"
 
-    # And the event's handler ends the grants themselves.
+    # And the deletion's `mcp_access.pod_deleted` item ends the grants
+    # themselves: once it has run, there is nothing left to end.
+    await run_until_idle(db_manager.session_factory, classes=[WorkClass.EVENTS])
     async with db_manager.session_factory() as session:
         ended = await McpAccessRepository(
             SqlAlchemyUnitOfWork(session)
         ).revoke_pod_grants(pod_id=UUID(pod_id), now=datetime.now(timezone.utc))
         await session.commit()
-    assert ended == 1
+    assert ended == 0
 
 
 async def test_a_public_client_disconnects_with_only_its_token(

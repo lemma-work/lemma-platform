@@ -58,8 +58,12 @@ class _Engine:
         self.terminal: list[WorkflowRunEntity] = []
         self.announced: list[WorkflowRunEntity] = []
 
-    def _collect_terminal_event(self, run: WorkflowRunEntity) -> None:
+    async def _record_transition(self, run: WorkflowRunEntity) -> None:
         self.terminal.append(run)
+
+    async def _settle(self, run: WorkflowRunEntity) -> None:
+        await self.uow.commit()
+        await self._announce(run)
 
     async def _announce(self, run: WorkflowRunEntity) -> None:
         self.announced.append(run)

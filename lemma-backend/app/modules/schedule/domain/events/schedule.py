@@ -116,8 +116,4 @@ class ScheduleEvents:
     # even though it never imports the consuming subscribers. Keeps a fired event
     # from being dropped when a consumer's group was lost (flush/failover) and is
     # otherwise only recreated later at "$".
-    CONSUMER_GROUPS = (
-        "workflow-schedule-events",
-        "schedule-notifications",
-        "schedule-runtime-lifecycle",
-    )
+    CONSUMER_GROUPS = ("workflow-schedule-events",)

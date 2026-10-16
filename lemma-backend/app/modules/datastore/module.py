@@ -199,6 +199,9 @@ def _routers():
     from app.modules.datastore.api.controllers.changes_controller import (
         router as changes,
     )
+    from app.modules.datastore.api.controllers.live_controller import (
+        router as live,
+    )
     from app.modules.datastore.api.controllers.processing_controller import (
         router as processing,
     )
@@ -217,15 +220,21 @@ def _routers():
         public_file,
         signed_file,
         changes,
+        live,
     ]
 
 
-def _event_routers():
-    from app.modules.datastore.events.pod_schema_consumer import (
-        router as pod_schema_router,
-    )
+def _register_work() -> None:
+    # In every process: the pod-create transaction (API) writes this kind
+    # through the `PodCreated` fact this module subscribes it to.
+    import app.modules.datastore.events.pod_provision_work  # noqa: F401
 
-    return [pod_schema_router]
+    # Every process: a schedule or MCP subscription change (API) writes
+    # `changes.sync_subscribers`; the worker claims every change-log kind.
+    import app.modules.datastore.changes.converter  # noqa: F401
+    import app.modules.datastore.changes.horizon  # noqa: F401
+    import app.modules.datastore.changes.retention  # noqa: F401
+    import app.modules.datastore.changes.work  # noqa: F401
 
 
 def _register_streaq() -> None:
@@ -242,29 +251,22 @@ def _register_streaq() -> None:
 
 
 @asynccontextmanager
-async def _datastore_outbox_dispatcher(context):
-    """Dispatch the second outbox when pod schemas use a separate database."""
+async def _change_handoff(context):
+    """Hand watched writes' wakes to ``changes.deliver`` items.
+
+    Replaces the datastore outbox dispatcher: record changes no longer travel
+    as stream events. One loop per worker; it holds one direct connection to
+    the datastore database for ``LISTEN`` and polls as a fallback.
+    """
     from app.core.config import settings
-    from app.core.infrastructure.events.message_bus import get_message_bus
-    from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
-    from app.modules.datastore.infrastructure.session import (
-        get_datastore_session_maker,
-    )
-    from app.modules.datastore.infrastructure.transactional_events import (
-        ensure_datastore_event_outbox,
-    )
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.modules.datastore.changes.handoff import change_handoff_lifespan
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
 
     del context
     datastore_url = datastore_settings.datastore_database_url or settings.database_url
-    if datastore_url == settings.database_url:
-        yield
-        return
-    await ensure_datastore_event_outbox()
-    async with outbox_dispatcher_lifespan(
-        get_datastore_session_maker(),
-        get_message_bus(),
-        database_url=datastore_url,
-        label="datastore",
+    async with change_handoff_lifespan(
+        get_datastore_engine(), async_session_maker, database_url=datastore_url
     ):
         yield
 
@@ -280,8 +282,7 @@ async def _close_datastore_engine(context):
 
     Registered *first* on purpose. `AsyncExitStack` unwinds last-entered-first,
     so entering this one first makes it the last of datastore's to unwind --
-    after the outbox dispatcher, which can still want the engine on its way
-    out.
+    after the change handoff, which can still want the engine on its way out.
     """
     try:
         yield
@@ -334,16 +335,15 @@ module = LemmaModule(
     name="datastore",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
     register_streaq=_register_streaq,
+    register_work=_register_work,
     # Nothing here may scale with data: see `test_boot_hooks.py`. The query
-    # role and its grants are ensured lazily, and the datastore outbox table is
-    # created by the first record write or the worker's dispatcher.
+    # role and its grants are ensured lazily; the change handoff starts a loop
+    # and reads nothing at boot.
     api_lifespans=(_preload_local_embeddings,),
     worker_lifespans=(
         _close_datastore_engine,
         _preload_local_embeddings,
-        _datastore_outbox_dispatcher,
+        _change_handoff,
     ),
-    stream_groups=(("pod_events", "pod-provisioning-events"),),
 )

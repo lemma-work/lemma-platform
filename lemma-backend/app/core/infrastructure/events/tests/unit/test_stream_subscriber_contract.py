@@ -61,7 +61,7 @@ def registered_bindings() -> list[ss.SubscriberEventBinding]:
 
 def test_the_gate_sees_the_real_subscriber_population(registered_bindings):
     """A gate that matches nothing passes forever."""
-    assert len(registered_bindings) >= 25, (
+    assert len(registered_bindings) >= 20, (
         "expected the full stream-subscriber population; only "
         f"{len(registered_bindings)} registered. Did the registry stop importing "
         "handler modules, or did the decorator stop recording?"

@@ -1031,7 +1031,7 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
 # -- FunctionUseCases sagas with no direct HTTP entry point of their own -----
 #
 # upsert_function_for_import (bundle import), execute_function_as_workload
-# (agent-as-tool) and dispatch_function_for_workflow/cancel_function_run
+# (agent-as-tool), the workflow step's dispatch and cancel_function_run
 # (workflow node control) have no HTTP surface at all -- they're built the same
 # way their real callers build them (app/modules/agent/tools/
 # callable_tool_factory.py, function/infrastructure/workflow_control.py) via
@@ -1197,20 +1197,21 @@ async def test_execute_function_as_workload_runs_under_the_agent_delegated_conte
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("configure_workspace_api_url")
-async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_it(
+async def test_a_workflow_function_step_is_queued_and_the_worker_completes_it(
     authenticated_client, test_pod, fixed_test_user, db_manager, worker
 ):
-    """``dispatch_function_for_workflow`` is the workflow-node path
-    (``function/infrastructure/workflow_control.py::FunctionControlAdapter.execute_function``):
-    it forces ASYNCHRONOUS dispatch even for an API function and returns
-    PENDING without running the sandbox inline, so the workflow engine can
-    suspend on the run id and let the ``FunctionRunCompleted`` event resume
-    it. Drive it against the real queue + worker."""
+    """The workflow-node path
+    (``function/infrastructure/workflow_control.py::FunctionControlAdapter.execute_function``)
+    forces ASYNCHRONOUS dispatch even for an API function: it writes the run
+    and the item that starts it in the workflow's own transaction and returns
+    PENDING without running the sandbox inline, so the workflow can park on
+    the run id. Drive it against the real queue and worker."""
     from uuid import UUID
 
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-    from app.modules.function.api.dependencies import build_function_use_cases
-    from app.modules.function.domain.entities import FunctionRunStatus
+    from app.modules.function.infrastructure.workflow_control import (
+        FunctionControlAdapter,
+    )
 
     pod_id = UUID(test_pod["id"])
     user_id = UUID(fixed_test_user["id"])
@@ -1227,28 +1228,19 @@ async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_
         },
     )
 
-    use_cases = build_function_use_cases(
-        SessionUnitOfWorkFactory(db_manager.session_factory)
-    )
-    dispatched = await use_cases.dispatch_function_for_workflow(
-        pod_id=pod_id,
-        name=func_name,
-        input_data={"value": 41},
-        user_id=user_id,
-    )
+    async with SessionUnitOfWorkFactory(db_manager.session_factory)() as uow:
+        dispatched = await FunctionControlAdapter(uow).execute_function(
+            func_name, {"value": 41}, pod_id, user_id
+        )
 
     # PENDING, and NOT run inline even though this is an API function -- the
     # whole point of the workflow path is that the caller never blocks on the
     # sandbox round-trip.
-    assert dispatched.status == FunctionRunStatus.PENDING
-    assert dispatched.job_id
-    assert dispatched.id is not None
+    assert dispatched["status"] == "PENDING", dispatched
+    run_id = str(dispatched["run_id"])
 
     final_run = await wait_for_run_completion(
-        authenticated_client,
-        str(pod_id),
-        func_name,
-        str(dispatched.id),
+        authenticated_client, str(pod_id), func_name, run_id
     )
     assert final_run["status"] == "COMPLETED", final_run
     assert final_run["output_data"]["result"] == 42

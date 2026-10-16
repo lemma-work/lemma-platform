@@ -76,6 +76,23 @@ export class SchedulesNamespace {
     );
   }
 
+  /**
+   * What a trigger let pass without firing, newest first, aggregated: one item
+   * per delivered page and reason (`bulk_write`, `import_write`, `fire_cap`)
+   * with its `count`. Pass the response's `next_page_token` back as
+   * `pageToken` for the next page.
+   */
+  skips(scheduleId: string, options: { limit?: number; pageToken?: string | null } = {}) {
+    return this.client.request(() =>
+      SchedulesService.scheduleSkipList(
+        this.podId(),
+        scheduleId,
+        options.limit ?? 50,
+        options.pageToken ?? undefined,
+      ),
+    );
+  }
+
   /** Run a failed or dead-lettered run again with the same event; answers the new run. */
   retryRun(scheduleId: string, runId: string) {
     return this.client.request(() =>

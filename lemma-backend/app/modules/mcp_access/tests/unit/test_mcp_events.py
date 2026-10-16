@@ -19,10 +19,6 @@ from app.modules.mcp_access.domain.events import (
     subscription_id,
     valid_secret,
 )
-from app.modules.mcp_access.events.event_deliveries import (
-    MAX_DEFERRALS,
-    deliver_within_rate,
-)
 from app.modules.mcp_access.infrastructure.webhook_sender import SendResult
 from app.modules.mcp_access.services.event_delivery import (
     DeliveryJob,
@@ -200,82 +196,3 @@ async def test_the_secret_reaches_the_signer_masked_and_revealable() -> None:
     [secret] = seen
     assert isinstance(secret, SecretStr)
     assert secret.get_secret_value() not in repr(secret)
-
-
-class _Limiter:
-    def __init__(self, wait: int | None) -> None:
-        self.wait = wait
-        self.keys: list[str] = []
-
-    async def retry_after(self, key: str, *, limit: int, window_seconds: int):
-        self.keys.append(key)
-        return self.wait
-
-
-class _Queue:
-    def __init__(self) -> None:
-        self.jobs: list[dict[str, object]] = []
-
-    async def enqueue(self, job_name: str, **kwargs: object) -> object:
-        self.jobs.append({"name": job_name, **kwargs})
-        return None
-
-
-@pytest.mark.asyncio
-async def test_under_the_rate_a_delivery_goes_now() -> None:
-    delivery, _, sent = _delivery(
-        wanted=_Subscription(), record={"a": 1}, result=SendResult(status=200)
-    )
-    queue = _Queue()
-    outcome = await deliver_within_rate(
-        _job(),
-        deferrals=0,
-        delivery=delivery,
-        limiter=_Limiter(None),
-        queue=queue,
-        now=datetime.now(timezone.utc),
-    )
-    assert outcome is Outcome.SENT
-    assert sent == [1]
-    assert queue.jobs == []
-
-
-@pytest.mark.asyncio
-async def test_past_the_rate_a_delivery_waits_for_the_next_window() -> None:
-    delivery, _, sent = _delivery(
-        wanted=_Subscription(), record={"a": 1}, result=SendResult(status=200)
-    )
-    queue, now, job = _Queue(), datetime.now(timezone.utc), _job()
-    outcome = await deliver_within_rate(
-        job,
-        deferrals=2,
-        delivery=delivery,
-        limiter=_Limiter(17),
-        queue=queue,
-        now=now,
-    )
-    assert outcome is None, "waiting is not an outcome, and not a spent try"
-    assert sent == []
-    [later] = queue.jobs
-    assert later["_defer_until"] == now + timedelta(seconds=17)
-    assert later["deferrals"] == 3
-    assert later["event_id"] == job.event_id
-    assert later["_job_id"] != f"mcp-event:{job.subscription_id}:{job.event_id}"
-
-
-@pytest.mark.asyncio
-async def test_a_delivery_that_has_waited_long_enough_is_let_go() -> None:
-    delivery, _, sent = _delivery(
-        wanted=_Subscription(), record={"a": 1}, result=SendResult(status=200)
-    )
-    queue = _Queue()
-    outcome = await deliver_within_rate(
-        _job(),
-        deferrals=MAX_DEFERRALS,
-        delivery=delivery,
-        limiter=_Limiter(5),
-        queue=queue,
-        now=datetime.now(timezone.utc),
-    )
-    assert outcome is Outcome.DROPPED
-    assert sent == [] and queue.jobs == []

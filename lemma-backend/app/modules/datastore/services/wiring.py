@@ -18,6 +18,7 @@ from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.datastore.services.record_service import RecordService
 from app.modules.datastore.services.table_service import TableService
 from app.modules.identity.contracts.organizations import build_user_directory
+from app.modules.datastore.changes.gate import change_log_active
 
 _schema_manager_instance: SchemaManager | None = None
 
@@ -63,4 +64,5 @@ def build_record_service(uow) -> RecordService:
         ),
         authorization_service=create_authorization_data_service(uow),
         user_repository=build_user_directory(uow),
+        change_log=change_log_active,
     )

@@ -18192,6 +18192,34 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * List Schedule Skips
+     * What the trigger let pass without firing -- e.g. the changes of a bulk
+     * write or an import it is set to skip -- newest first.
+     * @param podId
+     * @param scheduleId
+     * @param limit
+     * @param pageToken
+     * @returns TriggerSkipListResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleSkipList(podId, scheduleId, limit = 50, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/skips",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/schedules.ts
@@ -18244,6 +18272,25 @@ var LemmaClient = (() => {
             (_a = options.limit) != null ? _a : 100,
             (_b = options.status) != null ? _b : void 0,
             options.skipped
+          );
+        }
+      );
+    }
+    /**
+     * What a trigger let pass without firing, newest first, aggregated: one item
+     * per delivered page and reason (`bulk_write`, `import_write`, `fire_cap`)
+     * with its `count`. Pass the response's `next_page_token` back as
+     * `pageToken` for the next page.
+     */
+    skips(scheduleId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b;
+          return SchedulesService.scheduleSkipList(
+            this.podId(),
+            scheduleId,
+            (_a = options.limit) != null ? _a : 50,
+            (_b = options.pageToken) != null ? _b : void 0
           );
         }
       );
@@ -19445,6 +19492,8 @@ var LemmaClient = (() => {
   // src/datastore-changes.ts
   var RECONNECT_BASE_DELAY_MS = 500;
   var RECONNECT_MAX_DELAY_MS = 3e4;
+  var IDLE_CLOSE_MS = 1e3;
+  var PING_INTERVAL_MS = 25e3;
   var WS_UNAUTHENTICATED = 4401;
   var WS_FORBIDDEN = 4403;
   var WS_NOT_FOUND = 4404;
@@ -19455,150 +19504,386 @@ var LemmaClient = (() => {
     );
     return Math.random() * ceiling;
   }
-  function changesWsUrl(apiUrl, podId, table, since, token) {
+  function liveWsUrl(apiUrl, podId, token) {
     const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
-    const url = new URL(`${root}/pods/${podId}/datastore/changes`);
-    if (table) url.searchParams.set("table", table);
-    if (since) url.searchParams.set("since", since);
+    const url = new URL(`${root}/pods/${podId}/live`);
     if (token) url.searchParams.set("access_token", token);
     return url.toString();
   }
-  function watchDatastoreChanges(apiUrl, auth, podId, options) {
-    let socket = null;
-    let cursor = options.since;
-    let attempt = 0;
-    let stopped = false;
-    let authRefreshed = false;
-    let reconnectTimer = null;
-    const status = (next) => {
-      var _a;
-      return (_a = options.onStatus) == null ? void 0 : _a.call(options, next);
-    };
-    const fail = (error) => {
-      var _a;
-      if (stopped) return;
-      stopped = true;
-      status("closed");
-      (_a = options.onError) == null ? void 0 : _a.call(options, error);
-    };
-    const scheduleReconnect = () => {
+  function frameCursor(frame) {
+    var _a;
+    const cursor = (_a = frame.cursor) != null ? _a : frame.stream_id;
+    return typeof cursor === "string" && cursor ? cursor : void 0;
+  }
+  var Subscription = class {
+    constructor(id, options) {
+      __publicField(this, "id", id);
+      __publicField(this, "options", options);
+      __publicField(this, "status", null);
+      __publicField(this, "stopped", false);
+      __publicField(this, "cursor");
+      this.cursor = options.since;
+    }
+    setStatus(next) {
       var _a, _b;
-      if (stopped) return;
-      if (((_a = auth.getState) == null ? void 0 : _a.call(auth).status) === "unauthenticated") {
-        stopped = true;
-        status("closed");
-        (_b = options.onError) == null ? void 0 : _b.call(options, new Error("Datastore change stream: signed out"));
-        return;
-      }
-      if (options.maxRetries != null && attempt >= options.maxRetries) {
-        fail(new Error("Datastore change stream: max reconnect attempts reached"));
-        return;
-      }
-      const delay = reconnectDelayMs(attempt);
-      attempt += 1;
-      status("reconnecting");
-      reconnectTimer = setTimeout(() => void connect(), delay);
-    };
-    const connect = async () => {
+      if (this.status === next) return;
+      this.status = next;
+      (_b = (_a = this.options).onStatus) == null ? void 0 : _b.call(_a, next);
+    }
+    subscribeFrame() {
       var _a;
-      if (stopped) return;
-      status(attempt === 0 ? "connecting" : "reconnecting");
+      const frame = {
+        op: "subscribe",
+        id: this.id,
+        topic: "records"
+      };
+      if (this.options.table) frame.table = this.options.table;
+      if ((_a = this.options.ops) == null ? void 0 : _a.length) frame.ops = this.options.ops;
+      if (this.options.when) frame.when = this.options.when;
+      if (this.cursor) frame.since = this.cursor;
+      return JSON.stringify(frame);
+    }
+  };
+  var LiveConnection = class {
+    constructor(apiUrl, auth, podId, useCookie, onDispose) {
+      __publicField(this, "apiUrl", apiUrl);
+      __publicField(this, "auth", auth);
+      __publicField(this, "podId", podId);
+      __publicField(this, "useCookie", useCookie);
+      __publicField(this, "onDispose", onDispose);
+      __publicField(this, "socket", null);
+      __publicField(this, "ready", false);
+      __publicField(this, "attempt", 0);
+      __publicField(this, "authRefreshed", false);
+      __publicField(this, "reconnectTimer", null);
+      __publicField(this, "idleTimer", null);
+      __publicField(this, "pingTimer", null);
+      __publicField(this, "connecting", false);
+      __publicField(this, "nextId", 1);
+      __publicField(this, "closed", false);
+      __publicField(this, "subscriptions", /* @__PURE__ */ new Map());
+    }
+    get isClosed() {
+      return this.closed;
+    }
+    add(options) {
+      if (this.idleTimer != null) {
+        clearTimeout(this.idleTimer);
+        this.idleTimer = null;
+      }
+      const subscription = new Subscription(`s${this.nextId++}`, options);
+      this.subscriptions.set(subscription.id, subscription);
+      subscription.setStatus(
+        this.attempt === 0 ? "connecting" : "reconnecting"
+      );
+      if (this.ready) this.send(subscription.subscribeFrame());
+      else this.ensureConnecting();
+      return subscription;
+    }
+    remove(subscription) {
+      if (!this.subscriptions.delete(subscription.id)) return;
+      if (this.ready)
+        this.send(
+          JSON.stringify({ op: "unsubscribe", id: subscription.id })
+        );
+      if (this.subscriptions.size === 0 && this.idleTimer == null) {
+        this.idleTimer = setTimeout(() => {
+          this.idleTimer = null;
+          if (this.subscriptions.size === 0) this.dispose();
+        }, IDLE_CLOSE_MS);
+      }
+    }
+    send(text) {
+      var _a;
+      try {
+        (_a = this.socket) == null ? void 0 : _a.send(text);
+      } catch {
+      }
+    }
+    ensureConnecting() {
+      if (this.socket || this.connecting || this.reconnectTimer != null || this.closed)
+        return;
+      void this.connect();
+    }
+    async connect() {
+      var _a, _b;
+      if (this.closed) return;
+      this.connecting = true;
       let token = null;
-      if (!options.useCookie) {
+      if (!this.useCookie) {
         try {
-          token = await auth.getAccessToken();
+          token = await this.auth.getAccessToken();
         } catch {
           token = null;
         }
       }
-      if (stopped) return;
+      this.connecting = false;
+      if (this.closed || this.subscriptions.size === 0) return;
       let ws;
       try {
-        ws = new WebSocket(changesWsUrl(apiUrl, podId, options.table, cursor, token));
+        ws = new WebSocket(liveWsUrl(this.apiUrl, this.podId, token));
       } catch (error) {
-        (_a = options.onError) == null ? void 0 : _a.call(options, error instanceof Error ? error : new Error(String(error)));
-        scheduleReconnect();
+        for (const sub of this.subscriptions.values()) {
+          (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(
+            _a,
+            error instanceof Error ? error : new Error(String(error))
+          );
+        }
+        this.scheduleReconnect();
         return;
       }
-      socket = ws;
-      ws.onmessage = (event) => {
-        var _a2;
-        let frame;
-        try {
-          frame = JSON.parse(typeof event.data === "string" ? event.data : "");
-        } catch {
-          return;
-        }
-        if (!frame || typeof frame !== "object") return;
-        const record = frame;
-        if (record.type === "ready") {
-          attempt = 0;
-          authRefreshed = false;
-          status("open");
-          cursor = record.since || cursor;
-          if (cursor) (_a2 = options.onReady) == null ? void 0 : _a2.call(options, { since: cursor });
-          return;
-        }
-        cursor = record.stream_id || cursor;
-        options.onChange(record);
-      };
+      this.socket = ws;
+      ws.onmessage = (event) => this.onMessage(event);
       ws.onclose = (event) => {
-        socket = null;
-        if (stopped) {
-          status("closed");
+        if (this.socket === ws) this.onClose(event.code);
+      };
+      ws.onerror = () => {
+      };
+    }
+    onMessage(event) {
+      var _a, _b, _c, _d, _e, _f;
+      let frame;
+      try {
+        const parsed = JSON.parse(
+          typeof event.data === "string" ? event.data : ""
+        );
+        if (!parsed || typeof parsed !== "object") return;
+        frame = parsed;
+      } catch {
+        return;
+      }
+      if (frame.type === "ready") {
+        this.ready = true;
+        this.attempt = 0;
+        this.authRefreshed = false;
+        for (const sub2 of this.subscriptions.values())
+          this.send(sub2.subscribeFrame());
+        this.startPing();
+        return;
+      }
+      const sub = typeof frame.id === "string" ? this.subscriptions.get(frame.id) : void 0;
+      if (!sub) return;
+      const cursor = frameCursor(frame);
+      switch (frame.type) {
+        case "subscribed":
+          sub.cursor = cursor != null ? cursor : sub.cursor;
+          sub.setStatus("open");
+          if (sub.cursor) (_b = (_a = sub.options).onReady) == null ? void 0 : _b.call(_a, { since: sub.cursor });
+          return;
+        case "changes": {
+          sub.cursor = cursor != null ? cursor : sub.cursor;
+          const changes = Array.isArray(frame.changes) ? frame.changes : [];
+          for (const change of changes)
+            sub.options.onChange(this.toFrame(change, sub.cursor));
           return;
         }
-        if (event.code === WS_UNAUTHENTICATED) {
-          if (authRefreshed) {
-            fail(new Error("Datastore change stream: session rejected after refresh"));
-            return;
-          }
-          authRefreshed = true;
-          auth.refreshAccessToken().then(
-            scheduleReconnect,
-            (error) => fail(
-              new Error(
-                `Datastore change stream: session refresh failed (${error instanceof Error ? error.message : String(error)})`
-              )
+        case "resync":
+          sub.cursor = cursor != null ? cursor : sub.cursor;
+          (_e = (_d = sub.options).onResync) == null ? void 0 : _e.call(_d, {
+            cursor: (_c = sub.cursor) != null ? _c : "",
+            reason: typeof frame.reason === "string" ? frame.reason : "unknown"
+          });
+          return;
+        case "error":
+          this.end(
+            sub,
+            `subscription refused (${String(frame.code)}): ${String((_f = frame.message) != null ? _f : "")}`
+          );
+          return;
+        case "unsubscribed":
+          if (frame.reason === "client") return;
+          this.end(
+            sub,
+            `subscription ended by the server (${String(frame.reason)})`
+          );
+          return;
+        default:
+          return;
+      }
+    }
+    toFrame(change, cursor) {
+      var _a;
+      return {
+        type: `datastore.record.${change.op}`,
+        pod_id: this.podId,
+        table_name: change.table,
+        record_id: change.record_id,
+        operation: change.op,
+        payload: (_a = change.row) != null ? _a : {},
+        cursor,
+        stream_id: cursor
+      };
+    }
+    end(sub, message) {
+      var _a, _b;
+      this.subscriptions.delete(sub.id);
+      sub.stopped = true;
+      sub.setStatus("closed");
+      (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(_a, new Error(`Datastore change stream: ${message}`));
+      if (this.subscriptions.size === 0) this.dispose();
+    }
+    failAll(error) {
+      var _a, _b;
+      for (const sub of [...this.subscriptions.values()]) {
+        this.subscriptions.delete(sub.id);
+        sub.stopped = true;
+        sub.setStatus("closed");
+        (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(_a, error);
+      }
+      this.dispose();
+    }
+    onClose(code) {
+      this.socket = null;
+      this.ready = false;
+      this.stopPing();
+      if (this.closed) return;
+      if (this.subscriptions.size === 0) {
+        this.dispose();
+        return;
+      }
+      if (code === WS_UNAUTHENTICATED) {
+        if (this.authRefreshed) {
+          this.failAll(
+            new Error(
+              "Datastore change stream: session rejected after refresh"
             )
           );
           return;
         }
-        if (event.code === WS_FORBIDDEN) {
-          fail(new Error("Datastore change stream: no access to this pod's changes"));
-          return;
+        this.authRefreshed = true;
+        this.auth.refreshAccessToken().then(
+          () => this.scheduleReconnect(),
+          (error) => this.failAll(
+            new Error(
+              `Datastore change stream: session refresh failed (${error instanceof Error ? error.message : String(error)})`
+            )
+          )
+        );
+        return;
+      }
+      if (code === WS_FORBIDDEN) {
+        this.failAll(
+          new Error(
+            "Datastore change stream: no access to this pod's changes"
+          )
+        );
+        return;
+      }
+      if (code === WS_NOT_FOUND) {
+        this.failAll(
+          new Error("Datastore change stream: pod or table not found")
+        );
+        return;
+      }
+      this.scheduleReconnect();
+    }
+    scheduleReconnect() {
+      var _a, _b;
+      if (this.closed) return;
+      if (((_b = (_a = this.auth).getState) == null ? void 0 : _b.call(_a).status) === "unauthenticated") {
+        this.failAll(new Error("Datastore change stream: signed out"));
+        return;
+      }
+      for (const sub of [...this.subscriptions.values()]) {
+        const max = sub.options.maxRetries;
+        if (max != null && this.attempt >= max) {
+          this.end(sub, "max reconnect attempts reached");
         }
-        if (event.code === WS_NOT_FOUND) {
-          fail(new Error("Datastore change stream: pod or table not found"));
-          return;
-        }
-        scheduleReconnect();
-      };
-      ws.onerror = () => {
-      };
-    };
-    const close = () => {
-      if (stopped) return;
-      stopped = true;
-      if (reconnectTimer != null) clearTimeout(reconnectTimer);
+      }
+      if (this.closed || this.subscriptions.size === 0) return;
+      for (const sub of this.subscriptions.values())
+        sub.setStatus("reconnecting");
+      const delay = reconnectDelayMs(this.attempt);
+      this.attempt += 1;
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        void this.connect();
+      }, delay);
+    }
+    startPing() {
+      this.stopPing();
+      this.pingTimer = setInterval(
+        () => this.send('{"op":"ping"}'),
+        PING_INTERVAL_MS
+      );
+    }
+    stopPing() {
+      if (this.pingTimer != null) clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    dispose() {
+      if (this.closed) return;
+      this.closed = true;
+      this.stopPing();
+      if (this.reconnectTimer != null) clearTimeout(this.reconnectTimer);
+      if (this.idleTimer != null) clearTimeout(this.idleTimer);
+      this.reconnectTimer = null;
+      this.idleTimer = null;
+      const socket = this.socket;
+      this.socket = null;
+      this.ready = false;
       if (socket) {
         try {
           socket.close(1e3, "client closed");
         } catch {
         }
-        socket = null;
       }
-      status("closed");
-    };
-    if (options.signal) {
-      if (options.signal.aborted) stopped = true;
-      else options.signal.addEventListener("abort", close, { once: true });
+      this.onDispose(this);
     }
-    if (!stopped) void connect();
+  };
+  var connections = /* @__PURE__ */ new WeakMap();
+  function sharedConnection(apiUrl, auth, podId, useCookie) {
+    let byKey = connections.get(auth);
+    if (!byKey) {
+      byKey = /* @__PURE__ */ new Map();
+      connections.set(auth, byKey);
+    }
+    const key = `${apiUrl.replace(/\/$/, "")}|${podId}|${useCookie ? "cookie" : "token"}`;
+    const existing = byKey.get(key);
+    if (existing && !existing.isClosed) return existing;
+    const map = byKey;
+    const connection = new LiveConnection(
+      apiUrl,
+      auth,
+      podId,
+      useCookie,
+      (gone) => {
+        if (map.get(key) === gone) map.delete(key);
+      }
+    );
+    map.set(key, connection);
+    return connection;
+  }
+  function watchDatastoreChanges(apiUrl, auth, podId, options) {
+    var _a, _b;
+    let subscription = null;
+    let connection = null;
+    let stopped = false;
+    const close = () => {
+      if (stopped) return;
+      stopped = true;
+      if (subscription && connection && !subscription.stopped) {
+        subscription.stopped = true;
+        connection.remove(subscription);
+        subscription.setStatus("closed");
+      }
+    };
+    if ((_a = options.signal) == null ? void 0 : _a.aborted) {
+      stopped = true;
+    } else {
+      (_b = options.signal) == null ? void 0 : _b.addEventListener("abort", close, { once: true });
+      connection = sharedConnection(
+        apiUrl,
+        auth,
+        podId,
+        Boolean(options.useCookie)
+      );
+      subscription = connection.add(options);
+    }
     return {
       close,
       get closed() {
-        return stopped;
+        return stopped || Boolean(subscription == null ? void 0 : subscription.stopped);
       }
     };
   }

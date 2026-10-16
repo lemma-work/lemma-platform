@@ -2728,7 +2728,7 @@ def test_export_then_seed_table_data_strips_audit_columns(tmp_path: Path):
     captured: list[tuple[str, list[dict]]] = []
     import_sdk = SimpleNamespace(
         records=SimpleNamespace(
-            bulk_create=lambda table, items, upsert=False: (
+            bulk_create=lambda table, items, upsert=False, intent=None: (
                 captured.append((table, items, upsert)) or len(items)
             )
         )

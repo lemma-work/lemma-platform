@@ -28,6 +28,7 @@ from app.modules.pod.domain.pod_entities import (
     PodMemberEntity,
 )
 from app.modules.pod.infrastructure.models import Pod, PodJoinRequest, PodMember
+from app.modules.pod.infrastructure.pod_work import stage_pod_work
 from app.modules.pod.infrastructure.pod_administration_queries import (
     count_members_who_can,
     roles_grant_permission,
@@ -48,11 +49,12 @@ class PodRepository(PodRepositoryPort):
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
 
-    def _collect_events(self, entity: PodEntity | PodMemberEntity) -> None:
+    async def _collect_events(self, entity: PodEntity | PodMemberEntity) -> None:
         if hasattr(entity, "collect_events"):
             events = entity.collect_events()
             if events:
                 self.uow.collect_events(events)
+                await stage_pod_work(self.uow, events)
 
     def _raise_pod_name_conflict(self, exc: IntegrityError, name: str) -> None:
         if "uq_pod_active_org_name" in str(exc.orig):
@@ -75,7 +77,7 @@ class PodRepository(PodRepositoryPort):
             await self.session.flush()
         except IntegrityError as exc:
             self._raise_pod_name_conflict(exc, entity.name)
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def get(self, id: UUID) -> Optional[PodEntity]:
@@ -124,7 +126,7 @@ class PodRepository(PodRepositoryPort):
             await self.session.flush()
         except IntegrityError as exc:
             self._raise_pod_name_conflict(exc, entity.name)
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def delete(self, id: UUID) -> bool:
@@ -199,11 +201,12 @@ class PodMemberRepository(PodMemberRepositoryPort):
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
 
-    def _collect_events(self, entity: PodEntity | PodMemberEntity) -> None:
+    async def _collect_events(self, entity: PodEntity | PodMemberEntity) -> None:
         if hasattr(entity, "collect_events"):
             events = entity.collect_events()
             if events:
                 self.uow.collect_events(events)
+                await stage_pod_work(self.uow, events)
 
     def _member_persistence_data(self, entity: PodMemberEntity) -> dict:
         return entity.model_dump(
@@ -254,7 +257,7 @@ class PodMemberRepository(PodMemberRepositoryPort):
         instance = PodMember(**self._member_persistence_data(entity))
         self.session.add(instance)
         await self.session.flush()
-        self._collect_events(entity)
+        await self._collect_events(entity)
         created = await self.get(instance.id)
         return created or instance.to_entity()
 
@@ -305,7 +308,7 @@ class PodMemberRepository(PodMemberRepositoryPort):
                 setattr(instance, key, value)
 
         await self.session.flush()
-        self._collect_events(entity)
+        await self._collect_events(entity)
         updated = await self.get(instance.id)
         return updated or instance.to_entity()
 
@@ -321,7 +324,7 @@ class PodMemberRepository(PodMemberRepositoryPort):
         if not instance:
             return False
 
-        self._collect_events(entity)
+        await self._collect_events(entity)
         await self.session.delete(instance)
         return True
 
@@ -455,11 +458,12 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
 
-    def _collect_events(self, entity: PodJoinRequestEntity) -> None:
+    async def _collect_events(self, entity: PodJoinRequestEntity) -> None:
         if hasattr(entity, "collect_events"):
             events = entity.collect_events()
             if events:
                 self.uow.collect_events(events)
+                await stage_pod_work(self.uow, events)
 
     def _persistence_data(self, entity: PodJoinRequestEntity) -> dict:
         # user_email / user_name are display-only and have no columns.
@@ -480,7 +484,7 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
         instance = PodJoinRequest(**self._persistence_data(entity))
         self.session.add(instance)
         await self.session.flush()
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def update(self, entity: PodJoinRequestEntity) -> PodJoinRequestEntity:
@@ -498,7 +502,7 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
                 setattr(instance, key, value)
 
         await self.session.flush()
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def get(self, id: UUID) -> Optional[PodJoinRequestEntity]:

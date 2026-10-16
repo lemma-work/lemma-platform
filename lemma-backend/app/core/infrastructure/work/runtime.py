@@ -89,6 +89,7 @@ class WorkRuntime:
                     owner=f"{base}:{cls.value}",
                     statement_timeout_ms=work_settings.work_fast_statement_timeout_ms,
                     stopping=self.stopping,
+                    local_wake=self._wake_local,
                 ),
                 slots=class_slots(cls),
                 quantum=work_settings.work_quantum,
@@ -100,6 +101,11 @@ class WorkRuntime:
         self._loops: list[asyncio.Task[None]] = []
         self._stop_task: asyncio.Task[None] | None = None
         self._grace = work_settings.work_shutdown_grace_seconds
+
+    def _wake_local(self, cls: WorkClass) -> None:
+        dispatcher = self.dispatchers.get(cls)
+        if dispatcher is not None:
+            dispatcher.wake()
 
     @property
     def classes(self) -> list[WorkClass]:

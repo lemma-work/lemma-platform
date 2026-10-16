@@ -10,7 +10,8 @@ from app.core.infrastructure.db.transaction_locks import (
 )
 from app.core.domain.uow import IUnitOfWork
 from app.core.domain.message_bus import MessageBus
-from app.core.infrastructure.events.models import DomainEventOutbox
+from app.core.infrastructure.events.models import DomainEventInbox, DomainEventOutbox
+from app.core.infrastructure.events.settled_by_work import settled_inbox_rows
 from app.core.infrastructure.events.outbox_wake import notify_outbox_wake
 from app.core.log.log import get_logger
 
@@ -121,6 +122,16 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
             insert(DomainEventOutbox).on_conflict_do_nothing(index_elements=["id"]),
             rows,
         )
+        # Consumers this release moved to work items are settled here, in the
+        # same transaction: their work was written with the event.
+        settled = settled_inbox_rows(self._pending_events)
+        if settled:
+            await self.session.execute(
+                insert(DomainEventInbox).on_conflict_do_nothing(
+                    index_elements=["consumer", "event_id"]
+                ),
+                settled,
+            )
         # In the same transaction as the insert, so the dispatcher can never be
         # woken for rows a rollback erased, nor before they are visible.
         await notify_outbox_wake(self.session)

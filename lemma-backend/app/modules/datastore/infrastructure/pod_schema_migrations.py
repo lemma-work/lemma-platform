@@ -30,6 +30,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.modules.datastore.changes.schema import (
+    create_change_log,
+    create_global_tables,
+)
 from app.modules.datastore.infrastructure import pod_schema_memo
 from app.modules.datastore.infrastructure.pod_schema_catalog import (
     bootstrap_pod_schema,
@@ -39,13 +43,16 @@ from app.modules.datastore.infrastructure.query_role import POD_SCHEMA_RE
 logger = get_logger(__name__)
 
 #: The version every pod schema is migrated to by this release.
-POD_SCHEMA_LATEST = 2
+POD_SCHEMA_LATEST = 3
 
 #: Version 1: ``reserved_chunks`` with its path, text and vector indexes.
 CHUNKS_VERSION = 1
 #: Version 2: ``search_files`` (one row per indexed file), a stored ``tsv``
 #: column, and a unique ``(file_id, chunk_index)``.
 SEARCH_FILES_VERSION = 2
+#: Version 3: the record change log (``reserved_changes``) and its durable
+#: subscribers (``reserved_change_subscribers``); see ``datastore.changes``.
+CHANGE_LOG_VERSION = 3
 
 VERSIONS_TABLE = "public.lemma_pod_schema_versions"
 
@@ -102,6 +109,7 @@ async def _ensure_globals(engine: AsyncEngine) -> None:
                 "migrated_at timestamptz NOT NULL DEFAULT now())"
             )
         )
+        await create_global_tables(conn)
     _globals_ready = True
 
 
@@ -451,6 +459,7 @@ async def _v2_search_files(conn: AsyncConnection, schema: str) -> None:
 _STEPS: dict[int, _Step] = {
     CHUNKS_VERSION: _v1_chunks,
     SEARCH_FILES_VERSION: _v2_search_files,
+    CHANGE_LOG_VERSION: create_change_log,
 }
 if sorted(_STEPS) != list(range(1, POD_SCHEMA_LATEST + 1)):
     raise RuntimeError("pod schema steps must run 1..POD_SCHEMA_LATEST with no gap")

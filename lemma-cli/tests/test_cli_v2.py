@@ -3125,10 +3125,11 @@ def test_records_import_uses_bulk_create_csv(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
     class FakeRecords:
-        def bulk_create(self, pod_id, table, records):
+        def bulk_create(self, pod_id, table, records, intent=None):
             captured["pod_id"] = pod_id
             captured["table"] = table
             captured["records"] = records
+            captured["intent"] = intent
             return len(records)
 
     _patch_run(monkeypatch, data, SimpleNamespace(records=FakeRecords()))
@@ -3146,6 +3147,7 @@ def test_records_import_uses_bulk_create_csv(monkeypatch, tmp_path):
         {"title": "A", "status": "open"},
         {"title": "B", "status": "done"},
     ]
+    assert captured["intent"] == "import", "an import is marked as one for triggers"
     assert "Imported 2 record(s)" in result.stdout
 
 
@@ -3153,7 +3155,7 @@ def test_records_import_jsonl_and_limit(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
     class FakeRecords:
-        def bulk_create(self, pod_id, table, records):
+        def bulk_create(self, pod_id, table, records, intent=None):
             captured["records"] = records
             return len(records)
 

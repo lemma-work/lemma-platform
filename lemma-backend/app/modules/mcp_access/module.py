@@ -22,24 +22,22 @@ def _routers():
     return [consent, oauth_router()]
 
 
-def _event_routers():
-    from app.modules.mcp_access.events import event_deliveries, pod_lifecycle
+def _register_work() -> None:
+    # Every process: a pod deletion (API) writes this through `PodDeleted`.
+    import app.modules.mcp_access.events.pod_lifecycle  # noqa: F401
 
-    return [pod_lifecycle.router, event_deliveries.router]
+    # Every process: subscribing (API) writes `changes.sync_subscribers`, and
+    # the worker's change-log delivery finds this module's subscriber by prefix.
+    import app.modules.mcp_access.events.event_deliveries  # noqa: F401
 
 
 def _register_streaq() -> None:
-    import app.modules.mcp_access.events.event_deliveries  # noqa: F401
     import app.modules.mcp_access.events.tasks  # noqa: F401
 
 
 module = LemmaModule(
     name="mcp_access",
     routers=_routers,
-    event_routers=_event_routers,
     register_streaq=_register_streaq,
-    stream_groups=(
-        ("pod_events", "mcp-access-pod-events"),
-        ("datastore.events", "mcp-access-event-deliveries"),
-    ),
+    register_work=_register_work,
 )

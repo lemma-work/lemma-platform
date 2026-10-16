@@ -33,7 +33,6 @@ from app.modules.function.application.function_runtime_route_resolver import (
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
 )
-from app.modules.function.domain.ports import PodRunSlotsPort
 
 logger = get_logger(__name__)
 
@@ -57,10 +56,8 @@ class FunctionRuntimeQuarantine:
         routes: FunctionRuntimeRouteResolver,
         uow_factory: UnitOfWorkFactory,
         runtime_http_client_factory: Callable[[], httpx.AsyncClient],
-        pod_runs: PodRunSlotsPort,
     ) -> None:
         self._routes = routes
-        self._pod_runs = pod_runs
         self._uow_factory = uow_factory
         self._runtime_http_client_factory = runtime_http_client_factory
 
@@ -121,8 +118,6 @@ class FunctionRuntimeQuarantine:
                     error=ORPHANED_RUN_ERROR,
                     limit=_ORPHANED_RUNS_PAGE,
                 )
-            for run_id in failed:
-                await self._pod_runs.release(pod_id, run_id)
             total += len(failed)
             # A failed run leaves RUNNING, so the next page is new rows; a row
             # another transaction holds is skipped, never returned again.

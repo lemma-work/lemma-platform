@@ -104,6 +104,40 @@ async def test_uow_stages_event_before_database_commit() -> None:
     assert not uow.has_pending_events()
 
 
+class _PodDeletedForTest(DomainEvent):
+    event_type: str = "pod.deleted"
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return "pod_events"
+
+
+@pytest.mark.asyncio
+async def test_uow_settles_the_consumers_this_release_moved_to_work() -> None:
+    """A pod deletion's old consumers are marked settled with the event, so
+    the next release's cutover does not convert it a second time."""
+    session = _FakeSession()
+    uow = SqlAlchemyUnitOfWork(session)  # type: ignore[arg-type]
+    deleted = _PodDeletedForTest()
+    uow.collect_events([deleted, _TestEvent(value="unmoved")])
+
+    await uow.commit()
+
+    # Outbox insert, settled inbox rows, the wake.
+    assert len(session.statements) == 3
+    settled = session.parameters[1]
+    assert {row["consumer"] for row in settled} == {
+        "schedule-pod-events",
+        "agent-surfaces.pod-deletion",
+        "agent.pod-links.pod-deletion",
+        "mcp-access.pod-deletion",
+    }
+    assert {row["event_id"] for row in settled} == {deleted.event_id}
+    assert {(row["status"], row["last_error_type"]) for row in settled} == {
+        ("COMPLETED", "work_runtime")
+    }
+
+
 class _MemoryInbox(InboxConsumer):
     def __init__(self, attempt: int = 1) -> None:
         super().__init__(AsyncMock(), max_attempts=10)  # type: ignore[arg-type]

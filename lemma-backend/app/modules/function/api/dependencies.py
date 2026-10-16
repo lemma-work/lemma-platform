@@ -26,7 +26,6 @@ from app.core.authorization.dependencies import (
 )
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.events.message_bus import get_message_bus
-from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.function.infrastructure.repositories import (
     FunctionRepository,
@@ -63,10 +62,6 @@ from app.modules.function.application.function_schema_dispatcher import (
 from app.modules.function.application.function_runtime_http_client import (
     FunctionRuntimeHttpClientPool,
 )
-from app.modules.function.infrastructure.function_run_queue import (
-    StreaqFunctionRunQueue,
-)
-from app.modules.function.infrastructure.pod_run_gate import PodRunGate
 from app.modules.function.application.function_runtime_route_resolver import (
     endpoint_reuse_seconds,
 )
@@ -85,9 +80,6 @@ _function_runtime_endpoint_cache = FunctionRuntimeEndpointCache(
     max_entries=function_settings.function_runtime_endpoint_cache_max_entries,
 )
 _function_runtime_http_clients = FunctionRuntimeHttpClientPool()
-_function_pod_runs = PodRunGate(
-    limit=function_settings.function_runtime_max_concurrent_runs_per_pod,
-)
 
 
 async def close_function_runtime_http_clients() -> None:
@@ -158,7 +150,6 @@ def get_function_runtime_gateway(
         storage_factory=get_function_storage_factory(),
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         repository_factory=FunctionExecutionRepository,
-        pod_runs=_function_pod_runs,
     )
 
 
@@ -220,7 +211,7 @@ def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatc
         runtime_http_client_factory=_function_runtime_http_clients.get,
         organization_resolver=resolve_function_organization_id,
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
-        pod_runs=_function_pod_runs,
+        max_running_per_pod=function_settings.function_runtime_max_concurrent_runs_per_pod,
     )
 
 
@@ -244,7 +235,6 @@ def build_function_use_cases(uow_factory: UnitOfWorkFactory) -> FunctionUseCases
         build_function_service,
         build_function_definition_compiler(build_function_schema_dispatcher()),
         dispatcher,
-        StreaqFunctionRunQueue(get_streaq_job_queue()),
     )
 
 

@@ -33,7 +33,7 @@ from app.core.tests.e2e.work_support import (
     WorkDb,
 )
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 
 async def _bulk(work_db: WorkDb, ns: str, count: int, *, kind: str, age: float) -> None:

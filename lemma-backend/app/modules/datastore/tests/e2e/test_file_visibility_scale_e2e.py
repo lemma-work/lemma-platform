@@ -351,11 +351,20 @@ async def test_authorizing_a_candidate_pool_does_not_touch_the_rest_of_the_pod(
     service = AuthorizationDataService(db_session)
     ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
 
+    # A pool like a search's: some rows the caller may read, some not. Chosen
+    # by owner, not by whatever `LIMIT` returns first -- after the module's
+    # earlier tests that was sometimes forty of the stranger's personal files,
+    # and nothing to authorize.
     candidates = list(
         (
             await db_session.execute(
-                text("SELECT id FROM datastore_files WHERE pod_id = :pod LIMIT 40"),
-                {"pod": pod_id},
+                text(
+                    "(SELECT id FROM datastore_files WHERE pod_id = :pod "
+                    "AND owner_user_id = :me ORDER BY id LIMIT 20) UNION ALL "
+                    "(SELECT id FROM datastore_files WHERE pod_id = :pod "
+                    "AND owner_user_id <> :me ORDER BY id LIMIT 20)"
+                ),
+                {"pod": pod_id, "me": user_id},
             )
         ).scalars()
     )

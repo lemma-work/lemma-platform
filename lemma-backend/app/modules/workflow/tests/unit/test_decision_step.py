@@ -1,18 +1,16 @@
 """A decision node that asks a question: suspend, ask, route, and every failure.
 
-The engine, the job queue and the provider are stand-ins injected through the
-seams the code already takes -- the `DecisionPort` on the stepper, the
+The engine, the work writer and the provider are stand-ins injected through
+the seams the code already takes -- the writer on the stepper, the
 `DecisionWaits` and `DecisionMaker` the job is handed, and the engine and
 authorization context the resume service is built with.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from streaq.task import TaskStatus
 
 from app.modules.decisions.contracts import (
     Answer,
@@ -42,11 +40,8 @@ from app.modules.workflow.domain.wait import (
 )
 from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.execution.stepper import RunStepper
-from app.modules.workflow.infrastructure.decision_queue import (
-    AfterCommitDecisionQueue,
-)
+from app.modules.workflow.execution.wait_work import WORKFLOW_DECIDE
 from app.modules.workflow.services.decision_resume_service import (
-    MAX_DECISION_REQUEUES,
     DecisionResumeService,
     PendingDecision,
 )
@@ -55,7 +50,6 @@ from app.modules.workflow.services.decision_step import (
     RetryDecision,
     ask_waiting_decision,
 )
-from app.modules.workflow.services.run_resume_service import RunResumeService
 
 pytestmark = pytest.mark.unit
 
@@ -117,32 +111,24 @@ def _run(
 
 
 class _Ports:
-    """The four ports a stepper drives; only `decision` matters here."""
+    """What a stepper drives -- the function port and the work writer; the
+    ``workflow.decide`` item the executor writes is the question being asked."""
 
     def __init__(self) -> None:
         self.asked: list[str] = []
-        self.requeues: list[int] = []
         self.functions: list[str] = []
-        #: What the queue says of the job; None when it cannot say.
-        self.state: str | None = "ended"
 
-    def ask_once_committed(self, external_ref: str, *, requeue: int = 0) -> None:
-        self.asked.append(external_ref)
-        self.requeues.append(requeue)
-
-    async def job_state(self, external_ref: str, *, requeue: int = 0) -> str | None:
-        return self.state
+    async def add(self, kind, ns, payload, **_options):
+        if kind == WORKFLOW_DECIDE:
+            self.asked.append(payload.external_ref)
 
     async def execute_function(self, function_name, inputs, pod_id, user_id, ctx=None):
         self.functions.append(function_name)
         return {"done": function_name}
 
-    async def schedule_workflow_wake(self, run_id, scheduled_at, pod_id, user_id):
-        return run_id
-
 
 def _stepper(ports: _Ports) -> RunStepper:
-    return RunStepper(agent=ports, function=ports, schedule=ports, decision=ports)
+    return RunStepper(agent=ports, function=ports, work=ports)  # type: ignore[arg-type]
 
 
 # -- the executor suspends; it never answers -------------------------------------
@@ -473,13 +459,12 @@ class _Engine:
         )
         self.wait_repo = self.run_repo = self.flow_repo = _Repo(self)
         self.uow = _Uow()
-        self.decision_adapter = _Ports()
         self.updated: list[dict] = []
         self.resumed: list[dict] = []
         self.failed: list[dict] = []
 
     async def resume_internal(
-        self, wait_type, external_ref, output, *, ctx, next_node_id
+        self, wait_type, external_ref, output, *, ctx, next_node_id, found=None
     ):
         self.resumed.append({"output": output, "next_node_id": next_node_id})
 
@@ -600,183 +585,3 @@ async def test_an_answer_for_a_decision_no_longer_waited_on_is_dropped():
 
     assert await _service(engine).resume_on_answer("ref", _result()) is False
     assert engine.resumed == engine.failed == []
-
-
-# -- recovering a lost job ---------------------------------------------------------
-
-
-async def test_a_lost_decision_is_queued_again_and_counted():
-    engine = _Engine(_flow(_question()))
-
-    assert await _service(engine).recover_lost(engine.wait) is True
-
-    assert engine.decision_adapter.asked == ["ref"]
-    assert engine.decision_adapter.requeues == [1], "under a job id of its own"
-    assert engine.updated[-1]["requeues"] == 1
-    assert engine.uow.commits == 1
-    assert engine.failed == []
-
-
-@pytest.mark.parametrize("state", ["alive", None], ids=["alive", "unknown"])
-async def test_a_decision_whose_job_may_still_answer_is_not_requeued_or_counted(state):
-    """Slow is not lost: a job behind a backlog or waiting out a retry is left to
-    answer, and a queue that cannot say is asked again by the next sweep, so no
-    run is failed for a backlog."""
-    engine = _Engine(_flow(_question()))
-    engine.decision_adapter.state = state
-
-    assert await _service(engine).recover_lost(engine.wait) is False
-
-    assert engine.decision_adapter.asked == []
-    assert engine.updated == engine.failed == []
-    assert engine.uow.commits == 0, "the run's lock was never taken"
-
-
-async def test_a_decision_answered_meanwhile_is_left_alone():
-    """The job answered it between the sweep's read and its row lock."""
-    engine = _Engine(_flow(_question()))
-    stale = engine.wait
-    engine.wait = None
-
-    assert await _service(engine).recover_lost(stale) is False
-
-    assert engine.decision_adapter.asked == []
-    assert engine.updated == engine.failed == []
-    assert engine.uow.commits == 1, "the run's row lock is released"
-
-
-async def test_a_job_that_never_reached_the_queue_is_queued_again_uncounted():
-    """Its enqueue was lost after the commit -- Redis refused it -- so nothing
-    ran: the same queueing is tried again, and no loss is counted against the
-    run for a queue outage."""
-    engine = _Engine(_flow(_question()))
-    engine.decision_adapter.state = "missing"
-
-    assert await _service(engine).recover_lost(engine.wait) is True
-
-    assert engine.decision_adapter.asked == ["ref"]
-    assert engine.decision_adapter.requeues == [0], "the same queueing, not a new one"
-    assert engine.updated == [], "nothing counted"
-    assert engine.failed == []
-    assert engine.uow.commits == 1
-
-
-async def test_a_decision_lost_too_often_fails_the_run():
-    engine = _Engine(_flow(_question()))
-    engine.wait.payload = {**engine.wait.payload, "requeues": MAX_DECISION_REQUEUES}
-
-    assert await _service(engine).recover_lost(engine.wait) is True
-
-    assert engine.decision_adapter.asked == []
-    assert "was lost" in engine.failed[0]["error"]
-
-
-async def test_the_sweep_recovers_a_stale_decision_wait():
-    engine = _Engine(_flow(_question()))
-    engine.wait.created_at = datetime.now(timezone.utc) - timedelta(minutes=11)
-
-    acted = await RunResumeService(engine).reconcile_stale_waits()
-
-    assert acted == 1
-    assert engine.decision_adapter.asked == ["ref"]
-
-
-# -- queueing the job after the commit -------------------------------------------
-
-
-class _AfterCommitUow:
-    def __init__(self) -> None:
-        self.callbacks: list = []
-
-    def after_commit(self, callback) -> None:
-        self.callbacks.append(callback)
-
-
-class _JobQueue:
-    def __init__(
-        self,
-        error: Exception | None = None,
-        statuses: dict[str, TaskStatus] | None = None,
-    ) -> None:
-        self.error = error
-        self.enqueued: list[dict] = []
-        self.statuses = statuses or {}
-
-    async def enqueue(self, job_name: str, **kwargs: object) -> None:
-        if self.error is not None:
-            raise self.error
-        self.enqueued.append({"job_name": job_name, **kwargs})
-
-    async def status(self, job_id: str) -> TaskStatus:
-        if self.error is not None:
-            raise self.error
-        return self.statuses.get(job_id, TaskStatus.NOT_FOUND)
-
-    async def abort(self, job_id: str, *, timeout_seconds: float | None = None) -> bool:
-        return False
-
-
-async def test_a_requeued_job_gets_an_id_of_its_own():
-    """A finished job's result outlives it under its id, so a requeue under the
-    same id would read as finished while it still waits its turn."""
-    uow = _AfterCommitUow()
-    queue = _JobQueue()
-
-    AfterCommitDecisionQueue(uow, queue=queue).ask_once_committed("ref", requeue=2)
-    for callback in uow.callbacks:
-        await callback()
-
-    assert queue.enqueued[0]["_job_id"] == "workflow-decision:ref:2"
-
-
-@pytest.mark.parametrize(
-    ("status", "state"),
-    [
-        (TaskStatus.QUEUED, "alive"),
-        (TaskStatus.SCHEDULED, "alive"),
-        (TaskStatus.RUNNING, "alive"),
-        (TaskStatus.DONE, "ended"),
-        (TaskStatus.NOT_FOUND, "missing"),
-    ],
-)
-async def test_where_a_job_is_comes_from_the_queue(status, state):
-    queue = _JobQueue(statuses={"workflow-decision:ref:1": status})
-    adapter = AfterCommitDecisionQueue(_AfterCommitUow(), queue=queue)
-
-    assert await adapter.job_state("ref", requeue=1) == state
-
-
-async def test_a_queue_that_cannot_be_reached_cannot_say_where_a_job_is():
-    adapter = AfterCommitDecisionQueue(
-        _AfterCommitUow(), queue=_JobQueue(ConnectionRefusedError())
-    )
-
-    assert await adapter.job_state("ref") is None
-
-
-async def test_the_job_is_queued_only_once_the_wait_is_committed():
-    uow = _AfterCommitUow()
-    queue = _JobQueue()
-
-    AfterCommitDecisionQueue(uow, queue=queue).ask_once_committed("ref")
-    assert queue.enqueued == []
-    for callback in uow.callbacks:
-        await callback()
-
-    assert queue.enqueued == [
-        {
-            "job_name": "decide_workflow_step",
-            "external_ref": "ref",
-            "_job_id": "workflow-decision:ref",
-        }
-    ]
-
-
-async def test_a_queue_that_cannot_be_reached_leaves_the_decision_to_the_sweep():
-    uow = _AfterCommitUow()
-
-    AfterCommitDecisionQueue(
-        uow, queue=_JobQueue(ConnectionRefusedError())
-    ).ask_once_committed("ref")
-
-    await uow.callbacks[0]()  # does not raise into the committed request

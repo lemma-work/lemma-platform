@@ -268,6 +268,9 @@ class FakeChannels:
         #: Set to hold every subscription open until the test releases it.
         self.subscribe_gate: asyncio.Event | None = None
 
+    async def subscriber_count(self, channel: str) -> int:
+        return len(self._subscribers.get(channel, []))
+
     async def publish(self, channel: str, message: object) -> None:
         if (
             self._hold_announcements

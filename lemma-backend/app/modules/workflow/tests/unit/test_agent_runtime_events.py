@@ -1,4 +1,3 @@
-from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -6,10 +5,6 @@ import pytest
 
 from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.function.domain.events import (
-    FunctionRunCompletedEvent,
-    FunctionRunFailedEvent,
-)
 from app.modules.workflow.events import handlers
 from app.modules.test_support.fakes import PassthroughEventInbox
 
@@ -116,77 +111,3 @@ async def test_workflow_enqueues_agent_completion_with_waiting_run(monkeypatch):
             },
         )
     ]
-
-
-@pytest.mark.asyncio
-async def test_workflow_enqueues_function_completion_with_output():
-    job_queue = _FakeJobQueue()
-    event = FunctionRunCompletedEvent(
-        run_id=uuid4(),
-        function_id=uuid4(),
-        output_data={"recorded": True},
-        completed_at=datetime.now(),
-    ).model_dump(mode="json")
-
-    await handlers.handle_function_run_event(
-        event,
-        _FakeLogger(),
-        job_queue=job_queue,
-        inbox=PassthroughEventInbox(),
-    )
-
-    assert job_queue.enqueued == [
-        (
-            "resume_workflow_run_for_function",
-            {
-                "function_run_id": event["run_id"],
-                "run_status": "COMPLETED",
-                "output": {"recorded": True},
-                "_job_id": f"workflow-resume-function:{event['run_id']}:COMPLETED",
-            },
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_workflow_enqueues_function_failure_with_error():
-    job_queue = _FakeJobQueue()
-    event = FunctionRunFailedEvent(
-        run_id=uuid4(),
-        function_id=uuid4(),
-        error="boom",
-        completed_at=datetime.now(),
-    ).model_dump(mode="json")
-
-    await handlers.handle_function_run_event(
-        event,
-        _FakeLogger(),
-        job_queue=job_queue,
-        inbox=PassthroughEventInbox(),
-    )
-
-    assert job_queue.enqueued == [
-        (
-            "resume_workflow_run_for_function",
-            {
-                "function_run_id": event["run_id"],
-                "run_status": "FAILED",
-                "output": {"error": "boom"},
-                "_job_id": f"workflow-resume-function:{event['run_id']}:FAILED",
-            },
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_workflow_ignores_non_terminal_function_event():
-    job_queue = _FakeJobQueue()
-    event = {
-        "event_type": "function.run.started",
-        "run_id": str(uuid4()),
-        "function_id": str(uuid4()),
-    }
-
-    await handlers.handle_function_run_event(event, _FakeLogger(), job_queue=job_queue)
-
-    assert job_queue.enqueued == []

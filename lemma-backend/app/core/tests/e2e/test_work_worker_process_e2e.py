@@ -201,8 +201,11 @@ async def test_a_real_worker_runs_schedules_exports_metrics_and_drains_on_sigter
             await eventually(
                 label="every work metric exported with its class label",
                 probe=lambda: _async(dict(collector.seen)),
-                done=lambda seen: all(
-                    "work_class" in seen.get(name, set()) for name in _WORK_METRICS
+                done=lambda seen: (
+                    all("work_class" in seen.get(name, set()) for name in _WORK_METRICS)
+                    # Per database, not per class: the change-log horizon.
+                    and "database"
+                    in seen.get("lemma.work.oldest_transaction_age", set())
                 ),
                 timeout_seconds=15,
             )

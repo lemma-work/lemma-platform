@@ -427,6 +427,8 @@ _NAME_TO_MODULE = {
     'PodRoleResourcePermissionRequest': 'pod_role_resource_permission_request',
     'PodRoleResourcePermissionResponse': 'pod_role_resource_permission_response',
     'PodRoleResponse': 'pod_role_response',
+    'PodTriggerSettings': 'pod_trigger_settings',
+    'PodTriggerSettingsBulkWritesDefaultType0': 'pod_trigger_settings_bulk_writes_default_type_0',
     'PodUpdateRequest': 'pod_update_request',
     'PublicAudience': 'public_audience',
     'PublicColumnItem': 'public_column_item',
@@ -550,6 +552,9 @@ _NAME_TO_MODULE = {
     'TableSummaryResponse': 'table_summary_response',
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
+    'TriggerSkipListResponse': 'trigger_skip_list_response',
+    'TriggerSkipReason': 'trigger_skip_reason',
+    'TriggerSkipResponse': 'trigger_skip_response',
     'Update': 'update',
     'UpdateAgentHostRuntimeProfileRequest': 'update_agent_host_runtime_profile_request',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0': 'update_agent_host_runtime_profile_request_config_selections_type_0',
@@ -644,6 +649,7 @@ _NAME_TO_MODULE = {
     'WorkspaceFileListResponse': 'workspace_file_list_response',
     'WorkspaceStatusResponse': 'workspace_status_response',
     'WorkspaceStatusResponseState': 'workspace_status_response_state',
+    'WriteIntent': 'write_intent',
 }
 
 if TYPE_CHECKING:
@@ -1065,6 +1071,8 @@ if TYPE_CHECKING:
     from .pod_role_resource_permission_request import PodRoleResourcePermissionRequest
     from .pod_role_resource_permission_response import PodRoleResourcePermissionResponse
     from .pod_role_response import PodRoleResponse
+    from .pod_trigger_settings import PodTriggerSettings
+    from .pod_trigger_settings_bulk_writes_default_type_0 import PodTriggerSettingsBulkWritesDefaultType0
     from .pod_update_request import PodUpdateRequest
     from .public_audience import PublicAudience
     from .public_column_item import PublicColumnItem
@@ -1188,6 +1196,9 @@ if TYPE_CHECKING:
     from .table_summary_response import TableSummaryResponse
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
+    from .trigger_skip_list_response import TriggerSkipListResponse
+    from .trigger_skip_reason import TriggerSkipReason
+    from .trigger_skip_response import TriggerSkipResponse
     from .update import Update
     from .update_agent_host_runtime_profile_request import UpdateAgentHostRuntimeProfileRequest
     from .update_agent_host_runtime_profile_request_config_selections_type_0 import UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0
@@ -1282,6 +1293,7 @@ if TYPE_CHECKING:
     from .workspace_file_list_response import WorkspaceFileListResponse
     from .workspace_status_response import WorkspaceStatusResponse
     from .workspace_status_response_state import WorkspaceStatusResponseState
+    from .write_intent import WriteIntent
 
 
 def __getattr__(name: str):
@@ -1716,6 +1728,8 @@ __all__ = [
     'PodRoleResourcePermissionRequest',
     'PodRoleResourcePermissionResponse',
     'PodRoleResponse',
+    'PodTriggerSettings',
+    'PodTriggerSettingsBulkWritesDefaultType0',
     'PodUpdateRequest',
     'PublicAudience',
     'PublicColumnItem',
@@ -1839,6 +1853,9 @@ __all__ = [
     'TableSummaryResponse',
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
+    'TriggerSkipListResponse',
+    'TriggerSkipReason',
+    'TriggerSkipResponse',
     'Update',
     'UpdateAgentHostRuntimeProfileRequest',
     'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0',
@@ -1933,4 +1950,5 @@ __all__ = [
     'WorkspaceFileListResponse',
     'WorkspaceStatusResponse',
     'WorkspaceStatusResponseState',
+    'WriteIntent',
 ]

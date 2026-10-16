@@ -210,17 +210,13 @@ class FunctionRunModel(UUIDAuditBase):
             "function_id",
             text("id DESC"),
         ),
-        # ``fail_expired``: the once-a-minute deadline sweep. Partial because
-        # terminal runs are the overwhelming majority of the table and none of
-        # them can expire, and ordered to match the query's ORDER BY so the
-        # LIMIT is satisfied from the index instead of a sort.
+        # The per-pod gate counts a pod's RUNNING runs at every start. Partial:
+        # only runs holding a slot are in it, so the count never touches the
+        # terminal history that is most of the table.
         Index(
-            "ix_function_runs_expiring",
-            "deadline_at",
-            "id",
-            postgresql_where=text(
-                "deadline_at IS NOT NULL AND status IN ('PENDING', 'RUNNING')"
-            ),
+            "ix_function_runs_running",
+            "function_id",
+            postgresql_where=text("status = 'RUNNING'"),
         ),
         # The contact's delete cascades through this FK; without an index it
         # would scan every run. Partial: member runs never carry one.
@@ -228,15 +224,6 @@ class FunctionRunModel(UUIDAuditBase):
             "ix_function_runs_contact_id",
             "contact_id",
             postgresql_where=text("contact_id IS NOT NULL"),
-        ),
-        # ``list_pending_async_runs``: the recovery half of the same cron.
-        Index(
-            "ix_function_runs_pending_async",
-            "created_at",
-            "id",
-            postgresql_where=text(
-                "status = 'PENDING' AND job_id IS NOT NULL AND deadline_at IS NOT NULL"
-            ),
         ),
     )
 

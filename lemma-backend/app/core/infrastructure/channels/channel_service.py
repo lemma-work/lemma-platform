@@ -124,6 +124,11 @@ class RedisChannelAdapter:
             payload = json.dumps(message, default=str)
         await (await self._client()).publish(channel, payload)
 
+    async def subscriber_count(self, channel: str) -> int:
+        """Redis ``PUBSUB NUMSUB``: one subscription per process with a listener."""
+        counts = await (await self._client()).pubsub_numsub(channel)
+        return sum(int(count) for _name, count in counts)
+
     @asynccontextmanager
     async def subscribe(
         self, channels: Sequence[str]

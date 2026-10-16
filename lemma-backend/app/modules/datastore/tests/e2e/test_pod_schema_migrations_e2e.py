@@ -167,6 +167,7 @@ async def test_the_backfill_never_resurrects_a_dropped_schema(
     assert exists == 0
 
 
+@pytest.mark.drives_work
 async def test_the_backfill_job_migrates_every_schema_page_by_page(
     engine: AsyncEngine, postgres_only_database_url: str, monkeypatch
 ) -> None:

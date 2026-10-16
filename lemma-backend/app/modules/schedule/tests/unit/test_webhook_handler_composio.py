@@ -3,11 +3,24 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
+from app.modules.schedule.services.trigger_fire import FireOutcome, TriggerEvent
 from app.modules.schedule.services.webhook_handler import WebhookHandler
 from app.modules.schedule.services.webhook_schedule_matcher import (
     WebhookScheduleMatcher,
 )
 from app.modules.schedule.domain.errors import ScheduleSourceEventIdRequiredError
+
+
+class _Fired:
+    """Records each fire the handler asks for, in place of ``fire_trigger``."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[ScheduleEntity, TriggerEvent]] = []
+
+    async def __call__(self, uow, schedule, event) -> FireOutcome:
+        del uow
+        self.calls.append((schedule, event))
+        return FireOutcome.STARTED
 
 
 def _null_uow_factory():
@@ -31,7 +44,7 @@ def _null_uow_factory():
 @pytest.mark.asyncio
 async def test_handle_webhook_composio_success(composio_gmail_event):
     schedule_repo = AsyncMock()
-    event_publisher = AsyncMock()
+    fired = _Fired()
 
     matcher = WebhookScheduleMatcher(
         schedule_repository=schedule_repo,
@@ -39,7 +52,7 @@ async def test_handle_webhook_composio_success(composio_gmail_event):
     handler = WebhookHandler(
         matcher_factory=lambda _uow: matcher,
         uow_factory=_null_uow_factory,
-        event_publisher=event_publisher,
+        fire=fired,
     )
 
     schedule_id = uuid4()
@@ -66,7 +79,7 @@ async def test_handle_webhook_composio_success(composio_gmail_event):
         schedule_type=ScheduleType.WEBHOOK,
         criteria={"provider_trigger_id": provider_id},
     )
-    event_publisher.publish_schedule_fired.assert_called_once()
+    assert len(fired.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -79,7 +92,7 @@ async def test_handle_webhook_composio_missing_provider_id():
     handler = WebhookHandler(
         matcher_factory=lambda _uow: matcher,
         uow_factory=_null_uow_factory,
-        event_publisher=AsyncMock(),
+        fire=_Fired(),
     )
 
     payload = {"type": "some_event", "data": {}}
@@ -92,7 +105,7 @@ async def test_handle_webhook_composio_missing_provider_id():
 @pytest.mark.asyncio
 async def test_handle_webhook_composio_v3_success():
     schedule_repo = AsyncMock()
-    event_publisher = AsyncMock()
+    fired = _Fired()
 
     matcher = WebhookScheduleMatcher(
         schedule_repository=schedule_repo,
@@ -100,7 +113,7 @@ async def test_handle_webhook_composio_v3_success():
     handler = WebhookHandler(
         matcher_factory=lambda _uow: matcher,
         uow_factory=_null_uow_factory,
-        event_publisher=event_publisher,
+        fire=fired,
     )
 
     schedule_id = uuid4()
@@ -137,8 +150,8 @@ async def test_handle_webhook_composio_v3_success():
         schedule_type=ScheduleType.WEBHOOK,
         criteria={"provider_trigger_id": provider_id},
     )
-    publish_call = event_publisher.publish_schedule_fired.call_args.kwargs
-    assert publish_call["payload"] == payload["data"]
-    assert publish_call["metadata"]["event_type"] == payload["metadata"]["trigger_slug"]
-    assert publish_call["metadata"]["webhook_event_type"] == "composio.trigger.message"
-    assert publish_call["source_event_id"] == "evt_123"
+    [(_, event)] = fired.calls
+    assert event.payload == payload["data"]
+    assert event.metadata["event_type"] == payload["metadata"]["trigger_slug"]
+    assert event.metadata["webhook_event_type"] == "composio.trigger.message"
+    assert event.source_event_id == "evt_123"

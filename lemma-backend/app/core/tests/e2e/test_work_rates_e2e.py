@@ -20,7 +20,7 @@ from app.core.infrastructure.work.types import WorkClass, WorkMode
 from app.core.tests.e2e.work_support import POD_A, POD_B, Demo, WorkDb, write_effect
 from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 HOUR = 3600.0
 

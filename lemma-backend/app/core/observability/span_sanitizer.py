@@ -199,6 +199,9 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         "work_class",
         "work_kind",
         "error_class",
+        # Which of the platform's own databases a reading is about: ``main``
+        # or ``datastore``. Bounded by the code, never a host or a DSN.
+        "database",
         "execution_mode",
         "runtime_profile",
         "cold",

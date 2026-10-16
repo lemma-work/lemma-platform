@@ -45,7 +45,7 @@ from app.core.tests.e2e.work_support import (
     write_effect,
 )
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 NO_WAIT = Exponential(base=timedelta(0), cap=timedelta(0), jitter=0)
 LATER = Exponential(base=timedelta(hours=1), jitter=0)
@@ -542,3 +542,36 @@ async def test_an_invalid_payload_goes_dead_at_once(
     await run_until_idle(work_db.sessions, registry=registry)
     row = await work_db.item(item_id)
     assert row and row["state"] == "dead" and row["error_class"] == "invalid_payload"
+
+
+async def test_a_connection_release_inside_a_handler_cannot_commit_the_fence(
+    work_db: WorkDb, registry: WorkRegistry
+) -> None:
+    """Authorization commits a read-only session to hand its connection back.
+
+    Reached inside a fenced transaction, that commit would make the handler's
+    writes so far durable and drop the item's row lock -- half an effect that a
+    replay then finds and skips. The item lock marks the session as holding
+    state that dies at commit, so the release declines.
+    """
+    from app.core.infrastructure.db.transaction_locks import safe_to_release
+
+    seen: list[bool] = []
+
+    @registry.handler(
+        kind="demo.fenced_fast", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Demo
+    )
+    async def fast(ctx: FastContext, payload: Demo) -> None:
+        seen.append(safe_to_release(ctx.uow.session))
+
+    @registry.handler(
+        kind="demo.fenced_job", cls=WorkClass.EVENTS, mode=WorkMode.JOB, payload=Demo
+    )
+    async def job(ctx: JobContext, payload: Demo) -> None:
+        async with ctx.complete_work() as uow:
+            seen.append(safe_to_release(uow.session))
+
+    await work_db.enqueue(registry, "demo.fenced_fast")
+    await work_db.enqueue(registry, "demo.fenced_job")
+    assert await run_until_idle(work_db.sessions, registry=registry) == 2
+    assert seen == [False, False]

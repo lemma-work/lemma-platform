@@ -11,6 +11,7 @@ from ..openapi_client.api.schedules import (
     schedule_list,
     schedule_run_list,
     schedule_run_retry,
+    schedule_skip_list,
     schedule_update,
 )
 from ..openapi_client.models.create_schedule_request import CreateScheduleRequest
@@ -21,6 +22,9 @@ from ..openapi_client.models.schedule_run_list_response import ScheduleRunListRe
 from ..openapi_client.models.schedule_run_response import ScheduleRunResponse
 from ..openapi_client.models.schedule_run_status import ScheduleRunStatus
 from ..openapi_client.models.schedule_type import ScheduleType
+from ..openapi_client.models.trigger_skip_list_response import (
+    TriggerSkipListResponse,
+)
 from ..openapi_client.models.update_schedule_request import UpdateScheduleRequest
 from ..openapi_client.types import UNSET
 from .base import BoundResource, as_uuid
@@ -127,6 +131,28 @@ class PodSchedules(BoundResource):
             limit=limit,
             status=status if status is not None else UNSET,
             skipped=skipped if skipped is not None else UNSET,
+        )
+
+    def skips(
+        self,
+        schedule_id: str,
+        *,
+        limit: int = 50,
+        page_token: str | None = None,
+    ) -> TriggerSkipListResponse:
+        """What a trigger let pass without firing, newest first, aggregated.
+
+        One item stands for every change of a delivered page skipped for one
+        reason (`bulk_write`, `import_write`, `fire_cap`), with its `count`:
+        what a run history shows as "skipped N changes from a bulk write".
+        Pass the response's `next_page_token` back for the next page.
+        """
+        return self._call(
+            schedule_skip_list,
+            self._pod_uuid(),
+            self._schedule_id(schedule_id),
+            limit=limit,
+            page_token=page_token if page_token is not None else UNSET,
         )
 
     def retry_run(self, schedule_id: str, run_id: str) -> ScheduleRunResponse:

@@ -335,6 +335,7 @@ export type { PodRolePermissionsResponse } from './models/PodRolePermissionsResp
 export type { PodRoleResourcePermissionRequest } from './models/PodRoleResourcePermissionRequest.js';
 export type { PodRoleResourcePermissionResponse } from './models/PodRoleResourcePermissionResponse.js';
 export type { PodRoleResponse } from './models/PodRoleResponse.js';
+export type { PodTriggerSettings } from './models/PodTriggerSettings.js';
 export type { PodUpdateRequest } from './models/PodUpdateRequest.js';
 export { PublicAudience } from './models/PublicAudience.js';
 export type { PublicColumnItem } from './models/PublicColumnItem.js';
@@ -439,6 +440,9 @@ export type { TableResponse } from './models/TableResponse.js';
 export type { TableSummaryResponse } from './models/TableSummaryResponse.js';
 export type { TelegramManagedBotSetupRequest } from './models/TelegramManagedBotSetupRequest.js';
 export type { TelegramManagedBotSetupResponse } from './models/TelegramManagedBotSetupResponse.js';
+export type { TriggerSkipListResponse } from './models/TriggerSkipListResponse.js';
+export { TriggerSkipReason } from './models/TriggerSkipReason.js';
+export type { TriggerSkipResponse } from './models/TriggerSkipResponse.js';
 export type { update } from './models/update.js';
 export type { UpdateAgentHostRuntimeProfileRequest } from './models/UpdateAgentHostRuntimeProfileRequest.js';
 export type { UpdateAgentRequest } from './models/UpdateAgentRequest.js';
@@ -508,6 +512,7 @@ export type { WorkspaceAppAccessResponse } from './models/WorkspaceAppAccessResp
 export { WorkspaceFileEntry } from './models/WorkspaceFileEntry.js';
 export type { WorkspaceFileListResponse } from './models/WorkspaceFileListResponse.js';
 export { WorkspaceStatusResponse } from './models/WorkspaceStatusResponse.js';
+export { WriteIntent } from './models/WriteIntent.js';
 
 export { AgentAsksService } from './services/AgentAsksService.js';
 export { AgentConversationsService } from './services/AgentConversationsService.js';

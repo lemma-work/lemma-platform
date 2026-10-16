@@ -7,14 +7,11 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import WorkWriter
 from app.modules.schedule.config import schedule_settings
-from app.modules.schedule.domain.events.schedule import (
-    ScheduleDeactivated,
-    ScheduleRunCompleted,
-)
+from app.modules.schedule.domain.events.schedule import ScheduleRunCompleted
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
-    ScheduleFireStatus,
     ScheduleRunStatus,
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
@@ -22,6 +19,7 @@ from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
 from app.core.log.log import get_logger
+from app.modules.schedule.services.paused_notice import stage_paused_notice
 
 logger = get_logger(__name__)
 
@@ -29,10 +27,14 @@ logger = get_logger(__name__)
 class ScheduleRunOutcomeService:
     """Own schedule-run terminal transitions and breaker accounting."""
 
-    def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+    def __init__(
+        self, uow: SqlAlchemyUnitOfWork, *, work: WorkWriter | None = None
+    ) -> None:
         self.uow = uow
         self.run_repository = ScheduleRunRepository(uow)
         self.schedule_repository = ScheduleRepository(uow=uow)
+        # The breaker's pause writes its owner notice through this.
+        self.work = work or WorkWriter.of(uow)
 
     async def record_target_outcome(
         self,
@@ -97,7 +99,7 @@ class ScheduleRunOutcomeService:
         failure, so the breaker is left alone. Returns whether a row was
         written; a redelivered event writes nothing the second time.
         """
-        recorded = await self.run_repository.insert_filtered(
+        return await self.run_repository.insert_filtered(
             schedule_id=schedule.id,
             user_id=user_id,
             source_event_id=source_event_id,
@@ -105,10 +107,6 @@ class ScheduleRunOutcomeService:
             metadata=metadata,
             llm_output=llm_output,
         )
-        await self.schedule_repository.record_fire(
-            schedule.id, status=ScheduleFireStatus.FILTERED
-        )
-        return recorded
 
     async def record_pre_dispatch_failure(
         self,
@@ -214,15 +212,15 @@ class ScheduleRunOutcomeService:
         if not await self.schedule_repository.deactivate_if_active(schedule.id):
             return False
 
-        self.uow.collect_events(
-            [
-                ScheduleDeactivated(
-                    schedule_id=schedule.id,
-                    user_id=schedule.user_id,
-                    schedule_type=schedule.schedule_type,
-                    consecutive_failures=count,
-                )
-            ]
+        await stage_paused_notice(
+            self.uow,
+            schedule_id=schedule.id,
+            user_id=schedule.user_id,
+            pod_id=schedule.pod_id,
+            schedule_type=schedule.schedule_type,
+            reason="consecutive_failures",
+            consecutive_failures=count,
+            work=self.work,
         )
         logger.warning(
             "schedule.breaker.tripped",

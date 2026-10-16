@@ -21,10 +21,7 @@ from app.modules.function.domain.entities import (
     FunctionArtifact,
     FunctionSessionPrincipal,
 )
-from app.modules.function.domain.ports import (
-    FunctionStorageFactoryPort,
-    PodRunSlotsPort,
-)
+from app.modules.function.domain.ports import FunctionStorageFactoryPort
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
 )
@@ -62,13 +59,11 @@ class FunctionRuntimeGateway:
         storage_factory: FunctionStorageFactoryPort,
         delegated_tokens_enabled: bool,
         repository_factory: RepositoryFactory,
-        pod_runs: PodRunSlotsPort,
     ) -> None:
         self._uow_factory = uow_factory
         self._storage_factory = storage_factory
         self._delegated_tokens_enabled = delegated_tokens_enabled
         self._repository = repository_factory
-        self._pod_runs = pod_runs
 
     async def definition_artifact(
         self,
@@ -182,8 +177,6 @@ class FunctionRuntimeGateway:
             )
         if not accepted:
             raise RuntimeStateRejected
-        # The run is settled, so its pod slot goes to the next one waiting.
-        await self._pod_runs.release(context.pod_id, run_id)
         return RuntimeEventResponse(accepted=True, duplicate=duplicate)
 
     _logs = staticmethod(terminal_logs)

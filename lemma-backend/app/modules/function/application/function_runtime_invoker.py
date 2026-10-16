@@ -18,6 +18,7 @@ from uuid import UUID
 import httpx
 
 from app.core.config import settings
+from app.core.log.log import get_logger
 from app.modules.function.application.dispatch_failures import (
     InvocationOutcomeUnconfirmed,
     RuntimeNeverReached,
@@ -46,6 +47,9 @@ from app.modules.function.domain.entities import (
 )
 
 
+logger = get_logger(__name__)
+
+
 def runtime_gateway_url() -> str:
     configured = function_settings.function_runtime_gateway_url or settings.api_url
     return configured.rstrip("/")
@@ -62,6 +66,31 @@ class FunctionRuntimeInvoker:
         self._routes = routes
         self._quarantine = quarantine
         self._runtime_http_client_factory = runtime_http_client_factory
+
+    async def cancel(
+        self,
+        dispatch: FunctionExecutionDispatch,
+        *,
+        endpoint: FunctionRuntimeEndpoint | None = None,
+    ) -> None:
+        """Ask the runtime to stop the run. Best effort: the run's state is
+        already settled in the database whether or not this lands."""
+        try:
+            control_endpoint = endpoint or await self._routes.control_endpoint(dispatch)
+            await self._runtime_http_client_factory().post(
+                urljoin(
+                    control_endpoint.url,
+                    f"functions/{dispatch.function_id}/runs/{dispatch.run_id}:cancel",
+                ),
+                headers=control_endpoint.headers(),
+                timeout=httpx.Timeout(5),
+            )
+        except Exception:
+            logger.warning(
+                "function.dispatcher.runtime_cancellation.failed",
+                run_id=str(dispatch.run_id),
+                exc_info=True,
+            )
 
     async def post(
         self,

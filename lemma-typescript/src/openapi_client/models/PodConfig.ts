@@ -5,6 +5,7 @@
 import type { AgentRuntimeConfig } from './AgentRuntimeConfig.js';
 import type { PodJoinPolicy } from './PodJoinPolicy.js';
 import type { PodRecipe } from './PodRecipe.js';
+import type { PodTriggerSettings } from './PodTriggerSettings.js';
 /**
  * Typed pod-level configuration.
  */
@@ -13,4 +14,5 @@ export type PodConfig = {
     default_runtime?: (AgentRuntimeConfig | null);
     join_policy?: PodJoinPolicy;
     recipes?: Array<PodRecipe>;
+    triggers?: (PodTriggerSettings | null);
 };

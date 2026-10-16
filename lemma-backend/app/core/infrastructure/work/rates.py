@@ -77,6 +77,13 @@ DEFAULT_RATES: Mapping[str, Rate] = MappingProxyType(
         "llm_filter_pod": Rate(300, 3600),
         # Outbound messages per pod.
         "email_out": Rate(200, 3600),
+        # Fires per trigger per day. Not a bucket any kind draws from: it is
+        # the ceiling past which a trigger pauses itself (schedule module), kept
+        # here so the same override seam reaches it.
+        "trigger_fire_day": Rate(2000, 86400),
+        # Webhook deliveries per MCP event subscription (keyed by its id): a
+        # bulk write reaches the receiver at this pace instead of in one burst.
+        "mcp_delivery": Rate(120, 60),
     }
 )
 

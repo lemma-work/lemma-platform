@@ -18,7 +18,7 @@ from app.core.tests.e2e.work_support import (
     WorkDb,
 )
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 
 async def test_a_notify_wakes_an_idle_dispatcher_long_before_its_poll(

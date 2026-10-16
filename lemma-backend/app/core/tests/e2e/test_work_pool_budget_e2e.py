@@ -28,7 +28,7 @@ from app.core.infrastructure.work.types import WorkClass, WorkMode
 from app.core.tests.e2e.work_support import POD_A, Demo, WorkDb, write_effect
 from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 BUDGET = DbBudget({WorkClass.EVENTS: 3, WorkClass.AUTOMATION: 2}, control=2)
 FAST_ITEMS = 300

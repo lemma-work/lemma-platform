@@ -1,9 +1,9 @@
 """End-to-end: deleting a pod cascades cleanup of its schedules and surfaces.
 
-This drives the full event path through the real streaq worker: the in-process
-app soft-deletes the pod and publishes ``PodDeletedEvent`` to Redis; the worker
-subprocess consumes it on the ``pod_events`` stream and runs the per-module
-cleanup handlers (schedule + agent_surfaces). We then poll the DB until every
+This drives the full path through the real worker: the in-process app
+soft-deletes the pod and, in the same transaction, writes one cleanup work item
+per ``PodDeleted`` subscriber; the worker subprocess's work runtime claims them
+and runs the per-module cleanup (schedule + agent_surfaces). We then poll the DB until every
 schedule and surface for the pod is gone, and confirm the freed account can bind
 to a brand-new surface in another pod.
 
@@ -102,7 +102,7 @@ async def test_pod_delete_cascades_schedule_and_surface_cleanup(
     worker,
     monkeypatch,
 ):
-    _ = worker  # real streaq worker subprocess consuming pod_events
+    _ = worker  # real worker subprocess running the cleanup work items
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -159,7 +159,7 @@ async def test_pod_delete_cascades_schedule_and_surface_cleanup(
     assert schedules == 2, f"expected 2 schedules, got {schedules}"
     assert surfaces == 2, f"expected 2 surfaces, got {surfaces}"
 
-    # Delete the pod -> emits PodDeletedEvent -> worker cleans up asynchronously.
+    # Delete the pod -> writes the cleanup items -> the worker runs them.
     deleted = await authenticated_client.delete(f"/pods/{pod_id}")
     assert deleted.status_code == 204, deleted.text
 

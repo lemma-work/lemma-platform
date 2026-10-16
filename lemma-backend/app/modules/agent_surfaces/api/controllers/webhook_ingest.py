@@ -35,8 +35,9 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
-from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
 from app.modules.identity.contracts.whatsapp_verification import (
+    WhatsAppVerificationPayload,
+    add_whatsapp_verification_work,
     is_whatsapp_verification_configured,
     parse_reserved_verification_message,
 )
@@ -259,7 +260,7 @@ async def _handle_resend_webhook(
 async def _published_whatsapp_verification(
     payload: dict[str, Any], uow_factory: UnitOfWorkFactory
 ) -> bool:
-    """Publish a reserved verification message, when that is what arrived.
+    """Queue a reserved verification message, when that is what arrived.
 
     Verification commands are identity traffic, not agent messages. This is
     reached only after Meta's raw-body signature succeeds, and only acts when
@@ -280,16 +281,18 @@ async def _published_whatsapp_verification(
     if not await deployment_owns_whatsapp_number(destination_id):
         return False
 
-    identity_event = WhatsAppMobileVerificationReceivedEvent(
-        event_id=stable_event_id(
-            {"whatsapp_mobile_verification_message_id": message_id}
-        ),
-        code=code,
-        sender_wa_id=sender_wa_id,
-        destination_phone_number_id=destination_id,
-        whatsapp_message_id=message_id,
-    )
-    await EventPublisher.publish(identity_event.stream_name(), identity_event)
+    # Keyed by the WhatsApp message, so Meta's retries of one delivery are
+    # one verification.
+    async with uow_factory() as uow:
+        await add_whatsapp_verification_work(
+            uow,
+            WhatsAppVerificationPayload(
+                code=code,
+                sender_wa_id=sender_wa_id,
+                destination_phone_number_id=destination_id,
+                whatsapp_message_id=message_id,
+            ),
+        )
     return True
 
 

@@ -44,12 +44,8 @@ from app.modules.function.domain.entities import (
     FunctionUpdateEntity,
     RunAsWorkload,
 )
-from app.modules.function.domain.errors import (
-    FunctionRunQueueUnavailable,
-    FunctionValidationError,
-)
+from app.modules.function.domain.errors import FunctionValidationError
 from app.modules.function.domain.ports import FunctionExecutionPort
-from app.modules.function.domain.ports import FunctionRunQueuePort
 from app.modules.function.domain.types import JsonObject
 from app.modules.function.services.contact_execution import resolve_contact_execute
 from app.modules.function.services.execution_preflight import (
@@ -76,13 +72,11 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
         service_builder: Callable[[SqlAlchemyUnitOfWork], FunctionService],
         compiler: FunctionDefinitionCompiler,
         dispatcher: FunctionExecutionPort,
-        run_queue: FunctionRunQueuePort,
     ):
         self._uow_factory = uow_factory
         self._build = service_builder
         self._compiler = compiler
         self._dispatcher = dispatcher
-        self._run_queue = run_queue
 
     # -- Code-bearing create/update assembly (sandbox, no connection) ---------
 
@@ -438,14 +432,6 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
             resolved, user_email=user_email, run_as_workload=run_as_workload
         )
 
-    # -- Worker path (no ctx) -------------------------------------------------
-
-    async def execute_run_by_id(self, run_id: UUID) -> FunctionRunEntity:
-        return await self._dispatcher.execute(
-            run_id,
-            mode=FunctionDispatchMode.ASYNCHRONOUS,
-        )
-
     # -- Agent-as-tool path (delegated workload ctx) --------------------------
 
     async def execute_function_as_workload(
@@ -490,44 +476,6 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
         it is cancelled, so the sandbox stops work nobody is waiting for."""
         await self._dispatcher.cancel(run_id)
 
-    async def dispatch_function_for_workflow(
-        self,
-        *,
-        pod_id: UUID,
-        name: str,
-        input_data: JsonObject,
-        user_id: UUID,
-    ) -> FunctionRunEntity:
-        """Create + dispatch a function run for a workflow node WITHOUT running it
-        inline. Works for API and JOB functions alike: the run is enqueued to the
-        worker with an explicit asynchronous dispatch mode and returned PENDING,
-        so the workflow engine
-        suspends on the run id and releases its run-row lock instead of pinning it
-        across the sandbox round-trip. The FunctionRunCompleted event resumes the
-        workflow."""
-
-        async def resolve_once() -> ResolvedExecution:
-            async with uow_scope(self._uow_factory) as uow:
-                auth_ctx = await AuthorizationDataService(
-                    uow.session
-                ).build_user_context(
-                    user_id=user_id,
-                    pod_id=pod_id,
-                )
-                async with context_scope(auth_ctx):
-                    return await self._build(uow).resolve_execute(
-                        pod_id,
-                        name,
-                        input_data,
-                        user_id,
-                        None,
-                        ctx=auth_ctx,
-                        dispatch_mode=FunctionDispatchMode.ASYNCHRONOUS,
-                    )
-
-        resolved = await self._resolve_with_revision_backfill(resolve_once)
-        return await self._enqueue_run(resolved.run)
-
     async def dispatch_function_for_contact(
         self,
         *,
@@ -549,7 +497,7 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
                 )
 
         resolved = await self._resolve_with_revision_backfill(resolve_once)
-        return await self._enqueue_run(resolved.run)
+        return resolved.run
 
     # -- Shared dispatch ------------------------------------------------------
 
@@ -561,37 +509,12 @@ class FunctionUseCases(FunctionRevisionUseCasesMixin):
         run_as_workload: RunAsWorkload | None = None,
     ) -> FunctionRunEntity:
         function, run = resolved.function, resolved.run
-        # JOB runs use the one backend queue. Publication happens only after the
-        # run transaction above has committed and released its connection.
+        # A JOB run was written with the `function.run` item that starts it,
+        # in the transaction above; the worker takes it from there.
         if function.type == FunctionType.JOB:
-            return await self._enqueue_run(run)
+            return run
         del function, user_email, run_as_workload
         return await self._dispatcher.execute(
             run.id,
             mode=FunctionDispatchMode.SYNCHRONOUS,
         )
-
-    async def _enqueue_run(self, run: FunctionRunEntity) -> FunctionRunEntity:
-        """Best-effort fast publish backed by durable pending-run reconciliation.
-
-        The run and its deterministic ``job_id`` dispatch intent are already
-        committed when this method is called. If publication has an ambiguous
-        outcome, the reconciler safely republishes the same task identity and
-        the atomic ``PENDING`` to ``RUNNING`` transition prevents a second
-        execution attempt.
-        """
-
-        if run.id is None:
-            raise ValueError("function run must be persisted before enqueue")
-        try:
-            job_id = await self._run_queue.enqueue(run.id)
-        except FunctionRunQueueUnavailable as exc:
-            logger.warning(
-                "function.use_cases.run_enqueue_deferred.degraded",
-                run_id=str(run.id),
-                error_type=type(exc).__name__,
-            )
-            return run
-        if run.job_id != job_id:
-            raise RuntimeError("function run queue returned an unexpected job identity")
-        return run

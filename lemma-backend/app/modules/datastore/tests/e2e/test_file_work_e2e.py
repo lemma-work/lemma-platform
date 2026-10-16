@@ -69,7 +69,7 @@ from app.modules.datastore.tests.e2e.harness import (
 )
 from app.modules.test_support.e2e.waiters import eventually
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 _PDF = "application/pdf"
 

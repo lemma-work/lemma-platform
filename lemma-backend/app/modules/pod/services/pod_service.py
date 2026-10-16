@@ -8,9 +8,11 @@ from app.core.authorization.cache import invalidate_role_snapshot_cache
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
 from app.core.domain.runtime import AgentRuntimeConfig
+from app.core.infrastructure.work import facts
 from app.core.ports.plan_limits import PlanLimits
 from app.modules.identity.contracts import OrganizationJoinPolicy, OrganizationRole
 from app.modules.icon.contracts import IconCleanupPort
+from app.modules.pod.contracts.trigger_settings import PodTriggerDefaultsChanged
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
     PodLimitReachedError,
@@ -273,6 +275,7 @@ class PodService:
 
         updated_entity = PodEntity(**merged_dict)
         updated = await self.pod_repository.update(updated_entity)
+        await self._announce_trigger_defaults_change(pod_entity, updated)
 
         if (
             self.icon_service
@@ -282,6 +285,15 @@ class PodService:
             await self.icon_service.delete_by_url(pod_entity.icon_url)
 
         return updated
+
+    async def _announce_trigger_defaults_change(
+        self, before: PodEntity, after: PodEntity
+    ) -> None:
+        """Resync the pod's triggers when its trigger defaults changed."""
+        if self._uow is not None and _trigger_defaults(before) != _trigger_defaults(
+            after
+        ):
+            await facts.emit(self._uow, PodTriggerDefaultsChanged(pod_id=after.id))
 
     async def _require_join_policy_authority(
         self,
@@ -458,3 +470,7 @@ class PodService:
         suffix = token_hex(4)
         deleted_name = f"deleted-{suffix}-{name}"
         return deleted_name[:255]
+
+
+def _trigger_defaults(pod: PodEntity) -> object:
+    return (pod.model_dump().get("config") or {}).get("triggers")

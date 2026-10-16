@@ -25,6 +25,11 @@ dependencies = [
   "python-dateutil>=2.9.0.post0",
 ]
 
+[project.optional-dependencies]
+# `Pod.watch_changes` / `lemma_sdk.live.watch_changes` open a websocket; the
+# rest of the SDK never does, so the client library stays out of the base install.
+live = ["websockets>=14.0"]
+
 [project.urls]
 Homepage = "https://github.com/lemma-work/lemma-platform"
 Repository = "https://github.com/lemma-work/lemma-platform"
@@ -53,6 +58,8 @@ dev = [
   # function invocations -- was never actually exercised while this was missing:
   # pytest reported "async def functions are not natively supported" and failed.
   "pytest-asyncio>=1.0.0",
+  # tests/test_live.py drives `watch_changes` against a real local socket.
+  "websockets>=14.0",
 ]
 
 [build-system]

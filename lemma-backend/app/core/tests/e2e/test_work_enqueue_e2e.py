@@ -34,7 +34,7 @@ from app.core.tests.e2e.work_support import (
     write_effect,
 )
 
-pytestmark = [pytest.mark.e2e]
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 
 def _fast(registry: WorkRegistry, kind: str = "demo.fast", **options: object) -> None:
@@ -316,6 +316,75 @@ async def test_notify_is_sent_on_the_class_channel_at_commit_only(
     finally:
         await listener.close()
     assert received == ["work_events", "work_events"]
+
+
+async def test_work_a_handler_enqueues_wakes_its_own_process_not_the_database(
+    work_db: WorkDb, registry: WorkRegistry
+) -> None:
+    """A handler's follow-up wakes the local dispatcher after commit; no NOTIFY.
+
+    NOTIFY serialises every notifying commit database-wide, so a burst of
+    handler commits (5,000 schedule fires) paid it once each. The API's
+    enqueue still notifies: nobody else would look before the poll.
+    """
+    import asyncpg
+
+    from app.core.infrastructure.events.outbox_wake import asyncpg_connect_kwargs
+
+    _fast(registry)
+
+    @registry.handler(
+        kind="demo.chain", cls=WorkClass.EVENTS, mode=WorkMode.FAST, payload=Demo
+    )
+    async def chain(ctx: FastContext, payload: Demo) -> None:
+        await ctx.work.add("demo.fast", POD_B, Demo(tag="follow-up"))
+
+    url = work_db.engine.url.render_as_string(hide_password=False)
+    listener = await asyncpg.connect(
+        **asyncpg_connect_kwargs(url, application_name="t")
+    )
+    received: list[str] = []
+
+    async def seen() -> list[str]:
+        return list(received)
+
+    async def until(payload: str) -> None:
+        await eventually(
+            label=f"notification {payload!r}",
+            probe=seen,
+            done=lambda seen: payload in seen,
+            timeout_seconds=5,
+            interval_seconds=0.02,
+        )
+
+    try:
+        await listener.add_listener(
+            "work_events", lambda *args: received.append(args[3])
+        )
+        await work_db.enqueue(registry, "demo.chain", POD_A)
+        await until("")  # the API-side enqueue notifies
+
+        woken: list[WorkClass] = []
+        dispatcher = dispatcher_for(
+            work_db.sessions, WorkClass.EVENTS, registry=registry
+        )
+        dispatcher.env.local_wake = woken.append
+        claimed = await dispatcher.claim_once()
+        assert [item.kind for item in claimed] == ["demo.chain"]
+        assert await dispatcher.execute(claimed[0]) == "done"
+
+        # Notifications arrive in commit order: had the handler's commit
+        # notified, it would be seen before this marker.
+        async with work_db.sessions() as session:
+            await session.execute(text("SELECT pg_notify('work_events', 'marker')"))
+            await session.commit()
+        await until("marker")
+    finally:
+        await listener.close()
+
+    assert received == ["", "marker"]
+    assert woken == [WorkClass.EVENTS]
+    assert await work_db.count("state = 'queued' AND ns = :ns", ns=POD_B) == 1
 
 
 async def test_payloads_are_stored_as_ids_shaped_json(

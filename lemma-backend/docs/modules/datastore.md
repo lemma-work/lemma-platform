@@ -18,7 +18,8 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | Work kinds | `file.process` and `file.cleanup` (`ingestion`), written in the transaction that uploads, updates or deletes; `pod_schema.migrate`, `pod_schema.backfill`, `datastore.parent_backfill` and `datastore.storage_copy` (`admin`), the backfills armed as periodics |
 | streaq tasks | Nightly, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables); purge expired signed-link rows |
 | API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily, and the datastore outbox table is created by the first record write |
-| Worker lifespan | Runs the datastore outbox dispatcher |
+| Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item; the outbox dispatcher only while the change log is not on |
+| Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly) and `changes.drain` (cutover) (`admin`); see [Record change log](#record-change-log) |
 
 ## Storage model
 
@@ -41,7 +42,83 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | `/pods/{pod_id}/datastore/query` | Restricted ad-hoc datastore query under the RLS subject role |
 | `/pods/{pod_id}/datastore/files` | Upload, folders, metadata/content update, Markdown attachment, tree, search, preview/download |
 | `/public/datastore/files`, `/public/s/{code}` | Signed file delivery paths (`/s/{code}` is a legacy alias until 2026-10-17) |
-| `/pods/{pod_id}/datastore/changes` | Resumable WebSocket stream for authorized row changes |
+| `/pods/{pod_id}/live` | The pod's live socket: one per client and pod, many record subscriptions on it (see below) |
+| `/pods/{pod_id}/datastore/changes` | The previous one-table change socket, kept for one release as one implicit subscription on the same hub |
+
+## Live socket
+
+A client opens one websocket per pod and multiplexes subscriptions on it
+(`subscribe` / `unsubscribe` / `ping`; the server answers `ready`, `subscribed`,
+`changes`, `resync`, `error`, `unsubscribed`). The frames are defined in
+`domain/live.py`.
+
+Each API process keeps one hub per watched pod (`services/live/hub.py`). The hub
+holds one Redis Pub/Sub subscription to `pod:<id>:changes` (a wake, published
+after a record write commits), reads the pod's change log once per wake from its
+own cursor, fetches the current rows once per table per batch, and fans out in
+memory, so database work grows with watched pods and writes, not with sockets.
+A lost wake costs latency only: the hub also reads on an idle poll.
+
+- **Visibility**: table read permission is checked at subscribe. RLS rows reach
+  only their owner (the change row carries `owner_user_id`). When the pod's
+  authorization epoch moves, the hub re-checks every subscription and ends the
+  ones that lost their table with `unsubscribed`.
+- **`when`**: a subscription on one table may carry `when` conditions in the
+  trigger grammar (`app/core/domain/record_conditions.py`, the one evaluator
+  both use), limited to its value operators (`equals`, `not_equals`, `in`,
+  `not_in`): the socket sees the current row, with no prior image to ask
+  `changed`/`written`/`from`/`to` of, so those are refused with `invalid`. The
+  hub tests each insert or update against the row it fetched, after the RLS
+  check; deletes always pass, and a row updated out of the filter is not sent.
+- **Resume**: `subscribe` with `since` replays that subscription's gap from the
+  log. A cursor older than the log keeps, or one that is not a change-log
+  cursor, answers `resync`; so does a batch with more than
+  `LIVE_MAX_CHANGES_PER_BATCH` changes for one subscription.
+- **Back-pressure**: each socket has a bounded send queue
+  (`LIVE_SOCKET_QUEUE_BYTES`); overflow replaces its queued change frames with
+  one `resync` per subscription. A slow client never slows the hub.
+- **Limits**: subscriptions per socket and sockets per user per pod
+  (`LIVE_MAX_SUBSCRIPTIONS_PER_SOCKET`, `LIVE_MAX_SOCKETS_PER_USER_PER_POD`,
+  per-pod overrides in `LIVE_LIMIT_OVERRIDES_JSON`, or a provider installed with
+  `install_live_limit_port`). A socket past the per-user limit closes with 4429.
+
+## Record change log
+
+Every record write appends one slim row per record to its pod schema's
+`reserved_changes`, in the writing statement; row snapshots are kept only for a
+`(table, op)` a durable subscriber (a DATASTORE trigger, an MCP event
+subscription) watches, and only for a write intent (`normal`, `bulk`,
+`import`) one of them wants rows for -- a bulk import every watching trigger
+skips writes slim rows, from which the skips are still recorded. Readers (`changes/reader.py`) only see rows whose
+transaction id is below the oldest transaction still open
+(`pg_snapshot_xmin`), which is what makes a read final and gap-free. The cost
+of that rule is that delivery and the live socket wait for the **oldest open
+transaction on the datastore database's cluster**, whatever it is doing.
+
+**Operating it.** A transaction left open on the datastore database -- an
+`idle in transaction` session, a long migration, a stuck backfill, or the main
+database if it shares the cluster -- holds the horizon back: DATASTORE triggers
+stop firing, MCP event deliveries stop, and live sockets go quiet, while writes
+keep succeeding. Every worker exports the age of the oldest open transaction
+as the gauge `lemma.work.oldest_transaction_age` (seconds, label `database` =
+`main` or `datastore`, sampled with the other `lemma.work.*` gauges every
+`WORK_GAUGE_INTERVAL_SECONDS`). Alert when the `datastore` series stays above
+30 seconds. To find the culprit:
+
+```sql
+SELECT pid, usename, application_name, state, now() - xact_start AS open_for, query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL AND now() - xact_start > interval '30 seconds'
+ORDER BY xact_start;
+```
+
+Runbook: find the oldest row above. A worker or API session idle in
+transaction is a bug to report, and is safe to end with
+`pg_terminate_backend(pid)`; a migration or backfill should be let finish or
+cancelled by its owner. Delivery catches up by itself once the horizon moves --
+nothing is lost, because cursors only advance past rows that were read. The
+statement and idle-in-transaction timeouts bound how long this can last;
+`changes.retention` never deletes a row a durable cursor has not passed.
 
 ## File lifecycle
 

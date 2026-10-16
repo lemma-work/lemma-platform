@@ -13,7 +13,6 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.permissions import Permissions
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.start import WorkflowStartType
-from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.core.log.log import get_logger
 from app.modules.schedule.contracts.dispatch import (
@@ -206,6 +205,29 @@ class ScheduleStartService:
             return
 
         # 2. A schedule targeting a workflow or agent.
+        await self.start_for_fire(
+            schedule_id=schedule_id,
+            user_id=user_id,
+            payload=payload,
+            schedule_event_id=schedule_event_id,
+            metadata=metadata,
+            llm_output=llm_output,
+            source_occurred_at=source_occurred_at,
+        )
+
+    async def start_for_fire(
+        self,
+        *,
+        schedule_id: str,
+        user_id: UUID | str | None,
+        payload: dict,
+        schedule_event_id: str,
+        metadata: dict | None = None,
+        llm_output: dict | None = None,
+        source_occurred_at: datetime | None = None,
+    ) -> None:
+        """Start the target of one fire. Claims its schedule run first, so a
+        repeat finds the claim and starts nothing twice."""
         schedule = await get_schedule(self._uow, UUID(schedule_id))
         if schedule is None:
             logger.debug(
@@ -433,20 +455,16 @@ class ScheduleStartService:
     ) -> bool:
         """Route a timer that resumes something already waiting. True if handled.
 
-        Both wakes have the same shape — the timer carries the ``wait_ref`` that
-        resolves to exactly one ACTIVE wait — and differ only in what they resume:
-        a waiting conversation, or a suspended workflow run.
+        Only a waiting conversation's timer still arrives this way; a suspended
+        workflow run's is a work item.
         """
         if payload.get("conversation_id"):
             await self._resolve_conversation_wait(external_ref=payload.get("wait_ref"))
             return True
         if payload.get("workflow_run_id"):
-            await self._handle_timer_fire(
-                payload=payload,
-                user_id=user_id,
-                metadata=metadata,
-                llm_output=llm_output,
-            )
+            # A workflow timer fired by the old poller. Timers are
+            # ``workflow.resume`` items now, and the cutover wrote one for every
+            # wait that was active, so this one is already covered.
             return True
         return False
 
@@ -476,69 +494,6 @@ class ScheduleStartService:
             logger.debug("workflow.schedule_start_service.wait_fire_stale.observed")
             return
         await AgentWaitService(self._uow).resolve(wait=wait)
-
-    async def _handle_timer_fire(
-        self,
-        *,
-        payload: dict,
-        user_id: UUID | str | None,
-        metadata: dict | None,
-        llm_output: dict | None,
-    ) -> None:
-        """Resume the one wait this timer was created for.
-
-        The per-wait token is required so sequential timers on the same run
-        cannot cross-resume each other.
-        """
-        wait_ref = payload.get("wait_ref")
-        if not wait_ref:
-            raise ValueError("wait_ref is required for workflow timer fires")
-        await self._wake_run(
-            run_id=str(payload["workflow_run_id"]),
-            external_ref=str(wait_ref),
-            user_id=UUID(str(user_id)) if user_id else None,
-            payload=payload,
-            metadata=metadata,
-            llm_output=llm_output,
-        )
-
-    async def _wake_run(
-        self,
-        *,
-        run_id: str,
-        external_ref: str,
-        user_id: UUID | None,
-        payload: dict,
-        metadata: dict | None,
-        llm_output: dict | None,
-    ) -> None:
-        logger.debug(
-            "workflow.schedule_start_service.waking_workflow_run_scheduler.observed",
-            run_id=run_id,
-        )
-        run = await self._engine.run_repo.get(UUID(run_id))
-        if run is None:
-            return
-        # The run row owns the wake. A timer that names an owner must agree with
-        # it (a mismatched timer must never resume someone else's run); a timer
-        # persisted before ownership existed names nobody and simply adopts it.
-        if user_id is not None and run.user_id != user_id:
-            raise ValueError("workflow timer user_id does not match the run owner")
-        ctx = await self._build_user_context(user_id=run.user_id, pod_id=run.pod_id)
-        ctx_token = set_current_context(ctx)
-        try:
-            await self._engine.resume_internal(
-                WorkflowRunWaitType.TIME,
-                external_ref=external_ref,
-                output={
-                    "payload": payload,
-                    "metadata": metadata or {},
-                    "llm_output": llm_output or {},
-                },
-                ctx=ctx,
-            )
-        finally:
-            reset_current_context(ctx_token)
 
     async def _start_workflow_for_schedule(
         self,
@@ -587,4 +542,6 @@ class ScheduleStartService:
         )
         if dispatch_dead_lettered:
             await record_dispatch_dead_letter(self._uow, schedule)
-        await self._uow.commit()
+        # Inside a work handler the runtime commits, with the item's deletion.
+        if self._engine.commits:
+            await self._uow.commit()

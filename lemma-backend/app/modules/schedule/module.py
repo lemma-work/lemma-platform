@@ -56,25 +56,23 @@ def _routers():
 
 
 def _event_routers():
-    # schedule_consumer also defines the `handle_llm_filter_task` streaq task,
-    # which registers on import here (no separate register_streaq needed).
-    from app.modules.schedule.handlers import (
-        datastore_consumer,
-        pod_lifecycle_consumer,
-        schedule_consumer,
-        schedule_lifecycle_consumer,
-        schedule_notification_consumer,
-        target_outcome_consumer,
-    )
+    from app.modules.schedule.handlers import target_outcome_consumer
 
-    return [
-        schedule_consumer.router,
-        schedule_lifecycle_consumer.router,
-        datastore_consumer.router,
-        pod_lifecycle_consumer.router,
-        schedule_notification_consumer.router,
-        target_outcome_consumer.router,
-    ]
+    return [target_outcome_consumer.router]
+
+
+def _register_work() -> None:
+    # Every process: a pod deletion (API) writes this through `PodDeleted`.
+    import app.modules.schedule.events.pod_deleted_work  # noqa: F401
+    import app.modules.schedule.events.trigger_defaults_work  # noqa: F401
+
+    # Every process: the API arms TIME fires and fires webhooks inline, the
+    # worker runs them.
+    import app.modules.schedule.work.registration  # noqa: F401
+
+    # Every process: DATASTORE triggers are change-log subscribers; the
+    # worker's `changes.*` items find them by prefix.
+    import app.modules.schedule.services.datastore_event_handler  # noqa: F401
 
 
 def _register_streaq() -> None:
@@ -83,8 +81,11 @@ def _register_streaq() -> None:
 
 @asynccontextmanager
 async def _schedule_poller(context):
-    """Fire due schedules and timers, for as long as the worker runs.
+    """Fire due wait timers, for as long as the worker runs.
 
+    TIME schedules and workflow timers are work items now. This loop stays
+    only for agent ``wait_for`` TIME waits, which still live in their own table
+    -- until PR 3 moves agent waits to ``agent.wait.fire`` items and deletes it.
     Runs on every worker replica: the poll claims with `FOR UPDATE SKIP LOCKED`,
     so replicas share the work rather than duplicating it, and there is no
     leader to lose.
@@ -97,12 +98,11 @@ async def _schedule_poller(context):
     from app.core.request_context import create_background_task
     from app.modules.agent.contracts.timers import claim_due_waits
     from app.modules.schedule.services.schedule_poller import run_schedule_poller
-    from app.modules.workflow.contracts.timers import claim_due_workflow_waits
 
     task = create_background_task(
         run_schedule_poller(
             context.uow_factory,
-            timer_claimers=(claim_due_workflow_waits, claim_due_waits),
+            timer_claimers=(claim_due_waits,),
             interval_seconds=schedule_settings.schedule_poll_interval_seconds,
         ),
         name="schedule-poller",
@@ -155,13 +155,7 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     register_streaq=_register_streaq,
+    register_work=_register_work,
     worker_lifespans=(_reconcile_failure_breakers, _schedule_poller),
-    stream_groups=(
-        ("schedule_events", "schedule-notifications"),
-        ("schedule_events", "schedule-runtime-lifecycle"),
-        ("datastore.events", "schedule-datastore-events"),
-        ("pod_events", "schedule-pod-events"),
-        ("workflow_run_events", "schedule-workflow-outcomes"),
-        ("agent_events", "schedule-agent-outcomes"),
-    ),
+    stream_groups=(("agent_events", "schedule-agent-outcomes"),),
 )

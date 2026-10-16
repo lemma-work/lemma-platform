@@ -76,7 +76,6 @@ NETWORK_MODULES: tuple[str, ...] = (
     "app.core.email",
     "app.core.web_search",
     "app.core.embeddings",
-    "app.core.pubsub",
     "app.core.infrastructure.redis",
     "app.core.infrastructure.cache",
     "app.core.infrastructure.jobs",

@@ -41,8 +41,8 @@ ALLOWED_BOOT_HOOKS: dict[str, str] = {
         "loads one embedding model (or starts it in the background); "
         "independent of stored data"
     ),
-    "worker:datastore._datastore_outbox_dispatcher": (
-        "CREATE TABLE IF NOT EXISTS for one table, then a background dispatcher"
+    "worker:datastore._change_handoff": (
+        "starts the change-handoff loop and its LISTEN connection; reads nothing"
     ),
     "worker:schedule._reconcile_failure_breakers": (
         "reads only schedules already past the failure threshold, which the "

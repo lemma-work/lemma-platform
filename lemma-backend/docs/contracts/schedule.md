@@ -17,6 +17,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `schedule.list` | GET | `/pods/{pod_id}/schedules` | List Schedules |
 | `schedule.run.list` | GET | `/pods/{pod_id}/schedules/{schedule_id}/runs` | List Schedule Runs |
 | `schedule.run.retry` | POST | `/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry` | Retry Schedule Run |
+| `schedule.skip.list` | GET | `/pods/{pod_id}/schedules/{schedule_id}/skips` | List Schedule Skips |
 | `schedule.update` | PATCH | `/pods/{pod_id}/schedules/{schedule_id}` | Update Schedule |
 
 <!-- /generated:operations -->

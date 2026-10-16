@@ -1,4 +1,3 @@
-from datetime import datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -13,11 +12,13 @@ from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.function.domain.entities import FunctionRunStatus
-from app.modules.function.domain.events import (
-    FunctionRunCompletedEvent,
-    FunctionRunFailedEvent,
+from app.core.infrastructure.work import WorkClass, WorkRegistry
+from app.core.infrastructure.work.testing import run_until_idle
+from app.modules.function.infrastructure.execution_repository import (
+    FunctionExecutionRepository,
 )
-from app.modules.function.infrastructure.repositories import FunctionRunRepository
+from app.modules.function.infrastructure.models import FunctionModel, FunctionRunModel
+from app.modules.workflow.events.run_work import register_run_work
 from app.modules.pod.infrastructure.models.pod_models import PodMember
 from app.modules.test_support.fakes import PassthroughEventInbox
 from app.modules.test_support.e2e.waiters import eventually
@@ -45,12 +46,12 @@ pytestmark = [pytest.mark.e2e]
 
 # Why some tests here take `worker` and most do not.
 #
-# A FUNCTION node never runs inline: `dispatch_function_for_workflow` enqueues
-# the run and the executor suspends on its id, so the workflow only finishes
-# when the streaq worker executes it and its completion event resumes the run.
-# Most tests here drive that seam themselves (`_drive_function_completed`,
-# `_InlineResumeJobQueue`) and need no worker. The two that assert a run
-# completes *on its own* need the real one.
+# A FUNCTION node never runs inline: the run and its `function.run` item are
+# written with the wait, and the workflow only finishes when the worker runs
+# that item and the run's end writes `workflow.resume`. Most tests here end the
+# function run themselves (`_drive_function_completed`) and run the resume
+# in-process, and need no worker. The two that assert a run completes *on its
+# own* need the real one.
 #
 # The `worker` fixture is session-scoped, which is why this was invisible: run
 # the whole shard and some other module's test starts it first, and these pass
@@ -316,85 +317,47 @@ class _InlineResumeJobQueue:
         self.enqueued.append((job_name, kwargs))
         async with create_uow_from_session_maker(async_session_maker) as uow:
             service = RunResumeService(build_workflow_engine(uow))
-            if job_name == "resume_workflow_run_for_function":
-                await service.resume_for_function_run(
-                    function_run_id=kwargs["function_run_id"],
-                    run_status=kwargs["run_status"],
-                    output=kwargs.get("output"),
-                )
-            elif job_name == "resume_workflow_run_for_agent":
+            if job_name == "resume_workflow_run_for_agent":
                 await service.resume_for_agent_conversation(
                     conversation_id=kwargs["agent_conversation_id"],
                 )
         return SimpleNamespace(id=kwargs.get("_job_id"))
 
 
-async def _function_id_for_run(function_run_id: str) -> UUID:
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        run = await FunctionRunRepository(uow).get_run(UUID(function_run_id))
-        assert run is not None
-        return run.function_id
-
-
-async def _set_function_run_terminal(
-    function_run_id: str,
-    *,
-    status: FunctionRunStatus,
-    output_data: dict | None = None,
-    error: str | None = None,
+async def _end_function_run(
+    function_run_id: str, *, output_data: dict | None = None, error: str | None = None
 ) -> None:
+    """End the run the way the runtime's callback does, then run the work it
+    wrote: its terminal transition emits ``FunctionRunFinished`` and the
+    workflow's ``workflow.resume`` runs in-process on the work runtime."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = FunctionRunRepository(uow)
-        run = await repository.get_run(UUID(function_run_id))
-        assert run is not None
-        await repository.update_run_and_collect(
-            run,
-            status=status,
+        run = await uow.session.get(FunctionRunModel, UUID(function_run_id))
+        function = await uow.session.get(FunctionModel, run.function_id)
+        run.status = FunctionRunStatus.RUNNING
+        await uow.session.flush()
+        await FunctionExecutionRepository(uow).complete(
+            SimpleNamespace(run_id=run.id, pod_id=function.pod_id),
+            completed=error is None,
             output_data=output_data,
             error=error,
-            completed_at=datetime.now(),
+            logs=None,
         )
         await uow.commit()
+    await run_until_idle(
+        async_session_maker, registry=_WORKFLOW_WORK, classes=[WorkClass.EVENTS]
+    )
+
+
+_WORKFLOW_WORK = WorkRegistry()
+register_run_work(_WORKFLOW_WORK)
 
 
 async def _drive_function_completed(function_run_id: str, output_data: dict) -> None:
-    """Mark the function run COMPLETED and drive the REAL workflow function
-    event handler, exactly as the function worker + workflow subscriber would."""
-    function_id = await _function_id_for_run(function_run_id)
-    await _set_function_run_terminal(
-        function_run_id, status=FunctionRunStatus.COMPLETED, output_data=output_data
-    )
-    event = FunctionRunCompletedEvent(
-        run_id=UUID(function_run_id),
-        function_id=function_id,
-        output_data=output_data,
-        completed_at=datetime.now(),
-    ).model_dump(mode="json")
-    await wf_handlers.handle_function_run_event(
-        event,
-        _FakeLogger(),
-        job_queue=_InlineResumeJobQueue(),
-        inbox=PassthroughEventInbox(),
-    )
+    await _end_function_run(function_run_id, output_data=output_data)
 
 
 async def _drive_function_failed(function_run_id: str, error: str) -> None:
-    function_id = await _function_id_for_run(function_run_id)
-    await _set_function_run_terminal(
-        function_run_id, status=FunctionRunStatus.FAILED, error=error
-    )
-    event = FunctionRunFailedEvent(
-        run_id=UUID(function_run_id),
-        function_id=function_id,
-        error=error,
-        completed_at=datetime.now(),
-    ).model_dump(mode="json")
-    await wf_handlers.handle_function_run_event(
-        event,
-        _FakeLogger(),
-        job_queue=_InlineResumeJobQueue(),
-        inbox=PassthroughEventInbox(),
-    )
+    await _end_function_run(function_run_id, error=error)
 
 
 async def _drive_agent_event(conversation_id: str, *, status: AgentRunStatus) -> None:
@@ -1018,6 +981,7 @@ async def test_single_job_function_workflow_runs_with_function_wait_not_waiting(
     assert run["active_wait"]["external_ref"]
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_job_function_failure_fails_workflow_run(
     authenticated_client: AsyncClient,
@@ -1071,6 +1035,7 @@ async def test_job_function_failure_fails_workflow_run(
     assert failed_steps and failed_steps[0]["node_id"] == "record"
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_job_function_completion_resumes_run_via_event(
     authenticated_client: AsyncClient,
@@ -1126,6 +1091,7 @@ async def test_job_function_completion_resumes_run_via_event(
     assert completed["execution_context"]["record"] == output
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_duplicate_function_completion_event_is_idempotent(
     authenticated_client: AsyncClient,
@@ -1634,71 +1600,6 @@ async def test_reconciliation_recovers_lost_agent_completion(
     fetched = await _get_run(authenticated_client, pod_id, run["id"])
     assert fetched["status"] == "COMPLETED"
     assert fetched["execution_context"]["parse"] == {"answer": 42}
-
-
-@pytest.mark.asyncio
-async def test_reconciliation_recovers_lost_function_completion(
-    authenticated_client: AsyncClient,
-    fixed_test_org,
-    configure_workspace_api_url,
-):
-    """If a JOB function's completion event is lost, the sweep resumes the run."""
-    _ = configure_workspace_api_url
-    pod_id = await _create_pod(
-        authenticated_client, fixed_test_org["id"], "Workflow Fn Reconcile"
-    )
-    function_name = await _create_echo_function(
-        authenticated_client, pod_id, function_type="JOB"
-    )
-    workflow = await _create_workflow(
-        authenticated_client,
-        pod_id,
-        name=f"fn-reconcile-{uuid4().hex[:6]}",
-        start={"type": "MANUAL"},
-        nodes=[
-            {
-                "id": "record",
-                "type": "FUNCTION",
-                "config": {
-                    "function_name": function_name,
-                    "input_mapping": {
-                        "merchant": {"type": "literal", "value": "Uber"},
-                        "amount": {"type": "literal", "value": 23.5},
-                        "kind": {"type": "literal", "value": "expense"},
-                    },
-                },
-            },
-            {"id": "end", "type": "END"},
-        ],
-        edges=[{"id": "e1", "source": "record", "target": "end"}],
-    )
-
-    run = await _create_run(authenticated_client, pod_id, workflow["name"])
-    function_run_id = run["active_wait"]["external_ref"]
-    output = {"merchant": "Uber", "amount": 23.5, "kind": "expense", "recorded": True}
-
-    # Complete the function run WITHOUT notifying the workflow (lost event).
-    await _set_function_run_terminal(
-        function_run_id, status=FunctionRunStatus.COMPLETED, output_data=output
-    )
-
-    # Sweep with a zero threshold so the fresh wait qualifies as stale.
-    import app.modules.workflow.services.run_resume_service as rrs
-
-    original = rrs.RECONCILE_AFTER
-    rrs.RECONCILE_AFTER = rrs.timedelta(seconds=0)
-    try:
-        async with create_uow_from_session_maker(async_session_maker) as uow:
-            acted = await RunResumeService(
-                build_workflow_engine(uow)
-            ).reconcile_stale_waits()
-    finally:
-        rrs.RECONCILE_AFTER = original
-    assert acted == 1
-
-    fetched = await _get_run(authenticated_client, pod_id, run["id"])
-    assert fetched["status"] == "COMPLETED"
-    assert fetched["execution_context"]["record"] == output
 
 
 @pytest.mark.asyncio

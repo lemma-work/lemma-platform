@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     ARRAY,
+    UniqueConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -189,3 +190,38 @@ class McpEventSubscription(UUIDAuditBase):
     failures: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+
+
+class McpEventDelivery(UUIDCreatedBase):
+    """One record change owed to one event subscription.
+
+    Written by the change log's delivery in the transaction that decides the
+    change matches, unique on ``(subscription, change)``: a page delivered twice
+    (a crash between that commit and the cursor moving) owes nothing twice.
+    ``change_key`` is the change's ``xid:seq``, or the old event's id for a
+    change converted at cutover. ``delivered_at`` is set when the receiver took
+    it or it was let go; ``outcome`` says which.
+    """
+
+    __tablename__ = "mcp_event_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscription_id", "change_key", name="uq_mcp_event_deliveries_change"
+        ),
+        Index("ix_mcp_event_deliveries_created", "created_at"),
+    )
+
+    subscription_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mcp_event_subscriptions.id", ondelete="CASCADE"), nullable=False
+    )
+    change_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    pod_id: Mapped[UUID] = mapped_column(nullable=False)
+    table_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    record_id: Mapped[str] = mapped_column(Text, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)

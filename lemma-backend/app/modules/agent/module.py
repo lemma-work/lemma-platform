@@ -124,11 +124,13 @@ def _event_routers():
     from app.modules.agent.events.notification_settled import (
         router as notification_settled_router,
     )
-    from app.modules.agent.events.pod_links_lifecycle import (
-        router as pod_links_router,
-    )
 
-    return [router, notification_settled_router, pod_links_router]
+    return [router, notification_settled_router]
+
+
+def _register_work() -> None:
+    # Every process: a pod deletion (API) writes this through `PodDeleted`.
+    import app.modules.agent.events.pod_links_lifecycle  # noqa: F401
 
 
 def _resource_names():
@@ -155,6 +157,7 @@ module = LemmaModule(
     resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
+    register_work=_register_work,
     api_lifespans=(_report_system_model_pricing, _drain_agent_host_links),
     # The worker is where agent runs actually dispatch, so a deployment
     # whose models cannot back its spend limit has to hear it there too.

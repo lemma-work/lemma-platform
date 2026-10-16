@@ -84,3 +84,16 @@ def test_runs_can_ask_for_one_status_or_leave_out_the_skips() -> None:
 
     assert transport.calls[0]["status"] == ScheduleRunStatus.DEAD_LETTERED
     assert transport.calls[1]["skipped"] is False
+
+
+def test_skips_pages_with_the_token_the_server_returned() -> None:
+    transport = RecordingTransport([])
+    schedule_id = uuid4()
+    schedules = PodSchedules(transport, pod_id=POD)
+
+    schedules.skips(str(schedule_id))
+    schedules.skips(str(schedule_id), limit=10, page_token="next")
+
+    assert transport.calls[0]["limit"] == 50
+    assert transport.calls[1]["limit"] == 10
+    assert transport.calls[1]["page_token"] == "next"

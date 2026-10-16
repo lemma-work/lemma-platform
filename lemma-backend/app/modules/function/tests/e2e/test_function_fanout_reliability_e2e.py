@@ -1,18 +1,17 @@
 """A burst of function runs against one pod: queueing, deadlines and blast radius.
 
-Each test drives the real Postgres or Redis the behaviour depends on; the
-sandbox side is replaced at its HTTP and provider seams only.
+Each test drives the real Postgres the behaviour depends on; the sandbox side
+is replaced at its HTTP and provider seams only. The pod gate and the deadline
+item are covered with the work runtime in ``test_function_run_work_e2e.py``.
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4, uuid7
 
 import httpx
 import pytest
-from redis.asyncio import Redis
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -35,14 +34,10 @@ from app.modules.function.domain.entities import (
     FunctionStatus,
     FunctionType,
 )
-from app.modules.function.events.handlers import _fail_expired_function_runs
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
 )
 from app.modules.function.infrastructure.models import FunctionModel, FunctionRunModel
-from app.modules.function.infrastructure.pod_run_gate import PodRunGate
-from app.modules.function.infrastructure.repositories import FunctionRunRepository
-from app.modules.function.tests.fakes import InMemoryPodRunSlots
 from app.modules.workspace.domain.sandbox import (
     SandboxInstanceState,
     SandboxKind,
@@ -154,12 +149,12 @@ async def test_execution_deadline_starts_when_the_run_starts_not_when_it_was_que
 
     assert context is not None
     assert context.deadline_at == started + timedelta(seconds=budget)
-    # Still inside its budget from the start, so the sweep leaves it alone.
+    # Still inside its budget from the start, so its deadline leaves it alone.
     async with factory() as uow:
-        await FunctionRunRepository(uow).fail_expired(
-            now=started + timedelta(seconds=budget - 1),
-            job_callback_grace_seconds=0,
+        later = await FunctionExecutionRepository(uow).fail_if_overdue(
+            run_id, now=started + timedelta(seconds=budget - 1), grace=timedelta(0)
         )
+    assert later == started + timedelta(seconds=budget)
     row = (await _status_of(db_manager, [run_id]))[run_id]
     assert row.status == FunctionRunStatus.RUNNING
     assert row.deadline_at == started + timedelta(seconds=budget)
@@ -294,7 +289,6 @@ async def test_a_5xx_on_a_live_runtime_leaves_the_sandbox_and_its_runs_alone(
         routes=_routes(db_manager, provider),
         uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
         runtime_http_client_factory=lambda: probe,
-        pod_runs=InMemoryPodRunSlots(),
     )
 
     async with _runtime_answering_probe(200) as probe:
@@ -311,20 +305,18 @@ async def test_a_dead_runtime_is_replaced_and_its_job_runs_fail_at_once(
     test_pod,
     fixed_test_user,
 ) -> None:
-    """Nothing will ever report for those runs; they fail now, not at the
-    deadline sweep, and give their pod slots back."""
+    """Nothing will ever report for those runs; they fail now, not at their
+    deadline, and so stop holding their pod's slots."""
     pod_id = UUID(test_pod["id"])
     jobs, synchronous = await _seed_in_flight(
         db_manager, pod_id=pod_id, user_id=UUID(fixed_test_user["id"])
     )
     (sandbox,) = await _seed_function_sandbox(db_manager, pod_id, epochs=1)
     provider = _Provider()
-    slots = InMemoryPodRunSlots()
     quarantine = FunctionRuntimeQuarantine(
         routes=_routes(db_manager, provider),
         uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
         runtime_http_client_factory=lambda: probe,
-        pod_runs=slots,
     )
 
     async with _runtime_answering_probe(502) as probe:
@@ -338,7 +330,6 @@ async def test_a_dead_runtime_is_replaced_and_its_job_runs_fail_at_once(
         assert rows[run_id].error == ORPHANED_RUN_ERROR
     # A synchronous run holds its own connection and fails through it.
     assert rows[synchronous].status == FunctionRunStatus.RUNNING
-    assert set(jobs) <= set(slots.released)
 
 
 async def test_a_late_quarantine_of_a_replaced_sandbox_destroys_nothing(
@@ -358,12 +349,10 @@ async def test_a_late_quarantine_of_a_replaced_sandbox_destroys_nothing(
     )
     dead, replacement = await _seed_function_sandbox(db_manager, pod_id, epochs=2)
     provider = _Provider()
-    slots = InMemoryPodRunSlots()
     quarantine = FunctionRuntimeQuarantine(
         routes=_routes(db_manager, provider),
         uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
         runtime_http_client_factory=lambda: probe,
-        pod_runs=slots,
     )
 
     async with _runtime_answering_probe(502) as probe:
@@ -372,125 +361,9 @@ async def test_a_late_quarantine_of_a_replaced_sandbox_destroys_nothing(
     assert provider.destroyed == []
     rows = await _status_of(db_manager, jobs)
     assert {row.status for row in rows.values()} == {FunctionRunStatus.RUNNING}
-    assert slots.released == []
     async with SessionUnitOfWorkFactory(db_manager.session_factory)() as uow:
         current = await SandboxRepository(uow).current_instance(pod_id)
     assert current is not None
     assert current.provider_id == replacement
     assert current.state is not SandboxInstanceState.DESTROYED
     assert dead != replacement
-
-
-async def test_pod_gate_queues_the_run_past_the_limit_until_a_slot_frees(
-    test_redis_url,
-) -> None:
-    redis = Redis.from_url(test_redis_url, decode_responses=True)
-    gate = PodRunGate(limit=2, redis_factory=lambda: redis)
-    pod_id = uuid4()
-    first, second, third = uuid4(), uuid4(), uuid4()
-    now = datetime.now(timezone.utc)
-    hold = now + timedelta(minutes=5)
-    try:
-        assert await gate.acquire(pod_id, first, hold_until=hold, wait_until=now)
-        assert await gate.acquire(pod_id, second, hold_until=hold, wait_until=now)
-        # A redelivered dispatch of a run already holding a slot does not
-        # take a second one.
-        assert await gate.acquire(pod_id, second, hold_until=hold, wait_until=now)
-        # Full: one that will not wait is turned away rather than let past.
-        assert not await gate.acquire(pod_id, third, hold_until=hold, wait_until=now)
-
-        waiting = asyncio.create_task(
-            gate.acquire(
-                pod_id,
-                third,
-                hold_until=hold,
-                wait_until=datetime.now(timezone.utc) + timedelta(seconds=30),
-            )
-        )
-        await gate.release(pod_id, first)
-        assert await asyncio.wait_for(waiting, timeout=10) is True
-        assert set(await redis.zrange(f"function:pod-runs:{pod_id}", 0, -1)) == {
-            str(second),
-            str(third),
-        }
-    finally:
-        await redis.delete(f"function:pod-runs:{pod_id}")
-        await redis.aclose()
-
-
-async def test_pod_gate_slot_of_a_dispatcher_that_died_lapses_on_its_own(
-    test_redis_url,
-) -> None:
-    redis = Redis.from_url(test_redis_url, decode_responses=True)
-    gate = PodRunGate(limit=1, redis_factory=lambda: redis)
-    pod_id = uuid4()
-    now = datetime.now(timezone.utc)
-    try:
-        assert await gate.acquire(
-            pod_id, uuid4(), hold_until=now - timedelta(seconds=1), wait_until=now
-        )
-        # Never released, but past its hold: the next run gets the slot.
-        assert await gate.acquire(
-            pod_id, uuid4(), hold_until=now + timedelta(minutes=1), wait_until=now
-        )
-    finally:
-        await redis.delete(f"function:pod-runs:{pod_id}")
-        await redis.aclose()
-
-
-async def test_sweeps_page_past_the_first_page(
-    db_manager,
-    test_pod,
-    fixed_test_user,
-) -> None:
-    """Both halves of the reconcile cron reach runs beyond one page."""
-    pod_id = UUID(test_pod["id"])
-    user_id = UUID(fixed_test_user["id"])
-    now = datetime.now(timezone.utc)
-    async with db_manager.session_factory() as session:
-        function_id = await _seed_function(
-            session, pod_id=pod_id, user_id=user_id, job=True
-        )
-        unqueued = [
-            await _seed_run(
-                session,
-                function_id=function_id,
-                user_id=user_id,
-                deadline_at=now + timedelta(minutes=30),
-                job=True,
-            )
-            for _ in range(5)
-        ]
-        expired = [
-            await _seed_run(
-                session,
-                function_id=function_id,
-                user_id=user_id,
-                deadline_at=now - timedelta(seconds=1),
-                job=True,
-            )
-            for _ in range(5)
-        ]
-        await session.commit()
-    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
-
-    seen: list[UUID] = []
-    after: UUID | None = None
-    while True:
-        async with factory() as uow:
-            page = await FunctionRunRepository(uow).list_pending_async_runs(
-                now=now + timedelta(minutes=5),
-                min_age_seconds=0,
-                limit=2,
-                after=after,
-            )
-        seen.extend(page)
-        if len(page) < 2:
-            break
-        after = page[-1]
-    assert set(unqueued) <= set(seen)
-    assert len(seen) == len(set(seen))
-
-    await _fail_expired_function_runs(uow_factory=factory, now=now, limit=2)
-    rows = await _status_of(db_manager, expired)
-    assert {row.status for row in rows.values()} == {FunctionRunStatus.FAILED}

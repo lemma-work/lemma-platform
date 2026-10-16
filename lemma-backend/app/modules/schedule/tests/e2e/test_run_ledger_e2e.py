@@ -7,6 +7,7 @@ from uuid import UUID, uuid4, uuid7
 import pytest
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.schedule.services.run_recovery_service import (
     ScheduleRunRecoveryService,
 )
@@ -25,7 +26,6 @@ from app.modules.schedule.tests.e2e.test_schedule_e2e import (
     _create_schedule,
     _create_workflow,
 )
-from app.modules.workflow.infrastructure.models import WorkflowRunModel
 
 pytestmark = pytest.mark.e2e
 
@@ -462,114 +462,117 @@ async def test_breaker_recompute_is_independent_of_event_delivery_order(
         assert persisted.consecutive_failures == 0
 
 
-async def test_recovery_redelivers_abandoned_runs_and_reconciles_lost_outcome(
-    authenticated_client,
-    fixed_test_org,
-    db_manager,
-):
+async def _agent_schedule(
+    authenticated_client, fixed_test_org
+) -> tuple[str, UUID, UUID]:
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
-    workflow = await _create_workflow(
-        authenticated_client,
-        pod_id,
-        start={"type": "SCHEDULED", "config": {"schedule_type": "CRON"}},
-        name_prefix="schedule-recovery-workflow",
-    )
+    agent = await _create_agent(authenticated_client, pod_id)
     schedule = await _create_schedule(
         authenticated_client,
         pod_id,
         schedule_type="TIME",
-        workflow_name=workflow["name"],
+        agent_name=agent["name"],
         config={"cron": "0 * * * *"},
     )
-    schedule_id = UUID(schedule["id"])
-    user_id = UUID(schedule["user_id"])
+    return pod_id, UUID(schedule["id"]), UUID(schedule["user_id"])
+
+
+def _ledger_row(
+    schedule_id: UUID,
+    user_id: UUID,
+    *,
+    tag: str,
+    stale: datetime,
+    status: ScheduleRunStatus = ScheduleRunStatus.DISPATCHED,
+    target_kind: str = "AGENT",
+    target_run_id: UUID | None = None,
+    row_id: UUID | None = None,
+) -> ScheduleRun:
+    return ScheduleRun(
+        id=row_id or uuid7(),
+        schedule_id=schedule_id,
+        user_id=user_id,
+        source_event_id=tag,
+        status=status.value,
+        attempts=1,
+        target_kind=target_kind,
+        target_run_id=str(target_run_id or uuid4()),
+        payload={},
+        fire_metadata={},
+        llm_output={},
+        started_at=stale,
+        created_at=stale,
+        updated_at=stale,
+    )
+
+
+async def test_recovery_settles_only_dispatched_agent_runs_whose_outcome_was_lost(
+    authenticated_client,
+    fixed_test_org,
+    db_manager,
+):
+    """The sweep is now only the net under the agent outcome stream.
+
+    A lost terminal outcome is reconciled and a conversation that no longer
+    exists is dead-lettered. Rows other owners now settle -- a workflow target
+    (its end is a fact in the run's own transaction), and PROCESSING or FAILED
+    reservations (their ``schedule.start_target`` item retries them) -- are not
+    touched at all.
+    """
+    pod_id, schedule_id, user_id = await _agent_schedule(
+        authenticated_client, fixed_test_org
+    )
     stale = datetime.now(timezone.utc) - timedelta(minutes=10)
-    abandoned_id = uuid4()
-    failed_id = uuid4()
-    dispatched_id = uuid4()
-    exhausted_id = uuid4()
-    completed_target_id = uuid4()
+    finished_conversation = uuid4()
+    lost_id, gone_id = uuid7(), uuid7()
+    workflow_id, processing_id, failed_id = uuid7(), uuid7(), uuid7()
 
     async with db_manager.session_factory() as session, session.begin():
         session.add(
-            WorkflowRunModel(
-                id=completed_target_id,
-                flow_id=UUID(workflow["id"]),
-                pod_id=UUID(pod_id),
+            ConversationModel(
+                id=finished_conversation,
                 user_id=user_id,
-                start_type="SCHEDULED",
-                schedule_event_id="lost-terminal-target",
-                start_payload={},
+                pod_id=UUID(pod_id),
                 status="COMPLETED",
-                completed_at=stale,
-                created_at=stale,
-                updated_at=stale,
             )
         )
+        await session.flush()
         session.add_all(
             [
-                ScheduleRun(
-                    id=abandoned_id,
-                    schedule_id=schedule_id,
-                    user_id=user_id,
-                    source_event_id="abandoned-processing",
-                    status=ScheduleRunStatus.PROCESSING.value,
-                    attempts=1,
-                    target_kind="WORKFLOW",
-                    target_run_id=str(uuid4()),
-                    payload={},
-                    fire_metadata={},
-                    llm_output={},
-                    started_at=None,
-                    created_at=stale,
-                    updated_at=stale,
+                _ledger_row(
+                    schedule_id,
+                    user_id,
+                    tag="lost-terminal-outcome",
+                    stale=stale,
+                    target_run_id=finished_conversation,
+                    row_id=lost_id,
                 ),
-                ScheduleRun(
-                    id=failed_id,
-                    schedule_id=schedule_id,
-                    user_id=user_id,
-                    source_event_id="retryable-failed",
-                    status=ScheduleRunStatus.FAILED.value,
-                    attempts=2,
-                    target_kind="WORKFLOW",
-                    target_run_id=str(uuid4()),
-                    payload={},
-                    fire_metadata={},
-                    llm_output={},
-                    completed_at=stale,
-                    created_at=stale,
-                    updated_at=stale,
+                _ledger_row(
+                    schedule_id, user_id, tag="gone", stale=stale, row_id=gone_id
                 ),
-                ScheduleRun(
-                    id=dispatched_id,
-                    schedule_id=schedule_id,
-                    user_id=user_id,
-                    source_event_id="lost-terminal-event",
-                    status=ScheduleRunStatus.DISPATCHED.value,
-                    attempts=1,
+                _ledger_row(
+                    schedule_id,
+                    user_id,
+                    tag="workflow-target",
+                    stale=stale,
                     target_kind="WORKFLOW",
-                    target_run_id=str(completed_target_id),
-                    payload={},
-                    fire_metadata={},
-                    llm_output={},
-                    created_at=stale,
-                    updated_at=stale,
+                    row_id=workflow_id,
                 ),
-                ScheduleRun(
-                    id=exhausted_id,
-                    schedule_id=schedule_id,
-                    user_id=user_id,
-                    source_event_id="exhausted-processing",
-                    status=ScheduleRunStatus.PROCESSING.value,
-                    attempts=10,
-                    target_kind="WORKFLOW",
-                    target_run_id=str(uuid4()),
-                    payload={},
-                    fire_metadata={},
-                    llm_output={},
-                    started_at=stale,
-                    created_at=stale,
-                    updated_at=stale,
+                _ledger_row(
+                    schedule_id,
+                    user_id,
+                    tag="processing",
+                    stale=stale,
+                    status=ScheduleRunStatus.PROCESSING,
+                    row_id=processing_id,
+                ),
+                _ledger_row(
+                    schedule_id,
+                    user_id,
+                    tag="failed",
+                    stale=stale,
+                    status=ScheduleRunStatus.FAILED,
+                    row_id=failed_id,
                 ),
             ]
         )
@@ -578,20 +581,24 @@ async def test_recovery_redelivers_abandoned_runs_and_reconciles_lost_outcome(
     async with factory() as uow:
         result = await ScheduleRunRecoveryService(uow).recover()
 
-    assert result.redelivered == 2
-    assert result.reconciled == 1
-    assert result.dead_lettered == 1
+    assert (result.reconciled, result.dead_lettered, result.still_running) == (1, 1, 0)
     async with db_manager.session_factory() as session:
-        abandoned = await session.get(ScheduleRun, abandoned_id)
-        failed = await session.get(ScheduleRun, failed_id)
-        dispatched = await session.get(ScheduleRun, dispatched_id)
-        exhausted = await session.get(ScheduleRun, exhausted_id)
-        assert abandoned is not None and abandoned.status == "RECEIVED"
-        assert failed is not None and failed.status == "RECEIVED"
-        assert dispatched is not None
-        assert dispatched.status == "DISPATCHED"
-        assert dispatched.target_outcome == "COMPLETED"
-        assert exhausted is not None and exhausted.status == "DEAD_LETTERED"
+        lost = await session.get(ScheduleRun, lost_id)
+        gone = await session.get(ScheduleRun, gone_id)
+        assert lost is not None and lost.status == "DISPATCHED"
+        assert lost.target_outcome == "COMPLETED"
+        assert gone is not None and gone.status == "DEAD_LETTERED"
+        assert gone.error_type == "ScheduleTargetMissing"
+        for untouched_id, status in (
+            (workflow_id, "DISPATCHED"),
+            (processing_id, "PROCESSING"),
+            (failed_id, "FAILED"),
+        ):
+            row = await session.get(ScheduleRun, untouched_id)
+            assert row is not None
+            assert row.status == status
+            assert row.target_outcome is None
+            assert row.last_inspected_at is None, "the sweep must not even look"
 
 
 async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
@@ -601,120 +608,61 @@ async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
 ):
     """The sweep must not spend every tick on the same in-flight runs.
 
-    A run whose target is alive but unfinished needs no change, so the handler
-    wrote back the four values the row already held, SQLAlchemy computed no net
-    change, no UPDATE fired, and ``updated_at`` -- which the query ordered by --
-    never moved. The next tick selected the same rows. In production the cursor
-    sat on the same rows for days while reporting a full batch reconciled on
-    every consecutive sample: not a full batch, the same batch, with the eligible
-    rows behind it never examined.
-
-    All of those rows had live targets -- mostly workflows parked on human form
-    waits, the rest agents still running -- so the sweep's *decision* was right
-    every time. Only the bookkeeping was wrong.
+    A run whose agent is alive but unfinished needs no change, so without the
+    inspection stamp no UPDATE fires and the next tick selects the same rows:
+    a standing set of long-running agents would hold the batch while lost
+    outcomes waited behind it forever.
     """
-    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
-    workflow = await _create_workflow(
-        authenticated_client,
-        pod_id,
-        start={"type": "SCHEDULED", "config": {"schedule_type": "CRON"}},
-        name_prefix="schedule-cursor-workflow",
+    pod_id, schedule_id, user_id = await _agent_schedule(
+        authenticated_client, fixed_test_org
     )
-    schedule = await _create_schedule(
-        authenticated_client,
-        pod_id,
-        schedule_type="TIME",
-        workflow_name=workflow["name"],
-        config={"cron": "0 * * * *"},
-    )
-    schedule_id = UUID(schedule["id"])
-    user_id = UUID(schedule["user_id"])
     stale = datetime.now(timezone.utc) - timedelta(minutes=30)
-
-    waiting_target_id = uuid4()
-    # uuid7, not uuid4: both rows tie on `last_inspected_at` (both NULL), so the
-    # query's tie-break -- `ScheduleRun.id` ascending -- is what decides which
-    # one a `limit=1` sweep reaches first. uuid4 is random and carries no
-    # relationship to insertion order, which made "parked sorts first" true
-    # only about half the time. uuid7 is time-ordered, so calling it here
-    # before `behind_it_id` reproduces the same ordering the model's own
-    # `default=uuid7` on `ScheduleRun.id` gives rows created in production.
+    running_conversation, finished_conversation = uuid4(), uuid4()
+    # uuid7: both rows tie on `last_inspected_at` (NULL), so the id tie-break
+    # decides which one a `limit=1` sweep reaches first.
     parked_id = uuid7()
     behind_it_id = uuid7()
-    finished_target_id = uuid4()
 
     async with db_manager.session_factory() as session, session.begin():
         session.add_all(
             [
-                # Alive and unfinished: a workflow waiting on a human form.
-                WorkflowRunModel(
-                    id=waiting_target_id,
-                    flow_id=UUID(workflow["id"]),
-                    pod_id=UUID(pod_id),
+                ConversationModel(
+                    id=running_conversation,
                     user_id=user_id,
-                    start_type="SCHEDULED",
-                    schedule_event_id="still-waiting",
-                    start_payload={},
-                    status="WAITING",
-                    created_at=stale,
-                    updated_at=stale,
+                    pod_id=UUID(pod_id),
+                    status="RUNNING",
                 ),
-                WorkflowRunModel(
-                    id=finished_target_id,
-                    flow_id=UUID(workflow["id"]),
-                    pod_id=UUID(pod_id),
+                ConversationModel(
+                    id=finished_conversation,
                     user_id=user_id,
-                    start_type="SCHEDULED",
-                    schedule_event_id="finished-behind-the-wall",
-                    start_payload={},
+                    pod_id=UUID(pod_id),
                     status="COMPLETED",
-                    completed_at=stale,
-                    created_at=stale,
-                    updated_at=stale,
                 ),
             ]
         )
+        await session.flush()
         session.add_all(
             [
-                # Sorts first (older) and can never be reconciled.
-                ScheduleRun(
-                    id=parked_id,
-                    schedule_id=schedule_id,
-                    user_id=user_id,
-                    source_event_id="parked-on-human-wait",
-                    status=ScheduleRunStatus.DISPATCHED.value,
-                    attempts=1,
-                    target_kind="WORKFLOW",
-                    target_run_id=str(waiting_target_id),
-                    payload={},
-                    fire_metadata={},
-                    llm_output={},
-                    created_at=stale,
-                    updated_at=stale,
+                _ledger_row(
+                    schedule_id,
+                    user_id,
+                    tag="parked-on-a-running-agent",
+                    stale=stale,
+                    target_run_id=running_conversation,
+                    row_id=parked_id,
                 ),
-                # Behind it, and the one with real work waiting to be done.
-                ScheduleRun(
-                    id=behind_it_id,
-                    schedule_id=schedule_id,
-                    user_id=user_id,
-                    source_event_id="lost-outcome-behind-the-wall",
-                    status=ScheduleRunStatus.DISPATCHED.value,
-                    attempts=1,
-                    target_kind="WORKFLOW",
-                    target_run_id=str(finished_target_id),
-                    payload={},
-                    fire_metadata={},
-                    llm_output={},
-                    created_at=stale,
-                    updated_at=stale,
+                _ledger_row(
+                    schedule_id,
+                    user_id,
+                    tag="lost-outcome-behind-the-wall",
+                    stale=stale,
+                    target_run_id=finished_conversation,
+                    row_id=behind_it_id,
                 ),
             ]
         )
 
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
-
-    # One row at a time, so the parked run occupies the whole first batch. This
-    # is the 100-row wall in miniature.
     async with factory() as uow:
         first = await ScheduleRunRecoveryService(uow).recover(limit=1)
     assert first.still_running == 1, "the parked run is in flight, not reconciled"
@@ -722,7 +670,6 @@ async def test_recovery_advances_past_runs_whose_targets_are_still_alive(
 
     async with factory() as uow:
         second = await ScheduleRunRecoveryService(uow).recover(limit=1)
-
     assert second.reconciled == 1, "the second tick must get past the parked run"
 
     async with db_manager.session_factory() as session:

@@ -1,11 +1,15 @@
-"""Bridge workflow and agent terminal outcomes into the schedule ledger.
+"""Bridge agent terminal outcomes into the schedule ledger.
+
+Workflow outcomes arrive as ``WorkflowRunFinished`` facts on the work runtime
+(``work/outcome.py``); agent ones keep this consumer until the agent module
+emits facts too.
 
 Schedule's own handler, not a composition adapter. It reads two other modules
 through what they publish -- their `domain/events` for the notification, and
 `agent.contracts.conversation_outcomes` for the one fact an agent event does
 not carry -- and everything it writes is this module's.
 
-Both consumer groups are declared in `schedule/module.py`'s `stream_groups`. An
+The consumer group is declared in `schedule/module.py`'s `stream_groups`. An
 undeclared group is created on its first read and silently misses everything
 published before that.
 
@@ -47,10 +51,6 @@ from app.modules.schedule.contracts.target_outcome import TargetRunOutcome
 from app.modules.schedule.domain.schedule import ScheduleRunStatus
 from app.modules.schedule.services.run_outcome_service import (
     ScheduleRunOutcomeService,
-)
-from app.modules.workflow.domain.events import (
-    WORKFLOW_RUN_EVENTS_STREAM,
-    WorkflowRunTerminalEvent,
 )
 
 router = RedisRouter()
@@ -97,49 +97,6 @@ def provide_conversation_outcome() -> ConversationOutcomeReader:
     )
 
     return load_conversation_outcome
-
-
-@reliable_redis_stream_subscriber(
-    router,
-    WORKFLOW_RUN_EVENTS_STREAM,
-    group="schedule-workflow-outcomes",
-    consumer="schedule-workflow-outcomes-consumer",
-)
-async def on_workflow_run_terminal(
-    event: dict[str, object],
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-    ledger: LedgerFactory = Depends(provide_ledger),
-) -> None:
-    if event.get("event_type") != WorkflowRunTerminalEvent.get_event_type():
-        return
-
-    async def record() -> None:
-        parsed = WorkflowRunTerminalEvent.model_validate(event)
-        status = _schedule_status_for(parsed.status.value)
-        if status is None:
-            _log_unmapped_target_outcome("WORKFLOW", parsed.status.value)
-            return
-        async with uow_factory() as uow:
-            changed = await ledger(uow).record_target_outcome(
-                target_kind="WORKFLOW",
-                target_run_id=str(parsed.run_id),
-                status=status,
-                completed_at=parsed.completed_at,
-                error_type=(
-                    "WorkflowRunFailed"
-                    if status == ScheduleRunStatus.TARGET_FAILED
-                    else None
-                ),
-            )
-        if changed:
-            fs_logger.debug(
-                "schedule.workflow_outcome.recorded",
-                run_id=str(parsed.run_id),
-            )
-
-    await inbox.process("schedule.workflow-outcomes", event, record)
 
 
 @reliable_redis_stream_subscriber(

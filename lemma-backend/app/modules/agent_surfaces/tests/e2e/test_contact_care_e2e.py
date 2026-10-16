@@ -17,7 +17,6 @@ database, with only the model's next move scripted:
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -30,6 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.work import WorkClass
+from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.agent.contracts import contact_conversations
 from app.modules.agent.domain.outsiders import HANDED_TO_KEY
 from app.modules.agent.infrastructure.models import ConversationModel
@@ -63,7 +64,6 @@ from app.modules.contacts.infrastructure.visitor_sessions import (
     VisitorCodeModel,
     VisitorSessionModel,
 )
-from app.modules.agent_surfaces.events import handlers
 from app.modules.agent_surfaces.services.contact_keepers import UNATTENDED_WARNING
 from app.modules.agent_surfaces.tests.e2e.helpers import _resend_payload
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
@@ -81,8 +81,6 @@ from app.modules.contacts.infrastructure.models import (
 )
 from app.modules.datastore.contracts import contact_rows
 from app.modules.pod.contracts.members import pod_member_id
-from app.modules.pod.domain.events import PodMemberRemovedEvent
-from app.modules.test_support.fakes import PassthroughEventInbox
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.contacts_cap import contacts_cap_reached
 from app.modules.usage.contracts.metering import check_run_budget
@@ -808,6 +806,7 @@ async def test_stop_unsubscribes_the_address_it_came_from(
 # ------------------------------------------------------------ who looks after them
 
 
+@pytest.mark.drives_work
 async def test_a_contacts_history_moves_with_them_to_a_new_keeper(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
@@ -870,17 +869,8 @@ async def test_a_contacts_history_moves_with_them_to_a_new_keeper(
         f"/pods/{pod_id}/members/{keeper_member['pod_member_id']}"
     )
     assert removed.status_code == 204, removed.text
-    # As the pod stream delivers it to the surfaces' consumer.
-    await handlers.on_pod_deleted(
-        {
-            "event_type": PodMemberRemovedEvent.get_event_type(),
-            "pod_id": pod_id,
-            "user_id": keeper["id"],
-        },
-        logging.getLogger("test"),
-        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-        inbox=PassthroughEventInbox(),
-    )
+    # The removal wrote the surfaces' `surfaces.member_removed` item.
+    await run_until_idle(async_session_maker, classes=[WorkClass.EVENTS])
     shown = await authenticated_client.get(f"/pods/{pod_id}/surfaces/{surface['name']}")
     assert shown.json()["contacts_warning"] == UNATTENDED_WARNING
     notes = (

@@ -1,19 +1,24 @@
 """Workflow engine: transactions, authorization, and wait lifecycle.
 
-The engine owns one transaction per advance: the run row and its wait row
-always commit atomically. Resume paths row-lock the run, so double-resumes
-and stale completion events are conflicts/no-ops by construction.
+One transaction per advance: the run row, its wait row and the work items that
+end the wait always commit together. Resume paths row-lock the run, so
+double-resumes and stale completions are conflicts/no-ops by construction.
+
+Inside a work handler the runtime owns the transaction (``commits=False``):
+the engine writes and flushes, and the handler's completion commits it with the
+item's deletion. Everywhere else (API requests) the engine commits itself.
 """
 
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 
 from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import WorkWriter
 from app.modules.workflow.domain.context import TriggerContext, normalize_node_output
 from app.modules.workflow.domain.errors import (
     WorkflowConflictError,
@@ -23,7 +28,6 @@ from app.modules.workflow.domain.nodes import NodeType
 from app.modules.workflow.domain.schema_template import defaults_from_schema
 from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.domain.run import (
-    TERMINAL_STATUSES,
     WorkflowRunEntity,
     WorkflowRunStatus,
 )
@@ -36,17 +40,13 @@ from app.modules.workflow.execution.form_submission import (
     check_assignee,
     validate_form_inputs,
 )
-from app.modules.workflow.execution.run_admission import (
-    admit_queued_runs,
-    queue_wait_if_full,
-)
+from app.modules.workflow.execution.run_admission import queue_wait_if_full
 from app.modules.workflow.execution.run_publication import RunPublication
+from app.modules.workflow.execution.resume_target import ResumeTarget
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
 from app.modules.workflow.domain.ports import (
     AgentPort,
-    DecisionPort,
     FunctionPort,
-    SchedulePort,
     WorkflowNotificationPort,
 )
 from app.modules.workflow.execution.wait_failure import fail_run_for_wait
@@ -73,9 +73,9 @@ class WorkflowEngine(RunPublication):
     """Advances runs. Every collaborator arrives already bound.
 
     The adapters have no defaults on purpose: resolving them here made the
-    deepest file in this module choose which agent, function, scheduler,
-    decision queue and notifier the application runs on.
-    `build_workflow_engine` decides instead.
+    deepest file in this module choose which agent, function and notifier the
+    application runs on. `build_workflow_engine` decides instead. None of them
+    reaches the network: what a step needs from outside is a work item.
     """
 
     def __init__(
@@ -84,27 +84,26 @@ class WorkflowEngine(RunPublication):
         *,
         agent_adapter: AgentPort,
         function_adapter: FunctionPort,
-        schedule_adapter: SchedulePort,
-        decision_adapter: DecisionPort,
         notification_adapter: WorkflowNotificationPort,
+        work: WorkWriter | None = None,
+        commits: bool = True,
     ):
         self.uow = uow
+        self.work = work or WorkWriter(uow.session)
+        self.commits = commits
         self.flow_repo = SqlAlchemyWorkflowRepository(uow)
         self.run_repo = SqlAlchemyWorkflowRunRepository(uow)
         self.wait_repo = SqlAlchemyWorkflowRunWaitRepository(uow)
 
         self.agent_adapter = agent_adapter
         self.function_adapter = function_adapter
-        self.schedule_adapter = schedule_adapter
-        self.decision_adapter = decision_adapter
         self.notification_adapter = notification_adapter
 
     def _stepper(self, ctx: Context | None) -> RunStepper:
         return RunStepper(
             agent=self.agent_adapter,
             function=self.function_adapter,
-            schedule=self.schedule_adapter,
-            decision=self.decision_adapter,
+            work=self.work,
             authz_ctx=ctx,
         )
 
@@ -147,8 +146,9 @@ class WorkflowEngine(RunPublication):
         trigger: TriggerContext | None = None,
         schedule_event_id: str | None = None,
         ctx: Context | None = None,
+        flow: WorkflowEntity | None = None,
     ) -> WorkflowRunEntity:
-        """Create and advance a new run.
+        """Create and advance a new run (of ``flow``, when the caller read it).
 
         Manual runs take no inputs: if the entry node is a form the run is
         persisted WAITING on it in the same transaction. Machine waits such
@@ -156,7 +156,8 @@ class WorkflowEngine(RunPublication):
         active wait row tracks resumability. `trigger` is set only for
         scheduled/event/datastore starts and populates `start.*`.
         """
-        flow = await self.flow_repo.get(flow_id)
+        if flow is None or flow.id != flow_id:
+            flow = await self.flow_repo.get(flow_id)
         if not flow:
             raise ValueError(f"Workflow {flow_id} not found")
         ctx = await self._require_action(
@@ -169,12 +170,9 @@ class WorkflowEngine(RunPublication):
 
         entry_node_id = self._entry_node_id(flow)
 
-        if run_id is not None:
-            existing = await self.run_repo.get(run_id)
-            if existing is not None:
-                self._validate_reserved_run(existing, flow_id=flow.id, user_id=user_id)
-                return existing
-
+        # A known run_id is not looked up first: its insert below conflicts
+        # instead, and that path returns the existing run. A redelivery pays a
+        # savepoint rollback; every first delivery saves a read.
         if schedule_event_id is not None:
             existing = await self.run_repo.find_by_schedule_event(
                 flow_id=flow.id,
@@ -237,12 +235,9 @@ class WorkflowEngine(RunPublication):
         # create() persisted only the entry-node state; write the post-advance state
         # (final node, status, step history, context) before committing.
         run = await self.run_repo.update(run)
-        pending_wait = await self._persist_wait(run, result)
-        self._collect_terminal_event(run)
-        await self.uow.commit()
-        await self._announce(run)
-        if pending_wait is not None:
-            await self._announce_human_wait(run, pending_wait)
+        await self._persist_wait(run, result)
+        await self._record_transition(run)
+        await self._settle(run)
 
         return run
 
@@ -307,12 +302,9 @@ class WorkflowEngine(RunPublication):
         result = await self._stepper(ctx).continue_after(run, flow, node_id)
 
         run = await self.run_repo.update(run)
-        pending_wait = await self._persist_wait(run, result)
-        self._collect_terminal_event(run)
-        await self.uow.commit()
-        await self._announce(run)
-        if pending_wait is not None:
-            await self._announce_human_wait(run, pending_wait)
+        await self._persist_wait(run, result)
+        await self._record_transition(run)
+        await self._settle(run)
         return run
 
     async def resume_internal(
@@ -323,19 +315,32 @@ class WorkflowEngine(RunPublication):
         *,
         ctx: Context | None = None,
         next_node_id: str | None = None,
+        found: ResumeTarget | None = None,
     ) -> WorkflowRunEntity | None:
         """Resume the run waiting on (wait_type, external_ref).
 
         Returns None when no ACTIVE wait matches — stale or duplicate
         completion events are no-ops by construction. `next_node_id` is the
         branch a decision's answer chose; otherwise the run follows the edge.
+        `found` is what a caller already read for the same wait, so a step's
+        transaction does not read its rows twice.
         """
-        wait = await self.wait_repo.find_active_by_external_ref(wait_type, external_ref)
+        wait = (
+            found.wait
+            if found is not None
+            else await self.wait_repo.find_active_by_external_ref(
+                wait_type, external_ref
+            )
+        )
         if wait is None:
             logger.debug("workflow.resume.stale_event", wait_type=wait_type.value)
             return None
 
-        run = await self.run_repo.get_for_update(wait.run_id)
+        run = (
+            found.locked_run
+            if found is not None and found.locked_run is not None
+            else await self.run_repo.get_for_update(wait.run_id)
+        )
         if run is None or run.status not in (
             WorkflowRunStatus.WAITING,
             WorkflowRunStatus.RUNNING,
@@ -347,7 +352,11 @@ class WorkflowEngine(RunPublication):
             )
             return None
 
-        flow = await self.flow_repo.get(run.flow_id)
+        flow = (
+            found.flow
+            if found is not None and found.flow is not None
+            else await self.flow_repo.get(run.flow_id)
+        )
         if not flow:
             raise ValueError("Workflow definition not found")
 
@@ -365,12 +374,9 @@ class WorkflowEngine(RunPublication):
         )
 
         run = await self.run_repo.update(run)
-        pending_wait = await self._persist_wait(run, result)
-        self._collect_terminal_event(run)
-        await self.uow.commit()
-        await self._announce(run)
-        if pending_wait is not None:
-            await self._announce_human_wait(run, pending_wait)
+        await self._persist_wait(run, result)
+        await self._record_transition(run)
+        await self._settle(run)
         return run
 
     async def fail_internal(
@@ -434,9 +440,8 @@ class WorkflowEngine(RunPublication):
         except ValueError as exc:
             raise WorkflowConflictError(str(exc)) from exc
         run = await self.run_repo.update(run)
-        self._collect_terminal_event(run)
-        await self.uow.commit()
-        await self._announce(run)
+        await self._record_transition(run)
+        await self._settle(run)
         logger.debug("workflow.run.cancelled", run_id=str(run.id))
         return run
 
@@ -482,40 +487,10 @@ class WorkflowEngine(RunPublication):
         run.reopen_at_failed_node()
         result = await self._stepper(ctx).advance(run, flow)
         run = await self.run_repo.update(run)
-        pending_wait = await self._persist_wait(run, result)
-        self._collect_terminal_event(run)
-        await self.uow.commit()
-        await self._announce(run)
-        if pending_wait is not None:
-            await self._announce_human_wait(run, pending_wait)
+        await self._persist_wait(run, result)
+        await self._record_transition(run)
+        await self._settle(run)
         return run
-
-    async def admit_queued_runs(self, flow_id: UUID) -> int:
-        """Start parked runs of a workflow into the places it has free."""
-        return await admit_queued_runs(self, flow_id)
-
-    async def _announce(self, run: WorkflowRunEntity) -> None:
-        """Announce, and when a run has finished, hand its place to a parked one.
-
-        Every transition announces after its commit, so this is the one place
-        that sees every finish. The run that finished is already committed, so
-        a database failure here must not turn its request into an error: the
-        reconciliation sweep admits anything it leaves parked.
-        """
-        await super()._announce(run)
-        if run.status not in TERMINAL_STATUSES:
-            return
-        try:
-            flow = await self.flow_repo.get(run.flow_id)
-            if flow is not None and flow.max_concurrent_runs is not None:
-                await admit_queued_runs(self, flow.id)
-        except SQLAlchemyError:
-            logger.warning(
-                "workflow.run.admission_failed",
-                flow_id=str(run.flow_id),
-                exc_info=True,
-            )
-            await self.uow.rollback()
 
     # -- queries -----------------------------------------------------------------
 

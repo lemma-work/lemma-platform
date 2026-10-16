@@ -99,9 +99,13 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
             update(WorkflowRunModel)
             .where(WorkflowRunModel.id == run.id)
             .values(**self._to_dict(run))
+            # The row as written, in the same round trip: every advance ends in
+            # this update, and a second SELECT for it was one statement per step.
+            .returning(WorkflowRunModel)
+            .execution_options(populate_existing=True)
         )
-        await self.session.execute(stmt)
-        return await self.get(run.id)
+        model = (await self.session.execute(stmt)).scalar_one_or_none()
+        return self._to_entity(model) if model else None
 
     async def list_by_flow(
         self,

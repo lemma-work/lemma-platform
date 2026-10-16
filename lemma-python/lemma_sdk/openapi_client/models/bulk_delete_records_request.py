@@ -7,6 +7,9 @@ from uuid import UUID
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..models.write_intent import WriteIntent
+from ..types import UNSET, Unset
+
 T = TypeVar("T", bound="BulkDeleteRecordsRequest")
 
 
@@ -16,9 +19,11 @@ class BulkDeleteRecordsRequest:
 
     Attributes:
         record_ids (list[int | str | UUID]): Primary key values to delete. At most 1000 per request.
+        intent (WriteIntent | Unset):
     """
 
     record_ids: list[int | str | UUID]
+    intent: WriteIntent | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -31,6 +36,10 @@ class BulkDeleteRecordsRequest:
                 record_ids_item = record_ids_item_data
             record_ids.append(record_ids_item)
 
+        intent: str | Unset = UNSET
+        if not isinstance(self.intent, Unset):
+            intent = self.intent.value
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -38,6 +47,8 @@ class BulkDeleteRecordsRequest:
                 "record_ids": record_ids,
             }
         )
+        if intent is not UNSET:
+            field_dict["intent"] = intent
 
         return field_dict
 
@@ -63,8 +74,16 @@ class BulkDeleteRecordsRequest:
 
             record_ids.append(record_ids_item)
 
+        _intent = d.pop("intent", UNSET)
+        intent: WriteIntent | Unset
+        if isinstance(_intent, Unset):
+            intent = UNSET
+        else:
+            intent = WriteIntent(_intent)
+
         bulk_delete_records_request = cls(
             record_ids=record_ids,
+            intent=intent,
         )
 
         bulk_delete_records_request.additional_properties = d

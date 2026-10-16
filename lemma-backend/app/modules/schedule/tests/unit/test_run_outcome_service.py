@@ -33,6 +33,7 @@ def _service() -> tuple[ScheduleRunOutcomeService, Mock]:
         deactivate_if_active=AsyncMock(return_value=False),
         lock_breaker_candidates=AsyncMock(return_value=[]),
     )
+    service.work = Mock(add=AsyncMock())
     return service, uow
 
 
@@ -84,6 +85,10 @@ async def test_fifth_target_failure_deactivates_and_notifies_schedule_owner(
     assert isinstance(staged[0], ScheduleDeactivated)
     assert staged[0].user_id == schedule.user_id
     assert staged[0].consecutive_failures == 5
+    # The owner's email is a delivery item written in this same transaction.
+    [notice] = service.work.add.await_args_list
+    assert notice.args[0] == "schedule.paused_notice"
+    assert notice.args[2].reason == "consecutive_failures"
 
 
 @pytest.mark.anyio

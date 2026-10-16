@@ -24,6 +24,9 @@ from app.modules.schedule.api.schemas.schedule_schemas import (
     ScheduleResponse,
     ScheduleRunListResponse,
     ScheduleRunResponse,
+    TriggerSkipListResponse,
+    TriggerSkipReason,
+    TriggerSkipResponse,
 )
 from app.modules.schedule.domain.schedule import (
     MCP_EVENT_SOURCE,
@@ -225,6 +228,45 @@ async def list_schedule_runs(
     return ScheduleRunListResponse(
         items=[ScheduleRunResponse.model_validate(item) for item in runs],
         limit=max(1, min(limit, 1000)),
+    )
+
+
+@router.get(
+    "/{schedule_id}/skips",
+    response_model=TriggerSkipListResponse,
+    operation_id="schedule.skip.list",
+)
+async def list_schedule_skips(
+    pod_id: UUID,
+    schedule_id: UUID,
+    service: ScheduleServiceDep,
+    ctx: PodContextDep,
+    limit: int = Query(50, ge=1, le=500),
+    page_token: str | None = None,
+) -> TriggerSkipListResponse:
+    """What the trigger let pass without firing -- e.g. the changes of a bulk
+    write or an import it is set to skip -- newest first."""
+    skips, next_page_token = await service.run_service.list_trigger_skips(
+        pod_id=pod_id,
+        schedule_id=schedule_id,
+        ctx=ctx,
+        limit=limit,
+        page_token=page_token,
+    )
+    return TriggerSkipListResponse(
+        items=[
+            TriggerSkipResponse(
+                id=skip.id,
+                reason=TriggerSkipReason(skip.reason),
+                first=skip.first,
+                last=skip.last,
+                count=skip.count,
+                at=skip.at,
+            )
+            for skip in skips
+        ],
+        limit=limit,
+        next_page_token=next_page_token,
     )
 
 

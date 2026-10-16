@@ -1,4 +1,6 @@
 from uuid import UUID
+from app.core.infrastructure.work import WorkWriter
+from app.modules.workflow.execution.wait_work import write_admission
 from typing import List
 
 from app.core.authorization.context import (
@@ -188,6 +190,12 @@ class WorkflowService:
             )
         if "max_concurrent_runs" in update_data.model_fields_set:
             flow.max_concurrent_runs = update_data.max_concurrent_runs
+            # A raised or removed limit makes room no finishing run will hand
+            # on; parked runs are admitted into it by a work item in this
+            # transaction.
+            await write_admission(
+                WorkWriter(self.uow.session), pod_id=flow.pod_id, flow_id=flow.id
+            )
 
         updated = await self.flow_repo.update(flow)
         if self.icon_service and old_icon_url != updated.icon_url:

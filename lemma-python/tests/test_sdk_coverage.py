@@ -128,6 +128,7 @@ def test_schedule_run_contract_includes_retry_without_fire_aliases() -> None:
     assert "ScheduleRunListResponse" in schemas
     assert schemas["ScheduleRunStatus"]["enum"] == [
         "RECEIVED",
+        "FILTERING",
         "PROCESSING",
         "DISPATCHED",
         "COMPLETED",

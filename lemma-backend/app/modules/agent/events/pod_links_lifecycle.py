@@ -5,53 +5,55 @@ grantee by id with no foreign key, so nothing else would remove the links a
 deleted pod held. They could never be used -- a deleted pod runs nothing -- but
 they would go on listing it in "Works with" and in the brief of every pod that
 let it in.
+
+A FAST work item written by the deletion itself, under the organization's
+namespace: one statement on the main database, committed with the item's
+removal, so it runs exactly once.
 """
 
 from __future__ import annotations
 
-from faststream import Depends
-from faststream.redis import RedisRouter
+from uuid import UUID
 
-from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import (
-    SessionUnitOfWorkFactory,
-    UnitOfWorkFactory,
-)
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
+from pydantic import BaseModel
+
+from app.core.infrastructure.work import (
+    FastContext,
+    WorkClass,
+    WorkMode,
+    WorkRegistry,
+    facts,
+    registry as default_registry,
 )
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
-from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
+from app.modules.pod.contracts.lifecycle import PodDeleted
 
-router = RedisRouter()
-
-
-def provide_uow_factory() -> UnitOfWorkFactory:
-    return SessionUnitOfWorkFactory(async_session_maker)
+AGENT_POD_LINKS_POD_DELETED = "agent.pod_links.pod_deleted"
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    PodEvents.STREAM,
-    group="agent-pod-links-pod-events",
-    consumer="agent-pod-links-pod-events-consumer",
-)
-async def on_pod_deleted(
-    event: dict[str, object],
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+class PodLinksPodDeletedPayload(BaseModel):
+    pod_id: UUID
+
+
+async def forget_deleted_pod_links(
+    ctx: FastContext, payload: PodLinksPodDeletedPayload
 ) -> None:
-    if event.get("event_type") != PodDeletedEvent.get_event_type():
-        return
+    await PodLinkQueries(ctx.uow).forget_pod(pod_id=payload.pod_id)
 
-    async def forget() -> None:
-        parsed = PodDeletedEvent.model_validate(event)
-        async with uow_factory() as uow:
-            await PodLinkQueries(uow).forget_pod(pod_id=parsed.pod_id)
-            await uow.commit()
 
-    await inbox.process("agent.pod-links.pod-deletion", event, forget)
+def register_pod_links_work(registry: WorkRegistry) -> None:
+    registry.handler(
+        kind=AGENT_POD_LINKS_POD_DELETED,
+        cls=WorkClass.EVENTS,
+        mode=WorkMode.FAST,
+        payload=PodLinksPodDeletedPayload,
+    )(forget_deleted_pod_links)
+
+
+register_pod_links_work(default_registry)
+facts.subscribe(
+    PodDeleted,
+    kind=AGENT_POD_LINKS_POD_DELETED,
+    cls=WorkClass.EVENTS,
+    dedup=lambda fact: f"agent-pod-links-pod-deleted:{fact.pod_id}",
+)

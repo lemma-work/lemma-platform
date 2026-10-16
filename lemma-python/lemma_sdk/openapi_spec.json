@@ -3212,6 +3212,11 @@
       "BulkCreateRecordsRequest": {
         "description": "Schema for bulk creating records.",
         "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/WriteIntent",
+            "default": "bulk",
+            "description": "Why these rows are written, as DATASTORE triggers see it: `bulk` (the default) or `import` lets each trigger decide by its `bulk_writes` / `import_writes` setting (by default, skipped and recorded); `normal` fires triggers like single writes do."
+          },
           "records": {
             "description": "List of record payload objects to insert. At most 1000 per request.",
             "items": {
@@ -3238,6 +3243,11 @@
       "BulkDeleteRecordsRequest": {
         "description": "Schema for bulk deleting records.",
         "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/WriteIntent",
+            "default": "bulk",
+            "description": "Why these rows are written, as DATASTORE triggers see it: `bulk` (the default) or `import` lets each trigger decide by its `bulk_writes` / `import_writes` setting (by default, skipped and recorded); `normal` fires triggers like single writes do."
+          },
           "record_ids": {
             "description": "Primary key values to delete. At most 1000 per request.",
             "items": {
@@ -3268,6 +3278,11 @@
       "BulkUpdateRecordsRequest": {
         "description": "Schema for bulk updating records.",
         "properties": {
+          "intent": {
+            "$ref": "#/components/schemas/WriteIntent",
+            "default": "bulk",
+            "description": "Why these rows are written, as DATASTORE triggers see it: `bulk` (the default) or `import` lets each trigger decide by its `bulk_writes` / `import_writes` setting (by default, skipped and recorded); `normal` fires triggers like single writes do."
+          },
           "records": {
             "description": "List of record updates. Each item must include the table primary key field. At most 1000 per request.",
             "items": {
@@ -5371,7 +5386,7 @@
           },
           "config": {
             "additionalProperties": true,
-            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued.",
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
             "title": "Config",
             "type": "object"
           },
@@ -13452,6 +13467,16 @@
             },
             "title": "Recipes",
             "type": "array"
+          },
+          "triggers": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodTriggerSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "PodConfig",
@@ -14471,6 +14496,30 @@
           "created_at"
         ],
         "title": "PodRoleResponse",
+        "type": "object"
+      },
+      "PodTriggerSettings": {
+        "description": "Pod-wide defaults for the pod's DATASTORE triggers.",
+        "properties": {
+          "bulk_writes_default": {
+            "anyOf": [
+              {
+                "enum": [
+                  "skip",
+                  "each",
+                  "batch"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a bulk write does to this pod's triggers that do not say: skip (recorded as skipped), each (fire per matching row) or batch (one fire with the rows). Omitted means skip.",
+            "title": "Bulk Writes Default"
+          }
+        },
+        "title": "PodTriggerSettings",
         "type": "object"
       },
       "PodUpdateRequest": {
@@ -15586,6 +15635,18 @@
             "title": "Paused By Failures",
             "type": "boolean"
           },
+          "paused_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the platform paused this schedule: `fire_cap` (it fired more than its daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system reason. Absent while it runs, or when a person paused it. Reactivating clears it.",
+            "title": "Paused Reason"
+          },
           "pod_id": {
             "anyOf": [
               {
@@ -15905,6 +15966,7 @@
       "ScheduleRunStatus": {
         "enum": [
           "RECEIVED",
+          "FILTERING",
           "PROCESSING",
           "DISPATCHED",
           "COMPLETED",
@@ -18135,6 +18197,92 @@
         "title": "TelegramManagedBotSetupResponse",
         "type": "object"
       },
+      "TriggerSkipListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TriggerSkipResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
+          }
+        },
+        "required": [
+          "items",
+          "limit"
+        ],
+        "title": "TriggerSkipListResponse",
+        "type": "object"
+      },
+      "TriggerSkipReason": {
+        "enum": [
+          "bulk_write",
+          "import_write",
+          "fire_cap",
+          "lag_exceeded"
+        ],
+        "title": "TriggerSkipReason",
+        "type": "string"
+      },
+      "TriggerSkipResponse": {
+        "description": "Changes or fires the trigger let pass without firing, aggregated.\n\nOne row stands for every change of one delivered page skipped for one\nreason: a bulk write of thousands of rows is a handful of rows here.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "title": "At",
+            "type": "string"
+          },
+          "count": {
+            "description": "How many changes or fires this row stands for.",
+            "title": "Count",
+            "type": "integer"
+          },
+          "first": {
+            "description": "Position of the first skipped change or fire.",
+            "title": "First",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last": {
+            "description": "Position of the last skipped change or fire.",
+            "title": "Last",
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/TriggerSkipReason",
+            "description": "`bulk_write` / `import_write`: the trigger's write mode for that intent is `skip`. `fire_cap`: the trigger reached its daily fire ceiling and paused. `lag_exceeded`: the trigger fell further behind its table than the change log waits for a subscriber (24 hours by default), and these changes were passed over."
+          }
+        },
+        "required": [
+          "id",
+          "reason",
+          "first",
+          "last",
+          "count",
+          "at"
+        ],
+        "title": "TriggerSkipResponse",
+        "type": "object"
+      },
       "UpdateAgentHostRuntimeProfileRequest": {
         "properties": {
           "config_selections": {
@@ -18816,7 +18964,7 @@
                 "type": "null"
               }
             ],
-            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued.",
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
             "title": "Config"
           },
           "filter_instruction": {
@@ -22377,6 +22525,15 @@
         ],
         "title": "WorkspaceStatusResponse",
         "type": "object"
+      },
+      "WriteIntent": {
+        "enum": [
+          "normal",
+          "bulk",
+          "import"
+        ],
+        "title": "WriteIntent",
+        "type": "string"
       },
       "attach": {
         "properties": {
@@ -37958,6 +38115,95 @@
           "resource": "schedule.run",
           "result": "entity",
           "verb": "retry"
+        }
+      }
+    },
+    "/pods/{pod_id}/schedules/{schedule_id}/skips": {
+      "get": {
+        "description": "What the trigger let pass without firing -- e.g. the changes of a bulk\nwrite or an import it is set to skip -- newest first.",
+        "operationId": "schedule.skip.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerSkipListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Schedule Skips",
+        "tags": [
+          "Schedules"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "schedule.skip",
+          "result": "collection",
+          "verb": "list"
         }
       }
     },

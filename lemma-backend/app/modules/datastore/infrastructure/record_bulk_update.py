@@ -27,6 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from app.core.domain.events import DomainEvent
+from app.modules.datastore.changes.capture import ChangeCapture
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
@@ -117,6 +118,7 @@ async def bulk_update_records(
     *,
     enforce_user_scope: bool = True,
     event_factory: Callable[..., DomainEvent] | None = None,
+    changes: ChangeCapture | None = None,
 ) -> int:
     """Apply many updates in one transaction, like create and upsert do.
 
@@ -148,6 +150,16 @@ async def bulk_update_records(
         ]
     if not grouped:
         return 0
+    if changes is not None:
+        return await _bulk_update_logged(
+            repository,
+            ctx,
+            updates,
+            user_id,
+            grouped,
+            changes,
+            enforce_user_scope=enforce_user_scope,
+        )
 
     schema_manager = repository.schema_manager
     row_to_entity = repository._row_to_entity
@@ -192,3 +204,85 @@ async def bulk_update_records(
     except DBAPIError as exc:
         logger.debug("datastore.record.bulk_update.propagated", exc_info=True)
         raise_record_write_error(exc, operation="bulk update records", ctx=ctx)
+
+
+async def _bulk_update_logged(
+    repository: Any,
+    ctx: TableContext,
+    updates: list[tuple[Any, dict[str, Any]]],
+    user_id: UUID,
+    grouped: list[GroupedUpdate],
+    changes: ChangeCapture,
+    *,
+    enforce_user_scope: bool,
+) -> int:
+    """The same statements, each appending its changes; see ``ChangeCapture``.
+
+    ``grouped`` was built without a prior image. A watched table needs one,
+    so its statements are rebuilt with it once the probe says so -- the rare
+    case pays the second build, the common one never does.
+    """
+    schema_manager = repository.schema_manager
+    await changes.prepare()
+    try:
+        async with schema_manager.session_factory() as session:
+            if ctx.enable_rls:
+                await schema_manager.set_rls_context(
+                    session,
+                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
+                )
+            await changes.begin(session)
+            if "U" in changes.snapshot:
+                grouped = _with_prior_image(
+                    ctx, updates, user_id, enforce_user_scope=enforce_user_scope
+                )
+            updated = 0
+            for sql, params, changed_columns, alias, expected in grouped:
+                statement, bound = changes.wrap(
+                    sql,
+                    params,
+                    op="U",
+                    previous_alias=alias,
+                    changed=changed_columns,
+                    returning="count",
+                )
+                count = changes.count(await session.execute(text(statement), bound))
+                if count != expected:
+                    raise DatastoreRecordNotFoundError(
+                        "Record not found or update failed"
+                    )
+                updated += expected
+            await changes.wake_handoff(session)
+            await session.commit()
+            return updated
+    except DBAPIError as exc:
+        logger.debug("datastore.record.bulk_update.propagated", exc_info=True)
+        raise_record_write_error(exc, operation="bulk update records", ctx=ctx)
+
+
+def _with_prior_image(
+    ctx: TableContext,
+    updates: list[tuple[Any, dict[str, Any]]],
+    user_id: UUID,
+    *,
+    enforce_user_scope: bool,
+) -> list[GroupedUpdate]:
+    grouped = prepare_grouped_updates(
+        ctx,
+        updates,
+        user_id,
+        enforce_user_scope=enforce_user_scope,
+        capture_previous=True,
+    )
+    if grouped is not None:
+        return grouped
+    return [
+        (sql, params, changed, alias, 1)
+        for sql, params, changed, alias in prepare_bulk_updates(
+            ctx,
+            updates,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            capture_previous=True,
+        )
+    ]

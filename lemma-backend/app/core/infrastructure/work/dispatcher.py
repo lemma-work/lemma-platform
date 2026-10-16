@@ -33,6 +33,7 @@ from app.core.infrastructure.work.retry import (
     after_lease_lost,
 )
 from app.core.infrastructure.work.types import ClaimedItem, WorkClass, WorkMode
+from app.core.infrastructure.work.writer import waking_locally
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
 from app.core.request_context import create_background_task
@@ -169,10 +170,11 @@ class Dispatcher:
         started = time.monotonic()
         outcome = "error"
         try:
-            if spec.mode is WorkMode.FAST:
-                outcome = await run_fast(self.env, spec, item)
-            else:
-                outcome = await run_job(self.env, spec, item)
+            with waking_locally(self.env.local_wake):
+                if spec.mode is WorkMode.FAST:
+                    outcome = await run_fast(self.env, spec, item)
+                else:
+                    outcome = await run_job(self.env, spec, item)
         except SQLAlchemyError, OSError:
             # Settling itself failed -- the database went away mid-transition.
             # The item stays running under our lease, which will expire and be

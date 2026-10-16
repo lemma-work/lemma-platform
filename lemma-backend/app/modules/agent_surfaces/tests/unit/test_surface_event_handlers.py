@@ -1,4 +1,4 @@
-"""Tests for the agent_surfaces event handlers: surface webhooks and pod deletion."""
+"""Tests for the agent_surfaces event handlers: surface webhooks."""
 
 from __future__ import annotations
 
@@ -44,53 +44,6 @@ def _webhook_envelope(**kwargs) -> dict:
     still failing if the event's own fields change.
     """
     return SurfaceWebhookReceivedEvent(**kwargs).model_dump(mode="json")
-
-
-@pytest.mark.asyncio
-async def test_on_pod_deleted_removes_pod_surfaces(monkeypatch):
-    service = AsyncMock()
-    service.delete_all_surfaces_for_pod.return_value = 2
-    uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_service", lambda uow: service)
-
-    pod_id = uuid4()
-    event = {
-        "event_type": "pod.deleted",
-        "pod_id": str(pod_id),
-        "organization_id": str(uuid4()),
-    }
-
-    await handlers.on_pod_deleted(
-        event,
-        logging.getLogger("test"),
-        uow_factory=partial(_mock_uow_factory, uow_mock),
-        inbox=PassthroughEventInbox(),
-    )
-
-    service.delete_all_surfaces_for_pod.assert_awaited_once_with(pod_id)
-
-
-@pytest.mark.asyncio
-async def test_on_pod_deleted_ignores_non_delete_events(monkeypatch):
-    """A member leaving is heard here too; see the contact keepers' e2e test."""
-    service = AsyncMock()
-    uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_service", lambda uow: service)
-
-    event = {
-        "event_type": "pod.member.added",
-        "pod_id": str(uuid4()),
-        "user_id": str(uuid4()),
-    }
-
-    await handlers.on_pod_deleted(
-        event,
-        logging.getLogger("test"),
-        uow_factory=partial(_mock_uow_factory, uow_mock),
-        inbox=PassthroughEventInbox(),
-    )
-
-    service.delete_all_surfaces_for_pod.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -49,7 +49,6 @@ from app.modules.function.domain.entities import (
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
 )
-from app.modules.function.tests.fakes import InMemoryPodRunSlots
 from app.modules.function.services.contact_access import (
     require_contact_input,
     require_contacts_opener,
@@ -136,7 +135,7 @@ async def _send(dispatch: FunctionExecutionDispatch, minter):
         runtime_http_client_factory=_Runtime,
         organization_resolver=_organization,
         delegated_tokens_enabled=True,
-        pod_runs=InMemoryPodRunSlots(),
+        max_running_per_pod=1_000,
     )
     endpoint = FunctionRuntimeEndpoint(
         url="https://sandbox.test/runtime/",

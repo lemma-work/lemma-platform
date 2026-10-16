@@ -187,13 +187,11 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform", ["whatsapp", "WhatsApp", "WHATSAPP"])
-async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
+async def test_signed_reserved_whatsapp_message_queues_only_its_verification(
     monkeypatch, platform
 ):
+    from app.modules.agent_surfaces.api.controllers import webhook_ingest
     from app.modules.agent_surfaces.config import surface_settings
-    from app.modules.identity.domain.events import (
-        WhatsAppMobileVerificationReceivedEvent,
-    )
 
     monkeypatch.setattr(
         identity_settings, "auth_whatsapp_mobile_verification_enabled", True
@@ -208,6 +206,8 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
         assert_platform_request_allowed=Mock(),
         verify_platform_request=AsyncMock(),
     )
+    enqueue = AsyncMock()
+    monkeypatch.setattr(webhook_ingest, "add_whatsapp_verification_work", enqueue)
 
     with patch(
         "app.modules.agent_surfaces.api.controllers.webhook_controller."
@@ -225,11 +225,11 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
     # be compared case-sensitively after a case-insensitive allow-list.
     assert result == {"message": "Verification message received"}
     security.verify_platform_request.assert_awaited_once()
-    publish.assert_awaited_once()
-    event = publish.await_args.args[1]
-    assert isinstance(event, WhatsAppMobileVerificationReceivedEvent)
-    assert event.sender_wa_id == "14155552671"
-    assert event.whatsapp_message_id == "wamid.verify-1"
+    publish.assert_not_awaited()
+    enqueue.assert_awaited_once()
+    queued = enqueue.await_args.args[1]
+    assert queued.sender_wa_id == "14155552671"
+    assert queued.whatsapp_message_id == "wamid.verify-1"
 
 
 @pytest.mark.asyncio

@@ -359,6 +359,19 @@ id, the promise moves to `gap`, and the scenario is marked
 
 ---
 
+### Driving the work runtime in-process
+
+A module e2e test that claims and runs work items itself (`run_until_idle`,
+`make_due`, `dispatcher_for`) shares its database with the session's real
+worker subprocess whenever another module in the same pytest process started
+one, and the worker would take the item first. Mark such a module
+`pytestmark = [..., pytest.mark.drives_work]`: the root `conftest.py` then stops
+every registered session worker between transactions for each of its tests and
+resumes it afterwards (`app/modules/test_support/e2e/worker_hold.py`). A test
+that needs the real worker takes `worker` instead and must not carry the
+marker. `test_drives_work_contract.py` fails any in-process driver left
+unmarked, because the race only shows when a shard happens to co-locate the two.
+
 ## Iterating on module e2e tests locally
 
 A module e2e run starts Postgres, Redis and SuperTokens before its first test,

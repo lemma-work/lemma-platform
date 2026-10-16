@@ -52,6 +52,47 @@ class DatastoreSettings(DocumentWorkSettings):
             "``DATASTORE_ROW_MAX_BYTES``."
         ),
     )
+    datastore_change_log_mode: Literal["auto", "on", "off"] = Field(
+        default="auto",
+        description=(
+            "Whether record writes append to each pod's change log instead of "
+            "staging events in the datastore outbox. ``auto`` switches once "
+            "every pod schema carries the change log (pod-schema version 3) "
+            "and never switches back in that process; ``on`` and ``off`` "
+            "force it. Env: ``DATASTORE_CHANGE_LOG_MODE``."
+        ),
+    )
+    datastore_change_retention_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description=(
+            "How long a pod's change log keeps a change every durable "
+            "subscriber has read: the live catch-up window. A change some "
+            "durable subscriber has not read is never deleted -- until it is "
+            "``datastore_change_max_lag_seconds`` old."
+        ),
+    )
+    datastore_change_max_lag_seconds: int = Field(
+        default=86400,
+        ge=60,
+        description=(
+            "The furthest a durable subscriber may fall behind its pod's change "
+            "log. One whose oldest unread change is older than this is lapsed: "
+            "its cursor moves to the horizon and what it skipped is recorded "
+            "(a trigger's history shows it as ``lag_exceeded``), so one stuck "
+            "subscriber cannot keep a pod's log forever. A subscriber row no "
+            "running process recognises is dropped once it has gone this long "
+            "without moving. Env: ``DATASTORE_CHANGE_MAX_LAG_SECONDS``."
+        ),
+    )
+    datastore_change_handoff_poll_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "Fallback poll of the change-log wake table, for wakes the "
+            "LISTEN connection missed."
+        ),
+    )
     datastore_event_payload_max_bytes: int = Field(
         default=32 * 1024,
         description=(

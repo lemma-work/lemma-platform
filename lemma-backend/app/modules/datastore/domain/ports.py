@@ -39,7 +39,14 @@ from app.modules.datastore.domain.file_entities import (
 )
 
 if TYPE_CHECKING:
+    from app.modules.datastore.changes.capture import ChangeCapture
     from app.core.domain.events import DomainEvent
+    from app.modules.datastore.domain.live import (
+        ChangePosition,
+        LivePage,
+        LiveTable,
+        RowPayload,
+    )
     from app.modules.datastore.domain.record_entities import RecordEntity
 
 
@@ -281,6 +288,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         *,
         event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture | None = None,
     ): ...
 
     async def bulk_create_records(
@@ -290,6 +298,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         *,
         event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture | None = None,
     ) -> int: ...
 
     async def bulk_upsert_records(
@@ -299,6 +308,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         *,
         event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture | None = None,
     ) -> int: ...
 
     async def get_record(
@@ -338,6 +348,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         enforce_user_scope: bool = True,
         event_factory: RecordEventFactory | None = None,
         expected_updated_at: datetime | None = None,
+        changes: ChangeCapture | None = None,
     ): ...
 
     async def delete_record(
@@ -348,6 +359,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         *,
         enforce_user_scope: bool = True,
         event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture | None = None,
     ) -> "RecordEntity": ...
 
 
@@ -481,3 +493,43 @@ class DatastoreReindexQueuePort(Protocol):
         metadata: dict | None,
         defer_until: datetime | None = None,
     ) -> bool: ...
+
+
+class LiveChangeFeedPort(Protocol):
+    """The pod change log, as the live hub reads it."""
+
+    async def horizon(self, pod_id: UUID) -> str:
+        """A cursor at the log's current readable end."""
+
+    async def read(
+        self,
+        pod_id: UUID,
+        cursor: str,
+        *,
+        table_ids: Sequence[UUID] | None,
+        limit: int,
+    ) -> "LivePage":
+        """Changes after ``cursor``; raises ``LiveCursorExpired`` past the window."""
+
+    async def rows(
+        self, pod_id: UUID, table_id: UUID, record_ids: Sequence[str]
+    ) -> "dict[str, RowPayload]":
+        """Current rows by record id; a record that no longer exists is absent."""
+
+    def position(self, cursor: str) -> "ChangePosition":
+        """Decode a cursor; raises ``LiveCursorExpired`` for one that is not ours."""
+
+
+class LiveAccessPort(Protocol):
+    """Who may watch which table, asked at subscribe and on an authz epoch bump."""
+
+    async def table(self, user_id: UUID, pod_id: UUID, table_name: str) -> "LiveTable":
+        """The table if the user may read it; raises ``LiveAccessDenied``."""
+
+    async def readable_tables(self, user_id: UUID, pod_id: UUID) -> "list[LiveTable]":
+        """Every table the user may read; raises ``LiveAccessDenied`` for the pod."""
+
+    async def still_readable(
+        self, user_id: UUID, pod_id: UUID, table_ids: Sequence[UUID]
+    ) -> "dict[UUID, str | None]":
+        """Per table: ``None`` while readable, else an ``UnsubscribedReason``."""

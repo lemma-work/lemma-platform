@@ -9,6 +9,7 @@ from contextlib import AbstractAsyncContextManager
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.identity.events.identity_work import stage_identity_work
 from app.modules.identity.domain.events import (
     UserMobileChangedEvent,
     UserPhoneReplacedEvent,
@@ -119,14 +120,14 @@ async def ensure_chat_workspace(
                 raise ChallengeRejected("This phone belongs to another account")
             if user.mobile_number != normalized:
                 user.mobile_number = normalized
-                uow.collect_events(
-                    [
-                        UserMobileChangedEvent(user_id=user_id),
-                        UserPhoneReplacedEvent(
-                            user_id=user_id, email=user.email, mobile_number=normalized
-                        ),
-                    ]
-                )
+                changed = [
+                    UserMobileChangedEvent(user_id=user_id),
+                    UserPhoneReplacedEvent(
+                        user_id=user_id, email=user.email, mobile_number=normalized
+                    ),
+                ]
+                uow.collect_events(changed)
+                await stage_identity_work(uow, changed)
             user.mobile_verified_at = datetime.now(timezone.utc)
         if full_name and not user.first_name:
             user.first_name, _, last = full_name.strip().partition(" ")

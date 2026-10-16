@@ -163,6 +163,14 @@ EXPECTED = [
 # Non-numeric fields (bool / Literal) that the "env=7" parametrization below
 # cannot exercise — validated with dedicated tests instead.
 EXTRA_FIELDS = [
+    ("datastore_change_log_mode", "DATASTORE_CHANGE_LOG_MODE", "auto"),
+    ("datastore_change_retention_seconds", "DATASTORE_CHANGE_RETENTION_SECONDS", 3600),
+    ("datastore_change_max_lag_seconds", "DATASTORE_CHANGE_MAX_LAG_SECONDS", 86400),
+    (
+        "datastore_change_handoff_poll_seconds",
+        "DATASTORE_CHANGE_HANDOFF_POLL_SECONDS",
+        1.0,
+    ),
     ("document_processing_ocr_enabled", "DOCUMENT_PROCESSING_OCR_ENABLED", False),
     ("document_processing_layout_enabled", "DOCUMENT_PROCESSING_LAYOUT_ENABLED", True),
     ("document_processor", "DOCUMENT_PROCESSOR", "auto"),

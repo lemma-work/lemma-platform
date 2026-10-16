@@ -12,12 +12,18 @@ and ``contracts/__init__`` is imported by anything that wants any contract.
 
 from __future__ import annotations
 
+from app.modules.identity.events.identity_work import (
+    WhatsAppVerificationPayload,
+    add_whatsapp_verification_work,
+)
 from app.modules.identity.services.whatsapp_mobile_verification import (
     is_whatsapp_verification_configured,
     parse_reserved_verification_message,
 )
 
 __all__ = [
+    "WhatsAppVerificationPayload",
+    "add_whatsapp_verification_work",
     "is_whatsapp_verification_configured",
     "parse_reserved_verification_message",
 ]

@@ -76,6 +76,15 @@ so per-org and per-slug limit overrides can apply to a pod's work."""
 type StreaqRegistrar = Callable[[], None]
 """Imports the module's ``@streaq_task``/``@streaq_cron`` modules for side effects."""
 
+type WorkRegistrar = Callable[[], None]
+"""Imports the module's work kinds and fact subscriptions for side effects.
+
+Called in every process, not only the worker: ``WorkWriter.add`` looks a kind up
+to learn its class and payload, and ``facts.emit`` writes only the
+subscriptions it can see, so an API process that never imported a subscriber
+would commit a fact with nobody to react to it.
+"""
+
 # Lifespan hooks are ``@asynccontextmanager`` functions entered inside an
 # ``AsyncExitStack``; teardown happens automatically (LIFO) on stack unwind.
 type ApiLifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
@@ -95,6 +104,10 @@ class LemmaModule:
     event_routers: EventRouterProvider | None = None
     register_streaq: StreaqRegistrar | None = None
     worker_lifespans: Sequence[WorkerLifespan] = ()
+
+    # --- Every process ---
+    # Work kinds and fact subscriptions; see ``WorkRegistrar``.
+    register_work: WorkRegistrar | None = None
 
     # Redis Streams owned by this module's durable consumers. Publishers use
     # this topology before XADD, even in processes that never import handlers.

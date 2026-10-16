@@ -68,8 +68,25 @@ async def prune_datastore_outbox(
     return await prune(session_maker(), include_inbox=False)
 
 
+async def _datastore_outbox_exists() -> bool:
+    """Record writes stop staging outbox events once the change log is on, so
+    a new install's datastore database never gets the table at all."""
+    from sqlalchemy import text
+
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
+
+    async with get_datastore_engine().connect() as conn:
+        return bool(
+            await conn.scalar(
+                text("SELECT to_regclass('domain_event_outbox') IS NOT NULL")
+            )
+        )
+
+
 @streaq_cron("37 * * * *", name="prune_datastore_outbox", lane=Lane.BULK)
 async def prune_datastore_outbox_task() -> None:
+    if datastore_outbox_is_separate() and not await _datastore_outbox_exists():
+        return
     deleted = await prune_datastore_outbox()
     if deleted and (total := sum(deleted.values())):
         logger.debug(

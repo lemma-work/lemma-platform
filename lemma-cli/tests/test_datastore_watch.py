@@ -9,12 +9,8 @@ import pytest
 import typer
 
 from lemma_cli.cli_core.state import CliState
-from lemma_cli.cli_core.watch import (
-    _changes_ws_url,
-    _compact_payload,
-    _handle_message,
-    _short_time,
-)
+from lemma_cli.cli_core.watch import _compact_payload, _handle_message
+from lemma_sdk.live import LiveSession, live_ws_url
 
 
 def _state(output: str = "json") -> CliState:
@@ -30,57 +26,99 @@ def _state(output: str = "json") -> CliState:
     )
 
 
-def test_changes_ws_url_scheme_and_query():
+def test_live_url_scheme():
+    assert live_ws_url("https://api.x.dev", "POD") == "wss://api.x.dev/pods/POD/live"
     assert (
-        _changes_ws_url("https://api.x.dev", "POD", "notes", "5-0")
-        == "wss://api.x.dev/pods/POD/datastore/changes?table=notes&since=5-0"
-    )
-    assert (
-        _changes_ws_url("http://localhost:8711/", "POD", None, None)
-        == "ws://localhost:8711/pods/POD/datastore/changes"
+        live_ws_url("http://localhost:8711/", "POD")
+        == "ws://localhost:8711/pods/POD/live"
     )
     # Bare host (no scheme) assumes TLS, like a browser.
-    assert (
-        _changes_ws_url("//host", "POD", None, "9-0")
-        == "wss://host/pods/POD/datastore/changes?since=9-0"
-    )
+    assert live_ws_url("//host", "POD") == "wss://host/pods/POD/live"
 
 
-def test_ready_frame_advances_cursor_from_since():
-    state = _state()
-    cursor = _handle_message(state, json.dumps({"type": "ready", "since": "7-0"}), None)
-    assert cursor == "7-0"
+def test_ready_then_subscribe_resumes_from_since():
+    session = LiveSession()
+    session.add(table="notes", since="c.7")
+    assert _handle_message(_state(), session, json.dumps({"type": "ready"})) is True
+    [frame] = [json.loads(f) for f in session.subscribe_frames()]
+    assert frame == {
+        "op": "subscribe",
+        "id": "s1",
+        "topic": "records",
+        "table": "notes",
+        "since": "c.7",
+    }
 
 
-def test_record_frame_advances_cursor_from_stream_id_and_prints_ndjson(capsys):
+def test_changes_advance_the_cursor_and_print_ndjson_in_the_old_shape(capsys):
     state = _state(output="json")
-    frame = {
+    session = LiveSession()
+    session.add(table="notes")
+    _handle_message(
+        state,
+        session,
+        json.dumps(
+            {
+                "type": "changes",
+                "id": "s1",
+                "cursor": "c.12",
+                "changes": [
+                    {
+                        "op": "insert",
+                        "table": "notes",
+                        "record_id": "abc",
+                        "row": {"body": "hi"},
+                    }
+                ],
+            }
+        ),
+    )
+    assert session.cursor("s1") == "c.12"
+    out = capsys.readouterr().out.strip()
+    assert json.loads(out) == {
         "type": "datastore.record.insert",
         "table_name": "notes",
         "record_id": "abc",
         "operation": "insert",
         "payload": {"body": "hi"},
-        "stream_id": "12-0",
+        "cursor": "c.12",
+        "stream_id": "c.12",
     }
-    cursor = _handle_message(state, json.dumps(frame), "7-0")
-    assert cursor == "12-0"
-    out = capsys.readouterr().out.strip()
-    assert json.loads(out) == frame
+
+
+def test_resync_is_reported_and_moves_the_cursor(capsys):
+    session = LiveSession()
+    session.add(table="notes", since="c.1")
+    _handle_message(
+        _state(output="json"),
+        session,
+        json.dumps(
+            {"type": "resync", "id": "s1", "cursor": "c.40", "reason": "too_many"}
+        ),
+    )
+    assert session.cursor("s1") == "c.40"
+    assert json.loads(capsys.readouterr().out) == {
+        "type": "resync",
+        "cursor": "c.40",
+        "reason": "too_many",
+    }
 
 
 def test_invalid_or_unknown_messages_keep_cursor():
     state = _state()
-    assert _handle_message(state, "not json", "3-0") == "3-0"
-    assert _handle_message(state, json.dumps([1, 2]), "3-0") == "3-0"
+    session = LiveSession()
+    session.add(since="c.3")
+    assert _handle_message(state, session, "not json") is False
+    assert _handle_message(state, session, json.dumps([1, 2])) is False
+    assert _handle_message(state, session, None) is False
+    assert session.cursor("s1") == "c.3"
 
 
-def test_compact_payload_and_short_time():
+def test_compact_payload():
     assert _compact_payload({"body": "hi", "n": 3}, full=False) == "body=hi, n=3"
     assert _compact_payload({}, full=False) == ""
     long = _compact_payload({"k": "x" * 200}, full=False)
     assert long.endswith("…") and len(long) <= 120
-    assert _short_time("2026-06-21T18:49:01.309492Z") == "18:49:01"
-    assert _short_time(None) == ""
 
 
 # --- reconnect loop -----------------------------------------------------------

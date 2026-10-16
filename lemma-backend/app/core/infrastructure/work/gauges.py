@@ -15,7 +15,7 @@ slower cadence and only while something is waiting.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 
 from opentelemetry import metrics
@@ -64,7 +64,35 @@ _TOP_NS = text(
     """
 )
 
+#: How long the oldest open transaction on this database has been open. A
+#: transaction holds the ``xmin`` horizon back, and the record change log
+#: delivers nothing past it (design §15 row 4): this is what an alert on the
+#: change-log horizon watches. The sampler's own session is excluded.
+OLDEST_TRANSACTION_AGE = text(
+    """
+    SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(xact_start)), 0)
+      FROM pg_stat_activity
+     WHERE datname = current_database()
+       AND backend_type = 'client backend'
+       AND xact_start IS NOT NULL
+       AND pid <> pg_backend_pid()
+    """
+)
+
 type SessionOpener = Callable[[], AbstractSessionContext]
+#: Reads one other database's oldest open transaction age, in seconds.
+type TransactionAgeProbe = Callable[[], Awaitable[float]]
+
+#: The main database is read on the gauges' own session; other databases (the
+#: datastore's) register a probe here.
+_transaction_age_probes: dict[
+    str, TransactionAgeProbe
+] = {}  # memory: bounded one per database (main, datastore)
+
+
+def register_transaction_age_probe(database: str, probe: TransactionAgeProbe) -> None:
+    """Sample ``database``'s oldest open transaction with the work gauges."""
+    _transaction_age_probes[database] = probe
 
 
 @dataclass
@@ -74,10 +102,12 @@ class _Snapshot:
     oldest: dict[str, float] = field(default_factory=dict)
     items: dict[tuple[str, str], int] = field(default_factory=dict)
     namespaces: dict[tuple[str, str], int] = field(default_factory=dict)
+    transaction_age: dict[str, float] = field(default_factory=dict)
     samples: int = 0
 
     def forget(self) -> None:
         self.oldest, self.items, self.namespaces = {}, {}, {}
+        self.transaction_age = {}
 
 
 _snapshot = _Snapshot()
@@ -115,6 +145,25 @@ meter.create_observable_gauge(
     callbacks=[_observe(lambda: _snapshot.items)],
     description="Work items per class and state (queued, running, dead).",
 )
+
+
+def _observe_transaction_age(options: CallbackOptions) -> Iterable[Observation]:
+    del options
+    return [
+        Observation(age, {"database": database})
+        for database, age in _snapshot.transaction_age.items()
+    ]
+
+
+meter.create_observable_gauge(
+    "lemma.work.oldest_transaction_age",
+    callbacks=[_observe_transaction_age],
+    unit="s",
+    description=(
+        "Age of the oldest open transaction per database (main, datastore): "
+        "the record change log's delivery horizon."
+    ),
+)
 meter.create_observable_gauge(
     "lemma.work.namespaces",
     callbacks=[_observe(lambda: _snapshot.namespaces)],
@@ -131,6 +180,11 @@ async def sample(open_session: SessionOpener) -> None:
             if busiest
             else []
         )
+        main_age = float(await session.scalar(OLDEST_TRANSACTION_AGE) or 0.0)
+    transaction_age = {"main": main_age}
+    for database, probe in _transaction_age_probes.items():
+        transaction_age[database] = float(await probe())
+    _snapshot.transaction_age = transaction_age
     _snapshot.samples += 1
     # A class with nothing due has been measured: its oldest wait is zero. An
     # absent series would read as "no data" and silence the alert on it.

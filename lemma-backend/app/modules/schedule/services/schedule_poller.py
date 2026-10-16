@@ -1,30 +1,15 @@
-"""The loop that fires due schedules, on every replica.
+"""The loop that fires due wait timers, on every replica.
 
-One transaction per tick, and that is the point. It takes the due rows with
-``FOR UPDATE SKIP LOCKED``, advances their cursors, and stages the fire events
-onto the same unit of work. Committing makes all of it real together.
+TIME schedules and workflow ``WAIT_UNTIL`` timers no longer pass through here:
+each is a work item due at its moment. What is left is agent ``wait_for`` TIME
+waits, kept in the agent module's own table -- until PR 3 moves them to
+``agent.wait.fire`` items and this loop is deleted. One transaction
+per tick claims them with ``FOR UPDATE SKIP LOCKED`` and stages each fire onto
+the same unit of work, so a claim and its fire commit together.
 
-The obvious-looking alternative -- claim and commit, then publish -- is what
-this originally did, and it is wrong in a way that only shows up in production:
-between the two commits the cursor has moved but the event does not exist, so
-the occurrence is silently gone. Nothing retries it, because the row no longer
-looks due. We watched exactly that happen: a stale start-up gate rejected every
-dispatch while the claims had already committed, and the fires were lost rather
-than delayed.
-
-Staging costs one INSERT, not a Redis round trip -- `EventPublisher` writes to
-the transactional outbox, and the outbox dispatcher delivers with the lease,
-retry and dead-letter behaviour it already has. So keeping it inside the
-transaction does not reintroduce the hold this effort exists to remove; there
-was never a fan-out here to hold a connection across.
-
-Cadence is a plain sleep rather than a cron, because cron is minute-granular and
-these timers are not. A `WAIT_UNTIL` for ninety seconds should fire at ninety
-seconds. The poll interval is the worst-case lateness, so it is seconds.
-
-Every replica runs this. Nothing elects a leader; the claim decides who fires
-what, which means the answer to "what happens when a replica dies mid-poll" is
-"its uncommitted claims roll back and someone else takes them on the next tick".
+Cadence is a plain sleep rather than a cron, because cron is minute-granular
+and these timers are not. Every replica runs this; the claim decides who fires
+what.
 """
 
 from __future__ import annotations
@@ -36,17 +21,14 @@ from datetime import datetime, timezone
 from app.core.authorization.scope import uow_scope
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind, origin_scope
-from app.modules.schedule.services.due_schedule_claimer import (
-    DEFAULT_CLAIM_LIMIT,
-    backfill_missing_cursors,
-    claim_due_schedules,
-)
 from app.core.domain.timers import ClaimedTimer
 
 logger = get_logger(__name__)
 
 #: How late a timer can be, worst case, when nothing is backed up.
 DEFAULT_POLL_INTERVAL_SECONDS = 5.0
+
+DEFAULT_CLAIM_LIMIT = 100
 
 #: How long to wait after an unexpected failure. Longer than the poll interval
 #: so a database that is down is not hammered by every replica at 5Hz.
@@ -66,7 +48,7 @@ async def poll_due_schedules_once(
     now: datetime | None = None,
     limit: int = DEFAULT_CLAIM_LIMIT,
 ) -> int:
-    """Claim and dispatch one batch. Returns how many fires were emitted."""
+    """Claim and fire one batch of due timers. Returns how many fired."""
     from app.modules.schedule.scheduler.events import get_event_emitter
 
     moment = now or datetime.now(timezone.utc)
@@ -78,25 +60,9 @@ async def poll_due_schedules_once(
     # around the staging below, not around the task that runs it.
     with origin_scope(Origin(OriginKind.SCHEDULE)):
         async with uow_scope(uow_factory) as uow:
-            # Same transaction: a row backfilled here is claimable on the next
-            # tick, and one that is already due is claimed below without waiting
-            # for one.
-            # `uow` as well as its session: retiring a schedule stages a
-            # `ScheduleDeactivated` so the owner is told why, in the same
-            # transaction that deactivates it.
-            await backfill_missing_cursors(
-                uow.session, now=moment, limit=limit, uow=uow
-            )
-            claimed = await claim_due_schedules(
-                uow.session, now=moment, limit=limit, uow=uow
-            )
             timers: list[ClaimedTimer] = []
             for claim_timers in timer_claimers:
                 timers.extend(await claim_timers(uow.session, now=moment, limit=limit))
-
-            # Timers ride the same event as schedules: `_dispatch_wake` branches
-            # on the payload keys, so rebuilding the payload the old adapters
-            # sent leaves the wake path downstream untouched.
             for timer in timers:
                 await emitter.stage_scheduled_job_event(
                     uow,
@@ -105,16 +71,8 @@ async def poll_due_schedules_once(
                     payload=timer.payload,
                     scheduled_at=timer.fire_at,
                 )
-            for fire in claimed:
-                await emitter.stage_scheduled_job_event(
-                    uow,
-                    schedule_id=fire.schedule_id,
-                    user_id=fire.user_id,
-                    payload=fire.payload,
-                    scheduled_at=fire.fire_at,
-                )
 
-    return len(timers) + len(claimed)
+    return len(timers)
 
 
 async def run_schedule_poller(

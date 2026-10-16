@@ -24,8 +24,10 @@ from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.domain.events import DomainEvent
+from app.modules.datastore.changes.capture import ChangeCapture
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.errors import (
@@ -148,6 +150,7 @@ async def bulk_delete_records(
     *,
     enforce_user_scope: bool = True,
     event_factory: Callable[..., DomainEvent] | None = None,
+    changes: ChangeCapture | None = None,
 ) -> int:
     """Delete every named row in one transaction, or none of them.
 
@@ -165,6 +168,8 @@ async def bulk_delete_records(
 
     schema_manager = repository.schema_manager
     row_to_entity = repository._row_to_entity
+    if changes is not None:
+        await changes.prepare()
     try:
         async with schema_manager.session_factory() as session:
             if ctx.enable_rls:
@@ -173,35 +178,21 @@ async def bulk_delete_records(
                     RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
                 )
 
-            events: list[DomainEvent] = []
-            missing: list[RecordId] = []
-            try:
-                for rows, sql, params in batch_bulk_deletes(
+            if changes is not None:
+                await changes.begin(session)
+            deleted_rows, missing = await _delete_batches(
+                session,
+                batch_bulk_deletes(
                     ctx, prepared, user_id, enforce_user_scope=enforce_user_scope
-                ):
-                    result = await session.execute(text(sql), params)
-                    deleted = [dict(row._mapping) for row in result.fetchall()]
-                    matched = {str(row.get(ctx.primary_key_column)) for row in deleted}
-                    # Collected rather than raised on the spot: the whole
-                    # batch is rolled back either way, and one refusal
-                    # naming every bad id is worth more than N attempts.
-                    missing.extend(
-                        record_id
-                        for record_id, _, row_params in rows
-                        if str(row_params["id"]) not in matched
-                    )
-                    if event_factory is None:
-                        continue
-                    events.extend(
-                        event_factory(row_to_entity(row, ctx)) for row in deleted
-                    )
-            except IntegrityError as exc:
-                await session.rollback()
-                raise DatastoreConflictError(
-                    "Nothing was deleted: one of these records is still "
-                    "referenced by other records. Remove or reassign those "
-                    "first."
-                ) from exc
+                ),
+                ctx,
+                changes,
+            )
+            events: list[DomainEvent] = (
+                []
+                if event_factory is None
+                else [event_factory(row_to_entity(row, ctx)) for row in deleted_rows]
+            )
 
             if missing:
                 # Rolls the whole batch back, which is the point: a partial
@@ -213,8 +204,48 @@ async def bulk_delete_records(
 
             if events:
                 await stage_domain_events(session, events)
+            if changes is not None:
+                await changes.wake_handoff(session)
             await session.commit()
             return len(prepared)
     except DBAPIError as exc:
         logger.debug("datastore.record.bulk_delete.propagated", exc_info=True)
         raise_record_write_error(exc, operation="bulk delete records", ctx=ctx)
+
+
+async def _delete_batches(
+    session: AsyncSession,
+    batches: list[tuple[list[tuple[RecordId, str, SqlParams]], str, SqlParams]],
+    ctx: TableContext,
+    changes: ChangeCapture | None,
+) -> tuple[list[dict[str, object]], list[RecordId]]:
+    """Run every batch; the rows deleted, and the ids that matched nothing."""
+    deleted_rows: list[dict[str, object]] = []
+    missing: list[RecordId] = []
+    try:
+        for rows, sql, params in batches:
+            if changes is not None:
+                sql, params = changes.wrap(sql, params, op="D")
+            result = await session.execute(text(sql), params)
+            deleted = [
+                changes.row(row) if changes is not None else dict(row._mapping)
+                for row in result.fetchall()
+            ]
+            matched = {str(row.get(ctx.primary_key_column)) for row in deleted}
+            # Collected rather than raised on the spot: the whole batch is
+            # rolled back either way, and one refusal naming every bad id is
+            # worth more than N attempts.
+            missing.extend(
+                record_id
+                for record_id, _, row_params in rows
+                if str(row_params["id"]) not in matched
+            )
+            deleted_rows.extend(deleted)
+    except IntegrityError as exc:
+        await session.rollback()
+        raise DatastoreConflictError(
+            "Nothing was deleted: one of these records is still "
+            "referenced by other records. Remove or reassign those "
+            "first."
+        ) from exc
+    return deleted_rows, missing

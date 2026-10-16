@@ -174,7 +174,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "python-dateutil", specifier = ">=2.9.0.post0" },
     { name = "requests", specifier = ">=2.31.0" },
+    { name = "websockets", marker = "extra == 'live'", specifier = ">=14.0" },
 ]
+provides-extras = ["live"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -182,6 +184,7 @@ dev = [
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "ruff", specifier = ">=0.14.8,<0.17" },
+    { name = "websockets", specifier = ">=14.0" },
 ]
 
 [[package]]

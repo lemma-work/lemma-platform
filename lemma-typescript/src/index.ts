@@ -46,6 +46,7 @@ export type {
   DatastoreChangeFrame,
   ChangeStreamStatus,
   ChangeStreamHandle,
+  ChangeStreamResyncReason,
   ChangeStreamTokenProvider,
   WatchChangesOptions,
 } from "./datastore-changes.js";

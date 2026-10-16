@@ -1142,21 +1142,18 @@ class Settings(BaseSettings):
         ),
     )
     # Stays in core, alone among the workflow settings, because two modules
-    # read it: `mod:workflow` for its own sweep and `mod:agent_surfaces` to size
-    # a human-wait ceiling from the same number.
+    # read it: `mod:workflow` for its waits' ceilings and `mod:agent_surfaces`
+    # to size a human-wait ceiling from the same number.
     #
-    # An earlier version of this comment said the alternative was "a dependency
-    # the architecture gate refuses". That was wrong and is corrected here:
-    # `check_architecture.py` permits `app.modules.<x>.contracts` imports, and
-    # `schedule/module.py` already imports `workflow.contracts.timers`, so a
+    # `check_architecture.py` permits `app.modules.<x>.contracts` imports, so a
     # contracts-exposed accessor would be legal. The reason is cohesion, not
     # the gate -- one number meaning "how long we wait on a person" should not
     # become a cross-module call to read.
     workflow_wait_max_age_seconds: float = Field(
         default=6 * 60 * 60.0,
         description=(
-            "Longest a workflow run may stay suspended on a single agent or "
-            "function wait before the reconciliation sweep fails it. Without a "
+            "Longest a workflow run may stay suspended on a single agent, "
+            "function or decision wait before it is failed. Without a "
             "ceiling a hung agent holds its run open forever, which reads as a "
             "run that is still going rather than one that broke. This is the "
             "*machine* ceiling; a wait blocked on a person is multiplied by "

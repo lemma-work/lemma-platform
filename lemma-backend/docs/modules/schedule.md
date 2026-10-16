@@ -43,7 +43,7 @@ events of every MCP server the caller connected, each with the schedule type
 that serves it.
 
 A DATASTORE schedule can narrow what fires it with `when` conditions over the
-written row (`domain/match_conditions.py`: equals, not equals, in, not in,
+written row (`app/core/domain/record_conditions.py`, shared with live subscriptions: equals, not equals, in, not in,
 changed, written, from, to). They are checked before any LLM filter, so a row
 that fails them costs no model call.
 
@@ -63,6 +63,14 @@ case-insensitive filesystem.
 
 The poller owns the concrete time job set: `next_fire_at` is the whole index,
 claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
+
+`trigger_skips` records what a DATASTORE trigger let pass without firing --
+the changes of a bulk write or import it skips, or fires past its daily
+ceiling -- one row per delivered page and reason with a count, so a bulk write
+of thousands of rows is a handful of rows; `GET .../schedules/{id}/skips`
+pages them for run history. `trigger_batches` holds each window a `batch`-mode
+trigger planned before firing it, so a replay after a crash fires that same
+window rather than a differently cut one.
 
 ## API groups
 

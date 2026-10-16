@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Mapping, Optional
+from typing import Literal, Mapping, Optional
 from uuid import UUID
 from pydantic import (
     BaseModel,
@@ -37,6 +37,22 @@ class PodRecipe(BaseModel):
     imported_by: UUID
 
 
+TriggerWriteModeSetting = Literal["skip", "each", "batch"]
+
+
+class PodTriggerSettings(BaseModel):
+    """Pod-wide defaults for the pod's DATASTORE triggers."""
+
+    bulk_writes_default: TriggerWriteModeSetting | None = Field(
+        default=None,
+        description=(
+            "What a bulk write does to this pod's triggers that do not say: "
+            "skip (recorded as skipped), each (fire per matching row) or batch "
+            "(one fire with the rows). Omitted means skip."
+        ),
+    )
+
+
 class PodConfig(BaseModel):
     """Typed pod-level configuration."""
 
@@ -50,6 +66,7 @@ class PodConfig(BaseModel):
     # Bundles installed into this pod, appended on each successful import. Omitted
     # from the serialized config when empty so legacy config blobs are unchanged.
     recipes: list[PodRecipe] = Field(default_factory=list)
+    triggers: PodTriggerSettings | None = None
 
     @field_validator("default_profile_id")
     @classmethod
@@ -93,6 +110,8 @@ class PodConfig(BaseModel):
             data.pop("default_runtime", None)
         if not data.get("recipes"):
             data.pop("recipes", None)
+        if data.get("triggers") is None:
+            data.pop("triggers", None)
         return data
 
 

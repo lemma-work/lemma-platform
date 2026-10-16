@@ -112,6 +112,7 @@ def test_every_run_status_is_classified_one_way_or_the_other() -> None:
     """
     retryable_or_in_flight = {
         ScheduleRunStatus.RECEIVED.value,
+        ScheduleRunStatus.FILTERING.value,
         ScheduleRunStatus.PROCESSING.value,
         ScheduleRunStatus.DISPATCHED.value,
         ScheduleRunStatus.FAILED.value,

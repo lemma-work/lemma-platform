@@ -478,7 +478,7 @@ def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int
         return 0
     # Upsert so re-importing an edited data.csv updates existing rows (matched on
     # the table's primary key) instead of failing — idempotent re-seeding.
-    pod_sdk.records.bulk_create(table_name, rows, upsert=True)
+    pod_sdk.records.bulk_create(table_name, rows, upsert=True, intent="import")
     return len(rows)
 
 
