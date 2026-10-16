@@ -30,8 +30,10 @@ from uuid import UUID
 from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.infrastructure.runtime_bundle import RuntimeBundle
+from app.modules.workspace.providers.base import ProviderFailed
 from app.modules.workspace.providers.runtime_client import RuntimeState
 from app.modules.workspace.services.workspace_runtime_bundle import _SANDBOX_FAILURES
 from sandbox_runtime.protocol import WorkloadKind
@@ -207,6 +209,10 @@ async def _restart(
         )
         resumed = await host.get_or_create_sandbox(user_id)
     except _SANDBOX_FAILURES:
+        # `WORKSPACE_RUNTIME_BUNDLE_REQUIRED`: a server left on the floor is
+        # running code other than the code under test.
+        if workspace_settings.runtime_bundle_required:
+            raise
         logger.warning(
             "workspace.runtime_restart.restart_failed.degraded",
             user_id=str(user_id),
@@ -225,6 +231,11 @@ async def _restart(
             version=version,
             running_version=after.version,
         )
+        if workspace_settings.runtime_bundle_required:
+            raise ProviderFailed(
+                f"the workspace runtime still runs {after.version} after a "
+                f"restart onto {version}"
+            )
     return True
 
 

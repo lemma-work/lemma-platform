@@ -67,6 +67,18 @@ class WorkspaceSettings(BaseSettings):
             "sandboxes come to disagree about the code they are running."
         ),
     )
+    runtime_bundle_required: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("WORKSPACE_RUNTIME_BUNDLE_REQUIRED"),
+        description=(
+            "Fail a workspace session when the runtime bundle is absent or "
+            "cannot be installed, instead of degrading to the image's own "
+            "copy. Off in deployments, where a stale sandbox beats a broken "
+            "one. On in e2e, which runs a base image built from main and the "
+            "branch's code from the bundle: degrading there would test main's "
+            "code and pass."
+        ),
+    )
     host_cli_root: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("WORKSPACE_HOST_CLI_ROOT"),

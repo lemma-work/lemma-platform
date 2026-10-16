@@ -16,6 +16,11 @@ overlay still has the image's own copy of the first-party code, which is what
 every sandbox runs today. Failing a tool call because a 1.6 MB upload timed out
 would be a worse outcome than the staleness it was trying to fix -- and staleness
 is the status quo, not a regression this introduced.
+
+Except where it is asked not to: ``WORKSPACE_RUNTIME_BUNDLE_REQUIRED`` turns
+both "no bundle" and "the install failed" into a failed session. That is for e2e,
+whose sandbox image is built from main while the branch's code arrives in the
+bundle -- degrading there would quietly test main's code and pass.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from app.modules.workspace.infrastructure.runtime_bundle import (
     RuntimeBundle,
     runtime_bundle,
 )
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.services.browser_proxy import (
@@ -284,6 +290,11 @@ class WorkspaceRuntimeBundleMixin:
         """
         bundle = self._runtime_bundle()
         if bundle is None:
+            if workspace_settings.runtime_bundle_required:
+                raise ProviderFailed(
+                    "WORKSPACE_RUNTIME_BUNDLE_REQUIRED is set but there is no "
+                    "runtime bundle to install"
+                )
             return
         key = self._bundle_cache_key(user_id, sandbox_info)
         if key is not None and self._installed_bundles.get(key) == bundle.version:
@@ -326,6 +337,8 @@ class WorkspaceRuntimeBundleMixin:
             await self._deliver(client, user_id, bundle)
             await self._run_installer(client, user_id, bundle)
         except _SANDBOX_FAILURES as exc:
+            if workspace_settings.runtime_bundle_required:
+                raise
             # Deliberately swallowed, and deliberately logged in full. The
             # sandbox keeps the image's copy of the first-party code, so the
             # cost of this is staleness -- the same staleness every sandbox has

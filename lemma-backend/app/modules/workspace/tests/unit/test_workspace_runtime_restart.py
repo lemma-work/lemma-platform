@@ -14,8 +14,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.bounded import BoundedDict
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.infrastructure.runtime_bundle import RuntimeBundle
+from app.modules.workspace.providers.base import ProviderFailed
 from app.modules.workspace.providers.runtime_client import RuntimeState
 from app.modules.workspace.services.workspace_runtime_bundle import (
     _REMEMBERED_SANDBOXES,
@@ -220,3 +222,20 @@ async def test_a_failed_restart_is_reported_and_not_retried() -> None:
     client.fail_release = False
     assert await service.current(user_id, info) is False
     assert client.released == []
+
+
+@pytest.mark.parametrize("failure", ["release", "still_stale"])
+async def test_a_required_bundle_fails_the_caller_when_the_server_stays_on_the_floor(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """e2e's base image predates the branch: its floor is not the code under test."""
+    monkeypatch.setattr(workspace_settings, "runtime_bundle_required", True)
+    user_id = uuid4()
+    client = _Client(_state("floor"), _state("floor"))
+    client.fail_release = failure == "release"
+    service = _Service(client)
+    info = _info()
+    await service.prepare(user_id, info)
+
+    with pytest.raises((ProviderFailed, SandboxUnavailable)):
+        await service.current(user_id, info)

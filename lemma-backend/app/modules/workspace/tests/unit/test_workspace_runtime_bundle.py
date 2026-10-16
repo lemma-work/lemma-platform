@@ -22,11 +22,13 @@ from uuid import UUID, uuid4
 import pytest
 
 
+from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.infrastructure.runtime_bundle import (
     RuntimeBundle,
     load_bundle,
 )
+from app.modules.workspace.providers.base import ProviderFailed
 from app.modules.workspace.services.workspace_runtime_bundle import (
     _REMEMBERED_SANDBOXES,
     WorkspaceRuntimeBundleMixin,
@@ -308,6 +310,29 @@ async def test_a_deployment_with_no_bundle_does_nothing() -> None:
 
     assert client.reads == []
     assert client.writes == []
+
+
+@pytest.mark.parametrize(
+    ("client", "bundle"),
+    [
+        pytest.param(_Client(installed=None, fail=True), _BUNDLE, id="delivery"),
+        pytest.param(_Client(installed=None, exit_code=1), _BUNDLE, id="installer"),
+        pytest.param(_Client(installed=None), None, id="no-bundle"),
+    ],
+)
+async def test_a_required_bundle_fails_the_caller_instead_of_degrading(
+    monkeypatch: pytest.MonkeyPatch, client: _Client, bundle: RuntimeBundle | None
+) -> None:
+    """e2e runs a base image older than the branch and sets this.
+
+    Degrading there would run the base image's copy of the code and pass, so
+    every way of not ending up on the bundle has to be a failure instead.
+    """
+    monkeypatch.setattr(workspace_settings, "runtime_bundle_required", True)
+    service = _Service(client, bundle=bundle)
+
+    with pytest.raises((ProviderFailed, SandboxUnavailable)):
+        await service._ensure_runtime_bundle(uuid4(), _info())
 
 
 async def test_the_delivery_does_not_claim_a_precondition_it_cannot_mean() -> None:

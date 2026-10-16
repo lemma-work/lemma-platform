@@ -112,6 +112,27 @@ jobs:
   # 79s + 81s + 77s in run 32855094744 and 75s + 77s + 114s in 32851884561,
   # then three `docker save`s racing to write one cache key. Roughly four
   # minutes of runner time per run to produce one artifact three times.
+  #
+  # Two images, two keys. The workspace image is a *base*: the branch's
+  # lemma-python, lemma-cli and skills reach its sandboxes through the runtime
+  # bundle the shards build (see "Build the runtime bundle"), the way they
+  # reach an E2B sandbox in production. So its key leaves them out, along with
+  # the backend Makefile -- together a third of main's commits, each of which
+  # paid an 84s Chromium-layer rebuild plus a 2.9GB save and upload.
+  #
+  # What stays in: everything the bundle cannot replace (the Dockerfile, the
+  # third-party lockfiles and templates, the image-only scripts, and the
+  # first-party `pyproject.toml`s the floor install checks against those
+  # lockfiles) -- and the workspace side of `sandbox_runtime`, although the
+  # bundle carries it too. The provider-level tests (`test_sandbox_end_to_end`,
+  # the durability and sign-in suites) start containers without going through
+  # the session path that installs the bundle, so they run the image's own
+  # copy; keyed out, they would test main's runtime on a branch that changed
+  # it. 24 of 204 main commits over a month touched this key, against 68 for
+  # the old one.
+  #
+  # The function image has no overlay -- it bakes `sandbox_runtime/function`
+  # and the SDK -- so it keeps keying on them. It is the small one.
   sandbox-images:
     name: build sandbox images
     needs: changes
@@ -123,7 +144,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
-      key: ${{ steps.key.outputs.value }}
+      workspace_key: ${{ steps.key.outputs.workspace }}
+      function_key: ${{ steps.key.outputs.function }}
     defaults:
       run:
         working-directory: lemma-backend
@@ -131,42 +153,71 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
-      - name: Resolve the cache key
+      - name: Resolve the cache keys
         id: key
-        run: echo "value=e2e-sandbox-images-${{ hashFiles(
-              'lemma-backend/sandbox-images/**',
-              'lemma-backend/sandbox_runtime/**',
-              'lemma-backend/Makefile',
-              'lemma-python/**',
-              'lemma-pod-bundle/**',
-              'lemma-cli/**',
-              'lemma-skills/**'
-            ) }}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "workspace=e2e-workspace-image-${{ hashFiles(
+                'lemma-backend/sandbox-images/Dockerfile.workspace',
+                'lemma-backend/sandbox-images/templates/workspace-*/**',
+                'lemma-backend/sandbox-images/scripts/**',
+                'lemma-backend/sandbox_runtime/**',
+                '!lemma-backend/sandbox_runtime/function/**',
+                '!lemma-backend/sandbox_runtime/tests/**',
+                'lemma-python/pyproject.toml',
+                'lemma-pod-bundle/pyproject.toml',
+                'lemma-cli/pyproject.toml',
+                'lemma-cli/setup.py'
+              ) }}" >> "$GITHUB_OUTPUT"
+          echo "function=e2e-function-image-${{ hashFiles(
+                'lemma-backend/sandbox-images/Dockerfile.function',
+                'lemma-backend/sandbox-images/templates/function-python/**',
+                'lemma-backend/sandbox-images/scripts/lemma-function-runtime',
+                'lemma-backend/sandbox_runtime/__init__.py',
+                'lemma-backend/sandbox_runtime/tasks.py',
+                'lemma-backend/sandbox_runtime/function/**',
+                'lemma-python/**'
+              ) }}" >> "$GITHUB_OUTPUT"
       # `lookup-only`, so a warm cache costs a HEAD request rather than pulling
       # a multi-gigabyte tar down just to prove it exists. The shards download
       # it; this job only decides whether it has to be created.
-      - name: Is the image already cached?
-        id: probe
+      - name: Is the workspace image already cached?
+        id: workspace-probe
         uses: actions/cache/restore@v6
         with:
-          path: /tmp/e2e-sandbox-images.tar
-          key: ${{ steps.key.outputs.value }}
+          path: /tmp/e2e-workspace-image.tar
+          key: ${{ steps.key.outputs.workspace }}
           lookup-only: true
-      - name: Build sandbox images
-        if: steps.probe.outputs.cache-hit != 'true'
-        run: make sandbox-images
-      - name: Save sandbox images to cache
-        if: steps.probe.outputs.cache-hit != 'true'
+      - name: Build the workspace image
+        if: steps.workspace-probe.outputs.cache-hit != 'true'
         run: |
-          # shellcheck disable=SC2046 # one argument per image name, on purpose
-          docker save -o /tmp/e2e-sandbox-images.tar \
-            $(make print-sandbox-images | awk '{print $2}')
-      - name: Upload the image cache
-        if: steps.probe.outputs.cache-hit != 'true'
+          make sandbox-image-workspace
+          docker save -o /tmp/e2e-workspace-image.tar \
+            "$(make print-sandbox-images | awk '$1 == "workspace:" {print $2}')"
+      - name: Upload the workspace image cache
+        if: steps.workspace-probe.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: /tmp/e2e-sandbox-images.tar
-          key: ${{ steps.key.outputs.value }}
+          path: /tmp/e2e-workspace-image.tar
+          key: ${{ steps.key.outputs.workspace }}
+      - name: Is the function image already cached?
+        id: function-probe
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-function-image.tar
+          key: ${{ steps.key.outputs.function }}
+          lookup-only: true
+      - name: Build the function image
+        if: steps.function-probe.outputs.cache-hit != 'true'
+        run: |
+          make sandbox-image-function
+          docker save -o /tmp/e2e-function-image.tar \
+            "$(make print-sandbox-images | awk '$1 == "function:" {print $2}')"
+      - name: Upload the function image cache
+        if: steps.function-probe.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/e2e-function-image.tar
+          key: ${{ steps.key.outputs.function }}
 
   # Third-party service images (Postgres, Redis, SuperTokens, Kreuzberg),
   # pulled once per run here and handed to the shards through the cache,
@@ -462,26 +513,36 @@ jobs:
           restore-keys: fastembed-
       # Only the sandbox shards need the real workspace + function-runner
       # images, and by here they always exist: `sandbox-images` built them once
-      # for the whole run, or found them already cached. Content-addressed by
-      # the same inputs app/modules/test_support/e2e/runtime.py fingerprints
-      # (_SANDBOX_BUILD_INPUTS). `make sandbox-images` tags with
-      # SANDBOX_TAG=dev rather than that fingerprint, so the tags are resolved
-      # and handed to the fixtures explicitly via
+      # for the whole run, or found them already cached. `make sandbox-images`
+      # tags with SANDBOX_TAG=dev rather than the fingerprint
+      # app/modules/test_support/e2e/runtime.py would use locally, so the tags
+      # are resolved and handed to the fixtures explicitly via
       # WORKSPACE_E2E_IMAGE/FUNCTION_E2E_IMAGE -- the same two-step approach
       # sandbox-function-benchmark.yml already uses.
-      - name: Restore sandbox images
+      #
+      # Each restore fails on a miss: the `sandbox-images` job either found the
+      # key or created it, so a miss is a broken assumption rather than
+      # something to paper over by building -- which is the duplication that
+      # job removed.
+      - name: Restore the workspace image
         if: matrix.shard.needs_sandbox_images
         uses: actions/cache/restore@v6
         with:
-          path: /tmp/e2e-sandbox-images.tar
-          key: ${{ needs.sandbox-images.outputs.key }}
-          # The `sandbox-images` job either found this key or created it, so a
-          # miss here is a broken assumption rather than something to paper
-          # over by building -- which is the duplication this split removed.
+          path: /tmp/e2e-workspace-image.tar
+          key: ${{ needs.sandbox-images.outputs.workspace_key }}
+          fail-on-cache-miss: true
+      - name: Restore the function image
+        if: matrix.shard.needs_sandbox_images
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/e2e-function-image.tar
+          key: ${{ needs.sandbox-images.outputs.function_key }}
           fail-on-cache-miss: true
       - name: Load sandbox images
         if: matrix.shard.needs_sandbox_images
-        run: docker load -i /tmp/e2e-sandbox-images.tar
+        run: |
+          docker load -i /tmp/e2e-workspace-image.tar
+          docker load -i /tmp/e2e-function-image.tar
       - name: Resolve sandbox image tags
         if: matrix.shard.needs_sandbox_images
         run: |
@@ -491,6 +552,20 @@ jobs:
               function:)  echo "FUNCTION_E2E_IMAGE=$image"  >> "$GITHUB_ENV" ;;
             esac
           done
+      # The workspace image above is a base that may predate this branch's
+      # lemma-python, lemma-cli and skills; this is how the branch's copies get
+      # into its sandboxes -- the path an E2B sandbox takes in production. REQUIRED makes a missing
+      # bundle, a failed install or a runtime that will not restart onto it
+      # fail the test, where a deployment would degrade to the image's copy:
+      # here, degrading would test the base image's code and pass.
+      - name: Build the runtime bundle
+        if: matrix.shard.needs_sandbox_images
+        run: |
+          make runtime-bundle
+          {
+            echo "WORKSPACE_RUNTIME_BUNDLE_DIR=$PWD/dist/runtime-bundle"
+            echo "WORKSPACE_RUNTIME_BUNDLE_REQUIRED=true"
+          } >> "$GITHUB_ENV"
       # Shards run in parallel, so wall-clock is the slowest shard, not their
       # sum. Both args and worker count come from the generated layout.
       - name: E2E tests (deterministic LLM + in-process sandbox, real services)
