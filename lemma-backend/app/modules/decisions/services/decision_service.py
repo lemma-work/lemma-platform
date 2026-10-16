@@ -14,6 +14,7 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 
 from app.core.domain.errors import DomainError
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.decisions.config import DecisionsSettings, decisions_settings
 from app.modules.decisions.domain.answers import (
@@ -102,6 +103,7 @@ class DecisionService:
                         task, caller=caller, timeout_seconds=timeout
                     )
         except TimeoutError as exc:
+            raise_if_database_unavailable(exc)
             raise DecisionUnavailableError("timeout") from exc
         except DomainError as exc:
             # A 429 (a spend limit) and a 4xx are the caller's to see as they
@@ -121,6 +123,10 @@ class DecisionService:
             # the caller must not retry into; anything else is retryable.
             if group.subgroup(asyncio.CancelledError) is not None:
                 raise
+            # Lemma's database (the usage checkpoint), not the provider: the
+            # caller's work item retries it as unavailability, and it is never
+            # counted as the provider failing to answer.
+            raise_if_database_unavailable(group)
             spent = group.subgroup(UsageLimitExceededError)
             if spent is not None:
                 raise _first(spent) from group

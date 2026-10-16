@@ -6,11 +6,10 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Text, cast, func, select, text
+from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     build_whatsapp_signature_headers,
@@ -417,13 +416,13 @@ async def test_signed_whatsapp_webhook_is_deduplicated_and_never_becomes_surface
                 ),
                 {"kind": IDENTITY_WHATSAPP_VERIFICATION, "message_id": message_id},
             )
+            # Nor is it a surface message: no inbound row for it.
             surface_events = await session.scalar(
-                select(func.count())
-                .select_from(DomainEventOutbox)
-                .where(
-                    DomainEventOutbox.event_type == "surface.webhook.received",
-                    cast(DomainEventOutbox.payload, Text).contains(message_id),
-                )
+                text(
+                    "SELECT count(*) FROM surface_inbound_messages "
+                    "WHERE CAST(payload AS text) LIKE :message"
+                ),
+                {"message": f"%{message_id}%"},
             )
         assert verifications == 1
         assert surface_events == 0

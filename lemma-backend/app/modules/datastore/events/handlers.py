@@ -1,4 +1,4 @@
-"""Datastore streaq crons that have not moved to the work runtime yet.
+"""The datastore's signed-link retention, as periodic work.
 
 File processing, its dispatcher and recovery crons, and path cleanup moved to
 ``file_work`` (``file.process`` / ``file.cleanup`` work items).
@@ -16,10 +16,7 @@ from app.core.infrastructure.db.uow_factory import (
 from app.modules.datastore.infrastructure.repositories.signed_link_repository import (
     SignedLinkRepository,
 )
-from app.core.infrastructure.jobs.streaq_runtime import (
-    Lane,
-    streaq_cron,
-)
+from app.core.infrastructure.work import periodic_job
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -29,7 +26,7 @@ logger = get_logger(__name__)
 _SIGNED_LINK_PURGE_CEILING = 50_000
 
 
-@streaq_cron("41 4 * * *", name="purge_expired_signed_links", lane=Lane.BULK)
+@periodic_job("datastore.signed_links_purge", every=timedelta(days=1))
 async def purge_expired_signed_links() -> None:
     """Delete short-link rows whose links expired.
 

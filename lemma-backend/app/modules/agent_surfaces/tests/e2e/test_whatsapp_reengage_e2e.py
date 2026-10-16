@@ -12,6 +12,8 @@ with the WhatsApp fake recording every message the Graph API was given.
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any
 from uuid import UUID
 
@@ -28,23 +30,14 @@ from app.core.infrastructure.db.uow_factory import (
 from app.modules.agent.infrastructure.repositories.conversation_repository import (
     ConversationRepository,
 )
-from app.modules.agent_surfaces.domain.adapter_port import OutboundMetadata
-from app.modules.agent_surfaces.domain.credentials import (
-    SurfaceCredentials,
-    WhatsAppCredentials,
-)
 from app.modules.agent_surfaces.domain.entities import (
-    ParsedInboundSurfaceEvent,
     SurfacePlatform,
-)
-from app.modules.agent_surfaces.platforms.whatsapp.adapter import (
-    WhatsAppSurfaceAdapter,
 )
 from app.modules.agent_surfaces.services.held_replies import (
     HELD_REPLIES_KEY,
     HeldReplies,
-    deliver_held_replies,
     hold_reply,
+    stage_held_replies,
 )
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
@@ -156,32 +149,6 @@ async def test_a_closed_window_is_reopened_with_a_template_and_the_message_waits
     assert _bodies(message_store).count(FIRST) == 1
 
 
-class _HoldsWhileDelivering(WhatsAppSurfaceAdapter):
-    """Records what it is given to send, and -- while the first held message is
-    going out -- has another message held, the way a second send to the member
-    landing mid-delivery would."""
-
-    def __init__(self, conversation_id: UUID, uow_factory: UnitOfWorkFactory) -> None:
-        super().__init__()
-        self.conversation_id = conversation_id
-        self.uow_factory = uow_factory
-        self.sent: list[str] = []
-
-    async def send_message(
-        self,
-        *,
-        credentials: SurfaceCredentials,
-        event: ParsedInboundSurfaceEvent,
-        message: str,
-        metadata: OutboundMetadata | None = None,
-    ) -> None:
-        del credentials, event, metadata
-        self.sent.append(message)
-        if message == FIRST:
-            async with self.uow_factory() as uow:
-                await hold_reply(uow, self.conversation_id, SECOND, asked=False)
-
-
 async def _held_messages(
     uow_factory: UnitOfWorkFactory, conversation_id: UUID
 ) -> list[str]:
@@ -194,7 +161,20 @@ async def _held_messages(
     return [reply.message for reply in HeldReplies.model_validate(record).replies]
 
 
-async def test_a_message_held_while_the_hold_is_delivered_is_kept_for_next_time(
+async def _staged_held(conversation_id: UUID) -> list[str]:
+    async with async_session_maker() as session:
+        rows = await session.scalars(
+            text(
+                "SELECT content->>'text' FROM surface_deliveries "
+                "WHERE conversation_id = :conversation "
+                "AND content->>'purpose' = 'held' ORDER BY created_at, id"
+            ),
+            {"conversation": conversation_id},
+        )
+        return list(rows.all())
+
+
+async def test_a_message_held_while_the_hold_is_staged_is_kept_for_next_time(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -204,11 +184,12 @@ async def test_a_message_held_while_the_hold_is_delivered_is_kept_for_next_time(
     monkeypatch,
     platform_fake,
 ) -> None:
-    """The clear is of what was sent, not of whatever is held by then.
+    """Staging clears what it staged, never a message held meanwhile.
 
-    It used to drop the record by the ask it belonged to, and a second message
-    held under the same ask while the first was going out shared it -- so the
-    clear took the second one with it, unsent.
+    The member's reply stages what was held as deliveries in its ingest's
+    transaction, under the conversation's row lock. A second message held
+    while that transaction is open waits for the lock, then starts a new set:
+    it is not cleared unsent, and the next reply stages it -- once.
     """
     stage = await stage_surface(
         SurfacePlatform.WHATSAPP,
@@ -227,27 +208,42 @@ async def test_a_message_held_while_the_hold_is_delivered_is_kept_for_next_time(
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     async with uow_factory() as uow:
         await hold_reply(uow, conversation_id, FIRST, asked=True)
-    adapter = _HoldsWhileDelivering(conversation_id, uow_factory)
 
-    async def deliver() -> None:
-        await deliver_held_replies(
-            adapter=adapter,
-            credentials=WhatsAppCredentials(),
-            event=context.event,
+    async with uow_factory() as staging:
+        staged = await stage_held_replies(
+            staging,
             conversation_id=conversation_id,
-            uow_factory=uow_factory,
+            pod_id=UUID(str(test_pod["id"])),
+            platform=SurfacePlatform.WHATSAPP,
         )
+        assert staged == 1
 
-    await deliver()
+        async def hold_second() -> None:
+            async with uow_factory() as uow:
+                await hold_reply(uow, conversation_id, SECOND, asked=False)
+                await uow.commit()
 
-    assert adapter.sent == [FIRST]
+        racing = asyncio.create_task(hold_second())
+        await asyncio.sleep(0.3)
+        assert not racing.done(), "the second hold did not wait for the staging"
+        await staging.commit()
+    await asyncio.wait_for(racing, timeout=10)
+
+    assert await _staged_held(conversation_id) == [FIRST]
     assert await _held_messages(uow_factory, conversation_id) == [SECOND], (
-        "the message held mid-delivery was cleared without being sent"
+        "the message held mid-staging was cleared without being staged"
     )
 
-    # Their next message delivers it -- not refused by the first delivery's
-    # claim, and not the first one again.
-    await deliver()
-
-    assert adapter.sent == [FIRST, SECOND]
+    async with uow_factory() as uow:
+        assert (
+            await stage_held_replies(
+                uow,
+                conversation_id=conversation_id,
+                pod_id=None,
+                platform=SurfacePlatform.WHATSAPP,
+            )
+            == 1
+        )
+        await uow.commit()
+    assert await _staged_held(conversation_id) == [FIRST, SECOND]
     assert await _held_messages(uow_factory, conversation_id) == []

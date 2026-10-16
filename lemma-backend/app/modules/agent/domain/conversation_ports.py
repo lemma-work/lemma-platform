@@ -19,15 +19,10 @@ from typing import Protocol
 from uuid import UUID
 
 from app.modules.agent.domain.entities import Conversation, Message
-from app.modules.agent.domain.events import AgentDomainEvent
-from app.modules.agent.domain.run_projections import StaleAgentRunRef
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
-    AgentRunFinishResult,
-    AgentRunStatus,
     ConversationStatus,
     JsonObject,
-    JsonValue,
     MessageDraft,
 )
 
@@ -128,37 +123,10 @@ class PauseSupersession(Protocol):
     ) -> Message: ...
 
 
-class StuckStopSweep(Protocol):
-    """Finding the stops no worker acted on, and ending them."""
-
-    async def list_runs_stuck_stopping(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StaleAgentRunRef]: ...
-
-    async def finish_agent_run(
-        self,
-        *,
-        agent_run_id: UUID,
-        status: AgentRunStatus,
-        conversation_status: ConversationStatus | None = None,
-        error: str | None = None,
-        error_code: str | None = None,
-        error_reason: str | None = None,
-        output_data: JsonValue | None = None,
-        stamp: JsonObject | None = None,
-    ) -> AgentRunFinishResult | None: ...
-
-    def collect_events(self, events: Sequence[AgentDomainEvent]) -> None: ...
-
-
 __all__ = [
     "ConversationLookup",
     "ConversationStatusWrite",
     "QueuedMessages",
     "PausesHoldingATurn",
     "PauseSupersession",
-    "StuckStopSweep",
 ]

@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.modules.datastore.contracts.agent_tools import build_file_service
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -124,7 +125,8 @@ class PodFileAgentHostArtifactWriter:
                 )
             except ValueError as exc:
                 warnings.append(str(exc))
-            except DomainError, OSError, SQLAlchemyError, TimeoutError:
+            except (DomainError, OSError, SQLAlchemyError, TimeoutError) as exc:
+                raise_if_database_unavailable(exc)
                 logger.error(
                     "agent_host.artifact.persist_failed",
                     agent_run_id=str(agent_run_id),

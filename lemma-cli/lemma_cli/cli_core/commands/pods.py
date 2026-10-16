@@ -15,7 +15,7 @@ from ..context import (
     remember_pod,
     render_session_selection,
     resolve_pod,
-    selected_org,
+    selected_org_id,
     selected_pod,
 )
 from ..confirm import confirm_destructive
@@ -74,7 +74,7 @@ def resolve_pod_id(client, state, explicit: str | None = None) -> str:  # type: 
     if _is_uuid(selector):
         return selector
 
-    org_id = selected_org(state, required=False)
+    org_id = selected_org_id(client, state, required=False)
     # Page through pods so a name beyond the first page still resolves (and so
     # ambiguity is detected across the set, not just page one) — but BOUNDED. An
     # unbounded `while True` makes one CLI command's cost depend on how many pods
@@ -145,7 +145,7 @@ def list_pods(
     result = run_with_client(
         ctx,
         lambda client, s: _mark_current(
-            client.pods.list(org_id=selected_org(s, org), limit=limit),
+            client.pods.list(org_id=selected_org_id(client, s, org), limit=limit),
             selected_pod(s, required=False),
         ),
     )
@@ -185,7 +185,7 @@ def select_pod(
     state = state_from_ctx(ctx)
 
     def run(client, s):  # type: ignore[no-untyped-def]
-        org_id = selected_org(s, org, required=False)
+        org_id = selected_org_id(client, s, org, required=False)
         if name:
             return resolve_pod(client, s, name, org=org_id)
         items = list_items(client.pods.list(org_id=org_id, limit=limit))
@@ -293,7 +293,7 @@ def create_pod(
             build_request(
                 PodCreateRequest,
                 {
-                    "organization_id": selected_org(s, org) or client.org_id,
+                    "organization_id": selected_org_id(client, s, org) or client.org_id,
                     "name": name,
                     "description": description,
                 },

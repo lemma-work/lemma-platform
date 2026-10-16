@@ -7,7 +7,6 @@ from uuid import UUID
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -58,12 +57,9 @@ class ScheduleRepository(ScheduleRepositoryInterface):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def create(self, entity: ScheduleEntity) -> ScheduleEntity:
         """Create a new schedule."""

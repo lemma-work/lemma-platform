@@ -49,7 +49,7 @@ async def resolve_contact_execute(
     """
     found = await service.repository.get_by_name(pod_id, name)
     function = (
-        await service.repository.get_for_update(found.id)
+        await service.repository.get_for_share(found.id)
         if found is not None and found.id is not None
         else None
     )

@@ -26,7 +26,9 @@ from app.core.infrastructure.work.types import WorkMode
 
 
 def test_no_registered_fast_handler_module_imports_a_network_client() -> None:
-    import app.events  # noqa: F401  the worker's imports: every registered kind
+    from app.worker import register_worker_modules  # noqa: E402
+
+    register_worker_modules()  # every module's kinds, as the worker registers them
     from app.core.infrastructure.work.registry import registry
 
     fast = [

@@ -259,7 +259,12 @@ async def test_disconnecting_stops_a_link_thread_still_running(
         )
     assert stopped is not None
     assert stopped.status is not ConversationStatus.RUNNING
-    assert stopped.agent_runs[-1].status is AgentRunStatus.STOP_REQUESTED
+    # STOPPED when no worker had claimed the turn yet (the stop drops it and
+    # ends the run in its transaction), STOP_REQUESTED when one had.
+    assert stopped.agent_runs[-1].status in {
+        AgentRunStatus.STOPPED,
+        AgentRunStatus.STOP_REQUESTED,
+    }
 
 
 @pytest.mark.asyncio

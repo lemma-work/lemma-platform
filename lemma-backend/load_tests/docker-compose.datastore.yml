@@ -38,15 +38,10 @@ services:
       KREUZBERG_URL: http://kreuzberg:8000
       DOCUMENT_PROCESSOR: kreuzberg
       DOCUMENT_PROCESSING_OCR_ENABLED: "false"
-      # Extraction concurrency is now the BULK lane's worker concurrency. The old
-      # in-task semaphore (DOCUMENT_PROCESSING_MAX_CONCURRENCY) throttled
-      # extractions only after they had already taken a worker slot, so a burst
-      # blocked unrelated work while queued.
-      WORKER_BULK_CONCURRENCY: "${DATASTORE_EXTRACTION_CONCURRENCY:-2}"
-      # Per-pod admission + fair dispatch: bound how much of one tenant's upload
-      # is resident in Redis so no pod can monopolise ingestion.
-      DATASTORE_PER_POD_MAX_INFLIGHT: "${DATASTORE_PER_POD_MAX_INFLIGHT:-4}"
-      DATASTORE_DISPATCH_GLOBAL_BATCH: "${DATASTORE_DISPATCH_GLOBAL_BATCH:-50}"
+      # Extraction concurrency is the ingestion work class's slots per process;
+      # the per-pod cap keeps one tenant's upload from monopolising them.
+      WORK_SLOTS_JSON: '{"ingestion": ${DATASTORE_EXTRACTION_CONCURRENCY:-2}}'
+      WORK_MAX_RUNNING_JSON: '{"ingestion": ${DATASTORE_PER_POD_MAX_INFLIGHT:-4}}'
       DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES: "${DATASTORE_MAX_INFLIGHT_BYTES:-536870912}"
       KREUZBERG_REQUEST_TIMEOUT_SECONDS: "${DATASTORE_KREUZBERG_TIMEOUT_SECONDS:-600}"
       LOCAL_EMBEDDING_CACHE_DIR: /home/appuser/.cache/lemma/fastembed
@@ -56,7 +51,6 @@ services:
       # Pin ONNX to the container's CPU allocation. Unset, it sizes from the
       # HOST cpu count and oversubscribes, which measured ~3.7x slower.
       LOCAL_EMBEDDING_THREADS: "${DATASTORE_WORKER_CPUS:-4}"
-      WORKER_CONCURRENCY: "${DATASTORE_WORKER_CONCURRENCY:-10}"
     volumes:
       - datastore_objects:/home/appuser/.local/object-storage
       - local_files:/home/appuser/.local/files

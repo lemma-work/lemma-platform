@@ -12,12 +12,15 @@ Redis, after any database read has closed.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
 from pydantic import BaseModel, JsonValue
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.domain.events import DomainEvent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work.writer import HasSession
 from app.core.infrastructure.work import (
     SYSTEM_NAMESPACE,
     JobContext,
@@ -25,12 +28,15 @@ from app.core.infrastructure.work import (
     WorkMode,
     WorkRegistry,
     WorkWriter,
+    facts,
     org_namespace,
     registry as default_registry,
 )
+from app.modules.identity.contracts.profile_facts import UserMobileChanged
 from app.modules.identity.domain.events import (
     OrganizationInvitationAcceptedEvent,
     OrganizationInvitationCreatedEvent,
+    UserMobileChangedEvent,
     UserPhoneReplacedEvent,
     UserSignedUpEvent,
 )
@@ -165,9 +171,17 @@ def _namespace(event: DomainEvent) -> str:
 async def stage_identity_work(
     uow: SqlAlchemyUnitOfWork, events: Sequence[DomainEvent]
 ) -> None:
-    """Write the email each of ``events`` owes, on ``uow``'s transaction."""
+    """Write the email each of ``events`` owes, on ``uow``'s transaction.
+
+    A changed mobile number is also announced as the ``UserMobileChanged``
+    fact in the same transaction, so what was bound to the old number (a
+    surface identity) is unbound by work that commits with the change.
+    """
     work = WorkWriter.of(uow)
     for event in events:
+        if isinstance(event, UserMobileChangedEvent):
+            await emit_mobile_changed(uow, event.user_id, writer=work)
+            continue
         if not isinstance(event, _EMAIL_EVENTS):
             continue
         await work.add(
@@ -178,6 +192,19 @@ async def stage_identity_work(
             ),
             dedup_key=f"identity-email:{event.event_id}",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _OnSession:
+    session: AsyncSession
+
+
+async def emit_mobile_changed(
+    on: HasSession | AsyncSession, user_id: UUID, *, writer: WorkWriter | None = None
+) -> None:
+    """Announce a changed (or cleared) mobile number in that transaction."""
+    holder = _OnSession(on) if isinstance(on, AsyncSession) else on
+    await facts.emit(holder, UserMobileChanged(user_id=user_id), writer=writer)
 
 
 async def add_whatsapp_verification_work(

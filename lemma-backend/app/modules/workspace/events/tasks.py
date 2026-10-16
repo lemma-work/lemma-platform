@@ -11,16 +11,23 @@ not compete with a user waiting on a tool call.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from app.modules.workspace.config import workspace_settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_runtime import streaq_cron
+from app.core.infrastructure.work import WorkClass, periodic_job
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
 
-@streaq_cron(workspace_settings.sweep_cron, name="sweep_workspace_sandboxes")
+# Automation, not admin: it talks to the sandbox provider.
+@periodic_job(
+    "workspace.sandboxes_sweep",
+    every=timedelta(seconds=workspace_settings.sweep_interval_seconds),
+    cls=WorkClass.AUTOMATION,
+)
 async def sweep_workspace_sandboxes_task() -> None:
     from app.modules.workspace.services.sandbox_composition import get_sandbox_service
     from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper

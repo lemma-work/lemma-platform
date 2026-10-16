@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -200,7 +201,8 @@ class SurfaceInteractionMixin:
             await self._process_interaction(
                 parsed, attempt, authorized_surface_ids=authorized_surface_ids
             )
-        except Exception:
+        except Exception as exc:
+            raise_if_database_unavailable(exc)
             # Said first, at a level `LOG_LEVEL=INFO` keeps. This handler used to
             # swallow the failure whole: the person got "I couldn't complete
             # that action" and nobody else got anything, so a button that broke
@@ -297,18 +299,16 @@ class SurfaceInteractionMixin:
         # the claim used to be spent first, so a failure left the person's next
         # tap looking like a replay and being ignored in silence.
         #
-        # The connection goes back for it. This is a Redis round trip in the
-        # middle of the interaction path, and everything above it has only
-        # read -- the writes start below, so `safe_to_release` genuinely
-        # releases here rather than quietly declining.
-        async with connection_released(self.uow.session):
-            claimed = await self.event_dedup_store.claim_message(
-                surface_installation_id=surface.id,
-                platform=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_message_id=parsed.dedup_id,
-            )
+        # A durable claim on this request's own session: it commits with the
+        # answer it guards, and a failure that rolls the answer back takes the
+        # claim with it.
+        claimed = await self.event_dedup_store.claim_message(
+            surface_installation_id=surface.id,
+            platform=surface.surface_type,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+            external_message_id=parsed.dedup_id,
+        )
         if not claimed:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_interaction_ignored_replay_duplicate.observed",

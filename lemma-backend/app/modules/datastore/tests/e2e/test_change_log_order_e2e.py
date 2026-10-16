@@ -33,7 +33,6 @@ from app.modules.datastore.infrastructure.pod_schema_migrations import (
 from app.modules.datastore.infrastructure.session import get_datastore_engine
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.tests.e2e.change_log_support import (
-    change_log_mode,
     datastore_schedule,
     deliver_all,
     deliver_including_late,
@@ -46,12 +45,6 @@ from app.modules.datastore.tests.e2e.harness import DatastoreApi
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
-
-
-@pytest.fixture(autouse=True)
-def _change_log_on():
-    with change_log_mode("on"):
-        yield
 
 
 async def _append(conn, pod_id: UUID, table_id: UUID, record_id: str) -> None:

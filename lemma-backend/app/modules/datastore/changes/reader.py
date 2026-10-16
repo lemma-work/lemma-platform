@@ -92,8 +92,6 @@ class Change:
     #: ``visitor:<session>`` / ``contact:<id>`` when somebody outside the pod
     #: wrote the content; ``None`` for a member's write.
     outside_actor: str | None
-    #: The old event's id, for a change converted from the outbox or stream.
-    event_id: UUID | None
     #: The row after the write (I, U).
     new_row: JsonRow | None
     #: U: prior values of the written columns; D: the whole deleted row.
@@ -187,7 +185,7 @@ async def read_after(
                 await conn.execute(
                     text(
                         "SELECT xid::text AS xid_text, seq, table_id, op, record_id, intent, "
-                        "owner_user_id, outside_actor, event_id, new_row, old_values, at "
+                        "owner_user_id, outside_actor, new_row, old_values, at "
                         f"FROM {changes_table(schema)} WHERE {' AND '.join(where)} "
                         "ORDER BY xid, seq LIMIT :limit"
                     ),
@@ -389,7 +387,6 @@ async def _horizon_and_floor(
 
 def _change(row: Mapping[str, object]) -> Change:
     owner = row["owner_user_id"]
-    event_id = row["event_id"]
     at = row["at"]
     assert isinstance(at, datetime)
     return Change(
@@ -400,7 +397,6 @@ def _change(row: Mapping[str, object]) -> Change:
         intent=str(row["intent"]),
         owner_user_id=UUID(str(owner)) if owner is not None else None,
         outside_actor=str(row["outside_actor"]) if row["outside_actor"] else None,
-        event_id=UUID(str(event_id)) if event_id is not None else None,
         new_row=_json_row(row["new_row"]),
         old_values=_json_row(row["old_values"]),
         at=at,

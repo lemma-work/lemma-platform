@@ -206,7 +206,10 @@ async def test_a_resend_after_its_run_finished_streams_the_ending_and_closes(
     assert {frame["agent_run_id"] for frame in frames} == {first["agent_run_id"]}
 
 
+@pytest.mark.drives_work
 async def test_a_resend_while_its_run_is_working_follows_the_run(scenario):
+    """Held: the session worker must not pick up and stream the turn, whose
+    only frames here are the ones the test publishes."""
     seeded = await seeded_conversation(scenario)
     client_id = f"web-{uuid4()}"
     first = await _append(

@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import AnalyticsActor, emit
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
-from app.modules.analytics.events.wiring import actor_or_system, origin_of, router
+from app.modules.analytics.events.wiring import actor_or_system, origin_of
 from app.modules.pod.domain.events import (
-    POD_EVENTS_STREAM,
     PodCreatedEvent,
     PodDeletedEvent,
     PodMemberAddedEvent,
@@ -23,17 +14,12 @@ from app.modules.pod.domain.events import (
 WIRED = frozenset({"pod.created", "pod.member_joined", "pod.deleted"})
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    POD_EVENTS_STREAM,
-    group="analytics-pod",
-    consumer="analytics-pod-consumer",
+@projection(
+    PodCreatedEvent.get_event_type(),
+    PodMemberAddedEvent.get_event_type(),
+    PodDeletedEvent.get_event_type(),
 )
-async def on_pod_event(
-    event: dict[str, object],
-    fs_logger: Logger,
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-) -> None:
+async def on_pod_event(event: dict[str, object]) -> None:
     event_type = event.get("event_type")
     if event_type not in {
         PodCreatedEvent.get_event_type(),
@@ -74,4 +60,4 @@ async def on_pod_event(
                 properties={"pod_id": parsed_deleted.pod_id},
             )
 
-    await inbox.process("analytics.pod", event, record)
+    await record()

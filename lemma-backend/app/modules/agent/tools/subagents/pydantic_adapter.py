@@ -60,6 +60,9 @@ async def spawn_subagent(
             ctx.deps,
             agent_name=request.agent_name,
             input_data=request.input,
+            # The recorded call id: a resumed turn re-runs this call under it
+            # and gets the child it already spawned (KEYED, `domain/replay`).
+            tool_call_id=ctx.tool_call_id,
         )
     except SubAgentError as exc:
         return {"success": False, "error": safe_error_text(exc)}

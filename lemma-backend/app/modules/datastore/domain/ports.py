@@ -263,23 +263,6 @@ class DatastoreSchemaPort(Protocol):
     async def set_rls_context(self, session, principal: RowPrincipal) -> None: ...
 
 
-class RecordEventFactory(Protocol):
-    """Builds the domain event for a row the repository has just written.
-
-    Only the repository knows which columns a statement actually wrote and what
-    they held beforehand, so it hands those to the factory rather than letting
-    the caller infer them from what was submitted. Operations with no prior
-    image — inserts and deletes — call it with the row alone.
-    """
-
-    def __call__(
-        self,
-        record: "RecordEntity",
-        changed: list[str] | None = None,
-        previous: dict[str, Any] | None = None,
-    ) -> "DomainEvent": ...
-
-
 class DatastoreRecordRepositoryPort(Protocol):
     async def create_record(
         self,
@@ -287,8 +270,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         data: dict,
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
-        changes: ChangeCapture | None = None,
+        changes: ChangeCapture,
     ): ...
 
     async def bulk_create_records(
@@ -297,8 +279,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         records: list[dict],
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
-        changes: ChangeCapture | None = None,
+        changes: ChangeCapture,
     ) -> int: ...
 
     async def bulk_upsert_records(
@@ -307,8 +288,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         records: list[dict],
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
-        changes: ChangeCapture | None = None,
+        changes: ChangeCapture,
     ) -> int: ...
 
     async def get_record(
@@ -318,7 +298,6 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
-        event_factory: RecordEventFactory | None = None,
     ): ...
 
     async def execute_readonly_query(
@@ -345,10 +324,9 @@ class DatastoreRecordRepositoryPort(Protocol):
         data: dict,
         user_id: UUID,
         *,
+        changes: ChangeCapture,
         enforce_user_scope: bool = True,
-        event_factory: RecordEventFactory | None = None,
         expected_updated_at: datetime | None = None,
-        changes: ChangeCapture | None = None,
     ): ...
 
     async def delete_record(
@@ -357,9 +335,8 @@ class DatastoreRecordRepositoryPort(Protocol):
         record_id,
         user_id: UUID,
         *,
+        changes: ChangeCapture,
         enforce_user_scope: bool = True,
-        event_factory: RecordEventFactory | None = None,
-        changes: ChangeCapture | None = None,
     ) -> "RecordEntity": ...
 
 

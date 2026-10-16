@@ -2,7 +2,7 @@
 
 ``wait_for`` asks before it suspends, so a target that has already finished
 answers immediately instead of costing a suspend, a wake and a full history
-replay. The resolver asks on every claim. If those two disagreed about what
+replay. The resolver asks on every fire and poll. If those two disagreed about what
 "finished" means, an agent could be told a process was still running and then
 woken a second later to learn it had ended before it asked.
 
@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import (
@@ -115,12 +116,33 @@ async def _read_process(process_id: str, *, user_id: UUID) -> TargetOutcome:
 async def _read_subagent_run(
     run_id: str, *, user_id: UUID, parent_conversation_id: UUID
 ) -> TargetOutcome:
+    """``read_subagent_in`` on a unit of work of its own (``wait_for``'s check)."""
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        outcome = await read_subagent_in(
+            uow,
+            run_id,
+            user_id=user_id,
+            parent_conversation_id=parent_conversation_id,
+        )
+        await uow.commit()
+    return outcome
+
+
+async def read_subagent_in(
+    uow: SqlAlchemyUnitOfWork,
+    run_id: str,
+    *,
+    user_id: UUID,
+    parent_conversation_id: UUID,
+) -> TargetOutcome:
     """A child's run, in terms of its conversation as well as the run.
 
-    A run that ended on a question has ended, but its conversation is WAITING
-    on an answer only the parent can arrange -- the child has no surface, so
-    nobody else sees the question. Reported as finished, the parent built on a
-    result that did not exist yet and the question was never answered.
+    On the caller's unit of work, so a timer or a finished child resolves the
+    parent's wait in one transaction: database reads only. A run that ended on
+    a question has ended, but its conversation is WAITING on an answer only
+    the parent can arrange -- the child has no surface, so nobody else sees the
+    question. Reported as finished, the parent built on a result that did not
+    exist yet and the question was never answered.
     """
     from app.modules.agent.infrastructure.repositories import ConversationRepository
     from app.modules.agent.services.subagent_result_delivery import mark_collected
@@ -130,14 +152,13 @@ async def _read_subagent_run(
     except ValueError:
         return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE)
 
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        repository = ConversationRepository(uow)
-        run = await repository.get_agent_run(parsed)
-        child = (
-            await repository.get_conversation(run.conversation_id, include_runs=False)
-            if run is not None
-            else None
-        )
+    repository = ConversationRepository(uow)
+    run = await repository.get_agent_run(parsed)
+    child = (
+        await repository.get_conversation(run.conversation_id, include_runs=False)
+        if run is not None
+        else None
+    )
     if (
         run is None
         or child is None
@@ -152,7 +173,5 @@ async def _read_subagent_run(
         return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_NEEDS_INPUT)
     # Both callers hand "finished" to the parent that is waiting on exactly
     # this run, so the parent has collected it and nothing delivers it again.
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        await mark_collected(uow, run.id, by=COLLECTED_BY_WAIT)
-        await uow.commit()
+    await mark_collected(uow, run.id, by=COLLECTED_BY_WAIT)
     return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED)

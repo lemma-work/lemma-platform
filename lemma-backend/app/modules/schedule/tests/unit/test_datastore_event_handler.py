@@ -29,7 +29,6 @@ def _change(op: ChangeOp, **overrides) -> Change:
         "intent": "normal",
         "owner_user_id": None,
         "outside_actor": None,
-        "event_id": None,
         "new_row": {"id": "rec-1", "status": "paid"},
         "old_values": None,
         "at": AT,
@@ -89,9 +88,3 @@ def test_a_member_row_is_not_marked():
     change = trigger_change(_change(ChangeOp.INSERT), table_name="t")
     assert not change.from_outside
     assert "untrusted_row" not in change.metadata
-
-
-def test_a_change_converted_at_cutover_fires_under_the_old_events_id():
-    event_id = uuid4()
-    change = trigger_change(_change(ChangeOp.INSERT, event_id=event_id), table_name="t")
-    assert change.source_event_id == str(event_id)

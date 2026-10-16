@@ -47,8 +47,8 @@ tests use `httpx.ASGITransport`, which hands a request straight to the
 application object. That is fast, and it means those tests **never run the
 application's lifespan** — the fixture's own docstring says so. Everything in
 `app.py::lifespan` and every module's `api_lifespans` — the thread pool, the
-connection-scope monitor, analytics, SuperTokens, the job queue, the message bus
-— is dark to them. A green module-e2e run does not imply a bootable system.
+connection-scope monitor, analytics, SuperTokens, the realtime channels — is
+dark to them. A green module-e2e run does not imply a bootable system.
 Scenarios boot one.
 
 The same goes for the wire itself: body-size limits that deliberately do not
@@ -371,6 +371,12 @@ resumes it afterwards (`app/modules/test_support/e2e/worker_hold.py`). A test
 that needs the real worker takes `worker` instead and must not carry the
 marker. `test_drives_work_contract.py` fails any in-process driver left
 unmarked, because the race only shows when a shard happens to co-locate the two.
+
+A test that asserts a domain event was committed takes the `committed_events`
+fixture (`app/modules/test_support/e2e/committed_events.py`): committed events
+go only to the in-process after-commit sink, so there is no table to read them
+from. It sees what this process committed — an in-process request, not the
+worker subprocess.
 
 ## Iterating on module e2e tests locally
 

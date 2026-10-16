@@ -30,6 +30,9 @@ _BREAKER_SCAN_LIMIT = BREAKER_STREAK_SCAN_LIMIT
 FILTER_UNAVAILABLE = "ScheduleFilterUnavailable"
 #: ... and when the deployment has no decision provider to ask at all.
 FILTER_NOT_CONFIGURED = "ScheduleFilterNotConfigured"
+#: ... and when its question was interrupted (a crash, a lost lease, the
+#: database unreachable) every time it was asked.
+FILTER_INTERRUPTED = "ScheduleFilterInterrupted"
 #: A fire the release found waiting from before its live window and did not
 #: start (migration 0055): the upgrade's doing, not the schedule's.
 NOT_STARTED_BEFORE_UPGRADE = "ScheduleNotStartedBeforeUpgrade"
@@ -39,6 +42,7 @@ NOT_STARTED_BEFORE_UPGRADE = "ScheduleNotStartedBeforeUpgrade"
 DEPLOYMENT_FAILURES = (
     FILTER_UNAVAILABLE,
     FILTER_NOT_CONFIGURED,
+    FILTER_INTERRUPTED,
     NOT_STARTED_BEFORE_UPGRADE,
 )
 

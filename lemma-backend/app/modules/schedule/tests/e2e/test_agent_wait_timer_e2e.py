@@ -2,7 +2,7 @@
 
 TIME schedules and workflow timers are work items now, but agent waits keep
 their own table until PR 3 moves them onto ``agent.wait.fire``: the poller
-claims a due wait (``claim_due_waits``), stages ``ScheduleFired``, and the
+claims a due wait (``claim_due_waits``), stages its fire, and the
 ``workflow-schedule-events`` consumer resolves the conversation wait. This
 drives that whole path through the real worker.
 """

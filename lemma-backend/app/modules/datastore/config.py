@@ -52,16 +52,6 @@ class DatastoreSettings(DocumentWorkSettings):
             "``DATASTORE_ROW_MAX_BYTES``."
         ),
     )
-    datastore_change_log_mode: Literal["auto", "on", "off"] = Field(
-        default="auto",
-        description=(
-            "Whether record writes append to each pod's change log instead of "
-            "staging events in the datastore outbox. ``auto`` switches once "
-            "every pod schema carries the change log (pod-schema version 3) "
-            "and never switches back in that process; ``on`` and ``off`` "
-            "force it. Env: ``DATASTORE_CHANGE_LOG_MODE``."
-        ),
-    )
     datastore_change_retention_seconds: int = Field(
         default=3600,
         ge=60,
@@ -91,17 +81,6 @@ class DatastoreSettings(DocumentWorkSettings):
         description=(
             "Fallback poll of the change-log wake table, for wakes the "
             "LISTEN connection missed."
-        ),
-    )
-    datastore_event_payload_max_bytes: int = Field(
-        default=32 * 1024,
-        description=(
-            "Largest encoded size (bytes) of the row body carried on a record "
-            "change event. Above it the body is dropped and the event is flagged "
-            "truncated; consumers read the row instead. Deliberately far below "
-            "the row limit: a row is stored once, while its event is retained "
-            "50,000 times over in a Redis stream capped by entry count. Env: "
-            "``DATASTORE_EVENT_PAYLOAD_MAX_BYTES``."
         ),
     )
 

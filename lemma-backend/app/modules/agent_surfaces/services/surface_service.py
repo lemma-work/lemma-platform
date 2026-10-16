@@ -49,9 +49,6 @@ from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_org_credential_binding,
     ensure_unique_platform_identity,
 )
-from app.modules.agent_surfaces.services.event_receiver_service import (
-    notify_surface_receiver_config_changed,
-)
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     sync_telegram_mini_app,
 )
@@ -222,13 +219,10 @@ class AgentSurfaceService(
         return created
 
     async def _notify_receivers_after_commit(self, surface_id: UUID | None) -> None:
-        """Wake the receiver coordinators once the change has actually committed.
+        """Reconcile the native receivers once the change has actually committed.
 
-        Not inline, for the same two reasons the authorization service gives for
-        its snapshot invalidation: publishing inside the transaction holds a
-        pooled connection across a Redis round trip, and it is the wrong order
-        besides -- a coordinator woken before the commit reads the surface
-        configuration this change is about to replace.
+        Not inline: a reconcile that ran before the commit would read the
+        surface configuration this change is about to replace.
 
         Falls back to publishing immediately when there is no unit of work to
         defer to, which is also when there is no pooled connection to keep.
@@ -236,6 +230,12 @@ class AgentSurfaceService(
         uow = active_uow(self.surface_repository)
 
         async def _run() -> None:
+            # Imported here: the receiver work module reaches the runners,
+            # whose imports lead back to this service.
+            from app.modules.agent_surfaces.events.receiver_work import (
+                notify_surface_receiver_config_changed,
+            )
+
             await notify_surface_receiver_config_changed(surface_id)
 
         if uow is None:

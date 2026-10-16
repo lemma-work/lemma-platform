@@ -20,7 +20,13 @@ from app.core.infrastructure.work import WorkClass, facts
 from app.modules.schedule.contracts.webhook_source import NormalizedWebhook
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
-from app.modules.schedule.services.trigger_filter import install_schedule_filter
+from app.modules.schedule.repositories.schedule_run_repository import (
+    DEPLOYMENT_FAILURES,
+)
+from app.modules.schedule.services.trigger_filter import (
+    MAX_FILTER_ASKS,
+    install_schedule_filter,
+)
 from app.modules.schedule.services.webhook_handler import WebhookHandler
 from app.modules.schedule.services.webhook_schedule_matcher import (
     WebhookScheduleMatcher,
@@ -274,27 +280,57 @@ async def test_a_filtered_webhook_asks_the_model_once_however_often_it_arrives(
     assert counting_filter.asked == ["evt-filtered", "evt-skipped"]
 
 
-async def test_a_filter_replayed_after_its_claim_never_asks_twice(
+async def _interrupted_claim(schedule, user_id: str, event: str, asks: int) -> None:
+    """What an item interrupted mid-question leaves: its claim, and its item."""
+    [item] = await items("schedule.filter")
+    await execute(
+        "INSERT INTO schedule_runs (id, schedule_id, user_id, source_event_id, status, "
+        "attempts, target_kind, target_run_id, payload, metadata, llm_output, "
+        "created_at, updated_at) VALUES (gen_random_uuid(), :sid, :uid, "
+        ":evt, 'FILTERING', 0, 'AGENT', gen_random_uuid()::text, '{}', "
+        "jsonb_build_object('filter_item_id', CAST(:item AS text), "
+        "'filter_asks', CAST(:asks AS int)), '{}', now(), now())",
+        sid=str(schedule.id),
+        uid=user_id,
+        evt=event,
+        item=str(item.id),
+        asks=asks,
+    )
+
+
+async def test_a_filter_interrupted_once_is_asked_again_and_fires(
     authenticated_client: AsyncClient, fixed_test_org, fixed_test_user, counting_filter
 ):
     """The claim is committed before the call; a replay of the same item finds
-    its own claim and dead-letters the event rather than paying again."""
+    its own claim. The question has no effect until its verdict commits, so it
+    is asked again -- once -- rather than losing the event."""
     pod_id = await create_pod(authenticated_client, fixed_test_org["id"])
     schedule = await _webhook_schedule(
         pod_id, UUID(fixed_test_user["id"]), filter_instruction="Only real pings"
     )
     await _deliver(schedule, "evt-interrupted")
-    [item] = await items("schedule.filter")
-    # What a worker that died mid-call leaves behind: its claim, and its item.
-    await execute(
-        "INSERT INTO schedule_runs (id, schedule_id, user_id, source_event_id, status, "
-        "attempts, target_kind, target_run_id, payload, metadata, llm_output, "
-        "created_at, updated_at) VALUES (gen_random_uuid(), :sid, :uid, "
-        "'evt-interrupted', 'FILTERING', 0, 'AGENT', gen_random_uuid()::text, '{}', "
-        "jsonb_build_object('filter_item_id', CAST(:item AS text)), '{}', now(), now())",
-        sid=str(schedule.id),
-        uid=fixed_test_user["id"],
-        item=str(item.id),
+    await _interrupted_claim(schedule, fixed_test_user["id"], "evt-interrupted", 1)
+
+    await run(WorkClass.AUTOMATION)
+
+    assert counting_filter.asked == ["evt-interrupted"]
+    [run_row] = await runs(schedule.id)
+    assert run_row["status"] == "DISPATCHED"
+    assert run_row["metadata"]["filter_asks"] == 2
+
+
+async def test_a_filter_interrupted_every_time_is_dead_lettered_uncounted(
+    authenticated_client: AsyncClient, fixed_test_org, fixed_test_user, counting_filter
+):
+    """Asked as often as allowed and interrupted each time: no third bill. The
+    run says why, and the breaker does not count the deployment's interruption."""
+    pod_id = await create_pod(authenticated_client, fixed_test_org["id"])
+    schedule = await _webhook_schedule(
+        pod_id, UUID(fixed_test_user["id"]), filter_instruction="Only real pings"
+    )
+    await _deliver(schedule, "evt-interrupted")
+    await _interrupted_claim(
+        schedule, fixed_test_user["id"], "evt-interrupted", MAX_FILTER_ASKS
     )
 
     await run(WorkClass.AUTOMATION)
@@ -305,6 +341,7 @@ async def test_a_filter_replayed_after_its_claim_never_asks_twice(
         "DEAD_LETTERED",
         "ScheduleFilterInterrupted",
     )
+    assert "ScheduleFilterInterrupted" in DEPLOYMENT_FAILURES
 
 
 async def test_the_daily_ceiling_pauses_the_trigger_records_the_skip_and_tells_the_owner(

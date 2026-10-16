@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.connectors.contracts.webhook_sources import default_webhook_sources
-from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
     ConnectorTrigger,
@@ -1465,21 +1464,9 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         assert persisted is not None
         assert persisted.is_active is False
         assert persisted.consecutive_failures == 5
-
-        events = (
-            await session.scalars(
-                select(DomainEventOutbox).where(
-                    DomainEventOutbox.event_type == "schedule.deactivated"
-                )
-            )
-        ).all()
-        matching_events = [
-            event
-            for event in events
-            if event.payload.get("schedule_id") == schedule["id"]
-        ]
-        assert len(matching_events) == 1
-        assert matching_events[0].payload["user_id"] == schedule["user_id"]
+        # Deactivated by its own owner's failures: the schedule's owner, not
+        # the row owners, is who the paused notice goes to (below).
+        assert str(persisted.user_id) == schedule["user_id"]
 
     async def _matching_emails() -> list[dict]:
         matches = []

@@ -586,3 +586,27 @@ class RecordingFunctionPort(StubFunctionPort):
 
     async def cancel_run(self, function_run_id):
         self.cancelled.append(str(function_run_id))
+
+
+async def test_the_database_being_unavailable_does_not_fail_the_run():
+    """Lemma's database refusing a connection is not the node failing: the
+    error reaches the work item, which retries the step uncharged."""
+    from sqlalchemy.exc import OperationalError
+
+    class _TooMany(Exception):
+        sqlstate = "53300"
+
+    class UnreachableFunctionPort(StubFunctionPort):
+        async def execute_function(self, *args, **kwargs):
+            raise OperationalError("INSERT", {}, _TooMany("too many clients"))
+
+    nodes = [
+        FunctionNode(id="save", config=FunctionNodeConfig(function_name="fn")),
+        EndNode(id="end"),
+    ]
+    flow = _flow(nodes, [_edge(1, "save", "end")])
+    run = _run(flow)
+    with pytest.raises(OperationalError):
+        await _stepper(function=UnreachableFunctionPort()).advance(run, flow)
+
+    assert run.status != WorkflowRunStatus.FAILED

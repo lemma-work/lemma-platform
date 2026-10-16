@@ -42,8 +42,53 @@ from app.modules.agent_surfaces.services.telegram_manager_store import (
 
 logger = get_logger(__name__)
 
+#: ``surface_receiver_state`` key of the manager bot's offset, and the receiver
+#: key of the ``surface.receiver`` item that is its lease.
+TELEGRAM_MANAGER_RECEIVER_KEY = "telegram-manager"
+
 _WEBHOOK_RETRY_INITIAL_SECONDS = 5.0
 _WEBHOOK_RETRY_MAX_SECONDS = 300.0
+
+
+class ManagerOffsets:
+    """The manager bot's offset in ``surface_receiver_state``.
+
+    On first run it takes over the offset Redis held, once.
+    """
+
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        *,
+        legacy: Any | None = None,
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._legacy = legacy
+
+    async def load(self) -> int | None:
+        from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repository import (  # noqa: E501
+            ReceiverStateRepository,
+        )
+
+        async with self._uow_factory() as uow:
+            repository = ReceiverStateRepository(uow.session)
+            if await repository.exists(TELEGRAM_MANAGER_RECEIVER_KEY):
+                stored = await repository.load(TELEGRAM_MANAGER_RECEIVER_KEY)
+                return int(stored) if stored else None
+        legacy = await self._legacy() if self._legacy is not None else None
+        if legacy is not None:
+            await self.save(int(legacy))
+        return int(legacy) if legacy is not None else None
+
+    async def save(self, offset: int) -> None:
+        from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repository import (  # noqa: E501
+            ReceiverStateRepository,
+        )
+
+        async with self._uow_factory() as uow:
+            await ReceiverStateRepository(uow.session).store(
+                TELEGRAM_MANAGER_RECEIVER_KEY, str(offset)
+            )
 
 
 class TelegramManagerPollingReceiver:
@@ -55,9 +100,13 @@ class TelegramManagerPollingReceiver:
         manager_token: str | None = None,
         manager_username: str | None = None,
         api_base_url: str | None = None,
+        offsets: ManagerOffsets | None = None,
     ) -> None:
         self._uow_factory = uow_factory or SessionUnitOfWorkFactory(async_session_maker)
         self._store = store or TelegramManagedBotSetupStore()
+        self._offsets = offsets or ManagerOffsets(
+            self._uow_factory, legacy=self._store.load_offset
+        )
         self._manager_token = (
             manager_token
             if manager_token is not None
@@ -86,6 +135,13 @@ class TelegramManagerPollingReceiver:
         )
 
     async def run(self) -> None:
+        """Poll the manager bot until cancelled.
+
+        Run by the ``surface.receiver`` item keyed ``telegram-manager``, whose
+        lease is what keeps every other worker from polling it too -- before
+        that, every worker with the flag polled, and Telegram handed each
+        update to whichever asked first.
+        """
         if not self.should_start():
             return
         webhook_deleted = False
@@ -100,7 +156,7 @@ class TelegramManagerPollingReceiver:
                     )
                     webhook_deleted = True
                 if not offset_loaded:
-                    offset = await self._store.load_offset()
+                    offset = await self._offsets.load()
                     offset_loaded = True
                 payload: dict[str, Any] = {
                     "timeout": 30,
@@ -116,7 +172,7 @@ class TelegramManagerPollingReceiver:
                     update_id = update.get("update_id")
                     if isinstance(update_id, int):
                         next_offset = update_id + 1
-                        await self._store.save_offset(next_offset)
+                        await self._offsets.save(next_offset)
                         offset = next_offset
             except asyncio.CancelledError:
                 raise

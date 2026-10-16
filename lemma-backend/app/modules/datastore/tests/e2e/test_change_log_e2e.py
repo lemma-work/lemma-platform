@@ -14,7 +14,6 @@ from app.modules.datastore.changes.cursor import decode_cursor
 from app.modules.datastore.changes.reader import ChangeOp, read_after
 from app.modules.datastore.changes.schema import PENDING_TABLE
 from app.modules.datastore.tests.e2e.change_log_support import (
-    change_log_mode,
     datastore_scalar,
     datastore_schedule,
     deliver_all,
@@ -28,12 +27,6 @@ from app.modules.datastore.tests.e2e.harness import DatastoreApi
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
-
-
-@pytest.fixture(autouse=True)
-def _change_log_on():
-    with change_log_mode("on"):
-        yield
 
 
 async def test_unwatched_writes_append_slim_rows_and_wake_nobody(pod_api: DatastoreApi):

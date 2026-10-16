@@ -89,7 +89,11 @@ class FactBus:
         return list(self._subscriptions.get(fact_type, ()))
 
     async def emit(
-        self, uow: HasSession, fact: Fact, *, writer: WorkWriter | None = None
+        self,
+        uow: HasSession,
+        fact: Fact,
+        *,
+        writer: WorkWriter | None = None,
     ) -> int:
         """Write one item per matching subscriber; returns how many were enqueued."""
         work = writer or WorkWriter(uow.session, registry=self._registry)

@@ -11,10 +11,10 @@ runner, not here). One table here:
 
 Every active DATASTORE schedule and every live MCP subscription gets a
 ``changes.sync_subscribers`` item, which creates its subscriber row at the
-log's current horizon. One ``changes.drain`` item then converts whatever the
-old path still held -- datastore outbox rows and both groups' unfinished
-entries -- into change-log rows, after those syncs, so nothing the old path
-owed is lost.
+log's current horizon: it is owed what is written from then on. What the old
+path still held -- datastore outbox rows, the two groups' unread entries -- is
+not converted; the release is deployed with the previous one's workers
+stopped, and those record changes fire nothing.
 
 **Triggers.** Two tables and one column:
 
@@ -29,37 +29,29 @@ TIME schedules were fired by a poller reading ``next_fire_at``; now each owns a
 ``schedule.fire`` item. Every active TIME schedule gets a ``schedule.arm`` item,
 which writes that fire item from the row's cursor (computing one, or retiring
 the row, where it has none) -- the cron arithmetic lives in the application,
-not in SQL. Runs a redrive created but nothing started, and runs the old path
-abandoned recently enough that its sweep would still have re-sent them, become
-reservations with a ``schedule.start_target`` item each. An old worker
-finishing one during the rolling deploy is harmless: the start claims the
-reservation once.
+not in SQL. A fire already due when the release goes out is skipped, not fired
+late. A schedule run the old path never saw to its target ends as
+``TARGET_FAILED`` (``INTERRUPTED_BY_UPGRADE``), which the failure breaker passes
+over and a person may redrive.
 
 **Functions and workflows.** Function runs were started by a post-commit
 streaq enqueue repaired by a once-a-minute sweep, held a pod slot in a Redis
 sorted set, and were failed at their deadline by the same sweep. Workflow
 waits were woken through a consumer group, the schedule poller and a
 five-minute reconciliation. Each of those is now a work item written with the
-state that needs it, and every run and wait in flight gets the item that now
-drives it:
+state that needs it. At the cutover an unfinished function run is failed
+("Interrupted by the upgrade"), and the workflow waits are armed:
 
-* a queued (PENDING, asynchronous) function run -> ``function.run``;
-* any other unfinished function run -> ``function.deadline``, due now: the
-  handler re-arms itself for the run's real deadline, so nothing here has to
-  know the grace or the deployment's budgets;
 * an ACTIVE TIME wait -> ``workflow.resume`` at its ``scheduled_at``;
-* an ACTIVE FUNCTION wait whose run already ended (its completion was in the
-  old consumer group's backlog) -> ``workflow.resume`` now;
+* an ACTIVE FUNCTION wait -> ``workflow.resume`` now: its run has just ended;
 * an ACTIVE DECISION wait -> ``workflow.decide``;
 * every ACTIVE FUNCTION, DECISION and HUMAN wait -> ``workflow.wait_expire``,
   due now, which re-arms itself at the wait's real ceiling;
 * a workflow with parked (QUEUED) runs -> ``workflow.admit``.
 
-AGENT waits keep the old path until the agent module moves. Repeats are
-harmless: every handler checks the row's state under its lock first, and a run
-an old worker is still starting during the rolling deploy is fenced by its
-PENDING -> RUNNING transition. Two indexes served the deleted sweeps; one is
-added for the per-pod gate, which counts a pod's RUNNING runs at every start.
+AGENT waits are armed by ``0056``. Two indexes served the deleted sweeps; one
+is added for the per-pod gate, which counts a pod's RUNNING runs at every
+start.
 
 **Existing triggers keep firing on bulk and import writes.** Before the change
 log every record write -- bulk and import included -- fired every matching
@@ -69,15 +61,6 @@ means ``skip``. A trigger that predates the setting was written expecting the
 old behaviour, so each one that sets neither is given ``each``. New triggers
 keep the ``skip`` default. The downgrade leaves the configs as they are:
 ``each`` is what these triggers did before the setting existed.
-
-**Nothing old is replayed.** Only what was genuinely in flight as the release
-went out -- within ``_LIVE_WINDOW`` -- is carried over. A schedule run that
-never reached its target and is older than that becomes ``TARGET_FAILED``
-(``NOT_STARTED_BEFORE_UPGRADE``), redrivable by hand; a queued function run
-older than that becomes ``FAILED``; a TIME schedule whose next fire is older
-than that is re-armed from now instead of firing late; and the record-change
-drain appends only changes that occurred within the window, so no trigger
-fires on an old write.
 
 Every step is idempotent: the concurrent index builds commit on their own, so
 a failure after them leaves the revision half applied, and a rerun must finish
@@ -98,27 +81,16 @@ depends_on = None
 
 #: The classes' per-pod caps; the runtime refreshes them from the limits port
 #: within a minute, so these only have to be sane starting values.
-_CAPS = {"events": 16, "automation": 32, "admin": 1}
+_CAPS = {"events": 16, "automation": 32}
 
 _NS = "CASE WHEN s.pod_id IS NULL THEN 'system' ELSE 'pod:' || s.pod_id::text END"
 
 _ACTIVE_TIME = "s.schedule_type = 'TIME' AND s.is_active"
 
-#: How recent something must be to count as in flight when the release goes
-#: out. Anything older is not replayed (see the module docstring).
-_LIVE_WINDOW = "interval '30 minutes'"
-_RECENT_RUN = f"r.created_at > now() - {_LIVE_WINDOW}"
-
-#: A run younger than five minutes was still in flight on the old path.
-_RESERVABLE = (
-    f"r.target_outcome IS NULL AND {_RECENT_RUN} AND ("
-    " r.status = 'RECEIVED'"
-    " OR (r.status = 'PROCESSING' AND r.started_at < now() - interval '5 minutes'))"
-)
-#: Never reached its target and too old to carry over.
-_ABANDONED = (
-    "r.target_outcome IS NULL AND r.status IN ('RECEIVED', 'PROCESSING') "
-    f"AND NOT ({_RECENT_RUN})"
+#: A schedule run the old path received or started and never saw to its
+#: target: it ends here instead of being started again.
+_UNFINISHED_RUN = (
+    "r.target_outcome IS NULL AND r.status IN ('RECEIVED', 'FILTERING', 'PROCESSING')"
 )
 
 
@@ -148,21 +120,18 @@ def _repair_invalid(name: str) -> None:
 
 def trigger_seed_statements() -> list[str]:
     """The cutover, as statements -- importable so a test can run them."""
-    queues = [
-        (
-            "INSERT INTO work_queues (class, ns, max_running) "
-            f"SELECT DISTINCT 'events', {_NS}, {_CAPS['events']} "
-            f"FROM schedules s WHERE {_ACTIVE_TIME} "
-            "ON CONFLICT (class, ns) DO NOTHING"
-        ),
-        (
-            "INSERT INTO work_queues (class, ns, max_running) "
-            f"SELECT DISTINCT 'automation', {_NS}, {_CAPS['automation']} "
-            "FROM schedule_runs r JOIN schedules s ON s.id = r.schedule_id "
-            f"WHERE {_RESERVABLE} "
-            "ON CONFLICT (class, ns) DO NOTHING"
-        ),
-    ]
+    queues = (
+        "INSERT INTO work_queues (class, ns, max_running) "
+        f"SELECT DISTINCT 'events', {_NS}, {_CAPS['events']} "
+        f"FROM schedules s WHERE {_ACTIVE_TIME} "
+        "ON CONFLICT (class, ns) DO NOTHING"
+    )
+    # A fire already due is skipped, not fired late: arm computes the next one
+    # from now.
+    missed = (
+        "UPDATE schedules s SET next_fire_at = NULL "
+        f"WHERE {_ACTIVE_TIME} AND s.next_fire_at <= now()"
+    )
     arm = (
         "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, run_at) "
         f"SELECT gen_random_uuid(), {_NS}, 'events', 'schedule.arm', "
@@ -172,35 +141,15 @@ def trigger_seed_statements() -> list[str]:
         "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
         "DO NOTHING"
     )
-    missed = (
-        "UPDATE schedules s SET next_fire_at = NULL "
-        f"WHERE {_ACTIVE_TIME} AND s.next_fire_at < now() - {_LIVE_WINDOW}"
-    )
-    abandoned = (
+    unfinished = (
         "UPDATE schedule_runs r SET status = 'TARGET_FAILED', "
-        "error_code = 'NOT_STARTED_BEFORE_UPGRADE', "
+        "error_code = 'INTERRUPTED_BY_UPGRADE', "
         # The breaker passes over this error type (DEPLOYMENT_FAILURES): the
-        # upgrade did not start these, no target of the schedule failed.
+        # upgrade ended these, no target of the schedule failed.
         "error_type = 'ScheduleNotStartedBeforeUpgrade', "
-        f"completed_at = now() WHERE {_ABANDONED}"
+        f"completed_at = now() WHERE {_UNFINISHED_RUN}"
     )
-    reserve = (
-        "UPDATE schedule_runs r SET status = 'PROCESSING', attempts = 0, "
-        "started_at = NULL, completed_at = NULL "
-        f"WHERE {_RESERVABLE}"
-    )
-    start = (
-        "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, rate_key, run_at) "
-        f"SELECT gen_random_uuid(), {_NS}, 'automation', 'schedule.start_target', "
-        "jsonb_build_object('schedule_run_id', r.id::text), "
-        "'start:' || r.id::text, 'schedule:' || s.id::text, now() "
-        "FROM schedule_runs r JOIN schedules s ON s.id = r.schedule_id "
-        "WHERE r.status = 'PROCESSING' AND r.attempts = 0 AND r.started_at IS NULL "
-        "AND r.target_outcome IS NULL "
-        "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
-        "DO NOTHING"
-    )
-    return [*queues, missed, arm, abandoned, reserve, start]
+    return [queues, missed, arm, unfinished]
 
 
 _ON_CONFLICT = (
@@ -208,8 +157,6 @@ _ON_CONFLICT = (
     "DO NOTHING"
 )
 
-_RUN_NS = "'pod:' || f.pod_id::text"
-_RUNS = "function_runs r JOIN functions f ON f.id = r.function_id"
 _WAIT_NS = "'pod:' || w.pod_id::text"
 _ACTIVE_WAIT = "w.status = 'ACTIVE'"
 
@@ -234,18 +181,12 @@ def _queues(cls: str, ns: str, source: str) -> str:
 
 def flow_seed_statements() -> list[str]:
     """The cutover, as statements -- importable so a test can run them."""
-    queued = "r.status = 'PENDING' AND r.job_id IS NOT NULL"
-    queued_runs = f"{_RUNS} WHERE {queued} AND {_RECENT_RUN}"
-    # Queued too long ago to be carried over: failed, saying why, before the
-    # wait seeds below so a workflow waiting on one hears that it ended.
-    stale_runs = (
+    # Ended first, so the FUNCTION waits below find every run they wait on
+    # finished and resume their workflows with the failure.
+    ended_runs = (
         "UPDATE function_runs r SET status = 'FAILED', completed_at = now(), "
-        "error = 'Not started before the upgrade. Run it again to retry.' "
-        f"WHERE {queued} AND NOT ({_RECENT_RUN})"
-    )
-    open_runs = (
-        f"{_RUNS} WHERE r.status IN ('PENDING', 'RUNNING') "
-        "AND NOT (r.status = 'PENDING' AND r.job_id IS NOT NULL)"
+        "error = 'Interrupted by the upgrade. Run it again to retry.' "
+        "WHERE r.status IN ('PENDING', 'RUNNING')"
     )
     timers = (
         f"workflow_run_waits w WHERE {_ACTIVE_WAIT} AND w.wait_type = 'TIME' "
@@ -271,29 +212,9 @@ def flow_seed_statements() -> list[str]:
     )
     wait_sources = (timers, finished_functions, decisions, expiring, parked)
     return [
-        stale_runs,
-        _queues("automation", _RUN_NS, queued_runs),
-        _queues("events", _RUN_NS, open_runs),
+        ended_runs,
         *(_queues("events", _WAIT_NS, source) for source in wait_sources),
         _queues("automation", _WAIT_NS, decisions),
-        _item(
-            cls="automation",
-            kind="function.run",
-            ns=_RUN_NS,
-            payload="jsonb_build_object('run_id', r.id::text)",
-            dedup="'function-run:' || r.id::text",
-            run_at="now()",
-            source=queued_runs,
-        ),
-        _item(
-            cls="events",
-            kind="function.deadline",
-            ns=_RUN_NS,
-            payload="jsonb_build_object('run_id', r.id::text)",
-            dedup="'function-deadline:' || r.id::text || '/cutover'",
-            run_at="now()",
-            source=open_runs,
-        ),
         _item(
             cls="events",
             kind="workflow.resume",
@@ -381,18 +302,6 @@ def change_log_seed_statements() -> list[str]:
             "'changes.sync:' || w.pod_id::text || ':' || w.subscriber, "
             "'changes:' || w.pod_id::text || ':' || w.subscriber, 1, now() "
             f"FROM {subscribers} "
-            "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
-            "DO NOTHING"
-        ),
-        (
-            "INSERT INTO work_queues (class, ns, max_running) "
-            f"VALUES ('admin', 'system', {_CAPS['admin']}) "
-            "ON CONFLICT (class, ns) DO NOTHING"
-        ),
-        (
-            "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, run_at) "
-            "VALUES (gen_random_uuid(), 'system', 'admin', 'changes.drain', "
-            "'{}'::jsonb, 'changes.drain', now()) "
             "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
             "DO NOTHING"
         ),
@@ -590,7 +499,7 @@ def downgrade() -> None:
     op.execute(sa.text(f"DELETE FROM work_items WHERE kind IN ({_SEEDED_KINDS})"))
     op.execute(
         "DELETE FROM work_items WHERE kind IN ('changes.sync_subscribers', "
-        "'changes.deliver', 'changes.drain', 'changes.retention', 'mcp.deliver')"
+        "'changes.deliver', 'changes.retention', 'mcp.deliver')"
     )
     op.drop_index("ix_mcp_event_deliveries_created", table_name="mcp_event_deliveries")
     op.drop_table("mcp_event_deliveries")

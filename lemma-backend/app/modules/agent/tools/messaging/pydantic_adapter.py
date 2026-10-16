@@ -11,10 +11,10 @@ The distinction that matters, and the one the docstrings spend their words on:
 
 Because nothing pauses, an agent that needs answers fires all its messages and
 then simply ends its turn. It does not sleep, and it does not poll. Once the
-*last* of those asks is answered, `agent_surfaces` raises
-``NotificationSettledEvent`` and this module's event handler starts the next
-turn in the asking conversation, where the agent reads the answers with
-``check_messages``.
+*last* of those asks is answered, `agent_surfaces` emits the
+``NotificationSettled`` fact in the transaction that records it, and the agent
+module's ``agent.replies_arrived`` item starts the next turn in the asking
+conversation, where the agent reads the answers with ``check_messages``.
 
 Waiting for the last one rather than the first is what keeps a four-person
 standup to one turn instead of four full conversation replays.

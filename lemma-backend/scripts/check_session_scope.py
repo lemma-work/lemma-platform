@@ -100,7 +100,7 @@ SESSION_OPENERS = re.compile(
         # block was invisible to every rule -- 20+ production sites, including
         # ones that hold an open write transaction across an HTTP download.
         | SessionUnitOfWorkFactory
-        # `async with ctx.uow() as uow:` is the standard form in streaq tasks,
+        # `async with ctx.uow() as uow:` is the standard form in worker lifespans,
         # so omitting it left the entire worker surface unchecked. Deliberately
         # NOT bare `uow`: `async with uow:` re-enters a unit of work that is
         # already open, and `SqlAlchemyUnitOfWork.__aenter__` returns `self`, so

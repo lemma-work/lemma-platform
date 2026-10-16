@@ -31,13 +31,13 @@ def _register_work() -> None:
     import app.modules.mcp_access.events.event_deliveries  # noqa: F401
 
 
-def _register_streaq() -> None:
+def _register_periodic_work() -> None:
     import app.modules.mcp_access.events.tasks  # noqa: F401
 
 
 module = LemmaModule(
     name="mcp_access",
     routers=_routers,
-    register_streaq=_register_streaq,
     register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
 )

@@ -9,7 +9,6 @@ visitor's row, a contact's read -- and a contract reaching up into
 from __future__ import annotations
 
 from app.core.authorization.factory import create_authorization_data_service
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.datastore.infrastructure.record_repository import (
     DatastoreRecordRepository,
 )
@@ -18,7 +17,6 @@ from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.datastore.services.record_service import RecordService
 from app.modules.datastore.services.table_service import TableService
 from app.modules.identity.contracts.organizations import build_user_directory
-from app.modules.datastore.changes.gate import change_log_active
 
 _schema_manager_instance: SchemaManager | None = None
 
@@ -50,7 +48,7 @@ def reset_schema_manager() -> None:
 def build_table_service(uow) -> TableService:
     """Construct a TableService from a unit of work (single wiring source)."""
     return TableService(
-        table_repository=DatastoreTableRepository(uow, message_bus=get_message_bus()),
+        table_repository=DatastoreTableRepository(uow),
         schema_manager=get_schema_manager(),
         authorization_service=create_authorization_data_service(uow),
     )
@@ -64,5 +62,4 @@ def build_record_service(uow) -> RecordService:
         ),
         authorization_service=create_authorization_data_service(uow),
         user_repository=build_user_directory(uow),
-        change_log=change_log_active,
     )

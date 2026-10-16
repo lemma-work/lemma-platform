@@ -213,11 +213,13 @@ def _log_busiest(rows: Iterable[object]) -> None:
         states = by_class.setdefault(values["class"], {})
         states.setdefault(values["state"], {})[values["ns"]] = int(values["n"])
     for cls, states in by_class.items():
+        # As "ns=count" text: a dict-valued field below error is dropped by
+        # the log pipeline, which left this line carrying nothing.
         logger.info(
             "work.namespaces.busiest",
             work_class=cls,
-            queued=states.get("queued", {}),
-            running=states.get("running", {}),
+            queued=_pairs(states.get("queued", {})),
+            running=_pairs(states.get("running", {})),
         )
 
 
@@ -230,3 +232,7 @@ async def gauge_loop(open_session: SessionOpener, interval_seconds: float) -> No
             _snapshot.forget()
             _incident.record_failure(error_type=type(exc).__name__)
         await asyncio.sleep(interval_seconds)
+
+
+def _pairs(counts: dict[str, int]) -> str:
+    return ",".join(f"{ns}={count}" for ns, count in counts.items())

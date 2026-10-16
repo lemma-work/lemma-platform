@@ -13,11 +13,10 @@ because eager-loading whole run collections to answer them was the defect.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import func, or_, select, update
-from sqlalchemy.orm import selectinload
+from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy.orm import aliased, selectinload
 
 from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
@@ -31,7 +30,6 @@ from app.modules.agent.domain.queued_messages import (
     WAITING_ON_ANSWER,
 )
 from app.modules.agent.domain.value_objects import (
-    AgentRunStatus,
     ACTIVE_AGENT_RUN_STATUSES,
     ConversationStatus,
     MessageKind,
@@ -57,7 +55,6 @@ from app.modules.agent.infrastructure.queued_message_queries import (
     stamp,
     unclaimed_queued_messages,
 )
-from app.modules.agent.domain.run_projections import StaleAgentRunRef
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = [status.value for status in ACTIVE_AGENT_RUN_STATUSES]
 
@@ -138,89 +135,45 @@ class ConversationRunQueriesMixin:
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
-    async def list_stale_active_runs(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StaleAgentRunRef]:
-        """List identities of active runs older than the post-timeout cutoff.
+    async def list_unpaired_tool_calls(
+        self, agent_run_id: UUID, *, limit: int = 64
+    ) -> list[MessageEntity]:
+        """This run's tool calls that have no return, oldest first.
 
-        Only IDs are selected: reconciliation does not execute the run, and stale
-        legacy runtime JSON must not block a safe terminal status transition.
+        What a turn interrupted mid-step left behind: the call row committed,
+        the worker died before the return did. A turn resuming reads these to
+        decide, per call, whether to run it again (``services/turn_resume``).
+        Scoped to the run, so another run's calls -- a pause still open in the
+        conversation -- are never this run's to settle.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
+        returned = aliased(MessageModel)
         result = await self.session.execute(
-            select(AgentRunModel.id, AgentRunModel.conversation_id)
+            select(MessageModel)
             .where(
-                AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
-                AgentRunModel.started_at < cutoff,
+                MessageModel.agent_run_id == agent_run_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+                MessageModel.tool_call_id.is_not(None),
+                ~exists().where(
+                    returned.agent_run_id == agent_run_id,
+                    returned.kind == MessageKind.TOOL_RETURN.value,
+                    returned.tool_call_id == MessageModel.tool_call_id,
+                ),
             )
-            .order_by(AgentRunModel.started_at.asc())
+            .order_by(MessageModel.sequence.asc())
             .limit(limit)
         )
-        return [StaleAgentRunRef(*row) for row in result.all()]
+        return [model.to_entity() for model in result.scalars()]
 
-    async def list_active_runs_pending_liveness(
-        self,
-        *,
-        cutoff_seconds: int,
-        decided_after_seconds: int,
-        limit: int = 200,
-    ) -> list[StaleAgentRunRef]:
-        """Active runs whose age alone settles nothing.
-
-        Older than ``cutoff_seconds``, so anything still executing has had
-        several chances to renew its job heartbeat, and younger than
-        ``decided_after_seconds``, where `list_stale_active_runs` takes over
-        and fails them on age alone. A band rather than an open-ended window so
-        every run is decided in exactly one place, and so the caller never asks
-        the job layer about a run it has already reclaimed.
-        """
-        now = datetime.now(timezone.utc)
+    async def last_run_message(self, agent_run_id: UUID) -> MessageEntity | None:
+        """The step this run committed last, if any (``ix_agent_message_run_sequence``)."""
         result = await self.session.execute(
-            select(AgentRunModel.id, AgentRunModel.conversation_id)
-            .where(
-                AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
-                AgentRunModel.started_at < now - timedelta(seconds=cutoff_seconds),
-                AgentRunModel.started_at
-                >= now - timedelta(seconds=decided_after_seconds),
-            )
-            .order_by(AgentRunModel.started_at.asc())
-            .limit(limit)
+            select(MessageModel)
+            .where(MessageModel.agent_run_id == agent_run_id)
+            .order_by(MessageModel.sequence.desc())
+            .limit(1)
         )
-        return [StaleAgentRunRef(*row) for row in result.all()]
-
-    async def list_runs_stuck_stopping(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StaleAgentRunRef]:
-        """Stops that nobody picked up.
-
-        STOP_REQUESTED is an active status, so such a run keeps the one active
-        run slot: a new message attaches to the dying run and starts nothing,
-        and Retry refuses. A live worker now acts on a stop within a second, so
-        one still sitting here means the worker never will -- and until this,
-        the only thing that freed the conversation was the orphan sweep, an hour
-        after the run *started*.
-
-        Keyed on `updated_at`, which is when the stop was written, rather than
-        `started_at`: how long the run had been going says nothing about how
-        long the stop has been ignored.
-        """
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
-        result = await self.session.execute(
-            select(AgentRunModel.id, AgentRunModel.conversation_id)
-            .where(
-                AgentRunModel.status == AgentRunStatus.STOP_REQUESTED.value,
-                AgentRunModel.updated_at < cutoff,
-            )
-            .order_by(AgentRunModel.updated_at.asc())
-            .limit(limit)
-        )
-        return [StaleAgentRunRef(*row) for row in result.all()]
+        model = result.scalar_one_or_none()
+        return model.to_entity() if model else None
 
     async def list_agent_runs_with_messages(
         self,

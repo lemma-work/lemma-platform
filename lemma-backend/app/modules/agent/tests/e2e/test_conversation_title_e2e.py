@@ -1,7 +1,7 @@
 """E2E coverage for conversation title generation against a real database.
 
-The full worker-driven path (run completes -> AgentRunCompletedEvent ->
-``generate_conversation_title`` job) needs a real provider model and is covered
+The full worker-driven path (a turn starts -> its
+``agent.title`` item) needs a real provider model and is covered
 by ``test_first_run_generates_title_with_real_worker_model`` (provider-gated).
 
 This module exercises the same ``ConversationTitleService`` against the real

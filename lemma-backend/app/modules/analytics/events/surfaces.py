@@ -2,21 +2,12 @@
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import emit
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
 from app.modules.agent_surfaces.domain.events import (
     SurfaceConnectedEvent,
-    SurfaceEvents,
 )
-from app.modules.analytics.events.wiring import actor_or_system, origin_of, router
+from app.modules.analytics.events.wiring import actor_or_system, origin_of
 
 WIRED = frozenset({"surface.connected"})
 
@@ -26,17 +17,10 @@ WIRED = frozenset({"surface.connected"})
 _AUTO_PROVISIONED_SURFACES = frozenset({"RESEND"})
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    SurfaceEvents.STREAM,
-    group="analytics-surface",
-    consumer="analytics-surface-consumer",
+@projection(
+    SurfaceConnectedEvent.get_event_type(),
 )
-async def on_surface_event(
-    event: dict[str, object],
-    fs_logger: Logger,
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-) -> None:
+async def on_surface_event(event: dict[str, object]) -> None:
     if event.get("event_type") != SurfaceConnectedEvent.get_event_type():
         return
 
@@ -55,4 +39,4 @@ async def on_surface_event(
             },
         )
 
-    await inbox.process("analytics.surface", event, record)
+    await record()

@@ -19,6 +19,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    RecordingNotificationWork,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -475,6 +478,7 @@ def _notification_service(
         egress=_egress_double(),
         pod_membership_port=membership,
         surface_provisioner=provisioner,
+        work=RecordingNotificationWork(),
     )
 
 

@@ -15,14 +15,12 @@ from app.modules.agent_surfaces.config import (
     surface_settings,
 )
 from app.core.webhooks.signatures import constant_time_equals
-from app.core.infrastructure.events.inbox import stable_event_id
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.api.dependencies import get_uow_factory
 from app.modules.agent_surfaces.api.controllers.webhook_seams import (
+    InboundAccept,
     PooledNumberLookup,
-    SurfaceEventPublish,
+    get_inbound_accept,
     get_pooled_number_lookup,
-    get_surface_event_publish,
 )
 from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -50,7 +48,11 @@ from app.modules.agent_surfaces.api.controllers.webhook_rejections import (
     record_whatsapp_signature_rejected,
 )
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfaceDirectWebhookIngress,
+    SurfacePlatformWebhookIngress,
+)
+from app.modules.agent_surfaces.services.inbound_acceptor import InboundDelivery
 from app.modules.agent_surfaces.domain.source_event_ids import webhook_source_event_id
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.onboarding_slack_modal import (
@@ -111,12 +113,13 @@ async def handle_platform_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    accept: InboundAccept = Depends(get_inbound_accept),
 ):
     """Handle platform-level webhook callbacks."""
     # No request-scoped session on this route by design. It is an inbound
-    # webhook endpoint -- the request rate belongs to the sending platform --
-    # and it publishes to Redis up to three times. Every lookup below opens its
-    # own short scope, so nothing is held across a publish or a signature check.
+    # webhook endpoint -- the request rate belongs to the sending platform.
+    # Every lookup below opens its own short scope, so nothing is held across a
+    # signature check or a provider call.
     # Deliberately a comment, not part of the docstring: the docstring becomes
     # the endpoint's public OpenAPI description.
     resolved = parse_webhook_platform(platform)
@@ -134,6 +137,7 @@ async def handle_platform_webhook(
             raw_body=raw_body,
             security_service=security_service,
             uow_factory=uow_factory,
+            accept=accept,
         )
 
     # Slack sends url_verification before any signing secret is configured.
@@ -167,18 +171,23 @@ async def handle_platform_webhook(
     ):
         return Response(status_code=200)
 
-    source_event_id = webhook_source_event_id(
-        source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+    # Classified, answered or stored, in this request: what nobody acts on is
+    # dropped here, a tap is decided here, a message is a row and an item.
+    await accept(
+        InboundDelivery(
+            request=SurfacePlatformWebhookIngress(
+                source=source,
+                payload=payload,
+                headers=_redacted_headers(headers),
+                receiver_surface_ids=receiver_surface_ids,
+            ),
+            receiver_scope=SHARED_PLATFORM_RECEIVER,
+            source_event_id=webhook_source_event_id(
+                source, payload, raw_body, receiver=SHARED_PLATFORM_RECEIVER
+            ),
+            platform=resolved,
+        )
     )
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source=source,
-        payload=payload,
-        headers=_redacted_headers(headers),
-        source_event_id=source_event_id,
-        receiver_surface_ids=receiver_surface_ids,
-    )
-    await EventPublisher.publish(event.stream_name(), event)
 
     # A Slack modal submission is the one webhook whose *body* is protocol, not
     # acknowledgement: Slack parses it as a response_action and shows the user
@@ -243,11 +252,11 @@ async def handle_whatsapp_number_webhook(
     security_service: SurfaceWebhookSecurityServiceDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
     pooled_number: PooledNumberLookup = Depends(get_pooled_number_lookup),
-    publish: SurfaceEventPublish = Depends(get_surface_event_publish),
+    accept: InboundAccept = Depends(get_inbound_accept),
 ):
     """Handle a delivery to one pooled WhatsApp number's own callback URL."""
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
-    # short scope for the pool lookup, nothing held across the publish.
+    # short scope for the pool lookup, nothing held across a provider call.
     headers = dict(request.headers)
     raw_body = await request.body()
 
@@ -320,17 +329,20 @@ async def handle_whatsapp_number_webhook(
     # The number is the receiver, not `SHARED_PLATFORM_RECEIVER`: this URL has
     # one per pooled number, and the content-hash fallback in
     # `webhook_source_event_id` is only unique per receiver.
-    source_event_id = webhook_source_event_id(
-        "whatsapp", payload, raw_body, receiver=phone_number_id
+    await accept(
+        InboundDelivery(
+            request=SurfacePlatformWebhookIngress(
+                source="whatsapp",
+                payload=payload,
+                headers=_redacted_headers(headers),
+            ),
+            receiver_scope=phone_number_id,
+            source_event_id=webhook_source_event_id(
+                "whatsapp", payload, raw_body, receiver=phone_number_id
+            ),
+            platform=SurfacePlatform.WHATSAPP,
+        )
     )
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source="whatsapp",
-        payload=payload,
-        headers=_redacted_headers(headers),
-        source_event_id=source_event_id,
-    )
-    await publish(event)
 
     return {"message": "Webhook received"}
 
@@ -345,10 +357,11 @@ async def handle_surface_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    accept: InboundAccept = Depends(get_inbound_accept),
 ):
     """Handle webhooks addressed to one concrete surface."""
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
-    # short scope for the surface lookup, nothing held across the publish.
+    # short scope for the surface lookup, nothing held across a provider call.
     headers = dict(request.headers)
     raw_body = await request.body()
     payload = _decode_webhook_payload(raw_body, headers)
@@ -368,18 +381,21 @@ async def handle_surface_webhook(
     # Named by the surface, not just the platform: a Telegram ``update_id`` is a
     # per-bot counter, so every bot's first update is 1 and two of them would
     # otherwise share one inbox row.
-    source_event_id = webhook_source_event_id(
-        source, payload, raw_body, receiver=str(surface.id)
+    await accept(
+        InboundDelivery(
+            request=SurfaceDirectWebhookIngress(
+                surface_id=surface.id,
+                payload=payload,
+                headers=_redacted_headers(headers),
+            ),
+            receiver_scope=str(surface.id),
+            source_event_id=webhook_source_event_id(
+                source, payload, raw_body, receiver=str(surface.id)
+            ),
+            platform=surface.surface_type,
+            pod_id=surface.pod_id,
+        )
     )
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source=source,
-        payload=payload,
-        headers=_redacted_headers(headers),
-        surface_id=surface.id,
-        source_event_id=source_event_id,
-    )
-    await EventPublisher.publish(event.stream_name(), event)
 
     return {"message": "Webhook received"}
 

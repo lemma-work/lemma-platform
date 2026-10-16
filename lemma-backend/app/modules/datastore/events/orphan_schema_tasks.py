@@ -1,4 +1,4 @@
-"""The nightly cron that drops deleted pods' datastore schemas."""
+"""The daily periodic that drops deleted pods' datastore schemas."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
+from app.core.infrastructure.work import periodic_job
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.infrastructure.pod_schema_catalog import PodSchemaCatalog
@@ -52,6 +52,6 @@ async def reap_orphan_pod_schemas(now: datetime | None = None) -> ReapSummary | 
     return summary
 
 
-@streaq_cron("53 3 * * *", name="reap_orphan_pod_schemas", lane=Lane.BULK)
+@periodic_job("datastore.orphan_schemas_reap", every=timedelta(days=1))
 async def reap_orphan_pod_schemas_cron() -> None:
     await reap_orphan_pod_schemas()

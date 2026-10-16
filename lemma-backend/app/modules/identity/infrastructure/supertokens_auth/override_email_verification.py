@@ -16,7 +16,6 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.log.log import get_logger
 from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
@@ -43,7 +42,7 @@ async def _set_local_verification(user_id: str, *, verified: bool) -> None:
 
     async with async_session_maker() as db_session:
         uow = SqlAlchemyUnitOfWork(db_session)
-        repository = UserRepository(uow, message_bus=get_message_bus())
+        repository = UserRepository(uow)
         user = await repository.get(parsed_id)
         if user is None:
             logger.warning("identity.email_verification.local_user_missing")
@@ -51,9 +50,7 @@ async def _set_local_verification(user_id: str, *, verified: bool) -> None:
         if verified:
             service = UserService(
                 user_repository=repository,
-                organization_repository=OrganizationRepository(
-                    uow, message_bus=get_message_bus()
-                ),
+                organization_repository=OrganizationRepository(uow),
                 user_cache=get_user_cache(),
             )
             await service.mark_email_verified(parsed_id)

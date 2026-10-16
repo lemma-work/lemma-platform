@@ -86,10 +86,8 @@ class DeliveryRef(BaseModel):
 
 
 def _change_key(change: Change) -> str:
-    """The change's identity for this subscription: its log position, or for a
-    change converted at cutover the old event's id, which the old delivery job
-    was keyed on."""
-    return str(change.event_id) if change.event_id is not None else change.position.key
+    """The change's identity for this subscription: its log position."""
+    return change.position.key
 
 
 class McpChangeSubscriber:
@@ -177,10 +175,8 @@ class McpChangeSubscriber:
 
 
 def _event_id(change_key: str) -> str:
-    """The delivery's ``eventId`` / ``webhook-id``: the same on every retry. A
-    change converted at cutover keeps the old event's id, so a receiver that
-    already saw it from the old path deduplicates it."""
-    return f"chg_{change_key.replace(':', '_')}" if ":" in change_key else change_key
+    """The delivery's ``eventId`` / ``webhook-id``: the same on every retry."""
+    return f"chg_{change_key.replace(':', '_')}"
 
 
 def _listening(subscription, pod_id: UUID) -> bool:

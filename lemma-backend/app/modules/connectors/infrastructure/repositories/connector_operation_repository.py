@@ -6,7 +6,6 @@ from sqlalchemy import case, desc, func, or_, select
 from app.modules.connectors.infrastructure.repositories.catalog_rows import (
     convert_valid_rows,
 )
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.connector_operation import (
@@ -35,11 +34,8 @@ class ConnectorOperationRepository(
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         super().__init__(uow, ConnectorOperation, ConnectorOperationEntity)
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def list_by_connector(
         self,

@@ -2,23 +2,14 @@
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import emit
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
 from app.modules.analytics.events.wiring import (
     DELIVERED_STATUSES,
     actor_or_system,
     origin_of,
     provide_uow_factory,
-    router,
 )
 from app.modules.analytics.services.buckets import (
     COUNT_EDGES,
@@ -32,7 +23,6 @@ from app.modules.analytics.services.pod_delivery import (
     pod_creator,
 )
 from app.modules.workflow.domain.events import (
-    WORKFLOW_RUN_EVENTS_STREAM,
     WorkflowCreatedEvent,
     WorkflowRunTerminalEvent,
 )
@@ -40,18 +30,15 @@ from app.modules.workflow.domain.events import (
 WIRED = frozenset({"workflow.created", "workflow_run.completed"})
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    WORKFLOW_RUN_EVENTS_STREAM,
-    group="analytics-workflow",
-    consumer="analytics-workflow-consumer",
+@projection(
+    WorkflowCreatedEvent.get_event_type(),
+    WorkflowRunTerminalEvent.get_event_type(),
 )
 async def on_workflow_event(
     event: dict[str, object],
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    uow_factory: UnitOfWorkFactory | None = None,
 ) -> None:
+    uow_factory = uow_factory or provide_uow_factory()
     event_type = event.get("event_type")
     if event_type not in {
         WorkflowCreatedEvent.get_event_type(),
@@ -107,4 +94,4 @@ async def on_workflow_event(
                 creator_user_id=await pod_creator(uow_factory, terminal.pod_id),
             )
 
-    await inbox.process("analytics.workflow", event, record)
+    await record()

@@ -17,9 +17,7 @@ from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-    get_surface_event_dedup_store,
-)
+from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedupStore
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
 )
@@ -84,7 +82,9 @@ class ChatOnboardingCoordinator:
         self._uows = uow_factory
         self._adapters = SurfacePlatformAdapterRegistry()
         self._challenges = challenges
-        self._event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
+        self._event_dedup_store = event_dedup_store or SurfaceEventDedupStore(
+            uow_factory=uow_factory
+        )
         self._email_deliverable = email_deliverable
 
     def _can_email(self) -> bool:

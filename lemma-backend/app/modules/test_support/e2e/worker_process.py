@@ -1,4 +1,4 @@
-"""Reusable production streaq-worker subprocess for hermetic E2E journeys."""
+"""Reusable production worker subprocess (``python -m app.worker``) for hermetic E2E journeys."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from app.modules.test_support.e2e.worker_hold import (
 )
 
 _DEFAULT_READINESS_MARKERS = (
-    '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+    '"logger": "app.core.infrastructure.work.process"',
     '"event": "service.started"',
 )
 
@@ -58,9 +58,6 @@ async def production_worker_process(
     extra_env: Mapping[str, str] | None = None,
     readiness_markers: Sequence[str] = _DEFAULT_READINESS_MARKERS,
     startup_attempts: int = 600,
-    # Module entrypoint, not the streaq CLI: `streaq run app.events:streaq_worker`
-    # starts a single Worker object, which since lanes exist would consume only
-    # the interactive queue and silently never run document processing.
     worker_entrypoint: str = "app.worker",
 ) -> AsyncIterator[ProductionWorkerProcess]:
     """Start the same worker entrypoint used in production with hermetic I/O.
@@ -88,7 +85,6 @@ async def production_worker_process(
         "PYTHONUNBUFFERED": "1",
         "DATABASE_URL": e2e_settings.database_url,
         "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
-        "DATASTORE_CHANGE_LOG_MODE": datastore_settings.datastore_change_log_mode,
         "REDIS_URL": e2e_settings.redis_url,
         "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
         "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,
@@ -100,7 +96,8 @@ async def production_worker_process(
         # SIGKILL cannot be trapped, so coverage's `sigterm = true` handler
         # never flushed and the subprocess's coverage was lost. That is the
         # race that pinned the `agent` shard to one xdist worker.
-        "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
+        "WORK_SHUTDOWN_GRACE_SECONDS": "1",
+        "WORK_SHUTDOWN_GRACE_JSON": '{"interactive": 1}',
         "EMAIL_TRANSPORT": "filesystem",
         # `settings` rather than the `e2e_settings` parameter: the same object,
         # but only this spelling is one `check_settings_attrs.py` can follow to a

@@ -6,7 +6,6 @@ from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep
 from app.core.config import settings
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.identity.infrastructure.adapters.pod_membership_adapter import (
     SqlAlchemyPodMembershipAdapter,
 )
@@ -24,10 +23,9 @@ def get_user_service(
     uow: UoWDep,
 ) -> UserService:
     """Provide UserService with UoW-backed repositories."""
-    message_bus = get_message_bus()
     return UserService(
-        user_repository=UserRepository(uow, message_bus=message_bus),
-        organization_repository=OrganizationRepository(uow, message_bus=message_bus),
+        user_repository=UserRepository(uow),
+        organization_repository=OrganizationRepository(uow),
         user_cache=get_user_cache(),
     )
 
@@ -36,10 +34,9 @@ def get_organization_service(
     uow: UoWDep,
 ) -> OrganizationService:
     """Provide OrganizationService with UoW-backed repositories."""
-    message_bus = get_message_bus()
     return OrganizationService(
-        organization_repository=OrganizationRepository(uow, message_bus=message_bus),
-        user_repository=UserRepository(uow, message_bus=message_bus),
+        organization_repository=OrganizationRepository(uow),
+        user_repository=UserRepository(uow),
         invitation_accept_base_url=settings.frontend_url,
         pod_membership_port=SqlAlchemyPodMembershipAdapter(uow),
     )

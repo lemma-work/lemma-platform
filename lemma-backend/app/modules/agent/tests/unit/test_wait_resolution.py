@@ -162,19 +162,13 @@ def test_a_naive_deadline_is_read_as_utc():
     )
 
 
-def test_rearming_resets_the_failed_wake_counter():
-    """A re-arm is a *successful* check, and the counter counts failed wakes.
-
-    Without this a wait that checks every ten seconds for an hour crosses
-    MAX_WAKE_ATTEMPTS on three unrelated transient errors spread across that
-    hour, and is abandoned with its target perfectly healthy.
-    """
+def test_rearming_counts_the_poll():
+    """A re-arm is a successful check: it moves the next look and counts it."""
     wait = _wait(AgentWaitType.PROCESS)
-    wait.wake_attempts = 2
 
     wait.rearm(_NOW + timedelta(seconds=10))
 
-    assert wait.wake_attempts == 0
+    assert wait.scheduled_at == _NOW + timedelta(seconds=10)
     assert wait.spec["poll_attempt"] == 1
 
 

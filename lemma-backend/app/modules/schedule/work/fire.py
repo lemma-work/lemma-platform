@@ -97,7 +97,7 @@ async def run_arm(ctx: FastContext, payload: ScheduleRef) -> None:
     """Give an active TIME schedule a cursor if it has none, and its fire item.
 
     For rows the write paths did not arm: ones written before the work
-    runtime, seeded at cutover. A config that can never fire is retired here,
+    runtime, armed by its migration. A config that can never fire is retired here,
     saying why, rather than left active and silent.
     """
     from sqlalchemy import select

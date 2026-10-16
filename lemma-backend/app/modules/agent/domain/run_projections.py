@@ -6,15 +6,6 @@ and an undeclared method is how this repository's port drifted (#518).
 """
 
 from dataclasses import dataclass
-from uuid import UUID
-
-
-@dataclass(frozen=True, slots=True)
-class StaleAgentRunRef:
-    """Stable identity needed to reconcile an orphaned run."""
-
-    id: UUID
-    conversation_id: UUID
 
 
 @dataclass(frozen=True, slots=True)

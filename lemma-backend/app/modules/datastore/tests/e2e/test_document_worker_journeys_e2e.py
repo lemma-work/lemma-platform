@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import text
 
-from app.core.infrastructure.events.message_bus import get_message_bus
-from app.core.infrastructure.events.models import DomainEventOutbox
-from app.core.infrastructure.events.outbox import OutboxDispatcher
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
@@ -31,16 +27,6 @@ def _uploads_enqueue_processing(monkeypatch):
     """The API writes ``file.process`` in the upload's transaction, as in
     production; the e2e default indexes in-process instead."""
     monkeypatch.setattr(datastore_settings, "e2e_disable_worker_file_autoindex", False)
-
-
-async def _dispatch_outbox(db_manager) -> None:
-    dispatcher = OutboxDispatcher(
-        db_manager.session_factory,
-        get_message_bus(),
-        poll_seconds=0.01,
-    )
-    while await dispatcher.dispatch_once():
-        pass
 
 
 async def _wait_for_status(
@@ -65,20 +51,6 @@ async def _wait_for_status(
     )
 
 
-async def _outbox_event_for_file(db_manager, file_id: str) -> DomainEventOutbox:
-    async with db_manager.session_factory() as session:
-        rows = list(
-            (
-                await session.scalars(
-                    select(DomainEventOutbox).where(
-                        DomainEventOutbox.event_type == "datastore.file.created"
-                    )
-                )
-            ).all()
-        )
-    return next(row for row in rows if row.payload.get("file_id") == file_id)
-
-
 # 52 seconds against a 45-second pull-request budget, and four times the next
 # slowest test in its shard -- so this is what the lane waits for, not a slow
 # runner. Moved rather than excused: it drives the real Kreuzberg extractor
@@ -97,7 +69,7 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
     document_worker,
     fake_document_processor_server: FakeDocumentProcessorServer,
 ):
-    """One document, end to end: upload, extract, project, search, dedup.
+    """One document, end to end: upload, extract, project, search.
 
     The PR-lane half of what used to be a single 130-second test — the slowest
     in the entire e2e suite, 5.6% of its wall-clock on its own. It uploaded
@@ -106,8 +78,10 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
 
     What every pull request needs to know is that the pipeline is connected:
     an uploaded PDF reaches the extractor, its children get written, the
-    projection lands, search finds it, and a redelivered event does not
-    duplicate the work. That is this test, on one document.
+    projection lands and search finds it. That is this test, on one document.
+    (There is no event left to redeliver: processing is a work item keyed by
+    the file's bytes, and writing the same bytes again queues nothing --
+    test_file_work_e2e's test_the_same_bytes_again_are_not_reprocessed.)
 
     The extractor-behaviour matrix — config fallback, connection retry, chunk
     fallback, pages-only, and all three search methods — is
@@ -121,7 +95,6 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
             content_type="application/pdf",
         )
 
-        await _dispatch_outbox(db_manager)
         completed = await _wait_for_status(pod_api, uploaded["path"], {"COMPLETED"})
         assert completed["metadata"]["page_count"] == 1
 
@@ -156,31 +129,8 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
         )
         assert hit["page_number"] == 1
 
-        # Redis redelivery carries the same durable event id. The inbox must
-        # acknowledge it without creating another extraction/job side effect.
-        #
-        # Measured as "unchanged by the redelivery", not "exactly one, ever.
-        # The absolute form asserted that no transient retry had happened on
-        # the way here, which is not something the product promises and is not
-        # what this test is about: a loaded runner can time the first extract
-        # out (the worker's budget was 1 s when this bit), `release_claim`
-        # returns the row to PENDING with its attempt refunded (PS-DATA-041),
-        # and the re-drive extracts again — correct behaviour that read as a
-        # duplicate. It cost a red required check on an unrelated pull request.
-        before_redelivery = fake_document_processor_server.requests[
-            "kreuzberg:success.pdf"
-        ]
-        assert before_redelivery >= 1, "the document was never extracted at all"
-
-        event = await _outbox_event_for_file(db_manager, uploaded["id"])
-        bus = get_message_bus()
-        await bus.publish(event.stream, event.payload)
-        await bus.publish(event.stream, event.payload)
-        await asyncio.sleep(0.5)
-        assert (
-            fake_document_processor_server.requests["kreuzberg:success.pdf"]
-            == before_redelivery
-        ), "a redelivered event with the same id extracted the document again"
+        before_rename = fake_document_processor_server.requests["kreuzberg:success.pdf"]
+        assert before_rename >= 1, "the document was never extracted at all"
 
         # A rename is not a content change, and the whole point of carrying the
         # derived container across is that this stays true end to end: the
@@ -212,7 +162,7 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
         )
         assert (
             fake_document_processor_server.requests["kreuzberg:success.pdf"]
-            == before_redelivery
+            == before_rename
         ), "the rename re-extracted a document whose bytes had not changed"
 
         # Changing the *name* is the other half, and it is the one that can
@@ -260,7 +210,6 @@ async def test_kreuzberg_extractor_behaviour_matrix(
                 )
             )
 
-        await _dispatch_outbox(db_manager)
         completed = [
             await _wait_for_status(pod_api, item["path"], {"COMPLETED"})
             for item in files
@@ -333,7 +282,6 @@ async def test_failure_kind_decides_terminal_vs_retry_and_never_leaks_secrets(
             build_pdf_bytes("Provider failure"),
             content_type="application/pdf",
         )
-        await _dispatch_outbox(db_manager)
 
         # A response we cannot make sense of is a DOCUMENT-level failure: the
         # extractor answered, we just can't use the answer. It spends an attempt
@@ -407,7 +355,7 @@ async def _work_item(db_manager, file_id: str):
 
 
 @pytest.mark.asyncio
-async def test_docling_adapter_runs_through_http_outbox_and_worker(
+async def test_docling_adapter_runs_through_the_work_table_and_worker(
     pod_api: DatastoreApi,
     db_manager,
     document_worker,
@@ -433,7 +381,6 @@ async def test_docling_adapter_runs_through_http_outbox_and_worker(
             b"<h1>Submit error source</h1>",
             content_type="text/html",
         )
-        await _dispatch_outbox(db_manager)
         await _wait_for_status(pod_api, docling["path"], {"COMPLETED"})
         for failed_file in (
             docling_failure,
@@ -509,7 +456,6 @@ async def test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wh
             b"this is definitely not a pdf",
             content_type="application/pdf",
         )
-        await _dispatch_outbox(db_manager)
 
         await _wait_for_status(pod_api, pdf["path"], {"COMPLETED"})
         await _wait_for_status(pod_api, markdown["path"], {"COMPLETED"})

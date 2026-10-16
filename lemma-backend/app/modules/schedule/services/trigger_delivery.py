@@ -91,14 +91,10 @@ class TriggerChange:
     occurred_at: datetime | None = None
     from_outside: bool = False
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
-    #: For a change converted from the old event path at cutover: the event's
-    #: id, which the old consumer fired under, so a change it already fired is
-    #: not fired again.
-    legacy_event_id: str | None = None
 
     @property
     def source_event_id(self) -> str:
-        return self.legacy_event_id or f"chg:{self.position}"
+        return f"chg:{self.position}"
 
 
 @dataclass(slots=True)

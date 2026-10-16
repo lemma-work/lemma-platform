@@ -437,6 +437,74 @@ async def test_a_zombie_whose_lease_was_taken_over_cannot_complete(
     assert await work_db.effects() == ["done-by:0"]
 
 
+async def test_a_unit_checked_at_commit_commits_nothing_after_a_takeover(
+    work_db: WorkDb, registry: WorkRegistry
+) -> None:
+    """A job's own session, read against the claim at each commit.
+
+    Before the takeover it commits, and a unit nested inside it is not held
+    up by it (nothing is locked until the commit). After it, the commit is
+    refused with ``LeaseLost`` and its write rolls back.
+    """
+    from app.core.infrastructure.work.types import LeaseLost
+
+    proceed = asyncio.Event()
+    refused: list[BaseException] = []
+
+    @registry.handler(
+        kind="demo.checked",
+        cls=WorkClass.AUTOMATION,
+        mode=WorkMode.JOB,
+        payload=Demo,
+        lease=timedelta(minutes=5),
+    )
+    async def handle(ctx: JobContext, payload: Demo) -> None:
+        async with work_db.sessions() as outer:
+            ctx.check_lease_at_commit(outer)
+            await write_effect(outer, "before")
+            async with work_db.sessions() as inner:
+                ctx.check_lease_at_commit(inner)
+                await write_effect(inner, "nested")
+                await asyncio.wait_for(inner.commit(), 5)
+            await outer.commit()
+        await proceed.wait()
+        async with work_db.sessions() as late:
+            ctx.check_lease_at_commit(late)
+            await write_effect(late, "after")
+            try:
+                await late.commit()
+            except LeaseLost as exc:
+                refused.append(exc)
+                raise
+
+    item_id = await work_db.enqueue(registry, "demo.checked")
+    zombie = dispatcher_for(
+        work_db.sessions, WorkClass.AUTOMATION, registry=registry, owner="z"
+    )
+    [item] = await zombie.claim_once()
+    stalled = asyncio.create_task(zombie.execute(item))
+    await eventually(
+        label="the zombie's first commits",
+        probe=work_db.effects,
+        done=lambda effects: sorted(effects) == ["before", "nested"],
+        interval_seconds=0.05,
+    )
+
+    await work_db.expire_leases()
+    heir = dispatcher_for(
+        work_db.sessions, WorkClass.AUTOMATION, registry=registry, owner="h"
+    )
+    assert await heir.reap() == 1
+    await make_due(work_db.sessions)
+    [again] = await heir.claim_once()
+    assert again.id == item_id
+
+    proceed.set()
+    assert await stalled == "lease_lost"
+    assert len(refused) == 1
+    assert sorted(await work_db.effects()) == ["before", "nested"]
+
+
 async def test_shutdown_releases_every_owned_item_without_charging_it(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:

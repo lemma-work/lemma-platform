@@ -1002,9 +1002,9 @@ _SINGLE_CONSUMER_RECEIVERS = (
 def _how_many_workers(env: dict[str, str]) -> int:
     """How many worker processes to run. One unless asked for more.
 
-    The product expects replicas — `schedule_poller` says so in as many words:
-    "Every replica runs this. Nothing elects a leader; the claim decides who
-    fires." The suite ran exactly one, which is fine per journey and is what CI
+    The product expects replicas: every worker runs the work runtime, nothing
+    elects a leader, and the claim decides who runs an item. The suite ran
+    exactly one, which is fine per journey and is what CI
     does, and is the wrong shape for a local run of every journey at once: 380
     scenarios queue their agent runs through a single event loop, and the first
     thing to give is a scenario waiting on a reply that is merely behind a

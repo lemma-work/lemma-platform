@@ -15,6 +15,7 @@ from opentelemetry import metrics
 from sqlalchemy import Row, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 
@@ -35,7 +36,8 @@ dead_counter = meter.create_counter(
 _LOCK_OWNED = text(
     """
     SELECT attempts, lease_losses, first_unavailable_at FROM work_items
-     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+     WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
+       AND state = 'running'
        FOR UPDATE
     """
 )
@@ -47,8 +49,18 @@ _LOCK_OWNED_WITH_TIMEOUT = text(
     SELECT attempts, lease_losses, first_unavailable_at,
            set_config('statement_timeout', :timeout_ms, true) AS timeout
       FROM work_items
-     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+     WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
+       AND state = 'running'
        FOR UPDATE
+    """
+)
+# The same question without the lock, for a commit that must not wait on the
+# item's row or make anything wait on it (``JobContext.check_lease_at_commit``).
+_STILL_OWNED = text(
+    """
+    SELECT 1 FROM work_items
+     WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
+       AND state = 'running'
     """
 )
 _DELETE = text("DELETE FROM work_items WHERE id = :id")
@@ -74,10 +86,15 @@ _MARK_DEAD = text(
      WHERE id = :id
     """
 )
+_DUE_NOW = text(
+    "UPDATE work_items SET run_at = least(run_at, now()) "
+    "WHERE id = :id AND state = 'queued'"
+)
 _EXTEND = text(
     """
     UPDATE work_items SET lease_until = now() + make_interval(secs => :seconds)
-     WHERE id = :id AND lease_owner = :owner AND state = 'running'
+     WHERE id = :id AND lease_owner = :owner AND lease_epoch = :epoch
+       AND state = 'running'
     RETURNING id
     """
 )
@@ -86,12 +103,15 @@ _OWNED_BY = text(
     SELECT id FROM work_items WHERE lease_owner = :owner AND state = 'running'
     """
 )
+# ``epoch`` NULL: the shutdown release of everything this process owns, after
+# every job of it has stopped.
 _RELEASE_ONE = text(
     """
     SELECT id, ns, class, kind, payload, dedup_key, attempts, lease_losses,
-           first_unavailable_at, run_at, created_at
+           first_unavailable_at, run_at, created_at, lease_epoch
       FROM work_items
      WHERE id = :id AND lease_owner = :owner AND state = 'running'
+       AND (CAST(:epoch AS bigint) IS NULL OR lease_epoch = :epoch)
        FOR UPDATE
     """
 )
@@ -106,7 +126,7 @@ _EXPIRED = text(
 _LOCK_EXPIRED = text(
     """
     SELECT id, ns, class, kind, payload, dedup_key, attempts, lease_losses,
-           first_unavailable_at, run_at, created_at
+           first_unavailable_at, run_at, created_at, lease_epoch
       FROM work_items
      WHERE id = :id AND state = 'running' AND lease_until < now()
        FOR UPDATE SKIP LOCKED
@@ -116,12 +136,16 @@ _LOCK_EXPIRED = text(
 
 async def lock_owned(
     session: AsyncSession,
-    item_id: object,
+    item: ClaimedItem,
     owner: str,
     *,
     statement_timeout_ms: int | None = None,
 ) -> AttemptState | None:
-    """Lock the item if this owner still holds it; ``None`` means the lease is lost.
+    """Lock the item if this claim still holds it; ``None`` means the lease is lost.
+
+    "This claim": the owner *and* the claim's epoch. A process that claimed the
+    item again after its own lease expired is the same owner, and only the
+    epoch tells its new run from the one still running.
 
     The row lock is the fence, and it dies at commit, so the session is marked
     as holding one: a connection-release helper the handler reaches (an
@@ -131,15 +155,16 @@ async def lock_owned(
     ``statement_timeout_ms`` bounds every later statement of the transaction,
     set in the same round trip; only when the lock is held.
     """
+    params: dict[str, object] = {
+        "id": item.id,
+        "owner": owner,
+        "epoch": item.lease_epoch,
+    }
     if statement_timeout_ms is None:
-        statement, params = _LOCK_OWNED, {"id": item_id, "owner": owner}
+        statement = _LOCK_OWNED
     else:
         statement = _LOCK_OWNED_WITH_TIMEOUT
-        params = {
-            "id": item_id,
-            "owner": owner,
-            "timeout_ms": str(statement_timeout_ms),
-        }
+        params["timeout_ms"] = str(statement_timeout_ms)
     row = (await session.execute(statement, params)).first()
     if row is None:
         return None
@@ -147,10 +172,20 @@ async def lock_owned(
     return AttemptState(row.attempts, row.lease_losses, row.first_unavailable_at)
 
 
-async def finish_item(
+def still_owned(session: Session, item: ClaimedItem, owner: str) -> bool:
+    """Whether this claim holds the item at this moment; reads, locks nothing.
+
+    Synchronous, for a session event (``before_commit``): under the asyncio
+    extension those run inside the greenlet, where a sync ``execute`` does I/O.
+    """
+    params = {"id": item.id, "owner": owner, "epoch": item.lease_epoch}
+    return session.execute(_STILL_OWNED, params).first() is not None
+
+
+async def _rearm_periodic(
     session: AsyncSession, item: ClaimedItem, registry: WorkRegistry
 ) -> None:
-    """Delete the finished item, re-arming it first if it is a periodic."""
+    """Queue a periodic's next run ``every`` from now; nothing for other items."""
     periodic = registry.periodic_for(item.dedup_key)
     if periodic is not None:
         await WorkWriter(session, registry=registry).add(
@@ -160,6 +195,13 @@ async def finish_item(
             dedup_key=periodic.dedup_key,
             delay=periodic.every,
         )
+
+
+async def finish_item(
+    session: AsyncSession, item: ClaimedItem, registry: WorkRegistry
+) -> None:
+    """Delete the finished item, re-arming it first if it is a periodic."""
+    await _rearm_periodic(session, item, registry)
     await session.execute(_DELETE, {"id": item.id})
 
 
@@ -204,7 +246,12 @@ async def mark_dead(
     spec: HandlerSpec | None,
     registry: WorkRegistry,
 ) -> None:
-    """Move to ``dead`` and let the kind write its terminal domain state, together."""
+    """Move to ``dead`` and let the kind write its terminal domain state, together.
+
+    A periodic is re-armed in the same transaction: one bad tick is kept dead
+    for inspection, and the chain goes on ``every`` later. The dedup index
+    covers queued items only, so the dead one does not block its successor.
+    """
     await uow.session.execute(
         _MARK_DEAD,
         {
@@ -225,6 +272,7 @@ async def mark_dead(
                 work=WorkWriter(uow.session, registry=registry),
             )
         )
+    await _rearm_periodic(uow.session, item, registry)
     dead_counter.add(
         1,
         {
@@ -258,19 +306,38 @@ async def apply_decision(
 
 
 async def extend_lease(
-    session: AsyncSession, item_id: object, owner: str, lease: timedelta
+    session: AsyncSession, item: ClaimedItem, owner: str, lease: timedelta
 ) -> bool:
     row = await session.scalar(
-        _EXTEND, {"id": item_id, "owner": owner, "seconds": lease.total_seconds()}
+        _EXTEND,
+        {
+            "id": item.id,
+            "owner": owner,
+            "epoch": item.lease_epoch,
+            "seconds": lease.total_seconds(),
+        },
     )
     return row is not None
 
 
 async def release(
-    session: AsyncSession, item_id: object, owner: str, *, now: datetime
+    session: AsyncSession,
+    item_id: object,
+    owner: str,
+    *,
+    now: datetime,
+    epoch: int | None = None,
 ) -> bool:
-    """Hand an owned item back with nothing charged; ``False`` if it was not ours."""
-    row = (await session.execute(_RELEASE_ONE, {"id": item_id, "owner": owner})).first()
+    """Hand an owned item back with nothing charged; ``False`` if it was not ours.
+
+    ``epoch`` names the claim being released; ``None`` releases whatever this
+    owner holds, which only shutdown does, once its jobs have stopped.
+    """
+    row = (
+        await session.execute(
+            _RELEASE_ONE, {"id": item_id, "owner": owner, "epoch": epoch}
+        )
+    ).first()
     if row is None:
         return False
     item = item_from_row(row)
@@ -286,6 +353,10 @@ async def release(
             last_error=None,
         ),
     )
+    # Due by the database's clock, which is what a claim compares with: a
+    # worker whose clock runs ahead would otherwise requeue it slightly in the
+    # future, and the next process would find nothing due.
+    await session.execute(_DUE_NOW, {"id": item.id})
     # Another process may be idle and able to take it straight away.
     await session.execute(
         text("SELECT pg_notify(:channel, '')"), {"channel": wake_channel(item.cls)}
@@ -322,4 +393,5 @@ def item_from_row(row: Row[tuple[object, ...]]) -> ClaimedItem:
         first_unavailable_at=mapping["first_unavailable_at"],
         run_at=mapping["run_at"],
         created_at=mapping["created_at"],
+        lease_epoch=mapping["lease_epoch"],
     )

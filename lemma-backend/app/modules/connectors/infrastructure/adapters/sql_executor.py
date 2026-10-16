@@ -417,10 +417,14 @@ class SqlExecutor:
         except OperationExecutionValidationError:
             raise
         except (SQLAlchemyError, OSError, PostgresError) as exc:
+            # Not chained: this is the tenant's own database, and a refused
+            # connection in the cause would read to the work runtime as
+            # Lemma's database being down -- an uncharged retry for an outage
+            # that is not ours. The upstream text is kept in the details.
             raise OperationExecutionInfrastructureError(
                 f"SQL execution failed: {exc}",
                 details={"provider": "sql", "upstream_message": str(exc)},
-            ) from exc
+            ) from None
 
         truncated = len(rows) > row_cap
         rows = rows[:row_cap]

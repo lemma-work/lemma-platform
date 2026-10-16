@@ -2,7 +2,7 @@
 
 `delete_record` is right for one row and wrong N times, for the same reasons
 `record_bulk_update` gives: it opens its own session, sets the RLS context,
-runs the DELETE, stages its event and commits, per row.
+runs the DELETE, appends its change and commits, per row.
 
 Atomicity is why this one had to move, though, not latency. `PS-DATA-013`
 promises a bulk change applies all of its records or none of them, and that a
@@ -19,14 +19,13 @@ to be gone is not a request that failed.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.domain.events import DomainEvent
 from app.modules.datastore.changes.capture import ChangeCapture
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.row_security import RowPrincipal
@@ -40,10 +39,6 @@ from app.modules.datastore.infrastructure.record_bulk_sql import (
 )
 from app.modules.datastore.infrastructure.record_errors import (
     raise_record_write_error,
-)
-from app.modules.datastore.infrastructure.transactional_events import (
-    ensure_datastore_event_outbox,
-    stage_domain_events,
 )
 from app.modules.datastore.services.table_context import TableContext
 
@@ -148,28 +143,22 @@ async def bulk_delete_records(
     record_ids: list[RecordId],
     user_id: UUID,
     *,
+    changes: ChangeCapture,
     enforce_user_scope: bool = True,
-    event_factory: Callable[..., DomainEvent] | None = None,
-    changes: ChangeCapture | None = None,
 ) -> int:
     """Delete every named row in one transaction, or none of them.
 
     A free function rather than a repository method, like its update twin:
-    `record_repository` is already past the size the architecture gate allows,
-    and this is a cohesive unit that does not need the class.
+    this is a cohesive unit that does not need the class.
     """
     if not record_ids:
         return 0
-    if event_factory is not None:
-        await ensure_datastore_event_outbox()
     prepared = prepare_bulk_deletes(
         ctx, record_ids, user_id, enforce_user_scope=enforce_user_scope
     )
 
     schema_manager = repository.schema_manager
-    row_to_entity = repository._row_to_entity
-    if changes is not None:
-        await changes.prepare()
+    await changes.prepare()
     try:
         async with schema_manager.session_factory() as session:
             if ctx.enable_rls:
@@ -178,20 +167,14 @@ async def bulk_delete_records(
                     RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
                 )
 
-            if changes is not None:
-                await changes.begin(session)
-            deleted_rows, missing = await _delete_batches(
+            await changes.begin(session)
+            _deleted, missing = await _delete_batches(
                 session,
                 batch_bulk_deletes(
                     ctx, prepared, user_id, enforce_user_scope=enforce_user_scope
                 ),
                 ctx,
                 changes,
-            )
-            events: list[DomainEvent] = (
-                []
-                if event_factory is None
-                else [event_factory(row_to_entity(row, ctx)) for row in deleted_rows]
             )
 
             if missing:
@@ -202,10 +185,7 @@ async def bulk_delete_records(
                     _missing_ids_message(missing, len(prepared))
                 )
 
-            if events:
-                await stage_domain_events(session, events)
-            if changes is not None:
-                await changes.wake_handoff(session)
+            await changes.wake_handoff(session)
             await session.commit()
             return len(prepared)
     except DBAPIError as exc:
@@ -217,15 +197,14 @@ async def _delete_batches(
     session: AsyncSession,
     batches: list[tuple[list[tuple[RecordId, str, SqlParams]], str, SqlParams]],
     ctx: TableContext,
-    changes: ChangeCapture | None,
+    changes: ChangeCapture,
 ) -> tuple[list[dict[str, object]], list[RecordId]]:
     """Run every batch; the rows deleted, and the ids that matched nothing."""
     deleted_rows: list[dict[str, object]] = []
     missing: list[RecordId] = []
     try:
         for rows, sql, params in batches:
-            if changes is not None:
-                sql, params = changes.wrap(sql, params, op="D")
+            sql, params = changes.wrap(sql, params, op="D")
             result = await session.execute(text(sql), params)
             deleted = [
                 changes.row(row) if changes is not None else dict(row._mapping)

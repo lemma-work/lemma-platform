@@ -22,8 +22,6 @@ import pytest_asyncio
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
-from app.modules.datastore.changes.gate import reset_change_log_gate
-from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.config_live import live_settings
 from app.modules.datastore.domain.live import SubscribeRequest
 from app.modules.datastore.services.live.connection import LiveConnection
@@ -40,12 +38,6 @@ pytestmark = [pytest.mark.e2e]
 backend_server = _backend_server
 
 _TABLES = ("tickets", "comments", "orders")
-
-
-@pytest.fixture(autouse=True)
-def _change_log_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(datastore_settings, "datastore_change_log_mode", "on")
-    reset_change_log_gate()
 
 
 @pytest_asyncio.fixture

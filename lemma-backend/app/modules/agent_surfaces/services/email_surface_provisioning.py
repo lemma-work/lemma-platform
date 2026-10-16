@@ -37,6 +37,7 @@ from uuid import UUID
 from httpx import HTTPError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.errors import (
@@ -239,6 +240,7 @@ async def provision_email_surface(
             credential_mode=SurfaceCredentialMode.SYSTEM,
         )
     except (AgentSurfaceError, HTTPError, OSError, SQLAlchemyError) as exc:
+        raise_if_database_unavailable(exc)
         # Deliberately not a bare ``Exception``. These are the mail system or
         # the database saying no — a refused domain, Resend unreachable, a name
         # already taken, a savepoint that cannot open on a transaction another

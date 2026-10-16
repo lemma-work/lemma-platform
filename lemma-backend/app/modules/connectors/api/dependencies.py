@@ -7,7 +7,6 @@ from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
@@ -71,14 +70,13 @@ if TYPE_CHECKING:
 
 
 def _connector_repository(uow: UoWDep) -> ConnectorRepository:
-    return ConnectorRepository(uow=uow, message_bus=get_message_bus())
+    return ConnectorRepository(uow=uow)
 
 
 def _account_repository(uow: UoWDep) -> AccountRepository:
     return AccountRepository(
         uow=uow,
         encryption=get_secret_cipher(),
-        message_bus=get_message_bus(),
     )
 
 
@@ -86,20 +84,19 @@ def _auth_config_repository(uow: UoWDep) -> AuthConfigRepository:
     return AuthConfigRepository(
         uow=uow,
         encryption=get_secret_cipher(),
-        message_bus=get_message_bus(),
     )
 
 
 def _connect_request_repository(uow: UoWDep) -> ConnectRequestRepository:
-    return ConnectRequestRepository(uow=uow, message_bus=get_message_bus())
+    return ConnectRequestRepository(uow=uow)
 
 
 def _trigger_repository(uow: UoWDep) -> ConnectorTriggerRepository:
-    return ConnectorTriggerRepository(uow=uow, message_bus=get_message_bus())
+    return ConnectorTriggerRepository(uow=uow)
 
 
 def _operation_repository(uow: UoWDep) -> ConnectorOperationRepository:
-    return ConnectorOperationRepository(uow=uow, message_bus=get_message_bus())
+    return ConnectorOperationRepository(uow=uow)
 
 
 def _auth_provider_registry(uow: UoWDep) -> AuthProviderRegistry:

@@ -10,6 +10,7 @@ from pydantic import HttpUrl
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.crypto import get_secret_cipher
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -362,7 +363,8 @@ class AgentRuntimeProfileService:
             return False
         try:
             harnesses = await self.host_repository.get_harnesses({profile.harness_id})
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             # A capability hint is not worth losing a run over, but only a
             # database failure is expected here; anything else is a bug and
             # should surface as one.
@@ -399,7 +401,8 @@ class AgentRuntimeProfileService:
             if profile is None or profile.user_id in (None, user_id):
                 return None
             owner = await self.repository.owner_first_name(profile.user_id)
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             # A better message is not worth masking why the run cannot start.
             logger.warning(
                 "agent.runtime_profile.owner_lookup_failed.degraded",

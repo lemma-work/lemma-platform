@@ -33,6 +33,9 @@ class FakeStore:
     async def reopen_import(self, state: ImportState):
         await self.save_import(state)
 
+    async def stage_import(self, uow, state: ImportState, *, reopen=False):
+        await self.save_import(state)
+
     async def get_import(self, import_id):
         return self.imports.get(import_id)
 
@@ -57,17 +60,26 @@ class FakeQueue:
         self.calls: list = []
         self._duplicate = duplicate
 
-    async def enqueue(self, name, *, context, _job_id):
-        self.calls.append((name, context, _job_id))
-        return None if self._duplicate else object()
+    async def queue_job(self, uow, kind, payload, *, pod_id, dedup_key):
+        self.calls.append((kind, payload.model_dump(mode="json"), dedup_key))
+        return not self._duplicate
 
-    async def abort(self, job_id, **kw):
-        return True
+    async def drop_queued(self, uow, kinds, *, pod_id, dedup_key):
+        return False
 
 
 class FakeUow:
     def __init__(self):
         self.session = object()
+
+    async def commit(self):
+        return None
+
+    async def rollback(self):
+        return None
+
+    def after_commit(self, callback):
+        del callback
 
 
 class FakeUowFactory:
@@ -160,7 +172,7 @@ async def test_start_import_url_verifies_token_and_enqueues():
     assert state.status == ImportStatus.QUEUED
     assert state.source.kind == BundleSourceKind.URL
     assert state.source.url == url
-    call = next(c for c in queue.calls if c[0] == "import_pod_url")
+    call = next(c for c in queue.calls if c[0] == "pod_bundle.import_url")
     assert call[1]["source_kind"] == "pod-imports"
     assert call[1]["source_id"]
     assert call[2] == import_plan_job_id(state.import_id)
@@ -214,7 +226,7 @@ async def test_start_import_github_enqueues():
     assert state.source.kind == BundleSourceKind.GITHUB
     assert state.source.repo_url.endswith("acme/crm")
     assert state.account_id == account_id
-    call = next(c for c in queue.calls if c[0] == "import_pod_github")
+    call = next(c for c in queue.calls if c[0] == "pod_bundle.import_github")
     assert call[1]["owner"] == "acme" and call[1]["repo"] == "crm"
     assert call[1]["account_id"] == str(account_id)
 
@@ -306,7 +318,7 @@ async def test_apply_enqueues_with_dedup_id():
     )
 
     assert result.status == ImportStatus.APPLYING
-    assert queue.calls[0][0] == "apply_pod_import"
+    assert queue.calls[0][0] == "pod_bundle.apply"
     assert queue.calls[0][2] == import_apply_job_id(state.import_id)
 
 

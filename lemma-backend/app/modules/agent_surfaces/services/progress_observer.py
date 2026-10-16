@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from app.modules.agent_surfaces.domain.models import ProgressHandle
+from app.modules.agent_surfaces.domain.models import ProgressHandle, ProgressHandleKind
 
 import asyncio
 import time
 from collections.abc import Callable
-from typing import Any, TypedDict
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -31,20 +31,16 @@ from app.modules.agent_surfaces.platforms.rendering import (
     ThinkingStreamFilter,
 )
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
+from app.modules.agent_surfaces.services.live_display import forget_live_display
 from app.modules.agent_surfaces.services.progress_display import (
     ProgressDisplayMixin,
 )
 from app.modules.agent_surfaces.services.pending_envelope import (
     RunFiles,
-    discard_display_paths,
 )
 from app.modules.agent_surfaces.services.progress_plan import (
     SurfacePlan,
     plan_from_event,
-)
-from app.modules.agent_surfaces.services.progress_reply import (
-    deliver_final_answer,
-    deliver_run_error,
 )
 from app.modules.agent_surfaces.services.token_stream import TokenStreamMixin
 from app.modules.agent_surfaces.services.progress_events import (
@@ -56,9 +52,7 @@ from app.modules.agent_surfaces.services.progress_events import (
     _join_text,
     _safe_run_error_text,
     _surface_platform,
-    failure_notice,
 )
-from app.modules.agent.contracts.run_failures import user_safe_failure_reason
 
 logger = get_logger(__name__)
 
@@ -78,22 +72,18 @@ _TYPING_REFRESH_INTERVAL_SECONDS = {
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
 
 
-class _OptionalSendArgs(TypedDict, total=False):
-    """The egress arguments a send passes only when it has a value for them."""
-
-    metadata: dict[str, object]
-    attach_files_of: RunFiles
-
-
-# Email recipients get one composed reply, not a stream of chat messages, and
-# the observer is the only thing that sends it. Which platforms count as email
-# is decided by `is_email` in the capability registry.
+# Email recipients get one composed reply, not a stream of chat messages: the
+# run's delivery row. Which platforms count as email is decided by `is_email`
+# in the capability registry.
 class SurfaceAgentRunProgressObserver(
     ProgressWaitingMixin, ProgressDisplayMixin, TokenStreamMixin
 ):
     """Reflect agent run progress through platform-native surface indicators.
 
-    The agent's final answer is delivered once, on ``on_run_finished``. Its
+    Display only. The agent's final answer (or its failure notice) is the
+    run's ``surface_deliveries`` row, written by the transaction that finishes
+    the run and sent by the destination pump -- never by this object, so a
+    worker dying mid-run loses a progress bubble and not an answer. Its
     intermediate narration, reasoning (``ThinkingContent``) and tool activity
     (``ToolCallContent`` / ``ToolReturnContent``) are never delivered as chat
     messages — they only drive progress indicators. To achieve this the observer
@@ -128,17 +118,13 @@ class SurfaceAgentRunProgressObserver(
         # pre-tool narration is discarded and only the final answer remains.
         self._buffered_text: str | None = None
         self._reset_text_on_next = False
+        # Set once a pause's card carried the buffered text (``progress_waiting``).
         self._final_delivered = False
-        # The reply was attempted and did not go out. The run's held files stay
-        # for the deferred retry of that reply (`owed_reply`) instead of being
-        # discarded with the run.
-        self._final_send_failed = False
-        # Whose held files this observer's replies carry; set from the run's
-        # context, which is the only place the run's id is known.
+        # Whose held files a pause's card carries; set from the run's context,
+        # which is the only place the run's id is known.
         self._run_files = RunFiles(None)
         self._run_errored = False
         self._run_error_text: str | None = None
-        self._error_delivered = False
         # Opaque handle for the live progress message on streaming platforms
         # (Telegram/Teams), threaded across edits and cleared on finish.
         self._progress_handle: ProgressHandle | None = None
@@ -153,9 +139,8 @@ class SurfaceAgentRunProgressObserver(
         # (``<think>…</think>``), and a tag can straddle two deltas — so the
         # filter has to be stateful across the whole run.
         self._think_filter = ThinkingStreamFilter()
-        # Set when an answer sanitized away to nothing, which is the one case
-        # where "no text to deliver" means an answer was lost rather than never
-        # written. See ``_deliver_final_answer``.
+        # Set when an answer sanitized away to nothing. Display only: the
+        # reply itself is rendered from the run (``delivery_sender``).
         self._answer_was_all_reasoning = False
         self._rendered_waiting_tool_calls: set[tuple[str, str]] = set()
         # The agent's checklist, as of the last ``write_todos`` return, plus the
@@ -271,66 +256,15 @@ class SurfaceAgentRunProgressObserver(
 
         await self._maybe_send_text_progress(event, platform, conversation.id)
 
-    async def _finish_stream_with_answer(self, conversation: Conversation) -> bool:
-        """Close a live stream with the final answer, so they are one message.
-
-        Only attempted on platforms whose streaming API can carry the answer
-        (``finishes_stream_with_answer``) and only when there is a live stream
-        and an answer to put in it. Returns True when the answer was delivered
-        this way, which also marks it delivered so ``_deliver_final_answer``
-        does not send it a second time.
-        """
-        if self._progress_handle is None or self._final_delivered or self._run_errored:
-            return False
-        capabilities = PLATFORM_CAPABILITIES.get(_surface_platform(conversation) or "")
-        if capabilities is None or not capabilities.finishes_stream_with_answer:
-            return False
-        await self._flush_tokens(conversation, final=True)
-        message = (self._final_answer_text or self._buffered_text or "").strip()
-        if not message:
-            return False
-        # Whatever already streamed is on screen. Send only what is left, or the
-        # user reads the answer twice.
-        if self._streamed_text:
-            if message.startswith(self._streamed_text):
-                message = message[len(self._streamed_text) :]
-            else:
-                # The stream and the final text disagree (a retry, or a rewritten
-                # answer). Trust the stream the user already saw and just close.
-                message = ""
-        handle = self._progress_handle
-        try:
-            async with self.uow_factory() as uow:
-                service = self.egress_factory(uow)
-                delivered = await service.progress.finish_with_answer(
-                    conversation_id=conversation.id,
-                    progress_handle=handle,
-                    message=message,
-                    already_streamed=bool(self._streamed_text),
-                )
-        except _delivery_errors():
-            # Not debug: this is the step that turns a live stream into the
-            # answer, and a timeout here used to escape `on_run_finished`
-            # before `_deliver_final_answer` ran -- the stream was left open and
-            # the answer was never sent. Returning False sends the caller down
-            # the plain-message path instead.
-            logger.warning(
-                "agent_surfaces.progress_observer.finish_stream_failed.degraded",
-                conversation_id=str(conversation.id),
-                exc_info=True,
-            )
-            return False
-        if not delivered:
-            return False
-        self._progress_handle = None
-        self._final_delivered = True
-        return True
-
     async def _clear_progress(self, conversation_id) -> None:
         if not self._progress_handle:
             return
         handle = self._progress_handle
         self._progress_handle = None
+        run_id = self._run_files.agent_run_id
+        if run_id is not None and handle.kind is ProgressHandleKind.STREAM:
+            # Taken down here, so the reply must not try to close it.
+            await forget_live_display(run_id)
         try:
             async with self.uow_factory() as uow:
                 service = self.egress_factory(uow)
@@ -352,53 +286,104 @@ class SurfaceAgentRunProgressObserver(
         conversation: Conversation,
         ctx: ConversationContext,
     ) -> None:
+        """Finish the run's display; the answer is not the observer's to send.
+
+        The finished run writes its reply as a ``surface_deliveries`` row in the
+        transaction that finishes it (``surface.reply_for_run``), and the
+        destination pump sends it -- so a worker that dies here loses a typing
+        bubble, never the answer. What is left for the observer is display:
+
+        * the typing refresh stops;
+        * a live Slack stream carrying an answer is flushed to the last token
+          and *left open*, sealed in its ``live_display`` record: the reply
+          closes this same message with the rest of the answer, so the thread
+          holds one message, as it did when the observer sent it;
+        * any other live message (a progress line, a stream of a run with no
+          answer to close it with) is closed and removed, and the reply, if
+          there is one, arrives as the one message in the thread.
+        """
         self._run_files = RunFiles(ctx.agent_run_id)
         if self._stays_in_lemma:
             return
-        task = self._typing_task
-        self._typing_task = None
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                # Expected after task.cancel(); delivery cleanup must continue.
-                pass
+        await self._stop_typing()
+        if await self._hand_stream_to_reply(conversation):
+            return
+        await self._clear_progress(conversation.id)
+
+    async def _hand_stream_to_reply(self, conversation: Conversation) -> bool:
+        """Leave a live stream for the run's reply to close; True if it was left."""
+        run_id = self._run_files.agent_run_id
+        handle = self._progress_handle
+        if handle is None or run_id is None or self._run_errored:
+            return False
+        if handle.kind is not ProgressHandleKind.STREAM:
+            return False
+        capabilities = PLATFORM_CAPABILITIES.get(_surface_platform(conversation) or "")
+        if capabilities is None or not capabilities.finishes_stream_with_answer:
+            return False
+        if not await self._reply_will_close(run_id):
+            return False
         try:
-            finished = await self._finish_stream_with_answer(conversation)
+            await self._flush_tokens(conversation, final=True)
         except _delivery_errors():
-            # The flush before the close is outside the guarded call above. Either
-            # way the answer still has to go out, and that is the next line.
+            # The reply closes the stream with whatever it does not show yet,
+            # so a last flush that failed costs nothing but a later chunk.
             logger.warning(
-                "agent_surfaces.progress_observer.finish_stream_failed.degraded",
+                "agent_surfaces.progress_observer.final_flush_failed.degraded",
                 conversation_id=str(conversation.id),
                 exc_info=True,
             )
-            finished = False
-        if not finished:
-            await self._clear_progress(conversation.id)
-        await self._deliver_final_answer(conversation)
-        # Anything display_resource held for a single reply belongs to this run,
-        # and is released with the reply that carried it. It is discarded here
-        # only when nothing is left to recover: a reply that failed to send keeps
-        # its files, under this run's key, for the deferred retry `owed_reply`
-        # makes of a transient failure -- which discards them when it is done.
-        # No other run reads them, and a reply nobody retries lets them expire.
-        if not self._final_send_failed:
-            await discard_display_paths(conversation.id, self._run_files)
+        await self._record_stream(conversation, sealed=True)
+        self._progress_handle = None
+        return True
+
+    async def _reply_will_close(self, run_id: UUID) -> bool:
+        """Whether this run's reply is an answer the stream can carry.
+
+        The same test ``surface.reply_for_run`` applies: a completed run, not
+        private, that wrote an answer. Anything else -- a stop, a pause, a
+        failure notice -- leaves no reply to close the stream, so it comes
+        down now rather than spinning beside whatever follows.
+        """
+        from app.modules.agent.contracts.run_replies import run_reply_material
+
+        try:
+            async with self.uow_factory() as uow:
+                material = await run_reply_material(uow, run_id)
+        except SQLAlchemyError:
+            logger.warning(
+                "agent_surfaces.progress_observer.reply_material_unread.degraded",
+                run_id=str(run_id),
+                exc_info=True,
+            )
+            return False
+        return (
+            material is not None
+            and material.status == "COMPLETED"
+            and not material.private
+            and bool(material.answer)
+        )
 
     async def on_run_failed(
         self,
         conversation: Conversation,
         error: Exception,
     ) -> None:
-        """Deliver failures raised before the harness can emit an error event."""
+        """A run that died: its display comes down; the notice is the run's reply.
+
+        The finalize records the failure and writes the failure notice as the
+        run's delivery, like any other answer.
+        """
+        del error
         if self._stays_in_lemma:
             return
-        self._run_errored = True
-        self._run_error_text = failure_notice(
-            user_safe_failure_reason(error), _surface_platform(conversation)
-        )
+        await self._stop_display(conversation.id)
+
+    async def _stop_display(self, conversation_id: UUID) -> None:
+        await self._stop_typing()
+        await self._clear_progress(conversation_id)
+
+    async def _stop_typing(self) -> None:
         task = self._typing_task
         self._typing_task = None
         if task is not None:
@@ -406,14 +391,8 @@ class SurfaceAgentRunProgressObserver(
             try:
                 await task
             except asyncio.CancelledError:
+                # Expected after task.cancel(); the cleanup must continue.
                 pass
-        await self._clear_progress(conversation.id)
-        await self._deliver_run_error(conversation)
-        # Same reason as `on_run_finished`: what `display_resource` held belongs
-        # to this run. A run that died still held it, and the entry outlived the
-        # run -- attaching itself to whatever reply came next, or to nothing at
-        # all while the process kept the bytes.
-        await discard_display_paths(conversation.id, self._run_files)
 
     async def _refresh_typing_loop(
         self,
@@ -456,31 +435,4 @@ class SurfaceAgentRunProgressObserver(
             return await service.progress.show_typing(
                 conversation_id=conversation_id,
                 metadata=metadata,
-            )
-
-    async def _deliver_final_answer(self, conversation: Conversation) -> None:
-        await deliver_final_answer(self, conversation)
-
-    async def _deliver_run_error(self, conversation: Conversation) -> None:
-        await deliver_run_error(self, conversation)
-
-    async def _send_agent_message(
-        self,
-        *,
-        conversation_id: UUID,
-        message: str,
-        metadata: dict[str, object] | None = None,
-        carries_files: bool = True,
-    ) -> bool:
-        async with self.uow_factory() as uow:
-            service = self.egress_factory(uow)
-            optional: _OptionalSendArgs = {}
-            if carries_files:
-                # This run's reply, so it is the only one that carries this
-                # run's files. A failure notice is not that reply.
-                optional["attach_files_of"] = self._run_files
-            if metadata:
-                optional["metadata"] = metadata
-            return await service.send_agent_message_for_conversation(
-                conversation_id=conversation_id, message=message, **optional
             )

@@ -141,10 +141,12 @@ serving.
   30 per-call constructions remain in shapes the I/O gate cannot see.
 - **An in-process lock is not a lock.** `asyncio.Lock` coordinates one process.
   Anything that must hold across replicas needs Redis or a database constraint.
-- **At-least-once means idempotent.** Redis Streams and streaq both redeliver.
-  Every consumer goes through the inbox, and every side effect is keyed so the
-  second delivery is a no-op. See
-  [design.md DES-15](../../docs/engineering/design.md#des-15--every-cross-module-consumer-is-inbox-backed-and-idempotent).
+- **A job can run again, so it must be idempotent.** A work item whose lease
+  expires (a crash, a deploy past its grace) is claimed again. Write the item in
+  the transaction that causes it, put its database effects in the completing
+  transaction, and key every side effect outside the database so a second run
+  is a no-op. See
+  [design.md DES-15](../../docs/engineering/design.md#des-15--every-cross-module-reaction-is-a-work-item-written-with-its-cause).
 
 ## Authorization model (summary)
 

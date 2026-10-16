@@ -30,6 +30,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.work import WorkWriter
 from app.core.log.log import get_logger
 from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
 from app.modules.agent.domain.wait import (
@@ -42,6 +43,7 @@ from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
 from app.modules.agent.services.run_suspension import suspend_remote_run
+from app.modules.agent.services.wait_timers import arm_wait
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.agent.tools.waiting.models import (
@@ -216,6 +218,9 @@ async def wait_for(
     suspends_itself = bool(getattr(deps, "supports_pause_signal", False))
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         await AgentConversationWaitRepository(uow).create(wait)
+        # The wait's timer is a work item committed with the row: there is no
+        # window in which a wait exists that nothing will fire.
+        await arm_wait(WorkWriter.of(uow), wait, scheduled_at)
         # One transaction, because a run asked to stop with no wait row to wake
         # it is an agent that waits forever.
         host_to_poke = (

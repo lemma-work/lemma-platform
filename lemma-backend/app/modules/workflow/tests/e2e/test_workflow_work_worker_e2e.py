@@ -31,7 +31,7 @@ from app.modules.workflow.tests.e2e.workflow_work_support import FlowWork, flow_
 # Slow, and in the protected lane: each starts its own worker subprocess, which
 # must not share an e2e process with the session-scoped base worker (both
 # would claim the same work items, and the harness flushes the shared Redis).
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.drives_work]
 
 #: How late a timer may fire: the worker's poll, a claim and the advance.
 TIMER_SLACK_SECONDS = 1.5

@@ -41,10 +41,12 @@ def _routers():
     ]
 
 
-def _register_streaq() -> None:
+def _register_periodic_work() -> None:
     import app.modules.connectors.events.tasks  # noqa: F401
 
 
 module = LemmaModule(
-    name="connectors", routers=_routers, register_streaq=_register_streaq
+    name="connectors",
+    routers=_routers,
+    register_periodic_work=_register_periodic_work,
 )

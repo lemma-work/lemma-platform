@@ -5,8 +5,6 @@
     "app/core/infrastructure/cache/redis_json_cache.py::RedisJsonCache.get_json::cpu-on-loop::json.loads": 1,
     "app/core/infrastructure/cache/redis_json_cache.py::RedisJsonCache.set_json::cpu-on-loop::json.dumps": 1,
     "app/core/infrastructure/channels/channel_service.py::RedisChannelAdapter.publish::cpu-on-loop::json.dumps": 1,
-    "app/core/infrastructure/jobs/streaq_job_queue.py::SharedStreaqJobQueue.enqueue::cpu-on-loop::json.dumps": 1,
-    "app/core/infrastructure/jobs/streaq_job_queue.py::load_job_observability_context::cpu-on-loop::json.loads": 1,
     "app/modules/agent/api/controllers/shared.py::iter_subscription::cpu-on-loop::json.loads": 1,
     "app/modules/agent/infrastructure/agent_host/event_stream.py::AgentHostEventStream.append::cpu-on-loop::json.dumps": 1,
     "app/modules/agent_surfaces/platforms/telegram/client.py::TelegramClient.call_multipart::cpu-on-loop::json.dumps": 1,

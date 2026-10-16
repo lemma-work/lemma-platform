@@ -37,21 +37,13 @@ are vacuumed on a fixed threshold instead.
   the table is written on every upload and a full-table update would hold it.
 
 And the cutover: processing used to be driven by a stream consumer and two
-crons reading ``status``. Nothing old is replayed. Only a file that was
-genuinely in flight when the release went out -- ``PENDING`` or
-``PROCESSING`` and touched within ``_LIVE_WINDOW`` -- gets the
-``file.process`` work item that now drives it, so an upload made during the
-deploy is not lost. Every older waiting or mid-extraction row becomes
-``FAILED`` with a note saying it was not processed before the upgrade, and an
-existing ``FAILED`` row stays as it is: neither is processed until someone
-asks (the retry API accepts both), so a release cannot set off a backlog of
-extractions and embeddings. (The old recovery cron re-queued these rows on
-its own; the new runtime has no such cron.) A row that an old worker is
-still processing during a rolling deploy is fenced by the token *it* knows
-(``processing_attempts``): the seed moves that counter on by one rather than
-resetting it, so the new runtime's first claim can never reissue the token the
-old worker holds, and the overlap is harmless. The new runtime fences on
-``processing_claim``. (Retry budgets live on the work item now.)
+crons reading ``status``. This release is deployed with the previous one's
+workers stopped, and it replays nothing: every file that was waiting or
+mid-extraction becomes ``FAILED`` with a note to retry it, and an existing
+``FAILED`` row stays as it is. Nothing is processed until someone asks (the
+retry API accepts both), so a release cannot set off a backlog of extractions
+and embeddings. The runtime fences each run on ``processing_claim``; retry
+budgets live on the work item.
 
 Every step is idempotent: the concurrent index builds commit on their own, so
 a failure after them leaves the revision half applied, and a rerun must finish
@@ -70,16 +62,8 @@ down_revision = "0053_folder_visibility_index"
 branch_labels = None
 depends_on = None
 
-#: The ingestion class's per-pod cap, matching ``CLASS_DEFAULTS`` and the old
-#: per-pod in-flight gate (``DATASTORE_PER_POD_MAX_INFLIGHT``, 4); the runtime
-#: refreshes it from the limits port within a minute.
-_INGESTION_DEFAULT_CAP = 4
 
-#: How recently a waiting row must have been touched to count as in flight
-#: when the release goes out. Anything older is not replayed.
-_LIVE_WINDOW = "interval '30 minutes'"
 _WAITING = "kind = 'FILE' AND search_enabled AND status IN ('PENDING', 'PROCESSING')"
-_IN_FLIGHT = f"{_WAITING} AND updated_at >= now() - {_LIVE_WINDOW}"
 _NOT_PROCESSED = (
     "Not processed before the upgrade. Retry processing to index this file."
 )
@@ -111,37 +95,13 @@ def _repair_invalid(name: str) -> None:
 
 def seed_statements() -> list[str]:
     """The cutover, as statements -- importable so a test can run them."""
-    queues = (
-        "INSERT INTO work_queues (class, ns, max_running) "
-        f"SELECT DISTINCT 'ingestion', 'pod:' || pod_id::text, {_INGESTION_DEFAULT_CAP} "
-        f"FROM datastore_files WHERE {_IN_FLIGHT} "
-        "ON CONFLICT (class, ns) DO NOTHING"
-    )
-    items = (
-        "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, "
-        "concurrency_key, concurrency_limit, run_at) "
-        "SELECT gen_random_uuid(), 'pod:' || pod_id::text, 'ingestion', 'file.process', "
-        "jsonb_build_object('file_id', id::text, 'sha256', content_sha256), "
-        "'file:' || id::text || ':' || COALESCE(content_sha256, ''), "
-        "'file:' || id::text, 1, now() "
-        f"FROM datastore_files WHERE {_IN_FLIGHT} "
-        "ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL AND state = 'queued' "
-        "DO NOTHING"
-    )
-    rows = (
-        "UPDATE datastore_files SET status = 'PENDING', "
-        "processing_attempts = processing_attempts + 1 "
-        f"WHERE {_IN_FLIGHT} AND status <> 'PENDING'"
-    )
-    # After `rows`, which moved every live row's `updated_at` to now: what is
-    # still older than the window here is exactly what was not seeded.
-    stale = (
-        "UPDATE datastore_files SET status = 'FAILED', "
-        f"last_processing_error = '{_NOT_PROCESSED}', "
-        "processing_attempts = processing_attempts + 1 "
-        f"WHERE {_WAITING} AND updated_at < now() - {_LIVE_WINDOW}"
-    )
-    return [queues, items, rows, stale]
+    # Nothing in flight is carried over: a person retries a file to index it.
+    return [
+        (
+            "UPDATE datastore_files SET status = 'FAILED', "
+            f"last_processing_error = '{_NOT_PROCESSED}' WHERE {_WAITING}"
+        )
+    ]
 
 
 #: Storage parameters for the churning queue tables (see the module docstring).

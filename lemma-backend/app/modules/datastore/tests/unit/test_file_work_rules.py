@@ -193,3 +193,23 @@ def test_path_layout_keys_are_the_legacy_ones() -> None:
 )
 def test_parent_path(path: str, parent: str) -> None:
     assert parent_path_of(path) == parent
+
+
+def test_lemmas_own_database_being_unavailable_is_not_the_documents_fault() -> None:
+    from sqlalchemy.exc import OperationalError
+
+    from app.core.infrastructure.work import was_database_unavailable
+    from app.core.infrastructure.work.retry import describe_error
+
+    class _TooMany(Exception):
+        sqlstate = "53300"
+
+    unavailable = unavailable_for(OperationalError("SELECT", {}, _TooMany("full")))
+    assert unavailable is not None
+    assert unavailable.evidence is UnavailableEvidence.CONNECTION_REFUSED
+    message = dead_message("unavailable_exhausted", describe_error(unavailable))
+    assert message.startswith("database_unavailable:")
+    assert "nothing is wrong with the document" in message
+    assert was_database_unavailable(describe_error(unavailable))
+    assert dead_message("unavailable_exhausted", "Unavailable: KreuzbergUnreachable")
+    assert "extractor" in dead_message("unavailable_exhausted", None)

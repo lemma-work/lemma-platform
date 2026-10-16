@@ -17,17 +17,9 @@ import pytest
 import pytest_asyncio
 from asgiref.testing import ApplicationCommunicator
 
-from app.modules.datastore.changes.gate import reset_change_log_gate
-from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.tests.e2e.harness import DatastoreApi, signup_user
 
 pytestmark = [pytest.mark.e2e]
-
-
-@pytest.fixture(autouse=True)
-def _change_log_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(datastore_settings, "datastore_change_log_mode", "on")
-    reset_change_log_gate()
 
 
 def _ws_communicator(

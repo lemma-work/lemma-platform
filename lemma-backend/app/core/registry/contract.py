@@ -28,12 +28,11 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # type-only — never imported at runtime, so no cycles / cost
     from fastapi import FastAPI
-    from faststream.redis import RedisRouter
 
     from app.core.authorization.context import ResourceType
     from app.core.authorization.pod_liveness import PodLivenessReader
     from app.core.authorization.resource_names import ResourceNameTable
-    from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext
+    from app.core.infrastructure.work.process import WorkerContext
     from app.core.infrastructure.work.limits import NamespaceDirectory
     from app.core.ports.plan_limits import PlanLimitsFactory
 
@@ -49,9 +48,6 @@ if TYPE_CHECKING:  # type-only — never imported at runtime, so no cycles / cos
 # unnoticed at runtime.
 type RouterProvider = Callable[[], Sequence[Any]]
 """Returns a sequence of ``fastapi.APIRouter`` to ``include_router`` (in order)."""
-
-type EventRouterProvider = Callable[[], Sequence[RedisRouter]]
-"""Returns FastStream ``RedisRouter`` objects to ``broker.include_router``."""
 
 type ResourceNameProvider = Callable[
     [], Sequence[tuple[ResourceType, ResourceNameTable]]
@@ -73,9 +69,6 @@ type NamespaceDirectoryProvider = Callable[[], NamespaceDirectory]
 """Returns what tells the work runtime which organization owns a namespace,
 so per-org and per-slug limit overrides can apply to a pod's work."""
 
-type StreaqRegistrar = Callable[[], None]
-"""Imports the module's ``@streaq_task``/``@streaq_cron`` modules for side effects."""
-
 type WorkRegistrar = Callable[[], None]
 """Imports the module's work kinds and fact subscriptions for side effects.
 
@@ -85,10 +78,26 @@ subscriptions it can see, so an API process that never imported a subscriber
 would commit a fact with nobody to react to it.
 """
 
+type PeriodicRegistrar = Callable[[], None]
+"""Imports the module's periodic work (``periodic_job``) for side effects.
+
+Worker only: periodics are armed at worker boot and nothing else enqueues them,
+so the API process need not import the sweeps (or pay for their imports).
+"""
+
+type AnalyticsRegistrar = Callable[[], None]
+"""Imports the module's after-commit projections for side effects.
+
+They register on the domain-event sink (``app.core.analytics.domain_events``)
+by event type: analytics, and best-effort side effects such as a cache delete.
+Called in every process, because whichever process commits a domain event is
+the one that projects it.
+"""
+
 # Lifespan hooks are ``@asynccontextmanager`` functions entered inside an
 # ``AsyncExitStack``; teardown happens automatically (LIFO) on stack unwind.
 type ApiLifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
-type WorkerLifespan = Callable[[AppWorkerContext], AbstractAsyncContextManager[None]]
+type WorkerLifespan = Callable[[WorkerContext], AbstractAsyncContextManager[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,18 +109,17 @@ class LemmaModule:
     # --- API process ---
     routers: RouterProvider | None = None
     api_lifespans: Sequence[ApiLifespan] = ()
-    # --- Worker process ---
-    event_routers: EventRouterProvider | None = None
-    register_streaq: StreaqRegistrar | None = None
+    # --- Worker process (and the embedded worker of the single-process app) ---
     worker_lifespans: Sequence[WorkerLifespan] = ()
 
     # --- Every process ---
     # Work kinds and fact subscriptions; see ``WorkRegistrar``.
     register_work: WorkRegistrar | None = None
-
-    # Redis Streams owned by this module's durable consumers. Publishers use
-    # this topology before XADD, even in processes that never import handlers.
-    stream_groups: Sequence[tuple[str, str]] = ()
+    # Recurring maintenance as periodic work; see ``PeriodicRegistrar``.
+    register_periodic_work: PeriodicRegistrar | None = None
+    # Analytics projections of committed domain events; see
+    # ``AnalyticsRegistrar``.
+    register_analytics: AnalyticsRegistrar | None = None
 
     # Grant APIs speak resource names; grant storage keeps ids. This is how one
     # becomes the other for this module's types.

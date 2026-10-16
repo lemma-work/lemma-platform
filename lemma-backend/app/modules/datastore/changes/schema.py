@@ -67,12 +67,47 @@ async def create_global_tables(conn: AsyncConnection) -> None:
     )
 
 
+async def _present(conn: AsyncConnection, schema: str) -> set[str]:
+    """Which of the change log's tables, index and late column already exist."""
+    row = (
+        await conn.execute(
+            text(
+                "SELECT to_regclass(:changes) IS NOT NULL, "
+                "to_regclass(:subscribers) IS NOT NULL, "
+                "to_regclass(:table_index) IS NOT NULL, "
+                "EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = :schema AND table_name = :subscribers_name "
+                "AND column_name = 'snapshot_intents')"
+            ),
+            {
+                "changes": changes_table(schema),
+                "subscribers": subscribers_table(schema),
+                "table_index": f'"{schema}".ix_reserved_change_subscribers_table',
+                "schema": schema,
+                "subscribers_name": SUBSCRIBERS_TABLE,
+            },
+        )
+    ).one()
+    names = ("changes", "subscribers", "table_index", "intents")
+    return {name for name, there in zip(names, row) if there}
+
+
 async def create_change_log(conn: AsyncConnection, schema: str) -> None:
-    """Version 3 of a pod schema: the change log and its subscribers."""
+    """Version 3 of a pod schema: the change log and its subscribers.
+
+    Only what is missing is created. ``IF NOT EXISTS`` alone still locks: an
+    index's table is share-locked and ``ALTER TABLE ... ADD COLUMN IF NOT
+    EXISTS`` takes an exclusive lock before either finds there is nothing to
+    do -- and a schema whose change log a record write already created (ahead
+    of the backfill, ``ensure_change_log``) is being written to. Locking its
+    tables in DDL order against a writer's order deadlocked the two.
+    """
     changes = changes_table(schema)
     subscribers = subscribers_table(schema)
-    statements = (
-        (
+    present = await _present(conn, schema)
+    statements: list[str] = []
+    if "changes" not in present:
+        statements.append(
             f"CREATE TABLE IF NOT EXISTS {changes} ("
             "seq bigint GENERATED ALWAYS AS IDENTITY, "
             # The writing transaction: what makes the read rule in
@@ -86,19 +121,13 @@ async def create_change_log(conn: AsyncConnection, schema: str) -> None:
             "intent text NOT NULL DEFAULT 'normal', "
             "owner_user_id uuid, "
             "outside_actor text, "
-            # Set only on rows converted from the old event path, so a
-            # conversion that is repeated appends nothing twice.
-            "event_id uuid, "
             "new_row jsonb, "
             "old_values jsonb, "
             "at timestamptz NOT NULL DEFAULT now(), "
             "PRIMARY KEY (xid, seq))"
-        ),
-        (
-            "CREATE UNIQUE INDEX IF NOT EXISTS ux_reserved_changes_event "
-            f"ON {changes} (event_id) WHERE event_id IS NOT NULL"
-        ),
-        (
+        )
+    if "subscribers" not in present:
+        statements.append(
             f"CREATE TABLE IF NOT EXISTS {subscribers} ("
             "subscriber text PRIMARY KEY, "
             "table_id uuid NOT NULL, "
@@ -113,19 +142,22 @@ async def create_change_log(conn: AsyncConnection, schema: str) -> None:
             "cursor_seq bigint NOT NULL, "
             "created_at timestamptz NOT NULL DEFAULT now(), "
             "updated_at timestamptz NOT NULL DEFAULT now())"
-        ),
+        )
+    elif "intents" not in present:
         # A schema created by an earlier build of version 3.
-        (
+        statements.append(
             f"ALTER TABLE {subscribers} ADD COLUMN IF NOT EXISTS snapshot_intents "
             f"text[] NOT NULL DEFAULT {_ALL_INTENTS}"
-        ),
-        (
+        )
+    if "table_index" not in present:
+        statements.append(
             "CREATE INDEX IF NOT EXISTS ix_reserved_change_subscribers_table "
             f"ON {subscribers} (table_id)"
-        ),
-    )
+        )
     for statement in statements:
         await conn.execute(text(statement))
+    if {"changes", "subscribers"} <= present:
+        return
     role = query_role_name()
     # The role may not exist (an install whose role could not be created); then
     # there is nothing to revoke from.

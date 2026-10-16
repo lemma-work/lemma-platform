@@ -18,6 +18,7 @@ from app.core.authorization.dependencies import (
 from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.server_metadata import client_metadata
 from app.modules.agent.services.runtime_availability import (
     check_conversation_runtime_for_pod,
@@ -341,9 +342,9 @@ async def resolve_approval(
     # its half-finished resume instead of erroring (status "reconciled"). A truly
     # unknown approval raises UnknownApprovalError -> 404 via the domain handler.
     #
-    # defer_reconciliation keeps the browser's timeout out of the equation: the
-    # decision commits here, and an approved tool (which may legitimately run for
-    # minutes) is handed to a worker job, answering with status "queued".
+    # The browser's timeout stays out of the equation: the decision commits
+    # here with an `agent.approval.execute` item, and an approved tool (which
+    # may legitimately run for minutes) runs in a worker -- status "queued".
     resolution = await service.resolve_user_approval(
         conversation_id=conversation_id,
         approval_id=approval_id,
@@ -351,7 +352,6 @@ async def resolve_approval(
         pod_id=pod_id,
         decision=data.decision,
         response=data.response,
-        defer_reconciliation=True,
     )
     return ApprovalDecisionResponse(
         approval_id=approval_id,
@@ -536,39 +536,41 @@ async def stream_conversation(
     except (AgentNotFoundError, ConversationNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
 
+    async def load(run_id: UUID | None) -> AgentRun | None:
+        async with pod_context_scope(
+            uow_factory, request=request, user_id=user.id, pod_id=pod_id
+        ) as scope:
+            service = _build_conversation_service(scope.uow)
+            if run_id is None:
+                return await service.queries.get_active_agent_run(
+                    conversation_id=conversation_id, user_id=user.id, pod_id=pod_id
+                )
+            return await load_authorized_agent_run(
+                service,
+                conversation_id=conversation_id,
+                agent_run_id=run_id,
+                user_id=user.id,
+                pod_id=pod_id,
+            )
+
     async def event_generator() -> AsyncGenerator[str, None]:
         async with channel_service.subscribe(
             [conversation_channel(conversation_id)]
         ) as iterator:
-            async with pod_context_scope(
-                uow_factory, request=request, user_id=user.id, pod_id=pod_id
-            ) as scope:
-                service = _build_conversation_service(scope.uow)
-                target_run = (
-                    await load_authorized_agent_run(
-                        service,
-                        conversation_id=conversation_id,
-                        agent_run_id=agent_run_id,
-                        user_id=user.id,
-                        pod_id=pod_id,
-                    )
-                    if agent_run_id is not None
-                    else await service.queries.get_active_agent_run(
-                        conversation_id=conversation_id,
-                        user_id=user.id,
-                        pod_id=pod_id,
-                    )
-                )
+            target_run = await load(agent_run_id)
             if target_run is None:
                 return
-
             terminal_chunk = terminal_run_chunk(target_run)
             if terminal_chunk is not None:
                 yield terminal_chunk
                 return
 
+            async def ended() -> str | None:
+                run = await load(target_run.id)
+                return terminal_run_chunk(run) if run is not None else None
+
             async for chunk in with_keepalive(
-                iter_subscription(iterator, target_run.id)
+                iter_subscription(iterator, target_run.id), on_idle=ended
             ):
                 yield chunk
 

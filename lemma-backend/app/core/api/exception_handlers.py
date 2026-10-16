@@ -25,6 +25,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.core.domain.errors import DomainError
 from app.core.observability.telemetry import record_exception_on_current_span
 from app.core.redaction import redact_text, redact_value
@@ -268,6 +269,42 @@ def _unhandled_error_headers(request: Request) -> dict[str, str]:
     return headers
 
 
+#: Seconds a client is asked to wait before retrying a request the database
+#: could not serve.
+_DATABASE_RETRY_AFTER_SECONDS = 2
+
+
+def _database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    """503, retryable: the database could not take the request, nothing failed.
+
+    A refused connection, a full server, an empty pool or a deadlock says
+    nothing about the request; a 500 told clients and monitors it had broken,
+    and a datastore mapper called a deadlock a 400 validation error.
+    """
+    record_exception_on_current_span(
+        exc,
+        attributes={"app.database_unavailable": True, "http.response.status_code": 503},
+        mark_span_as_error=True,
+    )
+    _record_request_failure(
+        request,
+        code="DATABASE_UNAVAILABLE",
+        error_type=type(exc).__name__,
+        exception=exc,
+    )
+    headers = _unhandled_error_headers(request)
+    headers["Retry-After"] = str(_DATABASE_RETRY_AFTER_SECONDS)
+    return JSONResponse(
+        status_code=503,
+        content=_error_body(
+            request,
+            "The service is briefly unavailable. Try again in a moment.",
+            "DATABASE_UNAVAILABLE",
+        ),
+        headers=headers,
+    )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Register the unified error handlers on ``app`` (idempotent per app)."""
 
@@ -342,6 +379,8 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_exception(request: Request, exc: Exception):
+        if is_transient_database_error(exc):
+            return _database_unavailable(request, exc)
         record_exception_on_current_span(
             exc,
             attributes={

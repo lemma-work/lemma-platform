@@ -317,34 +317,31 @@ async def test_cutover_seeds_every_active_time_schedule_and_in_flight_run_once(
         )
         return run_id
 
+    # In flight on the old path: ended, never started again.
     received = await run_row("RECEIVED", None)
-    abandoned = await run_row("PROCESSING", timedelta(minutes=10))
-    fresh = await run_row("PROCESSING", timedelta(seconds=5))
+    processing = await run_row("PROCESSING", timedelta(seconds=5))
+    old = await run_row("RECEIVED", None, age=timedelta(hours=2))
     done = await run_row("DISPATCHED", timedelta(minutes=10))
-    # Never reached its target, and from long before the release: not replayed.
-    stale = await run_row("RECEIVED", None, age=timedelta(hours=2))
 
     async with async_session_maker() as session:
         from sqlalchemy import text
 
-        for _ in range(2):  # an overlapping old release may run it again
+        for _ in range(2):  # a re-run changes nothing more
             for statement in _seed_statements():
                 await session.execute(text(statement))
         await session.commit()
 
     arms = {item.payload["schedule_id"] for item in await items("schedule.arm")}
     assert arms == {armed, legacy, missed, late}
-    starts = {item.payload["schedule_run_id"] for item in await items(SCHEDULE_START)}
-    assert starts == {received, abandoned}
-    assert inactive not in arms and fresh not in starts and done not in starts
-    assert stale not in starts
+    assert inactive not in arms
+    assert await items(SCHEDULE_START) == [], "the cutover started a run again"
 
     await run(WorkClass.EVENTS)
 
     fires = {item.payload["schedule_id"] for item in await items("schedule.fire")}
     assert fires == {armed, legacy, late}
     assert (await schedule_row(late))["next_fire_at"] > now, (
-        "a fire missed hours before the cutover was replayed"
+        "a fire already due at the cutover was fired late"
     )
     assert (await schedule_row(legacy))["next_fire_at"] is not None
     retired = await schedule_row(missed)
@@ -353,10 +350,10 @@ async def test_cutover_seeds_every_active_time_schedule_and_in_flight_run_once(
         "SCHEDULE_ONE_TIME_MISSED",
     )
 
-    await run(WorkClass.AUTOMATION)
     statuses = {str(row["id"]): row["status"] for row in await runs(armed)}
-    assert statuses[received] == "DISPATCHED" and statuses[abandoned] == "DISPATCHED"
-    assert statuses[stale] == "TARGET_FAILED"
+    for run_id in (received, processing, old):
+        assert statuses[run_id] == "TARGET_FAILED", run_id
+    assert statuses[done] == "DISPATCHED"
     # ...which no target of the schedule did: the breaker must not count it,
     # or a schedule with a backlog at the release pauses and emails its owner.
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork

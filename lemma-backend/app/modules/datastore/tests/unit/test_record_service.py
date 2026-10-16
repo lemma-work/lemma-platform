@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -15,12 +17,6 @@ from app.modules.datastore.domain.datastore_entities import (
 )
 from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.core.authorization.function_run import NOBODY_USER_ID
-from app.modules.datastore.domain.events import (
-    DatastoreRecordEvent,
-    DatastoreRecordOperation,
-    RecordOrigin,
-)
-from app.modules.datastore.services.record_events import RecordEventCoordinator
 from app.modules.datastore.services.record_service import (
     RecordService as _RecordService,
 )
@@ -28,18 +24,9 @@ from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.services.table_context import TableContext
 
 
-def RecordService(
-    *,
-    record_repository,
-    event_dispatcher=None,
-    **kwargs,
-):
-    """Build the production transactional-only service for focused unit tests."""
-    return _RecordService(
-        record_repository=record_repository,
-        event_dispatcher=event_dispatcher or AsyncMock(),
-        **kwargs,
-    )
+def RecordService(*, record_repository, **kwargs):
+    """Build the production service for focused unit tests."""
+    return _RecordService(record_repository=record_repository, **kwargs)
 
 
 def _table_context() -> TableContext:
@@ -128,291 +115,19 @@ def _events_enabled_rls_context() -> TableContext:
     return TableContext.from_table_entity(table, "pod_test", events_enabled=True)
 
 
-async def test_create_record_stages_record_event_for_outbox():
-    ctx = _events_enabled_context()
-    user_id = uuid4()
-    record_id = str(uuid4())
-    record_repository = AsyncMock()
-    stored = type(
-        "StoredRecord",
-        (),
-        {"user_id": uuid4(), "id": record_id, "data": {"merchant": "Hotel"}},
-    )()
-    staged_events = []
-
-    async def create_record(_ctx, _data, _user_id, *, event_factory):
-        staged_events.append(event_factory(stored))
-        return stored
-
-    record_repository.create_record.side_effect = create_record
-    dispatcher = AsyncMock()
-    service = RecordService(
-        record_repository=record_repository,
-        event_dispatcher=dispatcher,
-    )
-
-    await service.create_record(ctx, {"merchant": "Hotel"}, user_id)
-
-    event = staged_events[0]
-    assert isinstance(event, DatastoreRecordEvent)
-    assert event.event_type == "datastore.record.insert"
-    assert event.operation == DatastoreRecordOperation.INSERT
-    assert event.actor_id == user_id
-    assert event.table_name == "expenses"
-    assert event.record_id == record_id
-    dispatcher.assert_awaited_once()
-
-
-async def test_production_record_event_is_staged_by_repository_not_published_after_commit():
-    ctx = _events_enabled_context()
-    user_id = uuid4()
-    record_id = str(uuid4())
-    stored = type(
-        "StoredRecord",
-        (),
-        {"user_id": user_id, "id": record_id, "data": {"merchant": "Hotel"}},
-    )()
-    staged_events = []
-    record_repository = AsyncMock()
-
-    async def create_record(_ctx, _data, _user_id, *, event_factory):
-        staged_events.append(event_factory(stored))
-        return stored
-
-    record_repository.create_record.side_effect = create_record
-    dispatcher = AsyncMock()
-    service = RecordService(
-        record_repository=record_repository,
-        event_dispatcher=dispatcher,
-    )
-
-    await service.create_record(ctx, {"merchant": "Hotel"}, user_id)
-
-    dispatcher.assert_awaited_once()
-    assert len(staged_events) == 1
-    assert staged_events[0].record_id == record_id
-    assert staged_events[0].operation == DatastoreRecordOperation.INSERT
-
-
-async def test_create_record_skips_event_when_events_disabled():
-    ctx = _table_context()  # events_enabled defaults to False
-    record_repository = AsyncMock()
-    record_repository.create_record.return_value = type(
-        "StoredRecord",
-        (),
-        {"user_id": uuid4(), "id": str(uuid4()), "data": {"merchant": "Hotel"}},
-    )()
-    dispatcher = AsyncMock()
-    service = RecordService(
-        record_repository=record_repository,
-        event_dispatcher=dispatcher,
-    )
-
-    await service.create_record(ctx, {"merchant": "Hotel"}, uuid4())
-
-    assert record_repository.create_record.await_args.kwargs["event_factory"] is None
-    dispatcher.assert_not_awaited()
-
-
-async def test_update_and_delete_emit_record_events():
-    ctx = _events_enabled_context()
-    user_id = uuid4()
-    record_id = str(uuid4())
-    record_repository = AsyncMock()
-    updated = type(
-        "StoredRecord",
-        (),
-        {"user_id": uuid4(), "id": record_id, "data": {"merchant": "Retreat"}},
-    )()
-    deleted = type(
-        "DeletedRecord",
-        (),
-        {"user_id": user_id, "id": record_id, "data": {"merchant": "Retreat"}},
-    )()
-    staged_events = []
-
-    async def update_record(*args, event_factory, **kwargs):
-        staged_events.append(event_factory(updated))
-        return updated
-
-    async def delete_record(*args, event_factory, **kwargs):
-        staged_events.append(event_factory(deleted))
-        return deleted
-
-    record_repository.update_record.side_effect = update_record
-    record_repository.delete_record.side_effect = delete_record
-    service = RecordService(record_repository=record_repository)
-
-    await service.update_record(ctx, record_id, {"merchant": "Retreat"}, user_id)
-    update_event = staged_events[-1]
-    assert update_event.operation == DatastoreRecordOperation.UPDATE
-    assert update_event.event_type == "datastore.record.update"
-    assert update_event.actor_id == user_id
-
-    await service.delete_record(ctx, record_id, user_id)
-    delete_event = staged_events[-1]
-    assert delete_event.operation == DatastoreRecordOperation.DELETE
-    assert delete_event.event_type == "datastore.record.delete"
-
-
-async def test_event_payload_is_the_stored_row_not_what_was_submitted():
-    """A subscriber must see columns the writer never mentioned.
-
-    The submitted dict carries only what the caller typed; the stored row also
-    carries the id, the timestamps, and anything the database defaulted. A
-    match condition on a defaulted column is only answerable from the latter.
-    """
-    ctx = _events_enabled_context()
-    record_id = str(uuid4())
-    stored_row = {
-        "id": record_id,
-        "merchant": "Hotel",
-        "status": "new",  # a default the caller never submitted
-        "created_at": "2026-08-06T00:00:00Z",
-    }
-    stored = type(
-        "StoredRecord", (), {"user_id": uuid4(), "id": record_id, "data": stored_row}
-    )()
-    staged_events = []
-    record_repository = AsyncMock()
-
-    async def create_record(_ctx, _data, _user_id, *, event_factory):
-        staged_events.append(event_factory(stored))
-        return stored
-
-    record_repository.create_record.side_effect = create_record
-    service = RecordService(record_repository=record_repository)
-
-    await service.create_record(ctx, {"merchant": "Hotel"}, uuid4())
-
-    assert staged_events[0].payload == stored_row
-    assert staged_events[0].changed is None
-    assert staged_events[0].previous is None
-
-
-async def test_update_event_carries_what_changed_and_what_it_was():
-    ctx = _events_enabled_context()
-    record_id = str(uuid4())
-    updated = type(
-        "StoredRecord",
-        (),
-        {
-            "user_id": uuid4(),
-            "id": record_id,
-            "data": {"id": record_id, "merchant": "Retreat", "status": "approved"},
-        },
-    )()
-    staged_events = []
-    record_repository = AsyncMock()
-
-    async def update_record(*args, event_factory, **kwargs):
-        # Stands in for the repository, which is the only layer that knows
-        # which columns the statement wrote and what they held before.
-        staged_events.append(event_factory(updated, ["status"], {"status": "pending"}))
-        return updated
-
-    record_repository.update_record.side_effect = update_record
-    service = RecordService(record_repository=record_repository)
-
-    await service.update_record(ctx, record_id, {"status": "approved"}, uuid4())
-
-    event = staged_events[-1]
-    assert event.payload["merchant"] == "Retreat"  # untouched column still present
-    assert event.changed == ["status"]
-    assert event.previous == {"status": "pending"}
-
-
-async def test_delete_event_carries_the_row_that_was_removed():
-    """It used to carry `{}`, which no condition could ever match."""
-    ctx = _events_enabled_context()
-    record_id = str(uuid4())
-    removed_row = {"id": record_id, "merchant": "Retreat", "status": "archived"}
-    deleted = type(
-        "DeletedRecord", (), {"user_id": uuid4(), "id": record_id, "data": removed_row}
-    )()
-    staged_events = []
-    record_repository = AsyncMock()
-
-    async def delete_record(*args, event_factory, **kwargs):
-        staged_events.append(event_factory(deleted))
-        return deleted
-
-    record_repository.delete_record.side_effect = delete_record
-    service = RecordService(record_repository=record_repository)
-
-    await service.delete_record(ctx, record_id, uuid4())
-
-    assert staged_events[-1].payload == removed_row
-
-
-async def test_bulk_create_emits_one_insert_event_per_written_row():
-    """Bulk events are built from the rows written, like every other write.
-
-    The service used to build them from the submitted data and guess each
-    record id from it, so a bulk-inserted row carried neither its generated id
-    nor anything the database defaulted — and a condition on such a column
-    silently never matched.
-    """
-    ctx = _events_enabled_context()
-    user_id = uuid4()
-    record_repository = AsyncMock()
-    written_rows = [
-        {"id": str(uuid4()), "merchant": "Hotel", "status": "new"},
-        {"id": str(uuid4()), "merchant": "Cafe", "status": "new"},
-    ]
-    staged_events = []
-
-    async def bulk_create_records(_ctx, _records, _user_id, *, event_factory):
-        for row in written_rows:
-            stored = type(
-                "StoredRecord", (), {"user_id": uuid4(), "id": row["id"], "data": row}
-            )()
-            staged_events.append(event_factory(stored))
-        return len(written_rows)
-
-    record_repository.bulk_create_records.side_effect = bulk_create_records
-    service = RecordService(record_repository=record_repository)
-
-    await service.bulk_create_records(
-        ctx,
-        [{"merchant": "Hotel"}, {"merchant": "Cafe"}],
-        user_id,
-    )
-
-    assert len(staged_events) == 2
-    for event, row in zip(staged_events, written_rows):
-        assert event.operation == DatastoreRecordOperation.INSERT
-        assert event.actor_id == user_id
-        assert event.record_id == row["id"]
-        assert event.payload == row  # the stored row, defaults and all
-
-
-async def test_bulk_create_passes_no_event_factory_when_events_disabled():
-    ctx = _table_context()  # events_enabled defaults to False
-    record_repository = AsyncMock()
-    record_repository.bulk_create_records.return_value = 1
-    service = RecordService(record_repository=record_repository)
-
-    await service.bulk_create_records(ctx, [{"merchant": "Hotel"}], uuid4())
-
-    kwargs = record_repository.bulk_create_records.await_args.kwargs
-    assert kwargs["event_factory"] is None
-
-
-async def _every_write_event(
-    ctx: TableContext, user_id: UUID
-) -> list[DatastoreRecordEvent]:
-    """Insert, update, delete and bulk-insert one row each; their events."""
+async def _every_write_capture(ctx: TableContext, user_id: UUID) -> list:
+    """Insert, update, delete and bulk-insert one row each; the change captures
+    the repository was handed for them."""
     record_id = str(uuid4())
     stored = type(
         "StoredRecord",
         (),
         {"user_id": None, "id": record_id, "data": {"merchant": "Hotel"}},
     )()
-    staged_events = []
+    captures = []
 
-    async def write(*args, event_factory, **kwargs):
-        staged_events.append(event_factory(stored))
+    async def write(*args, changes, **kwargs):
+        captures.append(changes)
         return stored
 
     record_repository = AsyncMock()
@@ -425,7 +140,7 @@ async def _every_write_event(
     await service.update_record(ctx, record_id, {"merchant": "Inn"}, user_id)
     await service.delete_record(ctx, record_id, user_id)
     await service.bulk_create_records(ctx, [{"merchant": "Cafe"}], user_id)
-    return staged_events
+    return captures
 
 
 def _working_for_contact(contact_id: UUID) -> AsyncMock:
@@ -438,173 +153,33 @@ def _working_for_contact(contact_id: UUID) -> AsyncMock:
 async def test_a_contacts_function_writes_rows_as_from_outside():
     """A function a contact called writes as its own workload, for nobody in
     the pod, and what it writes came from the contact's chat through a model.
-    Every event it raises says so, as a visitor's form row does, so a DATASTORE
-    schedule does not take it for a member's."""
+    Every change it appends says so, as a visitor's form row does, so a
+    DATASTORE schedule does not take it for a member's."""
     contact_id = uuid4()
     token = set_current_context(_working_for_contact(contact_id))
     try:
-        events = await _every_write_event(_events_enabled_context(), NOBODY_USER_ID)
+        captures = await _every_write_capture(_events_enabled_context(), NOBODY_USER_ID)
     finally:
         reset_current_context(token)
 
-    assert [e.operation for e in events] == [
-        DatastoreRecordOperation.INSERT,
-        DatastoreRecordOperation.UPDATE,
-        DatastoreRecordOperation.DELETE,
-        DatastoreRecordOperation.INSERT,
-    ]
-    for event in events:
-        assert event.origin is RecordOrigin.OUTSIDE
-        assert event.outside_actor == f"contact:{contact_id}"
-        assert event.actor_id is None
+    assert len(captures) == 4
+    for changes in captures:
+        assert changes.outside_actor == f"contact:{contact_id}"
 
 
 async def test_a_members_write_and_a_visitors_row_keep_their_own_names():
     user_id = uuid4()
     token = set_current_context(_member_ctx())
     try:
-        member = await _every_write_event(_events_enabled_context(), user_id)
+        member = await _every_write_capture(_events_enabled_context(), user_id)
         opened = _events_enabled_context()
         opened.outside_actor = "visitor:session-1"
-        visitor = await _every_write_event(opened, user_id)
+        visitor = await _every_write_capture(opened, user_id)
     finally:
         reset_current_context(token)
 
-    assert {(e.origin, e.actor_id, e.outside_actor) for e in member} == {
-        (RecordOrigin.MEMBER, user_id, None)
-    }
-    assert {(e.origin, e.actor_id, e.outside_actor) for e in visitor} == {
-        (RecordOrigin.OUTSIDE, None, "visitor:session-1")
-    }
-
-
-async def test_record_event_carries_row_owner_for_rls_table():
-    """RLS tables tag events with the row owner so change subscribers can scope
-    delivery to that user without a database read."""
-    ctx = _events_enabled_rls_context()
-    caller = uuid4()
-    owner = uuid4()
-    record_id = str(uuid4())
-    record_repository = AsyncMock()
-    stored = type(
-        "StoredRecord",
-        (),
-        {"user_id": owner, "id": record_id, "data": {"merchant": "Hotel"}},
-    )()
-    staged_events = []
-
-    async def create_record(*args, event_factory, **kwargs):
-        staged_events.append(event_factory(stored))
-        return stored
-
-    record_repository.create_record.side_effect = create_record
-    service = RecordService(record_repository=record_repository)
-
-    await service.create_record(ctx, {"merchant": "Hotel"}, caller)
-
-    event = staged_events[0]
-    assert event.owner_user_id == owner
-    assert event.actor_id == caller
-
-
-async def test_record_event_omits_owner_for_non_rls_table():
-    """Shared (non-RLS) rows carry no owner, so subscribers fan them out to every
-    member who can read the table."""
-    ctx = _events_enabled_context()  # enable_rls=False
-    record_repository = AsyncMock()
-    stored = type(
-        "StoredRecord",
-        (),
-        {"user_id": uuid4(), "id": str(uuid4()), "data": {"merchant": "Hotel"}},
-    )()
-    staged_events = []
-
-    async def create_record(*args, event_factory, **kwargs):
-        staged_events.append(event_factory(stored))
-        return stored
-
-    record_repository.create_record.side_effect = create_record
-    service = RecordService(record_repository=record_repository)
-
-    await service.create_record(ctx, {"merchant": "Hotel"}, uuid4())
-
-    event = staged_events[0]
-    assert event.owner_user_id is None
-
-
-async def test_delete_record_event_owner_defaults_to_caller_on_rls_table():
-    """A self-scoped RLS delete owns its own row, so the event is tagged to the
-    deleting user."""
-    ctx = _events_enabled_rls_context()
-    caller = uuid4()
-    record_id = str(uuid4())
-    record_repository = AsyncMock()
-    deleted = type(
-        "DeletedRecord",
-        (),
-        {"user_id": caller, "id": record_id, "data": {}},
-    )()
-    staged_events = []
-
-    async def delete_record(*args, event_factory, **kwargs):
-        staged_events.append(event_factory(deleted))
-        return deleted
-
-    record_repository.delete_record.side_effect = delete_record
-    service = RecordService(record_repository=record_repository)
-
-    await service.delete_record(ctx, record_id, caller)
-
-    event = staged_events[0]
-    assert event.operation == DatastoreRecordOperation.DELETE
-    assert event.owner_user_id == caller
-
-
-async def test_transactional_admin_delete_stages_original_rls_row_owner():
-    ctx = _events_enabled_rls_context()
-    actor = uuid4()
-    row_owner = uuid4()
-    record_id = str(uuid4())
-    deleted = type(
-        "DeletedRecord",
-        (),
-        {"user_id": row_owner, "id": record_id, "data": {}},
-    )()
-    staged_events = []
-    record_repository = AsyncMock()
-
-    async def delete_record(
-        _ctx,
-        _record_id,
-        _user_id,
-        *,
-        enforce_user_scope,
-        event_factory,
-    ):
-        assert enforce_user_scope is False
-        staged_events.append(event_factory(deleted))
-        return deleted
-
-    record_repository.delete_record.side_effect = delete_record
-    dispatcher = AsyncMock()
-    auth_context = _member_ctx()
-    auth_context.can.return_value = True
-    service = RecordService(
-        record_repository=record_repository,
-        event_dispatcher=dispatcher,
-        authorization_service=object(),
-    )
-
-    token = set_current_context(auth_context)
-    try:
-        await service.delete_record(ctx, record_id, actor, admin_mode=True)
-    finally:
-        reset_current_context(token)
-
-    dispatcher.assert_awaited_once()
-    assert len(staged_events) == 1
-    assert staged_events[0].actor_id == actor
-    assert staged_events[0].owner_user_id == row_owner
+    assert {changes.outside_actor for changes in member} == {None}
+    assert {changes.outside_actor for changes in visitor} == {"visitor:session-1"}
 
 
 async def test_create_record_ignores_user_supplied_timestamps():
@@ -1255,7 +830,7 @@ async def test_execute_readonly_query_requires_pod_read_when_no_table_referenced
     )
 
 
-async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypatch):
+async def test_bulk_update_checks_permission_and_wakes_once(monkeypatch):
     """Bulk work must cost one authorization check, not one per record.
 
     `bulk_update_records` looped over `update_record`, which re-runs the whole
@@ -1291,7 +866,7 @@ async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypa
     authz = AsyncMock()
     authz.should_enforce_record_user_scope.return_value = False
     service.authz = authz
-    service.events = AsyncMock()
+    service.change_log.after_commit = AsyncMock()
 
     updates = [{"id": str(uuid4()), "status": "done"} for _ in range(5)]
     count = await service.bulk_update_records(ctx, updates, user_id)
@@ -1313,12 +888,12 @@ async def test_bulk_update_checks_permission_and_dispatches_events_once(monkeypa
         f"{authz.should_enforce_record_user_scope.await_count} scope decisions "
         "for one bulk call; the mode does not change inside the loop"
     )
-    assert service.events.dispatch.await_count == 1, (
-        f"{service.events.dispatch.await_count} event dispatches for one bulk call"
+    assert service.change_log.after_commit.await_count == 1, (
+        f"{service.change_log.after_commit.await_count} wakes for one bulk call"
     )
 
 
-async def test_bulk_delete_checks_permission_once_and_still_publishes_events(
+async def test_bulk_delete_checks_permission_once_and_still_wakes(
     monkeypatch,
 ):
     """Same preamble hoist as bulk update, and the events must still be flushed.
@@ -1345,7 +920,7 @@ async def test_bulk_delete_checks_permission_once_and_still_publishes_events(
     authz = AsyncMock()
     authz.should_enforce_record_user_scope.return_value = False
     service.authz = authz
-    service.events = AsyncMock()
+    service.change_log.after_commit = AsyncMock()
 
     count = await service.bulk_delete_records(ctx, [uuid4() for _ in range(4)], user_id)
 
@@ -1360,12 +935,12 @@ async def test_bulk_delete_checks_permission_once_and_still_publishes_events(
     )
     assert authz.require_record_write.await_count == 1
     assert authz.should_enforce_record_user_scope.await_count == 1
-    assert service.events.dispatch.await_count == 1, (
-        "staged DELETE events were never flushed"
+    assert service.change_log.after_commit.await_count == 1, (
+        "the batch's changes never woke the live hubs"
     )
 
 
-async def test_a_single_update_still_checks_permission_and_dispatches():
+async def test_a_single_update_still_checks_permission_and_wakes():
     """The split must not weaken the single-record path it was extracted from."""
     ctx = _events_enabled_context()
     user_id = uuid4()
@@ -1375,52 +950,31 @@ async def test_a_single_update_still_checks_permission_and_dispatches():
     authz = AsyncMock()
     authz.should_enforce_record_user_scope.return_value = True
     service.authz = authz
-    service.events = AsyncMock()
+    service.change_log.after_commit = AsyncMock()
 
     await service.update_record(ctx, "row-1", {"status": "done"}, user_id)
 
     assert authz.require_record_write.await_count == 1
-    assert service.events.dispatch.await_count == 1
+    assert service.change_log.after_commit.await_count == 1
     # The scope decision still reaches the repository.
     assert (
         record_repository.update_record.await_args.kwargs["enforce_user_scope"] is True
     )
 
 
-class _PlatformSession:
-    """The platform session a record write does *not* need while it runs."""
-
-    def __init__(self) -> None:
-        self.released = 0
-        self.new: list = []
-        self.dirty: list = []
-        self.deleted: list = []
-        self.info: dict = {}
-
-    def in_transaction(self) -> bool:
-        return True
-
-    async def commit(self) -> None:
-        self.released += 1
-
-
 @pytest.mark.asyncio
-async def test_the_event_dispatch_hands_back_the_platform_connection():
+async def test_the_wake_after_a_write_never_holds_the_platform_connection():
     """Records live in a different database from the request's unit of work.
 
-    A wired dispatcher is a Redis round trip, reached with the *platform*
-    connection checked out by the authorization reads -- the record write itself
-    went to the datastore pool. So the platform connection is handed back for
-    it. The common case has no dispatcher at all, and must pay nothing: a
-    release and a re-acquire for a callback that is not there is cost without
-    benefit.
+    The wake after a write is a Redis round trip, and the request still holds
+    the *platform* connection its authorization reads checked out. The wake is
+    started in the background, so ``after_commit`` returns without waiting on
+    Redis and without touching that connection at all.
     """
-    session = _PlatformSession()
+    from app.modules.datastore.domain.write_intent import WriteIntent
+    from app.modules.datastore.services.record_change_log import RecordChangeLog
 
-    wired = RecordEventCoordinator(dispatcher=AsyncMock(), platform_session=session)
-    await wired.dispatch()
-    assert session.released == 1
-
-    absent = RecordEventCoordinator(dispatcher=None, platform_session=session)
-    await absent.dispatch()
-    assert session.released == 1, "a missing dispatcher must not cost a round trip"
+    change_log = RecordChangeLog()
+    changes = await change_log.capture(_events_enabled_context(), WriteIntent.NORMAL)
+    # Bounded well below the publish's own timeout: nothing here waits on Redis.
+    await asyncio.wait_for(change_log.after_commit(changes), timeout=0.05)

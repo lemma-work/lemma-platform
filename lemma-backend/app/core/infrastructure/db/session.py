@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import event, text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from app.core.infrastructure.db.connect_errors import translate_connect_errors
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.observability.connection_scope import attach_connection_scope_monitor
@@ -161,6 +162,7 @@ def get_engine():
         # monitor works under NullPool too (checkout/checkin still fire), which
         # is what lets the ordinary test suite catch a held connection without
         # needing a real pool.
+        translate_connect_errors(engine)
         attach_connection_scope_monitor(engine)
         watch_compiled_cache("primary", engine)
     return engine
@@ -203,6 +205,7 @@ def create_dedicated_engine(url: str, *, pool_size: int, logging_name: str):
     if "pool_size" in pooling:
         pool = dedicated.sync_engine.pool
         event.listen(pool, "checkout", _pool_utilization_listener(pool))
+    translate_connect_errors(dedicated)
     attach_connection_scope_monitor(dedicated)
     watch_compiled_cache(logging_name, dedicated)
     return dedicated

@@ -214,7 +214,7 @@ async def cancel_abandoned_host_runs(
 
     Nothing else closes this gap. When the worker driving a run dies — OOM,
     eviction, a task timeout — the run is finalized FAILED by the shielded write
-    or by ``reconcile_orphaned_agent_runs``, but the lease and the ACP agent on
+    or by its turn's ``on_dead``, but the lease and the ACP agent on
     the user's machine know nothing about it. The agent keeps thinking, keeps
     calling tools against the pod, and keeps spending tokens for a turn Lemma
     has already reported as failed.

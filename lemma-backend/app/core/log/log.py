@@ -46,14 +46,12 @@ _FOREIGN_LOGGER_PREFIXES = frozenset(
         "coredis",
         "e2b",
         "fastmcp",
-        "faststream",
         "filelock",
         "httpcore",
         "httpx",
         "mcp",
         "openai",
         "sqlalchemy",
-        "streaq",
         "urllib3",
         "uvicorn",
     }
@@ -62,7 +60,6 @@ _INFO_NOISE_LOGGER_PREFIXES = (
     # These libraries narrate every successful request/message at INFO. Their
     # warnings and errors remain visible; timing belongs in OTel spans instead
     # of duplicate console records.
-    "faststream",
     "httpcore",
     "httpx",
     "sqlalchemy.engine",
@@ -74,7 +71,6 @@ _INFO_NOISE_LOGGER_PREFIXES = (
     # propagate through the redacted JSON pipeline.
     "sqlalchemy.orm",
     "sqlalchemy.pool",
-    "streaq",
     "uvicorn.access",
 )
 _DEBUG_ONLY_NOISE_LOGGER_PREFIXES = (

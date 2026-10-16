@@ -153,8 +153,8 @@ precisely because Lemma's pitch is that you bring your own.
 Origin is resolved once, at the edge, and rides the request context alongside
 the actor. The `X-Lemma-Client` header already exists on every SDK request
 (`lemma-python/lemma_sdk/transport.py`, currently `lemma-sdk-py/<version>`);
-it gains an origin token. Server-initiated work — schedules, triggers, outbox
-consumers — sets origin at the point it is enqueued, not guessed downstream.
+it gains an origin token. Server-initiated work — schedules, triggers, work
+items — sets origin at the point it is enqueued, not guessed downstream.
 
 The **origin × actor matrix is the point.** Not every cell is populated, and
 the empty ones are as informative as the full ones:
@@ -220,16 +220,20 @@ class NullSink:         # every deployment that is not Lemma Cloud
 
 ## 5. Where events are emitted
 
-**The backend is the primary emitter**, and events project off the **domain
-event bus**, not controllers. `app/core/domain/events.py` plus the
-transactional outbox already give durability, lineage (`correlation_id`,
-`causation_id`), and replay (`replay_outbox_event`). A subscriber there means:
+**The backend is the primary emitter**, and events project off **committed
+domain events**, not controllers. `app/core/domain/events.py` gives lineage
+(`correlation_id`, `causation_id`); the unit of work hands each committed batch
+to an after-commit, batched sink (`app/core/analytics/domain_events.py`), where
+projections register by event type. A projection there means:
 
 - no controller edits, so instrumentation cannot drift from behaviour;
-- events survive a PostHog outage and replay afterwards;
-- an event that fires is an event that committed, because the outbox writes in
-  the same transaction as the state change. Controller-level emits routinely
-  report actions that later rolled back.
+- an event that fires is an event that committed, because the unit of work
+  offers nothing from a transaction that rolled back. Controller-level emits
+  routinely report actions that later rolled back.
+
+The sink is best effort by design: a bounded in-process queue that drops its
+oldest event when full (counted as `lemma.analytics.sink.dropped`), and loses
+what it holds if the process crashes. Analytics does not get a durable path.
 
 Critically, it also means **every origin is covered by one implementation.** A
 pod created from the CLI, from an agent over MCP, from a coding agent over ACP,

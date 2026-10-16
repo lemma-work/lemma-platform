@@ -161,6 +161,22 @@ class RunMessageWriter:
                 draft=draft,
             )
 
+    async def notice(
+        self, *, conversation_id: UUID, text: str, metadata: JsonObject
+    ) -> Message:
+        """A line for the person reading the conversation, in no run.
+
+        Run-less on purpose: the turn writing it does not carry it to its own
+        model (history takes only the run-less notifications older than the
+        turn's first message), and later turns read it as context.
+        """
+        async with self.uow_factory() as uow:
+            return await ConversationRepository(uow).append_message(
+                conversation_id=conversation_id,
+                agent_run_id=None,
+                draft=MessageDraft.of_notification(text, metadata=metadata),
+            )
+
     @staticmethod
     async def _unique_pause_id(
         repository: ConversationRepository,

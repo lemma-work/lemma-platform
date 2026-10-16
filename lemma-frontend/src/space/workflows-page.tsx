@@ -7,7 +7,7 @@ import { isForbidden } from "@/session/auth-state";
 import { gather } from "@/workflow/waiting-inbox";
 import { byNewest, runTone, sayStuckFor, sayWaitingOn, sayWhen, stillGoing, type RunRow, type WorkflowRow } from "@/workflow/runs";
 import { RunRowButton } from "@/workflow/run-row";
-import { useSpaceRuns, useWorkflowList } from "@/workflow/use-run";
+import { SPACE_RUNS_PAGE, useSpaceRuns, useWorkflowList } from "@/workflow/use-run";
 import { useSchedules } from "@/schedule/queries";
 import { ChevronRightIcon, WorkflowIcon } from "@/ui/icons";
 import { emptyFor } from "./empty-copy";
@@ -96,6 +96,7 @@ export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun, onAsk, onL
                     <ul className="wfindex">
                         {(flows.data ?? []).map((flow) => (
                             <FlowRow key={flow.id} flow={flow} runs={byFlow.get(flow.id) ?? []}
+                                everyRun={all.length < SPACE_RUNS_PAGE}
                                 schedules={(schedules.data ?? []).filter((job) => job.target.kind === "workflow" && job.target.name === flow.name && job.active).length}
                                 agentNames={agentNames} onOpen={() => onOpenWorkflow(flow.name)} />
                         ))}
@@ -138,9 +139,11 @@ export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun, onAsk, onL
     );
 }
 
-function FlowRow({ flow, runs, schedules, agentNames, onOpen }: {
+function FlowRow({ flow, runs, everyRun, schedules, agentNames, onOpen }: {
     flow: WorkflowRow;
     runs: RunRow[];
+    /** Whether `runs` came from a read that held every run in the space. */
+    everyRun: boolean;
     schedules: number;
     agentNames?: string[];
     onOpen: () => void;
@@ -168,7 +171,12 @@ function FlowRow({ flow, runs, schedules, agentNames, onOpen }: {
                             <i data-tone={runTone(last.status)} />
                             Last run {sayWhen(last.startedAt ?? last.createdAt) ?? "—"}
                         </span>
-                    ) : <span className="wfindex__last">Never run</span>}
+                    ) : (
+                        /* Only the space's latest runs are read: a busy workflow
+                           can push this one's last run out of them. "Never" is
+                           only true when the read held everything. */
+                        <span className="wfindex__last">{everyRun ? "Never run" : "No recent runs"}</span>
+                    )}
                     <small>{schedules > 0 ? schedules + (schedules === 1 ? " schedule" : " schedules") + " on" : runs.length > 0 ? runs.length + " recent runs" : ""}</small>
                 </span>
                 <ChevronRightIcon size={16} />

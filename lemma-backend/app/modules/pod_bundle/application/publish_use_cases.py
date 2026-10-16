@@ -1,7 +1,8 @@
 """Application/use-case layer for publishing a pod to GitHub.
 
 ``start_publish`` authorizes, acquires an account/repository concurrency lock,
-writes the initial ``QUEUED`` state, and enqueues the ``publish_pod_github`` job.
+and writes the initial ``QUEUED`` state with its ``pod_bundle.publish`` work
+item in one transaction.
 ``get_publish`` is a state read. All heavy work — export, README, GitHub
 uploads — happens in the worker with short per-operation UoW scopes.
 """
@@ -14,12 +15,18 @@ from app.core.authorization.permissions import Permissions
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.modules.pod_bundle.domain.errors import (
     BundleJobConflictError,
     BundleJobExpiredError,
 )
 from app.modules.pod_bundle.domain.state import PublishMode, PublishState, PublishStatus
+from app.modules.pod_bundle.events.work import (
+    PUBLISH,
+    BundleJobQueue,
+    PublishJob,
+    carried_origin,
+    publish_key,
+)
 from app.modules.pod_bundle.infrastructure.publish_lock import (
     PublishConcurrencyLock,
     get_publish_concurrency_lock,
@@ -29,11 +36,11 @@ from app.modules.pod_bundle.infrastructure.state_store import (
     get_pod_bundle_state_store,
 )
 
-PUBLISH_JOB_NAME = "publish_pod_github"
+PUBLISH_JOB_NAME = PUBLISH
 
 
 def publish_job_id(publish_id: UUID) -> str:
-    return f"pod-publish:{publish_id}"
+    return publish_key(publish_id)
 
 
 class PublishUseCases:
@@ -42,12 +49,12 @@ class PublishUseCases:
         uow_factory: UnitOfWorkFactory,
         *,
         state_store: PodBundleStateStore | None = None,
-        job_queue=None,
+        job_queue: BundleJobQueue | None = None,
         publish_lock: PublishConcurrencyLock | None = None,
     ):
         self._uow_factory = uow_factory
         self._state_store = state_store or get_pod_bundle_state_store()
-        self._job_queue = job_queue or get_streaq_job_queue()
+        self._job_queue = job_queue or BundleJobQueue()
         self._publish_lock = publish_lock or get_publish_concurrency_lock()
 
     async def start_publish(
@@ -86,18 +93,23 @@ class PublishUseCases:
                 "A publish for this GitHub account and repository is already running."
             )
         try:
-            await self._state_store.save_publish(state)
-            job = await self._job_queue.enqueue(
-                PUBLISH_JOB_NAME,
-                context={
-                    "publish_id": str(publish_id),
-                    "pod_id": str(pod_id),
-                    "user_id": str(user_id),
-                },
-                _job_id=publish_job_id(publish_id),
-            )
-            if job is None:
-                raise BundleJobConflictError("The publish job could not be queued.")
+            async with self._uow_factory() as uow:
+                await self._state_store.stage_publish(uow, state)
+                queued = await self._job_queue.queue_job(
+                    uow,
+                    PUBLISH,
+                    PublishJob(
+                        publish_id=publish_id,
+                        pod_id=pod_id,
+                        user_id=user_id,
+                        **carried_origin(),
+                    ),
+                    pod_id=pod_id,
+                    dedup_key=publish_key(publish_id),
+                )
+                if not queued:
+                    raise BundleJobConflictError("The publish job could not be queued.")
+                await uow.commit()
         except Exception:
             await self._publish_lock.release(
                 account_id=account_id,

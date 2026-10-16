@@ -19,8 +19,10 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.work import maintenance
 from app.core.infrastructure.work.config import (
+    class_shutdown_grace,
     class_slots,
     enabled_classes,
     work_settings,
@@ -45,6 +47,9 @@ from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
 
 logger = get_logger(__name__)
+
+#: How long a booting worker waits for a database that refuses connections.
+_BOOT_DB_WAIT_SECONDS = 60.0
 
 
 def process_owner() -> str:
@@ -100,7 +105,8 @@ class WorkRuntime:
         self._tasks: list[asyncio.Task[None]] = []
         self._loops: list[asyncio.Task[None]] = []
         self._stop_task: asyncio.Task[None] | None = None
-        self._grace = work_settings.work_shutdown_grace_seconds
+        #: Per class; one explicit ``grace_seconds`` on stop replaces them all.
+        self._grace = {cls: class_shutdown_grace(cls) for cls in classes}
 
     def _wake_local(self, cls: WorkClass) -> None:
         dispatcher = self.dispatchers.get(cls)
@@ -111,14 +117,39 @@ class WorkRuntime:
     def classes(self) -> list[WorkClass]:
         return list(self.dispatchers)
 
+    async def _arm_periodics(self) -> int:
+        """Arm the periodics, waiting out a database that cannot take a connection.
+
+        A worker that joins a rolling deploy while the database is full would
+        otherwise exit at boot and crash-loop until a slot frees. Bounded: past
+        ``_BOOT_DB_WAIT_SECONDS`` the error is raised as before.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _BOOT_DB_WAIT_SECONDS
+        delay = 0.5
+        while True:
+            try:
+                async with self.db.control() as session:
+                    armed = await maintenance.arm_periodics(
+                        session, self._registry, self.classes
+                    )
+                    await session.commit()
+                return armed
+            except (SQLAlchemyError, OSError) as exc:
+                if not is_database_unavailable(exc) or loop.time() > deadline:
+                    raise
+                logger.warning(
+                    "work.runtime.boot_waiting_for_database.degraded",
+                    error_type=type(exc).__name__,
+                    retry_in_seconds=delay,
+                )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 5.0)
+
     async def start(self) -> None:
         if not self.dispatchers:
             return
-        async with self.db.control() as session:
-            armed = await maintenance.arm_periodics(
-                session, self._registry, self.classes
-            )
-            await session.commit()
+        armed = await self._arm_periodics()
         for cls, dispatcher in self.dispatchers.items():
             self._tasks.append(
                 create_background_task(
@@ -178,11 +209,13 @@ class WorkRuntime:
         if self._stop_task is not None or not self.dispatchers:
             return
         if grace_seconds is not None:
-            self._grace = grace_seconds
+            self._grace = dict.fromkeys(self._grace, grace_seconds)
         self.stopping.set()
         for dispatcher in self.dispatchers.values():
             dispatcher.wake()
-        logger.info("work.runtime.stopping", grace_seconds=self._grace)
+        logger.info(
+            "work.runtime.stopping", grace_seconds=max(self._grace.values(), default=0)
+        )
         self._stop_task = create_background_task(self._drain(), name="work-drain")
 
     async def stop(self, grace_seconds: float | None = None) -> None:
@@ -196,7 +229,7 @@ class WorkRuntime:
         if self._tasks:
             await asyncio.wait(self._tasks)
         released = await asyncio.gather(
-            *(d.drain(self._grace) for d in self.dispatchers.values())
+            *(d.drain(self._grace[cls]) for cls, d in self.dispatchers.items())
         )
         for task in self._loops:
             task.cancel()

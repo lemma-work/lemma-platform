@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 from uuid import UUID
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.api.uploads import upload_source_sha256
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
@@ -496,7 +497,8 @@ class FileStoragePhase:
             return
         try:
             await search_service.remove_files(file_ids)
-        except Exception:
+        except Exception as exc:
+            raise_if_database_unavailable(exc)
             logger.error(
                 "datastore.storage_phase.deleted_file_search_purge.failed",
                 file_count=len(file_ids),

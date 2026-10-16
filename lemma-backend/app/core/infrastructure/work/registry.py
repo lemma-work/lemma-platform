@@ -9,6 +9,7 @@ so an old worker in a rolling deploy never claims a kind it cannot run.
 
 from __future__ import annotations
 
+import zlib
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -56,6 +57,9 @@ class HandlerSpec:
     priority: int
     #: Buckets each item draws one token from at claim. Empty = unlimited.
     rates: tuple[RateUse, ...] = ()
+    #: Wall-clock ceiling on one run of a JOB; past it the job is cancelled
+    #: and goes dead (``max_runtime``). None = bounded only by the handler.
+    max_runtime: timedelta | None = None
 
     @property
     def rate_per_key(self) -> bool:
@@ -73,6 +77,20 @@ class PeriodicSpec:
     def dedup_key(self) -> str:
         return f"{PERIODIC_PREFIX}{self.name}"
 
+    @property
+    def phase(self) -> timedelta:
+        """How long after arming the first run is due: stable per name.
+
+        Every periodic is armed at the same worker boot and re-arms itself
+        ``every`` after each run, so without an offset all the hourly sweeps
+        would fire together forever -- the convoy that showed up as event-loop
+        stalls on the round minute when they were crons. A hash of the name
+        spreads them across their interval (capped at an hour, so a daily
+        sweep still runs soon after a fresh deploy).
+        """
+        window = int(min(self.every, timedelta(hours=1)).total_seconds())
+        return timedelta(seconds=zlib.crc32(self.name.encode()) % max(window, 1))
+
 
 class WorkRegistry:
     def __init__(self) -> None:
@@ -85,6 +103,7 @@ class WorkRegistry:
             raise ValueError(f"work kind {spec.kind!r} is already registered")
         if spec.concurrency is not None and spec.concurrency < 1:
             raise ValueError(f"work kind {spec.kind!r}: concurrency must be >= 1")
+        _check_max_runtime(spec)
         _check_rates(spec)
         if spec.mode is WorkMode.FAST:
             check_handler_signature(spec.kind, spec.handler, "FastContext")
@@ -107,6 +126,7 @@ class WorkRegistry:
         on_dead: DeadHook | None = ...,
         priority: int = ...,
         rates: Sequence[RateUse | str] = ...,
+        max_runtime: None = ...,
     ) -> Callable[[FastHandler[P]], FastHandler[P]]: ...
 
     @overload
@@ -123,6 +143,7 @@ class WorkRegistry:
         on_dead: DeadHook | None = ...,
         priority: int = ...,
         rates: Sequence[RateUse | str] = ...,
+        max_runtime: timedelta | None = ...,
     ) -> Callable[[JobHandler[P]], JobHandler[P]]: ...
 
     def handler[P: BaseModel](
@@ -138,12 +159,18 @@ class WorkRegistry:
         on_dead: DeadHook | None = None,
         priority: int = 0,
         rates: Sequence[RateUse | str] = (),
+        max_runtime: timedelta | None = None,
     ) -> Callable[[Callable[..., Awaitable[None]]], Callable[..., Awaitable[None]]]:
         """Register the decorated coroutine as the handler for ``kind``.
 
         ``rates`` names the buckets each item draws a token from when claimed
         (a bare string is a per-namespace bucket); an item over a rate waits
         for its token, it is never charged or dropped.
+
+        ``max_runtime`` (JOB only) caps one run's wall-clock time: past it the
+        job is cancelled and the item goes dead with reason ``max_runtime``,
+        so ``on_dead`` records the terminal state. A handler that wants to end
+        on its own terms first reads ``ctx.deadline``.
         """
         uses = tuple(RateUse(use) if isinstance(use, str) else use for use in rates)
 
@@ -163,6 +190,7 @@ class WorkRegistry:
                     on_dead=on_dead,
                     priority=priority,
                     rates=uses,
+                    max_runtime=max_runtime,
                 )
             )
             return fn
@@ -210,6 +238,17 @@ class WorkRegistry:
         if dedup_key is None or not dedup_key.startswith(PERIODIC_PREFIX):
             return None
         return self._periodics.get(dedup_key.removeprefix(PERIODIC_PREFIX))
+
+
+def _check_max_runtime(spec: HandlerSpec) -> None:
+    if spec.max_runtime is None:
+        return
+    if spec.mode is WorkMode.FAST:
+        # A fast handler is bounded by its statement timeout; a second clock
+        # would only race it.
+        raise ValueError(f"work kind {spec.kind!r}: max_runtime is for JOB kinds")
+    if spec.max_runtime <= timedelta(0):
+        raise ValueError(f"work kind {spec.kind!r}: max_runtime must be positive")
 
 
 def _check_rates(spec: HandlerSpec) -> None:

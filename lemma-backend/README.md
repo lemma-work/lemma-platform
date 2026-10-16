@@ -17,8 +17,7 @@ The backend lives in `lemma-backend/` inside the `lemma-platform` monorepo. It i
 | ORM | SQLAlchemy 2.0 async (asyncpg) |
 | Database | PostgreSQL + pgvector |
 | Auth | SuperTokens cookie-based sessions |
-| Message bus | FastStream (Redis streams) |
-| Task queue | streaq (Redis) |
+| Background work | The work runtime: `work_items` in PostgreSQL (`app/core/infrastructure/work`) |
 | Cache | Redis (`app/core/infrastructure/cache`) |
 | Validation | Pydantic v2 |
 | Dependency mgmt | uv |
@@ -64,7 +63,7 @@ make logs               # tail backend logs
 - API: `http://localhost:8710`
 - API docs (Scalar): `http://localhost:8710/scalar`
 
-`make dev` runs Postgres/Redis/SuperTokens in Docker and the backend as **one** host process (`uvicorn local_app:app`) that combines the FastAPI app, the streaq event worker, and the scheduler — convenient for local dev. It also installs the local `lemma` CLI and registers it as the `local-dev` server:
+`make dev` runs Postgres/Redis/SuperTokens in Docker and the backend as **one** host process (`uvicorn local_app:app`) that combines the FastAPI app and the work runtime — convenient for local dev. It also installs the local `lemma` CLI and registers it as the `local-dev` server:
 
 ```bash
 lemma servers select local-dev
@@ -73,7 +72,7 @@ lemma auth login
 
 ### Run API and worker separately (prod topology)
 
-Production runs the API and the worker as **two** processes. There is no third scheduler process — time triggers are streaq crons on the worker's lanes. To mirror the split locally, start infra, then run each process yourself from `lemma-backend/`:
+Production runs the API and the worker as **two** processes. There is no third scheduler process — a TIME schedule is a work item due at its next occurrence, and maintenance is periodic work. To mirror the split locally, start infra, then run each process yourself from `lemma-backend/`:
 
 ```bash
 docker compose up -d                  # infra: postgres, redis, supertokens
@@ -82,8 +81,9 @@ uv run alembic upgrade head           # apply migrations
 # API only
 uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload
 
-# streaq worker — agent runs, file (re)indexing, surface ingest, datastore
-# cleanup, and every cron/time/webhook schedule
+# worker — the work runtime: agent runs, file (re)indexing, surface ingest,
+# deliveries, trigger fires and periodic maintenance. WORK_CLASSES picks the
+# classes (all by default); SIGTERM drains each within its own grace, exit 0.
 uv run python -m app.worker
 ```
 
@@ -141,7 +141,7 @@ cargo-built Agent Host; `make desktop-agent-host-e2e` supplies it) or
 
 ### Markers & modes
 
-Markers: `e2e`, `slow`, `worker` (needs the real streaq worker), `workspace` (needs a real sandbox provider), `provider` (needs the real model), `local_cli`. The model can be deterministic or real via `E2E_LLM_MODE=mock|real`; sandbox coverage always uses Docker (`E2E_SANDBOX_MODE=docker`) or credential-gated E2B.
+Markers: `e2e`, `slow`, `worker` (needs the real worker process), `workspace` (needs a real sandbox provider), `provider` (needs the real model), `local_cli`. The model can be deterministic or real via `E2E_LLM_MODE=mock|real`; sandbox coverage always uses Docker (`E2E_SANDBOX_MODE=docker`) or credential-gated E2B.
 
 ### Pre-merge e2e gate (CI)
 

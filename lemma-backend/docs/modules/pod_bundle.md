@@ -12,8 +12,8 @@ with the CLI through the top-level `lemma-pod-bundle` package.
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Import/upload/plan/apply/replan/cancel/events, export/status/download, publish/status/events |
-| streaq tasks | Export, plan URL/GitHub import, apply, GitHub publish |
-| cron | Sweep expired staging objects, mark stuck states, delete job rows past retention |
+| Work items | `pod_bundle.{export,plan,import_github,import_url,apply,publish}`: admin class, pod namespace, one per pod at a time, written with the job's state row in the request's transaction |
+| Periodic work | `pod_bundle.staging_sweep` (30 min): sweep expired staging objects, end jobs nothing will run again, delete job rows past retention |
 | Realtime | Redis pub/sub SSE plus polling snapshots |
 | SQL tables | `pod_bundle_jobs`, `pod_bundle_job_steps` |
 
@@ -21,10 +21,17 @@ Job state is authoritative in PostgreSQL and mirrored to Redis, not the other
 way round: a Redis flush loses the realtime mirror, not the job. Every job
 writes one `pod_bundle_jobs` row and one `pod_bundle_job_steps` row per plan
 step, so the two tables grow with every export, import and publish — the sweep
-cron deletes rows whose `completed_at` is past retention (30 days, the
+deletes rows whose `completed_at` is past retention (30 days, the
 `JOB_ROW_RETENTION_SECONDS` constant in `infrastructure/job_retention.py`), and
 steps go with their job through the FK cascade. Zip archives are staged in
 object storage. Completed import provenance is appended to `PodConfig.recipes`.
+
+A worker that dies mid-job loses its lease and the next one resumes from the
+first pending step (apply) or file (publish); a stopping worker hands the job
+back at the next step boundary, uncharged. Cancel stays cooperative for a
+running job and ends a queued one in its own transaction. An item that goes
+dead (attempts, lease losses, the 30-minute cap) ends its job FAILED, or
+CANCELLED if it was cancelling, in the dead transaction.
 
 ## Job state
 

@@ -111,8 +111,12 @@ async def start_and_stream_run(
                 await close_subscription()
                 return
         try:
+
+            async def ended() -> str | None:
+                return terminal_run_chunk(await load_run(result.agent_run_id))
+
             async for chunk in with_keepalive(
-                iter_subscription(iterator, result.agent_run_id)
+                iter_subscription(iterator, result.agent_run_id), on_idle=ended
             ):
                 yield chunk
         except Exception:

@@ -21,7 +21,6 @@ def configure_test_mappers() -> None:
     """Register every model, then configure. Idempotent."""
     # Imported inside the function: these are for their registration side
     # effect, and at module scope they read as dead imports.
-    from app.core.infrastructure.events import models as _events  # noqa: F401
     from app.modules.agent.infrastructure import models as _agent  # noqa: F401
     from app.modules.agent.infrastructure import (  # noqa: F401
         runtime_models as _agent_runtime,

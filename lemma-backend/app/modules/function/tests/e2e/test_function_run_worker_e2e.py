@@ -39,7 +39,7 @@ from app.modules.test_support.e2e.worker_process import production_worker_proces
 # Slow, and in the protected lane: each starts its own worker subprocess, which
 # must not share an e2e process with the session-scoped base worker (both
 # would claim the same work items, and the harness flushes the shared Redis).
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.drives_work]
 
 
 @pytest.fixture

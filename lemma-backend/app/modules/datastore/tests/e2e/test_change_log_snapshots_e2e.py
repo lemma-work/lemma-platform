@@ -13,7 +13,6 @@ import pytest
 
 from app.modules.datastore.changes.schema import PENDING_TABLE
 from app.modules.datastore.tests.e2e.change_log_support import (
-    change_log_mode,
     datastore_scalar,
     datastore_schedule,
     deliver_all,
@@ -25,12 +24,6 @@ from app.modules.datastore.tests.e2e.change_log_support import (
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
-
-
-@pytest.fixture(autouse=True)
-def _change_log_on():
-    with change_log_mode("on"):
-        yield
 
 
 async def _skipped(schedule_id: UUID) -> object:

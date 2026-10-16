@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.config import reveal_secret
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -119,7 +120,9 @@ async def deployment_owns_whatsapp_number(phone_number_id: str) -> bool:
     Fails **closed**, unlike `global_whatsapp_configuration`, and the asymmetry
     is deliberate: that one improves an answer settings can already give, while
     this one decides whether to act on a message. An unreadable pool must not
-    turn into "sure, we own that".
+    turn into "sure, we own that" -- nor, when the database is unavailable,
+    into "not ours": that is raised, so the caller retries instead of dropping
+    the code.
     """
     if not phone_number_id:
         return False
@@ -130,7 +133,8 @@ async def deployment_owns_whatsapp_number(phone_number_id: str) -> bool:
             found = await WhatsAppNumberRepository(
                 SqlAlchemyUnitOfWork(session)
             ).get_by_phone_number_id(phone_number_id)
-    except SQLAlchemyError, OSError:
+    except (SQLAlchemyError, OSError) as exc:
+        raise_if_database_unavailable(exc)
         logger.warning(
             "agent_surfaces.whatsapp_contract.number_ownership_unreadable.degraded",
             exc_info=True,

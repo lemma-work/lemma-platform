@@ -1,14 +1,17 @@
 """Pod-schema DDL as work: one ``pod_schema.migrate`` item per schema behind.
 
 A boot hook that walked every pod schema would grow with every pod ever made
-until it owned the boot. Instead a periodic ``pod_schema.backfill`` pages
+until it owned the boot. Instead a periodic ``pod_schema.backfill``, armed at
+the first worker boot of a release that knows a new version, pages
 through the schemas that are not at the latest version and enqueues one
 ``admin`` item per schema, in the schema's pod's namespace, so the admin class's
 per-namespace cap and round robin pace it and no pod waits behind another's
 migration. Each item takes only that schema's advisory lock and is idempotent,
 so a duplicate, a retry or a second worker doing the same schema costs a
-version read. Indexing still migrates its own schema inline on first use;
-this is for the schemas nothing has written to since the last release.
+version read. Indexing still migrates its own schema inline on first use, and
+a record write only makes sure the change log exists
+(``ensure_change_log``): a cheap read, and the change log's own small DDL for
+a schema the backfill has not reached -- never the chunk rewrite.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ POD_SCHEMA_BACKFILL = "pod_schema.backfill"
 #: Schemas enqueued per backfill page; the next page is its own item.
 BACKFILL_PAGE = 500
 BACKFILL_EVERY = timedelta(hours=6)
+BACKFILL_PERIODIC = f"{POD_SCHEMA_BACKFILL}:v{POD_SCHEMA_LATEST}"
 
 
 class PodSchemaMigratePayload(BaseModel):
@@ -117,7 +121,11 @@ def register_pod_schema_work(registry: WorkRegistry) -> None:
         mode=WorkMode.JOB,
         payload=PodSchemaBackfillPayload,
     )(run_backfill)
-    registry.periodic(POD_SCHEMA_BACKFILL, BACKFILL_EVERY, POD_SCHEMA_BACKFILL)
+    # Named by the version it migrates to: a release that adds a version arms
+    # a new chain at its first worker boot instead of waiting for the old
+    # chain's next tick, and the old chain's queued item runs once and stops
+    # (nothing re-arms a periodic no release registers).
+    registry.periodic(BACKFILL_PERIODIC, BACKFILL_EVERY, POD_SCHEMA_BACKFILL)
 
 
 register_pod_schema_work(default_registry)

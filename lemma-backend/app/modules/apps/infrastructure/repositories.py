@@ -15,7 +15,6 @@ from app.core.authorization.sql_actions import (
     allowed_actions_contains,
     allowed_actions_expr,
 )
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.sql_text import starts_with
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.apps.domain.entities import AppEntity, AppReleaseEntity
@@ -88,12 +87,9 @@ class AppRepository(AppRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def create(self, entity: AppEntity) -> AppEntity:
         model = AppModel(

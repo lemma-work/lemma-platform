@@ -3,7 +3,6 @@ from typing import Optional
 
 from sqlalchemy import select, update
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.connect_request import (
@@ -23,11 +22,8 @@ class ConnectRequestRepository(
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         super().__init__(uow, ConnectRequest, ConnectRequestEntity)
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def get_by_state(self, state: str) -> Optional[ConnectRequestEntity]:
         """Get connect request by state attribute."""

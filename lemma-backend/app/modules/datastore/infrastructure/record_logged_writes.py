@@ -61,14 +61,24 @@ async def create_logged(
     data: RecordValues,
     user_id: UUID,
     changes: ChangeCapture,
+    *,
+    existing_on_conflict: bool = False,
 ) -> RecordEntity:
+    """``existing_on_conflict``: a create whose key is taken returns the stored
+    row and logs no change (``services/record_idempotency``)."""
     converted = convert_record(ctx.columns, dict(data), skip_auto=False)
     values = repo._serialize_record_values(ctx, converted, user_id)
     columns = ", ".join(f'"{key}"' for key in values)
     placeholders = ", ".join(f":{key}" for key in values)
+    key = ctx.primary_key_column
+    conflict = (
+        f'ON CONFLICT ("{key}") DO NOTHING '
+        if existing_on_conflict and key in values
+        else ""
+    )
     sql = (
         f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" '
-        f"({columns}) VALUES ({placeholders}) RETURNING *"
+        f"({columns}) VALUES ({placeholders}) {conflict}RETURNING *"
     )
     await changes.prepare()
     try:
@@ -80,6 +90,16 @@ async def create_logged(
             await changes.begin(session)
             statement, params = changes.wrap(sql, dict(values), op="I")
             row = (await session.execute(text(statement), params)).fetchone()
+            if row is None and conflict:
+                row = (
+                    await session.execute(
+                        text(
+                            f'SELECT * FROM "{ctx.schema_name}"."{ctx.table_name}" '
+                            f'WHERE "{key}" = :pk'
+                        ),
+                        {"pk": values[key]},
+                    )
+                ).fetchone()
             if row is None:
                 raise DatastoreInfrastructureError("Failed to create record")
             entity = repo._row_to_entity(changes.row(row), ctx)

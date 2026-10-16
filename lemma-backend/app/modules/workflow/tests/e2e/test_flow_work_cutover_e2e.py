@@ -64,7 +64,7 @@ def _single(node: dict) -> tuple[list[dict], list[dict]]:
     ]
 
 
-async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
+async def test_the_cutover_arms_every_wait_and_ends_every_function_run(
     flows: FlowWork,
 ) -> None:
     flows.runtime.on_accepted = None  # functions end only when told to
@@ -96,15 +96,16 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
     form = await flows.workflow(
         *_single({"id": "ask", "type": "FORM", "config": {"input_schema": FORM_SCHEMA}})
     )
+    # Held by a timer, not a form: a run still on its entry form holds no
+    # place in the limit.
     capped = await flows.workflow(
         *_single(
-            {"id": "ask", "type": "FORM", "config": {"input_schema": FORM_SCHEMA}}
+            {"id": "hold", "type": "WAIT_UNTIL", "config": {"timeout_seconds": 3600}}
         ),
         limit=1,
     )
 
     queued_fn = await flows.start(function_step)  # function run PENDING
-    stale_fn = await flows.start(function_step)  # queued hours before the release
     lost_fn = await flows.start(function_step)  # function run ends, resume lost
     started_fn = await flows.start(running_step)  # function run RUNNING
     timed = await flows.start(timer)
@@ -138,13 +139,6 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
         "UPDATE workflow_run_waits SET status = 'CANCELLED' WHERE run_id = :id",
         id=UUID(first_capped["id"]),
     )
-    stale_ref = stale_fn["active_wait"]["external_ref"]
-    await _execute(
-        flows,
-        "UPDATE function_runs SET created_at = now() - interval '2 hours' "
-        "WHERE id = :id",
-        id=UUID(stale_ref),
-    )
     # Written by the previous release: nothing in the work table.
     await _execute(flows, "DELETE FROM work_items")
 
@@ -158,27 +152,21 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
     flows.runtime.on_accepted = None
     await flows.drain()
 
-    # Queued function run: started by its seeded item, once.
-    queued_ref = queued_fn["active_wait"]["external_ref"]
-    assert flows.runtime.invocations[queued_ref] == 1
-    # Queued long before the release: not started by the cutover, failed
-    # saying why.
-    assert flows.runtime.invocations[stale_ref] == 0
-    stale_run = await flows.scalar(
-        "SELECT status || ': ' || error FROM function_runs WHERE id = :id",
-        id=UUID(stale_ref),
-    )
-    assert stale_run.startswith("FAILED: Not started before the upgrade"), stale_run
+    # In flight on the old path: never started again, failed saying why, and
+    # each workflow waiting on one hears that it ended.
+    for fn, ref in (
+        (queued_fn, queued_fn["active_wait"]["external_ref"]),
+        (started_fn, started_fn["active_wait"]["external_ref"]),
+    ):
+        assert flows.runtime.invocations[ref] == 0
+        ended = await flows.scalar(
+            "SELECT status || ': ' || error FROM function_runs WHERE id = :id",
+            id=UUID(ref),
+        )
+        assert ended.startswith("FAILED: Interrupted by the upgrade"), ended
+        assert (await flows.run(fn["id"]))["status"] == "FAILED"
     # The function run whose end the old consumer never delivered: resumed.
     assert (await flows.run(lost_fn["id"]))["status"] == "COMPLETED"
-    # The one an old worker started: never invoked again, failed at its deadline.
-    assert flows.runtime.invocations[started_ref] == 0
-    assert (
-        await flows.scalar(
-            "SELECT status FROM function_runs WHERE id = :id", id=UUID(started_ref)
-        )
-        == "FAILED"
-    )
     # The timer fires at its time.
     await eventually(
         label="the seeded timer fired",
@@ -196,7 +184,9 @@ async def test_every_run_and_wait_in_flight_at_the_cutover_moves_on(
     )
     # The parked run is admitted into the room that was freed.
     admitted = await flows.run(parked["id"])
-    assert admitted["active_wait"]["wait_type"] == "HUMAN"
+    # (The drain pulls its timer forward, so it runs to the end.)
+    assert admitted["status"] == "COMPLETED"
+    assert [step["node_id"] for step in admitted["step_history"]] == ["hold", "end"]
 
 
 async def _drained_status(flows: FlowWork, run_id: str) -> str:

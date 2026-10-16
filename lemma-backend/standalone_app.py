@@ -7,9 +7,7 @@ from app.standalone import build_standalone_app
 
 
 def create_standalone_app() -> FastAPI:
-    from app.events import streaq_worker
-
-    return build_standalone_app(create_api_app(), streaq_worker)
+    return build_standalone_app(create_api_app())
 
 
 app = create_standalone_app()

@@ -94,11 +94,13 @@ _MARK_RUNNING = text(
     """
     UPDATE work_items w
        SET state = 'running', lease_owner = :owner,
+           lease_epoch = w.lease_epoch + 1,
            lease_until = now() + make_interval(secs => v.lease)
       FROM unnest(CAST(:ids AS uuid[]), CAST(:leases AS float8[])) AS v(id, lease)
      WHERE w.id = v.id
     RETURNING w.id, w.ns, w.class, w.kind, w.payload, w.dedup_key, w.attempts,
-              w.lease_losses, w.first_unavailable_at, w.run_at, w.created_at
+              w.lease_losses, w.first_unavailable_at, w.run_at, w.created_at,
+              w.lease_epoch
     """
 )
 _TOUCH_SERVED = text(

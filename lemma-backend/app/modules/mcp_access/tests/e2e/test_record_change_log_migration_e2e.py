@@ -1,4 +1,4 @@
-"""The change-log cutover migration: up, down, and up again, and what it seeds."""
+"""The change-log cutover migration: up, down, and up again."""
 
 import os
 import subprocess
@@ -18,7 +18,7 @@ BEFORE = "0054_work_runtime"
 REVISION = "0055_change_log_and_flows"
 
 
-def test_record_change_log_upgrades_seeds_and_rolls_back_cleanly() -> None:
+def test_record_change_log_upgrades_and_rolls_back_cleanly() -> None:
     scripts = ScriptDirectory.from_config(Config(str(BACKEND / "alembic.ini")))
     assert scripts.get_revision(REVISION).down_revision == BEFORE
 
@@ -39,20 +39,19 @@ def test_record_change_log_upgrades_seeds_and_rolls_back_cleanly() -> None:
 
         sync_url = database_url.replace("postgresql+asyncpg", "postgresql")
 
-        def state(connection: psycopg.Connection) -> tuple[object, ...]:
+        def state(connection: psycopg.Connection) -> object:
             row = connection.execute(
-                "SELECT to_regclass('mcp_event_deliveries'), "
-                "(SELECT count(*) FROM work_items WHERE kind = 'changes.drain')"
+                "SELECT to_regclass('mcp_event_deliveries')"
             ).fetchone()
             assert row is not None
-            return tuple(row)
+            return row[0]
 
         migrate("upgrade", REVISION)
         with psycopg.connect(sync_url) as connection:
-            assert state(connection) == ("mcp_event_deliveries", 1)
+            assert state(connection) == "mcp_event_deliveries"
         migrate("downgrade", BEFORE)
         with psycopg.connect(sync_url) as connection:
-            assert state(connection) == (None, 0)
+            assert state(connection) is None
         migrate("upgrade", REVISION)
         with psycopg.connect(sync_url) as connection:
-            assert state(connection) == ("mcp_event_deliveries", 1)
+            assert state(connection) == "mcp_event_deliveries"

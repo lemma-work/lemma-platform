@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import DBAPIError
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.context import FastContext
 from app.core.infrastructure.work.db import SessionMaker, WorkDb
@@ -40,8 +41,10 @@ from app.core.infrastructure.work.retry import (
 from app.core.infrastructure.work.types import (
     ClaimedItem,
     Defer,
+    MaxRuntimeExceeded,
     PermanentFailure,
     Unavailable,
+    database_down,
 )
 from app.core.infrastructure.work.writer import LocalWake, WorkWriter
 from app.core.log.log import get_logger
@@ -97,8 +100,16 @@ def decide(
     policy = spec.retry
     if isinstance(exc, Unavailable):
         return after_unavailable(policy, state, exc, now=now)
+    if is_database_unavailable(exc):
+        # The database itself could not be reached or take a connection: the
+        # same evidence an adapter's ``Unavailable`` carries, so the same
+        # uncharged retry, bounded by the kind's unavailable budget -- not an
+        # attempt the item is blamed for.
+        return after_unavailable(policy, state, database_down(exc), now=now)
     if isinstance(exc, Defer):
         return after_defer(state, exc.delay, now=now)
+    if isinstance(exc, MaxRuntimeExceeded):
+        return after_permanent(state, reason="max_runtime", error=describe_error(exc))
     if isinstance(exc, PermanentFailure):
         return after_permanent(state, reason="permanent", error=describe_error(exc))
     if isinstance(exc, ValidationError):
@@ -121,19 +132,25 @@ async def settle(
     """Record a failed run, fenced: requeue with backoff, or dead with its hook."""
     async with env.db.handler(item.cls) as session:
         uow = SqlAlchemyUnitOfWork(session)
-        state = await lock_owned(session, item.id, env.owner)
+        state = await lock_owned(session, item, env.owner)
         if state is None:
             return "lease_lost"
         decision = decide(spec, state, exc, env.clock())
-        logger.warning(
-            "work.item.failed",
-            item_id=str(item.id),
-            kind=item.kind,
-            ns=item.ns,
-            error_class=_error_class(decision),
-            attempts=decision.attempts,
-            exc_info=exc,
-        )
+        if isinstance(exc, Defer):
+            # "Not now", not a failure: a per-pod cap held until a run ends
+            # defers thousands of times under load, and logging each as a
+            # failed item with its traceback buried the real ones.
+            logger.debug("work.item.deferred", kind=item.kind, ns=item.ns)
+        else:
+            logger.warning(
+                "work.item.failed",
+                item_id=str(item.id),
+                kind=item.kind,
+                ns=item.ns,
+                error_class=_error_class(decision),
+                attempts=decision.attempts,
+                exc_info=exc,
+            )
         hook_error = await capture(
             apply_decision(uow, item, decision, spec, env.registry)
         )
@@ -164,7 +181,7 @@ async def _dead_without_hook(
     )
     async with env.db.handler(item.cls) as session:
         uow = SqlAlchemyUnitOfWork(session)
-        if await lock_owned(session, item.id, env.owner) is None:
+        if await lock_owned(session, item, env.owner) is None:
             return
         reason = Dead(
             f"{decision.reason}:on_dead_failed",
@@ -178,7 +195,9 @@ async def _dead_without_hook(
 
 async def release_item(env: ExecEnv, item: ClaimedItem) -> str:
     async with env.db.handler(item.cls) as session:
-        released = await release(session, item.id, env.owner, now=env.clock())
+        released = await release(
+            session, item.id, env.owner, now=env.clock(), epoch=item.lease_epoch
+        )
         await session.commit()
     return "released" if released else "lease_lost"
 
@@ -210,7 +229,7 @@ async def run_fast(env: ExecEnv, spec: HandlerSpec, item: ClaimedItem) -> str:
         if (
             await lock_owned(
                 session,
-                item.id,
+                item,
                 env.owner,
                 statement_timeout_ms=env.statement_timeout_ms,
             )

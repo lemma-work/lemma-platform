@@ -46,8 +46,12 @@ async def run_until_idle(
     registry: WorkRegistry | None = None,
     classes: list[WorkClass] | None = None,
     max_rounds: int = 1_000,
+    slots: int = 32,
 ) -> int:
     """Run due work of ``classes`` until none is left; returns items executed.
+
+    ``slots`` per class: a test pool smaller than ``slots`` sessions (plus the
+    side connections their writers open) needs fewer.
 
     Each round reaps expired leases, claims into every free slot and awaits
     what it claimed, so follow-up work enqueued by a handler runs in a later
@@ -55,7 +59,7 @@ async def run_until_idle(
     re-enqueues itself forever is a bug the test should see.
     """
     dispatchers = [
-        dispatcher_for(session_maker, cls, registry=registry)
+        dispatcher_for(session_maker, cls, registry=registry, slots=slots)
         for cls in (classes or list(WorkClass))
     ]
     executed = 0

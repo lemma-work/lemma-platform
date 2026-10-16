@@ -8,16 +8,16 @@ from types import SimpleNamespace
 import pytest
 
 from app.modules.function.config import function_settings
-from app.core.infrastructure.jobs.streaq_runtime import streaq_worker
 from app.modules.function.api import dependencies
 from app.modules.function.events import handlers
 
 
-def test_only_retention_crons_remain_on_streaq() -> None:
-    """Runs and their deadlines are work items; nothing re-enqueues them."""
-    assert "prune_function_runs" in streaq_worker.registry
-    assert "process_function_run" not in streaq_worker.registry
-    assert "reconcile_function_runs" not in streaq_worker.registry
+def test_retention_is_periodic_work() -> None:
+    """Runs and their deadlines are work items; retention is periodic work."""
+    from app.core.infrastructure.work import registry
+
+    periodics = {spec.name for spec in registry.periodics()}
+    assert {"function.runs_prune", "function.revisions_sweep"} <= periodics
 
 
 class _CountingUowFactory:
@@ -119,7 +119,7 @@ def test_worker_function_service_composition_matches_current_constructor(
     )
 
     service = dependencies.build_function_service(
-        SimpleNamespace(session=SimpleNamespace(), set_message_bus=lambda bus: None)
+        SimpleNamespace(session=SimpleNamespace())
     )
 
     assert service.storage_factory is storage_factory

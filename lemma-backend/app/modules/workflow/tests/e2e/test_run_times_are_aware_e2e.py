@@ -5,17 +5,15 @@ run that waited on something -- carried naive times, and so did the terminal
 event it published. The schedule ledger compared that ``completed_at`` with an
 aware time and raised. This walks a run through a form, so the engine finishes
 it from a row it read back, and reads the terminal event exactly as a consumer
-does: from the outbox payload, through the event's own model.
+does: from its committed JSON payload, through the event's own model.
 """
 
 from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workflow.contracts.run_outcomes import load_run_outcomes
 from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
@@ -63,7 +61,7 @@ async def _form_workflow(client: AsyncClient, org_id: str) -> str:
 
 
 async def test_a_run_finished_after_a_wait_publishes_aware_times(
-    authenticated_client: AsyncClient, fixed_test_org, db_manager
+    authenticated_client: AsyncClient, fixed_test_org, db_manager, committed_events
 ) -> None:
     client = authenticated_client
     pod_id = await _form_workflow(client, fixed_test_org["id"])
@@ -78,14 +76,11 @@ async def test_a_run_finished_after_a_wait_publishes_aware_times(
     assert answered.status_code == 200, answered.text
 
     async def terminal_payloads() -> list[dict[str, object]]:
-        async with db_manager.session_factory() as session:
-            rows = await session.scalars(
-                select(DomainEventOutbox.payload).where(
-                    DomainEventOutbox.event_type
-                    == WorkflowRunTerminalEvent.get_event_type()
-                )
-            )
-            return [p for p in rows.all() if p.get("run_id") == str(run_id)]
+        return [
+            p
+            for p in committed_events.of_type(WorkflowRunTerminalEvent.get_event_type())
+            if p.get("run_id") == str(run_id)
+        ]
 
     payloads = await eventually(
         label="the run's terminal event",

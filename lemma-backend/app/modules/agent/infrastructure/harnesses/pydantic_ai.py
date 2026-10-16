@@ -11,6 +11,8 @@ from typing import AsyncIterator, Sequence
 from uuid import UUID
 
 
+from app.core.infrastructure.db.transient_errors import is_transient_database_error
+from app.core.infrastructure.work import LeaseLost
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     OutstandingToolCalls,
 )
@@ -58,6 +60,7 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     to_json_value,
 )
+from app.modules.agent.capabilities.lease_gate import LeaseGateCapability
 from app.modules.agent.capabilities.outsider_gate import OutsiderToolGateCapability
 from app.modules.agent.capabilities.run_notices import RunNoticeCapability
 from app.modules.agent.infrastructure.harnesses.history import history_capabilities
@@ -241,6 +244,14 @@ class PydanticAIHarness:
                 agent_run_id=agent_run_id,
             )
         except Exception as exc:
+            if is_transient_database_error(exc) or isinstance(exc, LeaseLost):
+                # Lemma's own database, not the model: a stop check, a step
+                # read or a tool's session could not get a connection. The turn
+                # is interrupted, not over -- its work item retries it and the
+                # resumed turn settles what was in flight. Recorded as the run
+                # failing, this read "check the model settings". A lost lease
+                # likewise: another worker has the turn and finishes it.
+                raise
             logger.error(
                 "agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True
             )
@@ -330,6 +341,8 @@ class PydanticAIHarness:
         # every assembler above left in, only the allow-listed names survive.
         if run_audience(ctx).answers_outsiders:
             capabilities.append(OutsiderToolGateCapability())
+        if options.lease_alive is not None:
+            capabilities.append(LeaseGateCapability(options.lease_alive))
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,
             instructions=_instructions(agent=agent, conversation=conversation, ctx=ctx),

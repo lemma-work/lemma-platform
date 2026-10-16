@@ -50,8 +50,7 @@ from app.modules.datastore.changes.schema import (
 )
 from app.modules.datastore.domain.write_intent import WriteIntent
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
-    CHANGE_LOG_VERSION,
-    migrate_pod_schema,
+    ensure_change_log,
 )
 from app.modules.datastore.infrastructure.session import get_datastore_engine
 from app.modules.datastore.services.table_context import TableContext
@@ -135,9 +134,7 @@ class ChangeCapture:
 
     async def prepare(self) -> None:
         """Make sure the pod schema has a change log; a memo hit after the first."""
-        await migrate_pod_schema(
-            get_datastore_engine(), self.ctx.schema_name, target=CHANGE_LOG_VERSION
-        )
+        await ensure_change_log(get_datastore_engine(), self.ctx.schema_name)
 
     async def begin(self, session: AsyncSession) -> None:
         """Ask, in the write's transaction, what is watched on this table."""

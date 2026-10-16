@@ -25,7 +25,9 @@ install_datastore_composition(DatastoreComposition(embedder_provider=lambda: _em
 
 
 async def _run(lease_seconds: float) -> None:
-    import app.events  # noqa: F401 - every module's models and kinds, as a worker has
+    from app.worker import register_worker_modules  # noqa: E402
+
+    register_worker_modules()  # every module's kinds, as the worker registers them
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.work import WorkClass
     from app.core.infrastructure.work.testing import dispatcher_for

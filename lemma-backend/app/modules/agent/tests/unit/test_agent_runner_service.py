@@ -112,6 +112,8 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
     )
     publish_usage = AsyncMock()
     monkeypatch.setattr(service.finalizer, "publish_usage", publish_usage)
+    followups = AsyncMock()
+    monkeypatch.setattr(service.finalizer, "stage_followups", followups)
     identity = RunIdentity(
         conversation_id=UUID("00000000-0000-0000-0000-000000000101"),
         agent_run_id=UUID("00000000-0000-0000-0000-000000000102"),
@@ -150,6 +152,10 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
     assert publish.await_count == 1
     assert publish.await_args.args[1]["type"] == "completed"
     publish_usage.assert_awaited_once()
+    # Every follow-up is written in the transaction that ended the run.
+    followups.assert_awaited_once()
+    assert followups.await_args.args == (uow,)
+    assert followups.await_args.kwargs["finish"] is finish_result
 
 
 @pytest.mark.asyncio
@@ -219,6 +225,10 @@ async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
         return conversation, agent, agent_run, []
 
     monkeypatch.setattr(service, "_load_run_context", fake_load)
+    # A fresh run: nothing answered yet.
+    monkeypatch.setattr(
+        service.turn_resume, "committed_answer", AsyncMock(return_value=None)
+    )
 
     # Make the harness.run / inner try block raise CancelledError by patching
     # _resolve_agent_runtime to cancel the current task mid-flight.

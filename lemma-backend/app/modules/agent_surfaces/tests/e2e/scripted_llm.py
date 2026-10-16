@@ -30,11 +30,14 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    deliver_replies,
+)
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.events.handlers import reconcile_agent_approval_now
+from app.modules.test_support.e2e.agent_work import run_approval_work
 from app.modules.agent.infrastructure.harnesses.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
 )
@@ -217,6 +220,9 @@ async def run_scripted_agent_run(
         ),
     )
 
+    # The answer is the delivery row the finalize wrote; the pump sends it.
+    await deliver_replies()
+
     db_session.expire_all()
     completed = await db_session.get(AgentRunModel, run_id)
     assert completed is not None
@@ -292,21 +298,14 @@ async def resume_latest_scripted_run(
     call-site clarity after ``handler.try_handle_interaction(...)``.
 
     Pass ``approval_id`` when the submission was an approval button. A platform
-    webhook resolves the decision under its own deadline and hands the slow half
-    - running the approved tool and starting the resume run - to a worker job
-    (``defer_reconciliation=True`` in the ingress service). These tests drive the
-    harness in-process with no worker, so without this the decision commits, no
-    resume run is ever created, and the latest run is still the COMPLETED one.
+    webhook records the decision under its own deadline with an
+    ``agent.approval.execute`` item, and a worker runs the approved tool and
+    starts the resume run. These tests drive the harness in-process with no
+    worker, so without this the decision commits, no resume run is ever
+    created, and the latest run is still the COMPLETED one.
     """
     if approval_id is not None:
-        await reconcile_agent_approval_now(
-            {
-                "conversation_id": str(conversation_id),
-                "approval_id": approval_id,
-                "pod_id": str(pod_id),
-            },
-            uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-        )
+        await run_approval_work()
         db_session.expire_all()
     await run_scripted_agent_run(
         db_session,

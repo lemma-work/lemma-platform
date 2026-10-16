@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TypeVar
 
 from app.core.domain.aggregate import AggregateRoot
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 _E = TypeVar("_E", bound=AggregateRoot)
@@ -17,12 +16,9 @@ class DatastoreRepositoryBase:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ) -> None:
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def commit(self) -> None:
         """Commit the unit of work this repository writes through.

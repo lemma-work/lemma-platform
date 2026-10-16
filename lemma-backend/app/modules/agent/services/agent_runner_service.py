@@ -67,7 +67,6 @@ from app.modules.agent.services.run_limits import (
 )
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import (
-    observe_first_output,
     record_history_size,
     run_phase,
 )
@@ -77,7 +76,13 @@ from app.modules.agent.services.runtime_history import (
     without_private_runs,
 )
 from app.modules.agent.services.run_context_builder import build_run_context
-from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
+from app.modules.agent.services.run_event_pump import (
+    RunEventPump,
+    RunOutcome,
+    drive_harness,
+)
+from app.modules.agent.services.turn_resume import TurnResume
+from app.modules.agent.services.run_interruptions import run_is_not_over
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_finalizer import (
     is_usage_limit_error,
@@ -141,6 +146,10 @@ class AgentRunnerService:
         fallback_model_name: str | None = None,
         fixed_usage_limits: UsageLimits | None = None,
         profile_services: ProfileServices = runtime_profile_service_for,
+        terminal_units: UnitOfWorkFactory | None = None,
+        step_units: UnitOfWorkFactory | None = None,
+        tool_units: UnitOfWorkFactory | None = None,
+        lease_alive: Callable[[], bool] | None = None,
     ) -> None:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
@@ -149,11 +158,18 @@ class AgentRunnerService:
         self.profile_services = profile_services
         self.fallback_model_name = fallback_model_name
         self.fixed_usage_limits = fixed_usage_limits or harness_usage_limits()
-        self.tool_assembler = RunToolAssembler(uow_factory)
+        self.lease_alive = lease_alive  # see `events/turn_work.TurnFences`
+        self.tool_assembler = RunToolAssembler(tool_units or uow_factory)
         self.usage_recorder = RunUsageRecorder(uow_factory)
-        self.message_writer = RunMessageWriter(uow_factory)
-        self.finalizer = RunFinalizer(uow_factory, self.usage_recorder)
+        # `step_units`: where each step row commits (a turn's lease-fenced
+        # transaction), so a worker that lost its turn cannot add to it.
+        self.message_writer = RunMessageWriter(step_units or uow_factory)
+        # `terminal_units`: where a run's end commits (a turn's fenced completion).
+        self.finalizer = RunFinalizer(
+            uow_factory, self.usage_recorder, terminal_units=terminal_units
+        )
         self.event_pump = RunEventPump(self.message_writer, self.finalizer)
+        self.turn_resume = TurnResume(tool_units or uow_factory, self.message_writer)
 
     async def execute(
         self,
@@ -163,7 +179,10 @@ class AgentRunnerService:
         pod_id: UUID,
         agent_name: str | None,
         observer: AgentRunObserver | None = None,
+        yield_requested: Callable[[], bool] | None = None,
     ) -> None:
+        """Run ``agent_run_id`` to its end -- or, once ``yield_requested``
+        (the worker going away), to the next step boundary: ``TurnYielded``."""
         conversation, agent, agent_run, messages = await self._load_run_context(
             agent_run_id=agent_run_id,
             user_id=user_id,
@@ -189,6 +208,12 @@ class AgentRunnerService:
                     else agent_run.status
                 ),
                 error=agent_run.error,
+            )
+            return
+        answered = await self.turn_resume.committed_answer(agent_run_id)
+        if answered is not None:
+            await self.turn_resume.finish_on(
+                answered, run=run, finalizer=self.finalizer
             )
             return
         usage_reservation: UsageReservation | None = None
@@ -256,6 +281,21 @@ class AgentRunnerService:
                     protocol=resolved_runtime.profile.protocol,
                 )
                 harness_toolsets = []
+            messages, notices = await self.turn_resume.settle_for_turn(
+                agent_run_id,
+                conversation=conversation,
+                agent=agent,
+                ctx=ctx,
+                messages=messages,
+                in_process=resolved_runtime.harness_kind == HarnessKind.LEMMA,
+                reload=partial(
+                    self._load_run_context,
+                    agent_run_id=agent_run_id,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                    agent_name=agent_name,
+                ),
+            )
             usage_reservation = await self.usage_recorder.reserve(
                 organization_id=conversation.organization_id,
                 user_id=user_id,
@@ -292,10 +332,12 @@ class AgentRunnerService:
                 history_hard_token_ceiling=context_budget.hard_token_ceiling,
                 context_window=context_budget.window,
                 runtime_profile=snapshot,
+                lease_alive=self.lease_alive,
                 extra={
                     "runtime_credentials": runtime_credentials,
                 },
             )
+            options.notices.pending.extend(notices)
             tracer = trace.get_tracer(__name__)
             with agent_run_telemetry_context(
                 conversation_id=conversation.id,
@@ -336,24 +378,31 @@ class AgentRunnerService:
                         async with metering_execution(
                             run_usage_context, factory=self.uow_factory
                         ):
-                            await self.event_pump.drive(
-                                observe_first_output(
-                                    harness.run(
-                                        agent=agent,
-                                        conversation=conversation,
-                                        messages=messages,
-                                        ctx=ctx,
-                                        options=options,
-                                        agent_run_id=agent_run_id,
-                                    )
+                            await drive_harness(
+                                self.event_pump,
+                                harness.run(
+                                    agent=agent,
+                                    conversation=conversation,
+                                    messages=messages,
+                                    ctx=ctx,
+                                    options=options,
+                                    agent_run_id=agent_run_id,
                                 ),
                                 run=run_with_usage,
                                 outcome=outcome,
                                 observer=observer,
                                 conversation=conversation,
                                 ctx=ctx,
+                                yield_requested=(
+                                    yield_requested
+                                    if resolved_runtime.harness_kind
+                                    == HarnessKind.LEMMA
+                                    else None
+                                ),
                             )
-                    except Exception:
+                    except BaseException:
+                        # A cancellation or a shutdown yield too: nothing ended,
+                        # so nothing is announced as finished.
                         raised = True
                         raise
                     finally:
@@ -395,12 +444,6 @@ class AgentRunnerService:
             # four. `anyio.CancelScope(shield=True)` and not `asyncio.shield`:
             # the latter runs the coroutine in a new task, and the SQLAlchemy and
             # anyio scopes it touches are task-bound.
-            #
-            # CancelledError is deliberately not re-raised: it propagates into
-            # streaq's `with scope:` and corrupts the scope, crashing the worker.
-            # So streaq records the job as succeeded and never redelivers it --
-            # which is why parked runs are handed on by `services/run_resume`
-            # rather than by a retry.
             identity = run.with_runtime_profile(
                 runtime_profile_snapshot
             ).with_reservation(usage_reservation)
@@ -408,7 +451,7 @@ class AgentRunnerService:
             # wrong. A real exception still fails terminally, because retrying
             # a run that threw just throws again.
             with anyio.move_on_after(_FINALIZATION_TIMEOUT_SECONDS, shield=True):
-                if not isinstance(exc, Exception):
+                if run_is_not_over(exc):
                     # The worker is going away and the run is not over. Leave the
                     # status alone -- it stays RUNNING, which is what the worker
                     # that reclaims this job expects to find -- and announce
@@ -432,11 +475,11 @@ class AgentRunnerService:
                         agent_run_id=agent_run_id,
                     )
                     await notify_run_failed(observer, conversation, exc, agent_run_id)
-            # Re-raised on purpose: streaq XACKs a task that returned and
-            # "relinquishes" a cancelled one, leaving it for the next worker's
-            # XAUTOCLAIM. Swallowing it made every interrupted run look like a
-            # success, so a deploy ended every conversation in flight.
-            if not isinstance(exc, Exception):
+            # Re-raised on purpose (a cancellation, a lost lease, a shutdown
+            # yield): the turn's work item goes back to the queue and the next
+            # worker resumes it. Swallowing it made every interrupted run look
+            # like a success, so a deploy ended every conversation in flight.
+            if run_is_not_over(exc):
                 raise
 
     async def _runtime_for(

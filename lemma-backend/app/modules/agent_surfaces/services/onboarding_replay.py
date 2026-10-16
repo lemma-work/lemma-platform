@@ -1,4 +1,9 @@
-"""Hand off the saved user request through the normal ingestion/run pipeline."""
+"""Hand off the saved user request through the normal ingestion/run pipeline.
+
+The onboarding's "ready" transaction writes a ``surface.ingest`` item naming
+the pending row; that item prepares the context here and starts the turn, and
+marks the row handed off in the transaction that writes the message.
+"""
 
 from __future__ import annotations
 
@@ -16,8 +21,6 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
 from app.modules.agent_surfaces.composition import (
     build_conversation_binder,
     build_surface_ingress,
@@ -39,72 +42,87 @@ from app.modules.agent_surfaces.services.personal_dm_routes import (
 from app.modules.identity.contracts.onboarding import active_chat_user
 
 
-async def replay_onboarding(
-    pending_id: UUID, *, uow_factory: UnitOfWorkFactory, job_queue: SharedStreaqJobQueue
-) -> None:
-    async with uow_factory() as uow:
-        row = await uow.session.get(PendingChatOnboarding, pending_id)
-        if row is None or row.ready_at is None or row.handed_off_at is not None:
-            return
-        state = PendingState.model_validate(row)
-        if state.user_id is None:
-            raise ValueError("Onboarding has no verified account")
-        user = await active_chat_user(uow, state.user_id)
-        if user is None:
-            raise ValueError("The onboarding account is no longer active")
-        destination = ParsedInboundSurfaceEvent.model_validate(state.destination)
-        if not destination.is_dm:
-            raise ValueError("Onboarding replay requires a private destination")
-        if state.original_event is None or state.expires_at <= datetime.now(
-            timezone.utc
-        ):
-            context = await _expired_reply_context(uow, state, destination)
-        else:
-            original = ParsedInboundSurfaceEvent.model_validate(state.original_event)
-            event = original.model_copy(
-                update={
-                    "is_dm": True,
-                    "conversation_type": destination.conversation_type,
-                    "external_channel_id": destination.external_channel_id,
-                    "external_thread_id": destination.external_thread_id,
-                    "reply_target": destination.reply_target,
-                    "external_message_id": f"onboarding:{state.id}",
-                    "raw_payload": {},
-                }
-            )
-            if state.installation_surface_id is not None:
-                # The whole of `is_routable`, as `verified_sender` asks it:
-                # on the pod alone, a row whose installation was cleared would
-                # be refused inside `validate_personal_dm_route`, a raise in
-                # the middle of a replay.
-                route = await VerifiedSurfaceIdentityRepository(uow).personal_route(
-                    state.binding_key
-                )
-                route_id = route[0] if route is not None else None
-                if route_id is None:
-                    raise ValueError("The personal DM route is missing")
-                context = await prepare_personal_dm_context(
-                    uow,
-                    route_id=route_id,
-                    event=event,
-                    linker=build_conversation_binder(uow),
-                )
-            else:
-                context = await _shared_replay_context(uow, state, event, user)
-            if isinstance(context, SurfaceChatContext):
-                context = context.model_copy(update={"onboarding_handoff_id": state.id})
-    await job_queue.enqueue(
-        "process_surface_message",
-        payload={"context": context.model_dump(mode="json")},
-        _job_id=f"onboarding:{pending_id}",
+async def prepare_onboarding_replay(
+    uow: SqlAlchemyUnitOfWork, pending_id: UUID
+) -> AgentSurfaceContext | None:
+    """The context a ready onboarding hands to the ordinary run pipeline.
+
+    ``None`` when there is nothing (left) to hand off: the row is gone, not
+    ready, or already handed off -- which is what makes a retried
+    ``surface.ingest`` for it a no-op.
+    """
+    row = await uow.session.get(PendingChatOnboarding, pending_id)
+    if row is None or row.ready_at is None or row.handed_off_at is not None:
+        return None
+    state = PendingState.model_validate(row)
+    if state.user_id is None:
+        raise ValueError("Onboarding has no verified account")
+    user = await active_chat_user(uow, state.user_id)
+    if user is None:
+        raise ValueError("The onboarding account is no longer active")
+    destination = ParsedInboundSurfaceEvent.model_validate(state.destination)
+    if not destination.is_dm:
+        raise ValueError("Onboarding replay requires a private destination")
+    if state.original_event is None or state.expires_at <= datetime.now(timezone.utc):
+        return await _expired_reply_context(uow, state, destination)
+    original = ParsedInboundSurfaceEvent.model_validate(state.original_event)
+    event = original.model_copy(
+        update={
+            "is_dm": True,
+            "conversation_type": destination.conversation_type,
+            "external_channel_id": destination.external_channel_id,
+            "external_thread_id": destination.external_thread_id,
+            "reply_target": destination.reply_target,
+            "external_message_id": f"onboarding:{state.id}",
+            "raw_payload": {},
+        }
     )
-    async with uow_factory() as uow:
-        row = await uow.session.get(
-            PendingChatOnboarding, pending_id, with_for_update=True
+    if state.installation_surface_id is not None:
+        # The whole of `is_routable`, as `verified_sender` asks it: on the pod
+        # alone, a row whose installation was cleared would be refused inside
+        # `validate_personal_dm_route`, a raise in the middle of a replay.
+        route = await VerifiedSurfaceIdentityRepository(uow).personal_route(
+            state.binding_key
         )
-        if row is not None:
-            row.original_event = None
-            row.handed_off_at = datetime.now(timezone.utc)
+        route_id = route[0] if route is not None else None
+        if route_id is None:
+            raise ValueError("The personal DM route is missing")
+        context: AgentSurfaceContext = await prepare_personal_dm_context(
+            uow,
+            route_id=route_id,
+            event=event,
+            linker=build_conversation_binder(uow),
+        )
+    else:
+        context = await _shared_replay_context(uow, state, event, user)
+    if isinstance(context, SurfaceChatContext):
+        context = context.model_copy(update={"onboarding_handoff_id": state.id})
+    return context
+
+
+async def hand_off_onboarding(
+    uow_factory, pending_id: UUID
+) -> AgentSurfaceContext | None:
+    """Prepare the replay and mark the row handed off, in one transaction.
+
+    What ``surface.ingest`` does around the turn it then starts, without the
+    turn: for a caller (a test, an operator) that starts it itself.
+    """
+    async with uow_factory() as uow:
+        context = await prepare_onboarding_replay(uow, pending_id)
+        if context is not None:
+            await mark_onboarding_handed_off(uow, pending_id)
+    return context
+
+
+async def mark_onboarding_handed_off(
+    uow: SqlAlchemyUnitOfWork, pending_id: UUID
+) -> None:
+    """The held message has been handed to the run pipeline: forget its content."""
+    row = await uow.session.get(PendingChatOnboarding, pending_id, with_for_update=True)
+    if row is not None and row.handed_off_at is None:
+        row.original_event = None
+        row.handed_off_at = datetime.now(timezone.utc)
 
 
 async def _shared_replay_context(

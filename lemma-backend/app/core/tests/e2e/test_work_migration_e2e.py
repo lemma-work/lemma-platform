@@ -25,6 +25,8 @@ pytestmark = pytest.mark.e2e
 BACKEND = Path(__file__).resolve().parents[4]
 BEFORE = "0053_folder_visibility_index"
 REVISION = "0054_work_runtime"
+#: The last migration that changes the work tables: what the model matches.
+MODEL_REVISION = REVISION
 
 _TABLES = {"work_items", "work_queues", "work_rate_buckets"}
 _INDEXES = """
@@ -79,7 +81,7 @@ async def test_the_migration_round_trips_and_matches_the_model(
     url = get_postgres_url(postgres_only_container, name)
     sync_url = url.replace("postgresql+asyncpg", "postgresql")
 
-    _migrate(url, "upgrade", REVISION)
+    _migrate(url, "upgrade", MODEL_REVISION)
     assert _tables(sync_url) == _TABLES
     migrated = _indexes(sync_url)
 

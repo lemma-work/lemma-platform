@@ -1,4 +1,4 @@
-"""Turning a raw platform webhook into an event, before any route sees it.
+"""Turning a raw platform webhook into a stored delivery, before any route sees it.
 
 Signature checks, payload decoding, and the per-platform special cases that have
 to happen inside the HTTP request: a Resend catch-all address resolved to a
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import UUID
 
@@ -20,8 +20,6 @@ from fastapi import HTTPException
 from app.modules.agent_surfaces.contracts.whatsapp import (
     deployment_owns_whatsapp_number,
 )
-from app.core.infrastructure.events.inbox import stable_event_id
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.redaction import redact_value
 from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -30,11 +28,15 @@ from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
+)
+from app.modules.agent_surfaces.services.inbound_acceptor import (
+    AcceptResult,
+    InboundDelivery,
 )
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.errors import SurfaceWebhookAuthenticationError
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.identity.contracts.whatsapp_verification import (
     WhatsAppVerificationPayload,
     add_whatsapp_verification_work,
@@ -222,8 +224,9 @@ async def _handle_resend_webhook(
     raw_body: bytes,
     security_service: SurfaceWebhookSecurityServiceDep,
     uow_factory: UnitOfWorkFactory,
+    accept: Callable[[InboundDelivery], Awaitable[AcceptResult]],
 ) -> dict[str, str]:
-    """Resolve a catch-all Resend delivery to one surface, then publish it."""
+    """Resolve a catch-all Resend delivery to one surface, then store it."""
     # Authenticate the Svix signature over the raw body BEFORE trusting any
     # of it (Resend does not go through assert_platform_request_allowed).
     await security_service.verify_resend_request(headers=headers, raw_body=raw_body)
@@ -242,18 +245,23 @@ async def _handle_resend_webhook(
     # Resend's own id rather than the generic candidate list, because the
     # polling receiver has to be able to mint the same one for the same email
     # and has no raw body to fall back on.
-    source_event_id = resend_webhook_source_event_id(
-        normalized, raw_body, receiver=str(surface.id)
+    # Keyed by the surface, as the poller keys it, so a deployment running
+    # both routes stores one email once.
+    await accept(
+        InboundDelivery(
+            request=SurfaceDirectWebhookIngress(
+                surface_id=surface.id,
+                payload=normalized,
+                headers=_redacted_headers(headers),
+            ),
+            receiver_scope=str(surface.id),
+            source_event_id=resend_webhook_source_event_id(
+                normalized, raw_body, receiver=str(surface.id)
+            ),
+            platform=SurfacePlatform.RESEND,
+            pod_id=surface.pod_id,
+        )
     )
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source="resend",
-        payload=normalized,
-        headers=_redacted_headers(headers),
-        surface_id=surface.id,
-        source_event_id=source_event_id,
-    )
-    await EventPublisher.publish(event.stream_name(), event)
     return {"message": "Webhook received"}
 
 

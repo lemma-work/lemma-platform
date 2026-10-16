@@ -421,7 +421,7 @@ typecheck-critical:
 		app/core/domain/errors.py \
 		app/core/api/schemas.py \
 		app/core/api/uploads.py \
-		app/core/infrastructure/events \
+		app/core/infrastructure/work \
 		app/modules/agent/api/dependencies.py \
 		app/modules/agent/domain/ports.py \
 		app/modules/agent/services \

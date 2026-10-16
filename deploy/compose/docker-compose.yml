@@ -186,6 +186,9 @@ services:
       migrate: {condition: service_completed_successfully}
       sandbox-images: {condition: service_completed_successfully}
     command: ["python", "-m", "app.worker"]
+    # Above the longest work-class shutdown grace (interactive, 90 s) plus
+    # teardown, so a deploy drains rather than SIGKILLing mid-turn.
+    stop_grace_period: 120s
     user: root
     volumes:
       - ${LEMMA_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
@@ -193,8 +196,9 @@ services:
       - file_storage:/app/.local/files
       - worker_model_cache:/home/appuser/.cache
     # No healthcheck: the worker serves no HTTP, deliberately
-    # (core/infrastructure/jobs/streaq_runtime.py). A wedged loop is caught by
-    # its own watchdog, not from out here.
+    # (core/infrastructure/work/process.py). A wedged loop is caught by its own
+    # watchdog, not from out here. SIGTERM drains each work class within its
+    # grace (interactive 90 s), so give it a stop grace above that.
     networks: [data, sandbox]
 
   # Deliberately NOT env_file: .env — that file holds the database password and

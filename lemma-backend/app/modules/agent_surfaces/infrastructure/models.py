@@ -19,6 +19,12 @@ from app.modules.agent_surfaces.infrastructure.group_models import (  # noqa: F4
 from app.modules.agent_surfaces.infrastructure.notification_models import (  # noqa: F401
     NotificationModel,
 )
+from app.modules.agent_surfaces.infrastructure.inbound_delivery_models import (  # noqa: F401
+    SurfaceDeliveryModel,
+    SurfaceInboundMessageModel,
+    SurfaceMessageClaimModel,
+    SurfaceReceiverStateModel,
+)
 
 from datetime import datetime
 from uuid import UUID

@@ -24,11 +24,6 @@ EXPECTED = [
     ),
     ("datastore_cell_max_bytes", "DATASTORE_CELL_MAX_BYTES", 256 * 1024),
     ("datastore_row_max_bytes", "DATASTORE_ROW_MAX_BYTES", 1024 * 1024),
-    (
-        "datastore_event_payload_max_bytes",
-        "DATASTORE_EVENT_PAYLOAD_MAX_BYTES",
-        32 * 1024,
-    ),
     ("datastore_query_role", "DATASTORE_QUERY_ROLE", "lemma_datastore_query"),
     (
         "datastore_query_statement_timeout_ms",
@@ -163,7 +158,6 @@ EXPECTED = [
 # Non-numeric fields (bool / Literal) that the "env=7" parametrization below
 # cannot exercise — validated with dedicated tests instead.
 EXTRA_FIELDS = [
-    ("datastore_change_log_mode", "DATASTORE_CHANGE_LOG_MODE", "auto"),
     ("datastore_change_retention_seconds", "DATASTORE_CHANGE_RETENTION_SECONDS", 3600),
     ("datastore_change_max_lag_seconds", "DATASTORE_CHANGE_MAX_LAG_SECONDS", 86400),
     (

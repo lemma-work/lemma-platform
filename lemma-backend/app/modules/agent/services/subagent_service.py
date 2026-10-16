@@ -182,6 +182,7 @@ class SubAgentService:
         *,
         agent_name: str | None = None,
         input_data: JsonObject | str,
+        tool_call_id: str | None = None,
     ) -> SubAgentHandle:
         # Self-spawn: omit agent_name (or pass the parent's own name) to launch
         # another instance of the agent already running in this conversation. The
@@ -198,10 +199,19 @@ class SubAgentService:
         )
         task = self._input_prompt(input_data)
         key = spawn_key(target_name=target_name, task=task)
+        # The spawning call, when the run gave it one: a resumed turn re-runs an
+        # interrupted spawn under the same id and must get the same child.
+        spawn_call = (
+            f"{deps.agent_run_id}:{tool_call_id}"
+            if deps.agent_run_id and tool_call_id
+            else None
+        )
         async with self.uow_factory() as uow:
             token = set_current_context(await self._agent_ctx(uow, deps))
             try:
-                earlier = await self._already_spawned(uow, deps, key)
+                earlier = await self._already_spawned(
+                    uow, deps, key, spawn_call=spawn_call
+                )
                 if earlier is not None:
                     return earlier
                 service = self._conversation_service(uow)
@@ -227,6 +237,10 @@ class SubAgentService:
                         REPORTS_TO_PARENT_KEY: True,
                     },
                 )
+                if spawn_call is not None:
+                    await ConversationRepository(uow).set_spawn_call(
+                        conversation.id, spawn_call
+                    )
                 await ConversationRepository(uow).set_conversation_metadata_key(
                     deps.conversation_id, SUBAGENTS_OUT_KEY, True
                 )
@@ -249,7 +263,12 @@ class SubAgentService:
                 reset_current_context(token)
 
     async def _already_spawned(
-        self, uow: SqlAlchemyUnitOfWork, deps: BaseAgentContext, key: str
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        deps: BaseAgentContext,
+        key: str,
+        *,
+        spawn_call: str | None = None,
     ) -> SubAgentHandle | None:
         """The child this run already spawned for this task, if it has.
 
@@ -261,7 +280,13 @@ class SubAgentService:
             return None
         repository = ConversationRepository(uow)
         await repository.lock_conversation(deps.conversation_id)
-        child = await repository.find_spawned_child(
+        child = (
+            await repository.find_child_by_spawn_call(
+                parent_id=deps.conversation_id, spawn_call=spawn_call
+            )
+            if spawn_call is not None
+            else None
+        ) or await repository.find_spawned_child(
             parent_id=deps.conversation_id,
             parent_run_id=deps.agent_run_id,
             spawn_key=key,

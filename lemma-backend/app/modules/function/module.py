@@ -21,11 +21,9 @@ def _routers():
     return [function, function_revision, function_runtime]
 
 
-def _event_routers():
-    # Importing this module registers the run and revision retention crons.
-    from app.modules.function.events.handlers import router
-
-    return [router]
+def _register_periodic_work() -> None:
+    # Run and revision retention.
+    import app.modules.function.events.handlers  # noqa: F401
 
 
 def _register_work() -> None:
@@ -72,8 +70,8 @@ module = LemmaModule(
     name="function",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
     register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
     api_lifespans=(_close_runtime_http_clients,),
     worker_lifespans=(_close_runtime_http_clients,),
 )

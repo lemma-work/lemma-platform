@@ -12,27 +12,13 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import make_due, run_until_idle
-from app.modules.datastore.changes.gate import reset_change_log_gate
 from app.modules.datastore.changes.cursor import ChangePosition
 from app.modules.datastore.changes.handoff import ChangeHandoff
 from app.modules.datastore.changes.reader import Change, read_after
-from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.infrastructure.session import get_datastore_engine
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
-
-
-@contextmanager
-def change_log_mode(mode: str = "on") -> Iterator[None]:
-    previous = datastore_settings.datastore_change_log_mode
-    datastore_settings.datastore_change_log_mode = mode  # type: ignore[assignment]
-    reset_change_log_gate()
-    try:
-        yield
-    finally:
-        datastore_settings.datastore_change_log_mode = previous
-        reset_change_log_gate()
 
 
 async def orders_table(pod_api: DatastoreApi, name: str = "orders") -> UUID:

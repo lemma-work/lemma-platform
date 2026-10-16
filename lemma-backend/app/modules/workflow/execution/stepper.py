@@ -6,6 +6,7 @@ return outcomes; the stepper interprets them and manages transitions.
 
 from dataclasses import dataclass
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.authorization.context import Context
 from app.core.infrastructure.work import WorkWriter
 from app.modules.workflow.domain.context import LoopScope, RunContextReader
@@ -114,6 +115,7 @@ class RunStepper:
                 run.fail(exc.message, node_id=node.id)
                 break
             except Exception as exc:  # noqa: BLE001 — every executor error fails the run
+                raise_if_database_unavailable(exc)
                 run.fail(f"Node '{node.id}' execution failed: {exc}", node_id=node.id)
                 break
 

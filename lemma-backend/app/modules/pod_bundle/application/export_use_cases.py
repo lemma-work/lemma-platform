@@ -1,8 +1,8 @@
 """Application/use-case layer for the pod-bundle export saga.
 
-Owns the phase sequencing across SHORT units of work — authorize + write the
-initial ``QUEUED`` state doc + enqueue in one short scope, read status in
-another. A pooled DB connection is never held across archive assembly or the
+Owns the phase sequencing across SHORT units of work — authorize in one, then
+write the initial ``QUEUED`` state row and its ``pod_bundle.export`` work item
+in one transaction (both or neither), read status in another. A pooled DB connection is never held across archive assembly or the
 object-storage upload (those live in the worker job and the streaming response
 body respectively). Mirrors the ``FunctionUseCases`` phase-split discipline.
 
@@ -20,7 +20,6 @@ from app.core.authorization.permissions import Permissions
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.domain.errors import (
     BundleJobConflictError,
@@ -28,6 +27,13 @@ from app.modules.pod_bundle.domain.errors import (
     BundleStagingMissingError,
 )
 from app.modules.pod_bundle.domain.state import ExportState, ExportStatus
+from app.modules.pod_bundle.events.work import (
+    EXPORT,
+    BundleJobQueue,
+    ExportJob,
+    carried_origin,
+    export_key,
+)
 from app.modules.pod_bundle.infrastructure.download_url import verify_download_token
 from app.modules.pod_bundle.infrastructure.rate_limiter import (
     BundleRateLimiter,
@@ -39,11 +45,11 @@ from app.modules.pod_bundle.infrastructure.state_store import (
     get_pod_bundle_state_store,
 )
 
-EXPORT_JOB_NAME = "export_pod_bundle"
+EXPORT_JOB_NAME = EXPORT
 
 
 def export_job_id(export_id: UUID) -> str:
-    return f"pod-export:{export_id}"
+    return export_key(export_id)
 
 
 class ExportUseCases:
@@ -56,13 +62,13 @@ class ExportUseCases:
         *,
         state_store: PodBundleStateStore | None = None,
         staging: BundleStagingStorage | None = None,
-        job_queue=None,
+        job_queue: BundleJobQueue | None = None,
         rate_limiter: BundleRateLimiter | None = None,
     ):
         self._uow_factory = uow_factory
         self._state_store = state_store or get_pod_bundle_state_store()
         self._staging = staging or BundleStagingStorage()
-        self._job_queue = job_queue or get_streaq_job_queue()
+        self._job_queue = job_queue or BundleJobQueue()
         self._rate_limiter = rate_limiter or get_bundle_rate_limiter()
 
     async def start_export(
@@ -105,19 +111,25 @@ class ExportUseCases:
             include=include,
             ttl_seconds=resolved_ttl,
         )
-        await self._state_store.save_export(state)
-
-        job = await self._job_queue.enqueue(
-            EXPORT_JOB_NAME,
-            context={
-                "export_id": str(export_id),
-                "pod_id": str(pod_id),
-                "user_id": str(user_id),
-            },
-            _job_id=export_job_id(export_id),
-        )
-        if job is None:
-            raise BundleJobConflictError("An identical export is already in progress.")
+        async with self._uow_factory() as uow:
+            await self._state_store.stage_export(uow, state)
+            queued = await self._job_queue.queue_job(
+                uow,
+                EXPORT,
+                ExportJob(
+                    export_id=export_id,
+                    pod_id=pod_id,
+                    user_id=user_id,
+                    **carried_origin(),
+                ),
+                pod_id=pod_id,
+                dedup_key=export_key(export_id),
+            )
+            if not queued:
+                raise BundleJobConflictError(
+                    "An identical export is already in progress."
+                )
+            await uow.commit()
         return state
 
     async def get_export(

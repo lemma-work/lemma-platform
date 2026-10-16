@@ -18,7 +18,6 @@ import pytest
 
 from app.modules.datastore.tests.e2e.change_log_support import (
     LIFTED_CEILING,
-    change_log_mode,
     lifted_daily_ceiling,
     datastore_schedule,
     deliver_all,
@@ -31,7 +30,12 @@ from app.modules.datastore.tests.e2e.harness import DatastoreApi
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.asyncio]
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.slow,
+    pytest.mark.asyncio,
+    pytest.mark.drives_work,
+]
 
 ROWS = 100_000
 PER_REQUEST = 1_000
@@ -39,7 +43,6 @@ PER_REQUEST = 1_000
 _WORKER_ENV = {
     "WORK_CLASSES": "events",
     "WORK_POLL_INTERVAL_SECONDS": "0.2",
-    "DATASTORE_CHANGE_LOG_MODE": "on",
     "WORK_RATES_JSON": json.dumps(LIFTED_CEILING),
 }
 
@@ -74,7 +77,7 @@ async def test_a_large_import_fires_each_change_once_across_a_worker_kill(
 ):
     pod_id = UUID(pod_api.pod_id)
     owner = UUID(fixed_test_user["id"])
-    with change_log_mode("on"), lifted_daily_ceiling():
+    with lifted_daily_ceiling():
         await orders_table(pod_api)
         each = await datastore_schedule(
             pod_id, owner, operations=["INSERT"], bulk_writes="each"

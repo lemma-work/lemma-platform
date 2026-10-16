@@ -2,24 +2,15 @@
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import AnalyticsActor, emit
 from app.core.authorization.context import ActorType
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
 from app.core.origin import OriginKind
 from app.modules.analytics.events.wiring import (
     DELIVERED_STATUSES,
     origin_of,
     provide_uow_factory,
-    router,
 )
 from app.modules.analytics.services.pod_delivery import (
     DeliveryVia,
@@ -33,18 +24,15 @@ from app.modules.schedule.domain.events.schedule import (
 WIRED = frozenset({"schedule.created", "schedule_run.completed"})
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    ScheduleCreated.stream_name(),
-    group="analytics-schedule",
-    consumer="analytics-schedule-consumer",
+@projection(
+    ScheduleCreated.get_event_type(),
+    ScheduleRunCompleted.get_event_type(),
 )
 async def on_schedule_event(
     event: dict[str, object],
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    uow_factory: UnitOfWorkFactory | None = None,
 ) -> None:
+    uow_factory = uow_factory or provide_uow_factory()
     event_type = event.get("event_type")
     if event_type not in {
         ScheduleCreated.get_event_type(),
@@ -114,4 +102,4 @@ async def on_schedule_event(
                 creator_user_id=None,
             )
 
-    await inbox.process("analytics.schedule", event, record)
+    await record()

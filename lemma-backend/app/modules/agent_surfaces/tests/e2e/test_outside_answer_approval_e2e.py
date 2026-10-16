@@ -173,6 +173,7 @@ async def _press(
     return handled
 
 
+@pytest.mark.drives_work
 async def test_an_outside_answer_reaches_the_group_only_after_the_owner_approves_it(
     scenario, db_session: AsyncSession, fake_telegram, message_store, monkeypatch
 ):
@@ -270,6 +271,7 @@ async def test_an_outside_answer_reaches_the_group_only_after_the_owner_approves
     assert relayed
 
 
+@pytest.mark.drives_work
 async def test_a_declined_outside_answer_leaves_the_question_open(
     scenario, db_session: AsyncSession, fake_telegram, message_store, monkeypatch
 ):

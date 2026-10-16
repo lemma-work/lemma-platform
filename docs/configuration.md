@@ -102,7 +102,7 @@ from colliding on the same metric series.
 
 Lemma uses two Postgres databases: the application database and a separate
 datastore database holding pod data, which is queried under row-level security
-by a lower-privilege role. Redis carries the event streams and caches.
+by a lower-privilege role. Redis carries caches, realtime pub/sub and short-lived locks; background work lives in PostgreSQL (`work_items`).
 
 ```dotenv
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/lemma
@@ -113,7 +113,6 @@ REDIS_URL=redis://localhost:6379
 # there is no overflow — so a process opens at most DB_POOL_SIZE connections per
 # engine and cluster capacity stays predictable when replicas autoscale.
 DB_POOL_SIZE=10
-WORKER_CONCURRENCY=50
 ```
 
 ### Sizing the pool
@@ -124,13 +123,16 @@ gives it back before any LLM call, HTTP request, sandbox operation or thread
 offload — `make lint-session-scope` fails the build if that stops being true.
 So the steady-state demand is roughly `queries_per_second × seconds_per_query`.
 An agent run spends 95%+ of its wall clock outside the database, which is why a
-worker at `WORKER_CONCURRENCY=50` still needs single-digit connections in
+worker running dozens of turns still needs single-digit connections in
 steady state. The pool is there to absorb the burst at task start and finish.
+(The work runtime opens its own small pool, sized from its slots
+(`WORK_DB_SLOTS_JSON`, `WORK_DB_CONTROL_SLOTS`), so a busy handler never waits on
+the request pool.)
 
 Raise it in response to measurement, not anticipation: the backend reports a
 `database_pool_capacity` incident when checkout saturation is sustained, and
-`pg_stat_activity` shows what the server actually sees. `WORKER_CONCURRENCY` is
-a RAM and CPU budget for the pod, unrelated to the pool.
+`pg_stat_activity` shows what the server actually sees. The work classes' slots
+(`WORK_SLOTS_JSON`) are a RAM and CPU budget for the pod, unrelated to the pool.
 
 ### Enforcing the cluster-wide ceiling
 
@@ -212,10 +214,11 @@ FUNCTION_IMAGE=ghcr.io/lemma-work/lemma-function@sha256:...
 # bytes. Required for any provider that runs a workspace runtime.
 WORKSPACE_RUNTIME_CREDENTIAL_KEY=...
 
-# Release an idle workspace after this long. The sweep that enforces it runs on
-# WORKSPACE_SWEEP_CRON. Releasing keeps the files; it stops the compute.
+# Release an idle workspace after this long. The sweep that enforces it runs
+# every WORKSPACE_SWEEP_INTERVAL_SECONDS (a periodic work item). Releasing keeps
+# the files; it stops the compute.
 WORKSPACE_IDLE_RELEASE_SECONDS=900
-WORKSPACE_SWEEP_CRON=*/5 * * * *
+WORKSPACE_SWEEP_INTERVAL_SECONDS=300
 ```
 
 ### Making a new sandbox image take effect
@@ -431,7 +434,7 @@ APP_RELEASE_RETENTION_ENABLED=true
 APP_RELEASE_KEEP_LAST=10      # floor: never prune the newest N, whatever their age
 APP_RELEASE_KEEP_DAYS=30      # keep anything younger than this, up to the ceiling
 APP_RELEASE_MAX_KEEP=20       # ceiling: must be >= KEEP_LAST or startup refuses
-APP_RELEASE_RETENTION_CRON="20 4 * * *"
+APP_RELEASE_RETENTION_INTERVAL_SECONDS=86400  # a periodic work item; no wall-clock alignment
 # Apps per round trip. The sweep pages until the candidate set is drained, so
 # this bounds one query rather than deciding which apps ever get swept.
 APP_RELEASE_RETENTION_BATCH=200
@@ -443,7 +446,7 @@ FUNCTION_REVISION_RETENTION_ENABLED=true
 FUNCTION_REVISION_KEEP_LAST=10
 FUNCTION_REVISION_KEEP_DAYS=30
 FUNCTION_REVISION_MAX_KEEP=20
-FUNCTION_REVISION_RETENTION_CRON="40 4 * * *"
+FUNCTION_REVISION_RETENTION_INTERVAL_SECONDS=86400  # a periodic work item; no wall-clock alignment
 FUNCTION_REVISION_RETENTION_BATCH=200
 FUNCTION_REVISION_RETENTION_BUDGET_SECONDS=60
 ```
@@ -956,32 +959,39 @@ Three things govern it:
 ### Ingestion throughput and fairness
 
 ```dotenv
-WORKER_LANES=                  # empty = all lanes; or interactive | bulk
-WORKER_BULK_CONCURRENCY=2      # concurrent document extractions
-DATASTORE_PER_POD_MAX_INFLIGHT=4
-DATASTORE_DISPATCH_GLOBAL_BATCH=50
+WORK_CLASSES=                          # empty = every class; e.g. ingestion
+WORK_SLOTS_JSON={"ingestion": 4}       # per-class slots per process
+WORK_MAX_RUNNING_JSON={"ingestion": 4} # per-class cap per pod
 ```
 
-Document processing runs on the **bulk** worker lane, a separate Redis queue from
-the **interactive** lane that serves agent runs, surface messages and workflow
-resumes. A large upload therefore cannot occupy the slots interactive work needs.
-`WORKER_BULK_CONCURRENCY` is the real cap on concurrent extractions and the main
-lever on worker peak RAM.
+Document processing is a `file.process` work item in the **ingestion** class,
+which has its own slots, separate from the **interactive** class that serves
+agent turns and surface messages. A large upload therefore cannot occupy the
+slots interactive work needs. Ingestion's slots (4 per process by default) are
+the real cap on concurrent extractions and the main lever on worker peak RAM.
 
-Uploads beyond `DATASTORE_PER_POD_MAX_INFLIGHT` are intentionally not enqueued;
-their rows stay `PENDING` in Postgres, which is the durable backlog, and a
-per-minute dispatcher drains it round-robin across pods. So one tenant uploading
-a thousand documents cannot monopolise ingestion, Redis depth stays bounded, and
-every file is still processed eventually.
+Every class claims fairly across pods, under a per-pod cap (4 running
+extractions per pod by default, as the old per-pod in-flight gate allowed). So one tenant uploading a thousand documents
+waits behind itself, not in front of everyone else, and every file is still
+processed eventually: the backlog is the `work_items` table.
+`WORK_LIMIT_OVERRIDES_JSON` raises the cap for one organization or pod.
 
-Leaving `WORKER_LANES` empty runs both lanes in one process. The local stack,
-desktop and `make dev` embed the worker inside the API process and run *every*
-lane unconditionally, ignoring `WORKER_LANES` — that process is the whole
-deployment, so there is no second one a lane could be delegated to, and honouring
-the variable there would let it silently leave a queue unconsumed. Split
-deployments (a separate `python -m app.worker`) set `WORKER_LANES=interactive` on
-one worker and `WORKER_LANES=bulk` on another; the interactive lane owns
-process-wide startup, so at least one process must run it.
+Leaving `WORK_CLASSES` empty runs every class in one process. The local stack,
+desktop and `make dev` embed the worker inside the API process and always run
+every class — that process is the whole deployment. Split deployments run
+several `python -m app.worker` processes, for example `WORK_CLASSES=ingestion`
+on a memory-heavy one and the rest on another; every class must run somewhere.
+
+### Worker shutdown
+
+`python -m app.worker` drains on SIGTERM: claiming stops at once, running jobs
+are handed back uncharged at their next safe point, and each class waits at most
+its own grace before releasing what is left. `interactive` has 90 seconds built
+in; every other class gets `WORK_SHUTDOWN_GRACE_SECONDS` (default 20);
+`WORK_SHUTDOWN_GRACE_JSON` overrides any class, for example
+`{"interactive": 120}`. Then the process exits 0. Set the platform's termination
+grace above the longest class grace plus teardown (120 seconds for the
+defaults). See [reliability operations](../lemma-backend/docs/operators/reliability.md).
 
 ## Observability
 
@@ -993,10 +1003,9 @@ OBSERVABILITY_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
 OTEL_SERVICE_NAME=lemma-backend
 OTEL_TRACES_SAMPLER_ARG=0.05
-# How often the worker samples queue depth and pending event rows. Matching the
-# metric export interval is the useful floor; sampling faster only costs
-# queries. Zero disables the backlog gauges.
-BACKLOG_GAUGE_INTERVAL_SECONDS=60
+# How often the worker samples work-queue depth and the oldest ready item per
+# class (lemma.work.* gauges).
+WORK_GAUGE_INTERVAL_SECONDS=15
 ```
 
 Set `LEMMA_RELEASE_SHA` too — see [Release identity](#release-identity). Without
@@ -1071,7 +1080,7 @@ authoritative answer for anything this document does not name.
 | Apps, icons, schedules | `app/modules/{apps,icon,schedule}/config.py` |
 | Outside MCP clients | `lemma-backend/app/modules/mcp_access/config.py` |
 | Decisions | `lemma-backend/app/modules/decisions/config.py` |
-| Event transport | `lemma-backend/app/core/infrastructure/events/config.py` |
+| Work runtime | `lemma-backend/app/core/infrastructure/work/config.py` |
 
 Settings whose description begins with `TEST HOOK ONLY` exist for the end-to-end
 suite and should never be set in a real deployment.

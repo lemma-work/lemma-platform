@@ -15,7 +15,6 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.orm import load_only
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.domain.entities import (
     FunctionRunEntity,
@@ -35,12 +34,9 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     def _collect_events(self, entity: FunctionRunEntity) -> None:
         events = entity.collect_events()

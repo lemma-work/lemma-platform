@@ -26,7 +26,6 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -112,7 +111,7 @@ from app.modules.agent_surfaces.services.webhook_security_service import (
 
 
 def build_surface_repository(uow: SqlAlchemyUnitOfWork) -> SurfaceRepository:
-    return SurfaceRepository(uow, message_bus=get_message_bus())
+    return SurfaceRepository(uow)
 
 
 def build_surface_service(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceService:
@@ -237,7 +236,7 @@ def build_surface_ingress(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceIngressServi
 def build_surface_turn_starter(uow_factory: UnitOfWorkFactory) -> SurfaceTurnStarter:
     """The worker's half: scope your own short units of work around long I/O.
 
-    `process_surface_message` runs platform APIs, file ingest and voice
+    `surface.ingest` runs platform APIs, file ingest and voice
     transcription before it writes anything, and none of that may hold a pooled
     connection. This used to be the same class as `build_surface_ingress`,
     handed a factory instead of a session, with seven collaborators left `None`.

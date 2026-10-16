@@ -92,6 +92,9 @@ class ClaimedItem:
     first_unavailable_at: datetime | None
     run_at: datetime
     created_at: datetime
+    #: Which claim this is. Every fenced write matches it, so a run whose
+    #: lease was taken over -- by another process or by this one -- cannot.
+    lease_epoch: int
 
 
 class UnavailableEvidence(StrEnum):
@@ -127,6 +130,26 @@ class Unavailable(Exception):
         self.retry_after = retry_after
 
 
+#: How an ``Unavailable`` for Lemma's own database starts its detail, so a dead
+#: hook can tell "the database was down" from a dependency of the kind's own.
+DATABASE_UNAVAILABLE = "database unavailable"
+
+
+def database_down(exc: BaseException) -> Unavailable:
+    """The ``Unavailable`` a database connection failure is (see ``transient_errors``)."""
+    down = Unavailable(
+        f"{DATABASE_UNAVAILABLE}: {type(exc).__name__}",
+        evidence=UnavailableEvidence.CONNECTION_REFUSED,
+    )
+    down.__cause__ = exc
+    return down
+
+
+def was_database_unavailable(last_error: str | None) -> bool:
+    """Whether a dead item's last error was the database being unavailable."""
+    return DATABASE_UNAVAILABLE in (last_error or "")
+
+
 class ItemFailure(Exception):
     """This item failed; charge an attempt.
 
@@ -158,6 +181,20 @@ class Released(Exception):
     The item goes back to ``queued`` with nothing charged, so a deploy never
     counts against it.
     """
+
+
+class MaxRuntimeExceeded(Exception):
+    """A job ran past its kind's ``max_runtime`` and was cancelled; it goes dead.
+
+    Raised by the runtime, never by a handler. Dead rather than retried: a run
+    that used its whole wall-clock allowance would most likely use it again.
+    The kind's ``on_dead`` records the terminal state, with reason
+    ``max_runtime``.
+    """
+
+    def __init__(self, limit: timedelta) -> None:
+        super().__init__(f"ran past its {limit} time limit")
+        self.limit = limit
 
 
 class LeaseLost(Exception):

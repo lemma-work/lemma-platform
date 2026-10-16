@@ -106,13 +106,15 @@ count.
 | `lemma.http.server.requests` | `http.route`, `http.request.method`, `http.response.status_code` | Per-route error rate. Exact status, so it joins the FastAPI instrumentation's own histogram |
 | `http.client.request.duration` | `server.address`, `http.request.method`, `http.response.status_code` | Which third party is slow |
 | `db.client.connections.usage` | `pool.name`, `state` | Pool utilisation per pool. `pool.name` is safe only because the engines set an explicit `pool_logging_name`; the instrumentation's fallback is the DSN |
-| `lemma.worker.queue.depth` | `lane` | How much work is *waiting*, which throughput cannot tell you |
-| `lemma.event.outbox.pending` / `.inbox.pending` | — | A growing pile behind a healthy-looking publish rate |
+| `lemma.work.items` | `work_class`, `state` | How much work is *waiting*, which throughput cannot tell you |
+| `lemma.work.ready_oldest_age` | `work_class` | How long the oldest claimable item has waited: the latency a person sees |
+| `lemma.work.dead` | `work_class`, `work_kind`, `error_class` | Work that gave up |
 | `lemma.llm.tokens` | `gen_ai.request.model`, `gen_ai.token.type` | Tokens per day by model |
 | `lemma.llm.cost_usd` | `gen_ai.request.model` | Spend, next to everything else |
 
-The backlog gauges are sampled by a loop on the **worker** and report nothing
-until the first successful sample — a gauge that reports a stale level reads as
+The work gauges are sampled by a loop on the **worker** (every
+`WORK_GAUGE_INTERVAL_SECONDS`) and report nothing until the first successful
+sample — a gauge that reports a stale level reads as
 a healthy steady state, which is the failure these exist to catch.
 
 ### HTTP semantic conventions

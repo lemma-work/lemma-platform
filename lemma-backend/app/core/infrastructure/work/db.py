@@ -84,7 +84,10 @@ def pool_capacity(engine: AsyncEngine) -> int | None:
     overflow = int(getattr(pool, "_max_overflow", 0))
     if overflow < 0:
         return None
-    return int(size()) + overflow
+    capacity = size()
+    if not isinstance(capacity, int):
+        return None
+    return capacity + overflow
 
 
 def check_fits(budget: DbBudget, engine: AsyncEngine | None) -> None:

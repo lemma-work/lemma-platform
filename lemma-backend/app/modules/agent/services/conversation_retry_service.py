@@ -18,7 +18,7 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.private_notes import privacy_of
 from app.modules.agent.domain.errors import ConversationStateError
-from app.modules.agent.domain.events import AgentRunStartedEvent
+from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRunStatus,
@@ -127,16 +127,14 @@ class RetryCoordinator:
                 **privacy_of(failed_run.metadata),
             },
         )
-        self.uow.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation.id,
-                    agent_run_id=retry_run.id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    agent_name=agent_name,
-                )
-            ]
+        await stage_agent_turn(
+            self.uow,
+            turn_for(
+                conversation,
+                run_id=retry_run.id,
+                user_id=user_id,
+                agent_name=agent_name,
+            ),
         )
         await self.uow.commit()
         return AgentRunStartResult(

@@ -184,37 +184,6 @@ class ScheduleStartService:
             conversation_metadata=_conversation_metadata(schedule, metadata),
         )
 
-    async def handle_schedule_fired(
-        self,
-        *,
-        schedule_id: str,
-        user_id: UUID | str | None,
-        payload: dict,
-        schedule_event_id: str,
-        metadata: dict | None = None,
-        llm_output: dict | None = None,
-        source_occurred_at: datetime | None = None,
-    ) -> None:
-        # 1. A wake for one already-suspended execution, rather than a schedule.
-        if await self._dispatch_wake(
-            payload=payload,
-            user_id=user_id,
-            metadata=metadata,
-            llm_output=llm_output,
-        ):
-            return
-
-        # 2. A schedule targeting a workflow or agent.
-        await self.start_for_fire(
-            schedule_id=schedule_id,
-            user_id=user_id,
-            payload=payload,
-            schedule_event_id=schedule_event_id,
-            metadata=metadata,
-            llm_output=llm_output,
-            source_occurred_at=source_occurred_at,
-        )
-
     async def start_for_fire(
         self,
         *,
@@ -237,7 +206,7 @@ class ScheduleStartService:
             return
         if not schedule.has_target:
             # An internal schedule is a wait timer and never had a target; if
-            # `_dispatch_wake` did not claim it there is nothing to record.
+            # a legacy timer fire reaches here there is nothing to record.
             # A schedule a person made always had one -- creation refuses
             # without it -- so a missing target means the workflow or agent was
             # deleted out from under it. PS-SCHED-030: record the firing as
@@ -407,7 +376,7 @@ class ScheduleStartService:
         its payload is empty (nothing writes one) and its metadata was `None`,
         so a cron-started run was handed three empty objects and had to infer
         from its instruction alone that it had been woken by a clock, let alone
-        which occurrence. `scheduled_at` has ridden on `ScheduleFired` the whole
+        which occurrence. `scheduled_at` has ridden on the fire the whole
         time and simply never reached the target.
 
         Into `metadata` rather than `payload`: `payload` is the event body and
@@ -444,56 +413,6 @@ class ScheduleStartService:
             metadata=fire_metadata,
             llm_output=llm_output or {},
         )
-
-    async def _dispatch_wake(
-        self,
-        *,
-        payload: dict,
-        user_id: UUID | str | None,
-        metadata: dict | None,
-        llm_output: dict | None,
-    ) -> bool:
-        """Route a timer that resumes something already waiting. True if handled.
-
-        Only a waiting conversation's timer still arrives this way; a suspended
-        workflow run's is a work item.
-        """
-        if payload.get("conversation_id"):
-            await self._resolve_conversation_wait(external_ref=payload.get("wait_ref"))
-            return True
-        if payload.get("workflow_run_id"):
-            # A workflow timer fired by the old poller. Timers are
-            # ``workflow.resume`` items now, and the cutover wrote one for every
-            # wait that was active, so this one is already covered.
-            return True
-        return False
-
-    async def _resolve_conversation_wait(self, *, external_ref: str | None) -> None:
-        """Hand a fired conversation wait to the agent module to interpret.
-
-        `resolve`, not `wake`: only a TIME wait means "your time is up" when its
-        timer fires. For the others the timer is a *check* — has the process
-        exited, has the child finished — and may well end in the wait re-arming
-        itself rather than the agent waking at all. This file deliberately does
-        not know which; the branch belongs in the module that owns the wait.
-        """
-        if not external_ref:
-            logger.debug("workflow.schedule_start_service.wait_fire_no_ref.observed")
-            return
-        from app.modules.agent.infrastructure.wait_repository import (
-            AgentConversationWaitRepository,
-        )
-        from app.modules.agent.services.wait_wake_service import AgentWaitService
-
-        wait = await AgentConversationWaitRepository(
-            self._uow
-        ).find_active_by_external_ref(external_ref)
-        if wait is None:
-            # Already resolved by the reconciliation sweep, cancelled, or long
-            # gone. Duplicate and stale timer fires are no-ops by construction.
-            logger.debug("workflow.schedule_start_service.wait_fire_stale.observed")
-            return
-        await AgentWaitService(self._uow).resolve(wait=wait)
 
     async def _start_workflow_for_schedule(
         self,

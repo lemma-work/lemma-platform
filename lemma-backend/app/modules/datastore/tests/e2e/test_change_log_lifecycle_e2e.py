@@ -3,18 +3,15 @@ and the cutover that converts what the old event path still held."""
 
 from __future__ import annotations
 
+
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from pydantic import BaseModel
-from redis.exceptions import ResponseError
 from sqlalchemy import text
 
-from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.events.message_bus import get_message_bus
-from app.core.infrastructure.redis.client import get_redis
 from app.core.infrastructure.work import (
     SYSTEM_NAMESPACE,
     JobContext,
@@ -23,25 +20,17 @@ from app.core.infrastructure.work import (
     WorkRegistry,
     WorkWriter,
 )
-from app.core.infrastructure.work.testing import make_due, run_until_idle
-from app.modules.datastore.changes.converter import DRAIN, LEGACY_GROUPS
+from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.datastore.changes.reader import ChangeOp, read_after
 from app.modules.datastore.changes.retention import retain, retain_pod
 from app.modules.datastore.changes.schema import changes_table, subscribers_table
 from app.modules.datastore.changes.subscribers import SubscriberTable
 from app.modules.datastore.changes.work import register_change_work
-from app.modules.datastore.domain.events import (
-    DATASTORE_EVENTS_STREAM,
-    DatastoreRecordEvent,
-    DatastoreRecordOperation,
-)
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
     schema_name_for_pod,
 )
 from app.modules.datastore.infrastructure.session import get_datastore_engine
 from app.modules.datastore.tests.e2e.change_log_support import (
-    change_log_mode,
-    datastore_scalar,
     datastore_schedule,
     deliver_all,
     deliver_including_late,
@@ -55,12 +44,6 @@ from app.modules.datastore.tests.e2e.change_log_support import (
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio, pytest.mark.drives_work]
-
-
-@pytest.fixture(autouse=True)
-def _change_log_on():
-    with change_log_mode("on"):
-        yield
 
 
 async def _age(pod_id: UUID, *, hours: int) -> None:
@@ -355,98 +338,4 @@ async def test_a_batch_trigger_never_fires_a_window_twice_on_replay(
             id=str(schedule.id),
         )
         == 35
-    )
-
-
-async def _legacy_event(pod_id: UUID, record_id: str, table: str = "orders") -> dict:
-    event = DatastoreRecordEvent.create(
-        pod_id=pod_id,
-        table_name=table,
-        record_id=record_id,
-        operation=DatastoreRecordOperation.INSERT,
-        payload={"id": record_id, "status": "legacy", "total": 1},
-    )
-    return event.model_dump(mode="json")
-
-
-async def test_the_drain_converts_the_old_paths_backlog_once(
-    pod_api: DatastoreApi, fixed_test_user
-):
-    """Outbox rows and both groups' unread entries -- the same event reached
-    through several of them -- become one change each, fired once, under the
-    id the old consumer would have fired them with."""
-    pod_id = UUID(pod_api.pod_id)
-    await orders_table(pod_api)
-    schedule = await datastore_schedule(
-        pod_id, UUID(fixed_test_user["id"]), operations=["INSERT"]
-    )
-    await deliver_all()
-
-    # The old path, still writing while the change log was off.
-    with change_log_mode("off"):
-        await pod_api.create_record("orders", {"status": "outbox", "total": 1})
-    outbox_rows = await datastore_scalar(
-        "SELECT count(*) FROM domain_event_outbox WHERE event_type LIKE 'datastore.record.%' "
-        "AND published_at IS NULL"
-    )
-    assert outbox_rows == 1
-
-    # Entries both legacy groups had not finished; one is also in the outbox.
-    raw = get_redis(url=settings.redis_url, decode_responses=False)
-    for group in LEGACY_GROUPS:
-        try:
-            await raw.xgroup_create(
-                DATASTORE_EVENTS_STREAM, group, id="$", mkstream=True
-            )
-        except ResponseError:
-            pass
-    bus = get_message_bus()
-    await bus.connect()
-    streamed = [await _legacy_event(pod_id, str(uuid4())) for _ in range(3)]
-    for event in streamed:
-        await bus.publish(DATASTORE_EVENTS_STREAM, event)
-    await bus.publish(DATASTORE_EVENTS_STREAM, streamed[0])  # a redelivery
-    # A change from long before the release that a group never read: cleared,
-    # and no trigger fires on it.
-    stale = await _legacy_event(pod_id, str(uuid4()))
-    stale["occurred_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    await bus.publish(DATASTORE_EVENTS_STREAM, stale)
-
-    async with async_session_maker() as session:
-        await WorkWriter(session).add(DRAIN, SYSTEM_NAMESPACE, {}, dedup_key=DRAIN)
-        await session.commit()
-    await run_until_idle(async_session_maker, classes=[WorkClass.ADMIN])
-    await deliver_all()
-
-    converted = [change for change in await log(pod_id) if change.event_id is not None]
-    assert len(converted) == 4, "one per event, however many ways it arrived"
-    fired = {run["source_event_id"] for run in await runs(schedule.id)}
-    assert {event["event_id"] for event in streamed} <= fired
-    assert len(fired) == 4
-    assert stale["event_id"] not in fired
-    assert (
-        await datastore_scalar(
-            "SELECT count(*) FROM domain_event_outbox WHERE event_type LIKE 'datastore.record.%'"
-        )
-        == 0
-    )
-    for group in LEGACY_GROUPS:
-        pending = await raw.xpending(DATASTORE_EVENTS_STREAM, group)
-        assert pending["pending"] == 0
-
-    # Quiet for long enough with the log on: the drain ends and takes the
-    # drained groups with it.
-    await execute(
-        "UPDATE work_items SET payload = jsonb_build_object('quiet_since', "
-        "to_jsonb(now() - interval '1 hour')) WHERE kind = :kind",
-        kind=DRAIN,
-    )
-    await make_due(async_session_maker, kind=DRAIN)
-    await run_until_idle(async_session_maker, classes=[WorkClass.ADMIN])
-    assert await scalar("SELECT count(*) FROM work_items WHERE kind = :k", k=DRAIN) == 0
-    groups = {
-        group["name"] for group in await raw.xinfo_groups(DATASTORE_EVENTS_STREAM)
-    }
-    assert not groups & {name.encode() for name in LEGACY_GROUPS} and not groups & set(
-        LEGACY_GROUPS
     )

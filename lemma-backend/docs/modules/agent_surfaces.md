@@ -18,10 +18,9 @@ Resend address.
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Pod surface CRUD/setup/catalog/send, current-user defaults, public webhooks/verification |
-| Redis consumers | Surface webhooks, schedule fires, and pod deletion |
-| streaq task | Execute one prepared surface message outside the webhook request |
-| Worker lifespan | Optional Telegram polling and Slack Socket Mode receivers |
-| API/worker cleanup | Close Redis event-dedup clients |
+| Request-time intake | Every webhook route and receiver classifies a delivery, answers provider-deadline interactions in the request, and writes each message as a `surface_inbound_messages` row plus a `surface.ingest` item in one transaction |
+| Work kinds | `surface.ingest` (`interactive`, one at a time per thread), `surface.platform_update`, `surface.reply` (`delivery`, one pump per destination) and `surface.reply_for_run` (subscribes `AgentRunFinished`), `surface.receiver` (`receivers`, one leased item per polling credential), `notification.expire`, `surfaces.mobile_changed`, `surfaces.pod_deleted`, `surfaces.member_removed` |
+| Periodic work | `surfaces.receivers.reconcile` (15 s), `surfaces.onboarding_cleanup` (1 min), `surfaces.web_visitors` (hourly), `surfaces.retention` (daily) |
 
 ## Main data model
 
@@ -40,6 +39,10 @@ Resend address.
 | `visitor_sessions` (contacts' table) | One visitor's hold on one widget, found by a secret stored only as its digest and traded at `POST /public/web/{key}/session` for a 15-minute `visitor-access` token sent as `Authorization: Bearer` (`api/public_dependencies.py`). `strength` is `ANONYMOUS`, `CODE` or `HOST`; anonymous sessions end 90 days after they began, a contact's 30 days after last use, and a `HOST` session never refreshes without a fresh host token. Reissuing a widget's secret revokes its host sessions; forgetting a contact revokes theirs. Cascades from its conversation. CORS for `/public/web/*` is answered from the widget's own origins, never with credentials (`api/public_cors.py`), and nothing there is served unless `PUBLIC_WEB_ENABLED` is on |
 | `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions, spent codes and anonymous web conversations idle for 90 days, hourly |
 | `agent_surface_group_messages` | What the bot heard in a group and what it said there, kept only where the platform keeps no readable history (Telegram, WhatsApp). Always read newest-first and bounded |
+| `surface_inbound_messages` | One row per inbound message any webhook or receiver accepted, unique on (receiver scope, the platform's event id), so a delivery retried a minute or three days later is the same row. RECEIVED → INGESTING → ROUTED, DROPPED or FAILED; the `surface.ingest` item that turns it into a turn is written with it. ROUTED and DROPPED rows are kept 7 days, FAILED 30 |
+| `surface_message_claims` | The durable message-level claim: one row per platform message, owned by the inbound row that took it, taken in the transaction that routes it so a duplicate under another scope is answered once. Kept 7 days |
+| `surface_deliveries` | Every outbound message the platform owes: a run's answer, a held reply, a notification, a "please resend". Unique on an idempotency key; PENDING → SENDING → SENT, or UNKNOWN when a send's outcome was lost (never re-sent), or FAILED. One `surface.reply` pump per destination sends them in order |
+| `surface_receiver_state` | One cursor per polling receiver (Telegram offset, Resend cursor, the Telegram manager bot), written in the transaction that stores the messages before it, so a receiver that moves to another worker resumes without a gap or a duplicate |
 
 Conversation metadata records surface, platform, external user/channel/thread,
 and message identifiers so delivery and debugging do not depend only on the
@@ -77,16 +80,16 @@ impossible to leave stale.
 sequenceDiagram
     participant P as External platform
     participant API as Webhook/receiver
-    participant Bus as surface_events
-    participant In as Ingress service
+    participant DB as surface_inbound_messages
+    participant In as surface.ingest
     participant A as Agent module
-    participant Out as Platform adapter
+    participant Out as surface.reply
     P->>API: webhook / poll / socket event
-    API->>API: verify + normalize headers/payload
-    API-->>Bus: publish and return quickly
-    Bus->>In: resolve surface, identity, dedup, conversation link
-    In->>A: append user message + queue run
-    A-->>Out: progress/final messages
+    API->>API: verify, classify, answer deadline interactions
+    API->>DB: row + surface.ingest item (one transaction), return quickly
+    DB->>In: resolve surface, identity, claim, conversation link
+    In->>A: user message + agent.turn (one transaction)
+    A-->>Out: AgentRunFinished -> surface_deliveries row
     Out-->>P: reply in original channel/thread
 ```
 
@@ -436,7 +439,8 @@ Management routes use pod permissions and ensure connector account ownership.
 Webhook security handles Slack signatures, Teams/Telegram/WhatsApp verification,
 email provider metadata, timestamp windows, and challenge responses. Identity
 policy controls whether unknown external senders are rejected, linked, or
-represented as contacts. Redis dedup guards repeat provider deliveries.
+represented as contacts. The inbound row's unique key and the message claim
+(`surface_message_claims`) make a repeated provider delivery one message.
 
 The contact path (`services/contacts.py`) never answers mail a machine sent
 (`platforms/email_automated.py`, plus the pod's own addresses), and treats a

@@ -32,10 +32,6 @@ from app.modules.agent_surfaces.services.surface_candidates import (
     admitted_surfaces,
     fan_in_candidates,
 )
-from app.modules.agent_surfaces.services.delivery_claims import (
-    hand_back_delivery_claim,
-    take_delivery_claim,
-)
 from app.modules.agent_surfaces.services.created_groups import created_group_surfaces
 from app.modules.agent_surfaces.services.group_ingress import (
     logged_and_addressed,
@@ -346,7 +342,7 @@ class SurfaceInboundMixin:
         display_name = agent_display_name(
             (await agent_name_for_surface(self.uow, surface)) if surface else None
         )
-        # `prepare_unrouted_context` opens with a Redis dedup claim, and
+        # `prepare_unrouted_context` opens with a message claim, and
         # `resolve_sender` above has flushed an external-user upsert --
         # so `connection_released` would decline and hand nothing back. Commit
         # instead: what has been written by here is a durable fact about the
@@ -407,34 +403,33 @@ class SurfaceInboundMixin:
         ):
             return None
 
-        if claim_delivery and not await take_delivery_claim(
-            self.uow, self.event_dedup_store, surface, parsed
+        # The message-level claim (Slack sends `message` and `app_mention` for
+        # one message): on this session, so it commits with what preparation
+        # writes and goes away with it if preparation fails -- nothing to hand
+        # back. Owned by the inbound row being ingested, whose own retry finds
+        # it its own. A replay took its claim already, and asks for none.
+        if claim_delivery and not await self.event_dedup_store.claim_message(
+            surface_installation_id=surface.id,
+            platform=surface.surface_type,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+            external_message_id=parsed.external_message_id,
         ):
+            logger.info(
+                "agent_surfaces.ingress_service.duplicate_message_dropped.observed",
+                surface_type=surface.surface_type,
+                external_channel_id=parsed.external_channel_id,
+            )
             return None
 
-        # The claim is spent, and everything from here can still fail (sender
-        # resolution, routing, the binder, the commit after). Left spent, the
-        # inbox's retry reads a "duplicate" and drops the message, and a
-        # `DomainError` is terminal and never retried. So it is kept only once
-        # preparation has returned -- a `finally`, so cancellation counts too.
-        # A replay took no claim, so it has none to give back.
-        prepared = False
-        try:
-            context = await self._prepare_claimed_surface_context(
-                surface=surface,
-                parsed=parsed,
-                adapter=adapter,
-                credentials=credentials,
-                resolved_user=resolved_user,
-                fallback_agent_display_name=fallback_agent_display_name,
-            )
-            prepared = True
-            return context
-        finally:
-            if claim_delivery and not prepared:
-                await hand_back_delivery_claim(
-                    self.uow, self.event_dedup_store, surface, parsed
-                )
+        return await self._prepare_claimed_surface_context(
+            surface=surface,
+            parsed=parsed,
+            adapter=adapter,
+            credentials=credentials,
+            resolved_user=resolved_user,
+            fallback_agent_display_name=fallback_agent_display_name,
+        )
 
     async def _prepare_claimed_surface_context(
         self,

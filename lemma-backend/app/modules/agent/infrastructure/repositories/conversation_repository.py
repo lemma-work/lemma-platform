@@ -336,6 +336,26 @@ class ConversationRepository(
         )
         return model.to_entity() if model is not None else None
 
+    async def find_child_by_spawn_call(
+        self, *, parent_id: UUID, spawn_call: str
+    ) -> ConversationEntity | None:
+        """The child the spawning call ``spawn_call`` created, if it did."""
+        model = await self.session.scalar(
+            select(ConversationModel).where(
+                ConversationModel.parent_id == parent_id,
+                ConversationModel.spawn_tool_call_id == spawn_call,
+            )
+        )
+        return model.to_entity() if model is not None else None
+
+    async def set_spawn_call(self, conversation_id: UUID, spawn_call: str) -> None:
+        """Record the call that spawned ``conversation_id``; unique per parent."""
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .values(spawn_tool_call_id=spawn_call)
+        )
+
     async def list_children(
         self,
         *,

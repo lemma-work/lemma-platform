@@ -1744,7 +1744,23 @@ def _slack_deliveries(store: MockPlatformMessageStore) -> list[tuple[dict, str]]
     """
     deliveries: list[tuple[dict, list[str]]] = []
     streams: dict[tuple[str, str], list[str]] = {}
+    # A live stream the run's display took down (``end_progress``: stopped,
+    # then deleted) is not on the person's screen: the answer arrives as the
+    # run's delivery instead, and counting both would see it twice.
+    deleted = {
+        (str(call.get("channel") or ""), str(call.get("ts") or ""))
+        for call in store.get_all("SLACK_DELETE")
+    }
     for platform, message in store.get_ordered("SLACK", "SLACK_STREAM_APPEND"):
+        if (
+            platform != "SLACK"
+            and (
+                str(message.get("channel") or ""),
+                str(message.get("ts") or ""),
+            )
+            in deleted
+        ):
+            continue
         text = _slack_reply_text(platform, message)
         if not text:
             continue

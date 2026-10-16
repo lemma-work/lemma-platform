@@ -181,15 +181,13 @@ def test_ceiling_is_a_day():
 
 @pytest.fixture
 def suspend_harness(monkeypatch):
-    """Stub the one side effect of a successful wait: the wait row.
+    """Stub the two writes of a successful wait: the row and its work item.
 
-    There used to be two. The other was a one-shot scheduler, reached through
-    `app/composition/agent_snooze_scheduler.py`, and stubbing it is what these
-    tests spent most of their length on. There is no scheduler: the row below
-    carries `scheduled_at` and `external_ref`, and the poller claims from those
-    columns, so the row *is* the timer.
+    Both go in one transaction: a wait with nothing to fire it is an agent that
+    sleeps forever.
     """
     created: list[AgentConversationWaitEntity] = []
+    armed: list[tuple[AgentConversationWaitEntity, datetime | None]] = []
 
     class _FakeRepo:
         def __init__(self, uow):
@@ -229,18 +227,25 @@ def suspend_harness(monkeypatch):
     monkeypatch.setattr(
         adapter, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow()
     )
+
+    async def _fake_arm_wait(work, wait, at):
+        armed.append((wait, at))
+
     monkeypatch.setattr(adapter, "suspend_remote_run", _fake_suspend_remote_run)
     monkeypatch.setattr(adapter, "poke_host", _fake_poke_host)
-    return SimpleNamespace(created=created, suspended=suspended, poked=poked)
+    monkeypatch.setattr(adapter, "arm_wait", _fake_arm_wait)
+    monkeypatch.setattr(adapter.WorkWriter, "of", staticmethod(lambda uow: None))
+    return SimpleNamespace(
+        created=created, suspended=suspended, poked=poked, armed=armed
+    )
 
 
 @pytest.mark.asyncio
 async def test_wait_for_arms_one_active_wait_and_pauses_the_run(suspend_harness):
-    """The success path: one ACTIVE wait that is due, and the pause signal.
+    """The success path: one ACTIVE wait, its timer item, and the pause signal.
 
-    The row is the timer, so what has to be right is the row: due at the
-    requested time, ACTIVE so the poller's due query can see it, and carrying a
-    `wait_ref` the fired timer resolves back through.
+    The row and the item that fires it are written together, the item due at
+    the requested time.
     """
     ctx = _ctx()
     before = datetime.now(timezone.utc)
@@ -255,11 +260,13 @@ async def test_wait_for_arms_one_active_wait_and_pauses_the_run(suspend_harness)
     assert wait.status is AgentWaitStatus.ACTIVE
     assert wait.tool_call_id == "tc-1"
     assert wait.spec["note_to_self"] is None
-    # Due when it was asked to be, because `scheduled_at` is what the poller
-    # claims on. A minute of slack, not a fixed clock, so this does not flake.
+    # Due when it was asked to be. A minute of slack, not a fixed clock, so
+    # this does not flake.
     assert (
         timedelta(seconds=599) <= wait.scheduled_at - before <= timedelta(seconds=660)
     )
+    # And armed: the item is due exactly when the row says it wakes.
+    assert suspend_harness.armed == [(wait, wait.scheduled_at)]
     # And resolvable to exactly one wait: `external_ref` is what
     # `find_active_by_external_ref` joins on.
     assert UUID(wait.external_ref)
@@ -361,200 +368,6 @@ async def test_wait_for_clamps_an_over_long_request(suspend_harness):
     assert wait.spec["requested_seconds"] == MAX_WAIT_SECONDS * 10
 
 
-# -- the composition adapter ---------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_the_claimed_wait_payload_still_matches_the_wake_contract():
-    """The payload is the contract with ScheduleStartService.handle_schedule_fired.
-
-    This used to check the adapter's outgoing call to the scheduler sidecar,
-    because that was where the payload was built. The producer moved -- the wait
-    row is the timer now, and `claim_due_waits` builds the payload from
-    its columns when the poller claims it -- but the consumer did not, and it is
-    still keyed on exactly these three fields. A drift here fails at runtime in
-    a place that raises `AgentInputRequired` rather than returning, so it is
-    asserted rather than assumed.
-    """
-    from app.modules.agent.services.due_wait_claimer import claim_due_waits
-
-    conversation_id, external_ref = uuid4(), uuid4()
-    now = datetime.now(timezone.utc)
-    fire_at = now - timedelta(seconds=1)
-
-    row = SimpleNamespace(
-        conversation_id=conversation_id,
-        external_ref=str(external_ref),
-        scheduled_at=fire_at,
-        fire_lease_until=None,
-    )
-
-    class _Session:
-        async def scalars(self, _statement):
-            return SimpleNamespace(all=lambda: [row])
-
-    (claimed,) = await claim_due_waits(_Session(), now=now)
-
-    assert claimed.timer_id == external_ref
-    assert claimed.fire_at == fire_at
-    # conversation_id selects the conversation-wait branch; wait_ref resolves
-    # the fired timer to exactly one ACTIVE wait.
-    assert claimed.payload["conversation_id"] == str(conversation_id)
-    assert claimed.payload["wait_ref"] == str(external_ref)
-    assert claimed.payload["source"] == "agent_wait"
-    # A claim without a lease would be taken again on the very next tick.
-    assert row.fire_lease_until is not None and row.fire_lease_until > now
-
-
-# -- the sweep: grace period, isolation, and the attempt cap --------------------
-
-
-@pytest.fixture
-def sweep(monkeypatch):
-    """Drive WaitReconcileService with in-memory units of work."""
-    from app.modules.agent.services import wait_reconcile_service as svc
-
-    state = SimpleNamespace(listed=[], attempts={}, abandoned=[], woke=[], cutoffs=[])
-
-    class _FakeRepo:
-        def __init__(self, uow):
-            pass
-
-        async def list_active_due(self, *, due_before, limit):
-            state.cutoffs.append(due_before)
-            return list(state.listed)
-
-        async def record_wake_attempt(self, wait_id):
-            state.attempts[wait_id] = state.attempts.get(wait_id, 0) + 1
-            return state.attempts[wait_id]
-
-        async def claim(self, wait_id):
-            return next((w for w in state.listed if w.id == wait_id), None)
-
-        async def update(self, wait):
-            if wait.status is AgentWaitStatus.FAILED:
-                state.abandoned.append(wait)
-            return wait
-
-    class _FakeUow:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def commit(self):
-            pass
-
-    monkeypatch.setattr(svc, "AgentConversationWaitRepository", _FakeRepo)
-    monkeypatch.setattr(
-        svc, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow()
-    )
-    monkeypatch.setattr(svc, "async_session_maker", object())
-    state.service = svc.WaitReconcileService()
-    state.module = svc
-    return state
-
-
-@pytest.mark.asyncio
-async def test_sweep_leaves_a_grace_period_before_calling_a_timer_lost(sweep):
-    """Without it the 5-minute sweep races the real timer on every timed wait.
-
-    Every healthy wait would then be woken by the backstop and logged as a lost
-    timer at WARNING — alert noise that hides the failure it exists to report.
-    """
-    before = datetime.now(timezone.utc)
-    await sweep.service.reconcile_due_waits()
-    after = datetime.now(timezone.utc)
-
-    # The sweep asks for waits overdue by a full grace period, never merely due.
-    (cutoff,) = sweep.cutoffs
-    grace = sweep.module.RECONCILE_AFTER
-    assert before - grace <= cutoff <= after - grace
-    # And it matches the workflow sweep it claims to mirror.
-    from app.modules.workflow.services.run_resume_service import RECONCILE_AFTER
-
-    assert sweep.module.RECONCILE_AFTER == RECONCILE_AFTER
-
-
-@pytest.mark.asyncio
-async def test_sweep_abandons_a_wait_whose_wake_never_succeeds(sweep, monkeypatch):
-    """The poison pill: without a cap this retries every 5 minutes forever."""
-
-    class _AlwaysFails:
-        def __init__(self, uow):
-            pass
-
-        async def resolve(self, *, wait):
-            raise RuntimeError("wake is broken")
-
-    monkeypatch.setattr(sweep.module, "AgentWaitService", _AlwaysFails)
-    wait = _wait(scheduled_at=datetime.now(timezone.utc))
-    sweep.listed = [wait]
-
-    for _ in range(sweep.module.MAX_WAKE_ATTEMPTS):
-        assert await sweep.service.reconcile_due_waits() == 0
-        assert not sweep.abandoned  # still retrying
-
-    await sweep.service.reconcile_due_waits()
-    (abandoned,) = sweep.abandoned
-    assert abandoned.status is AgentWaitStatus.FAILED
-    assert "wake failed" in abandoned.spec["abandoned_because"]
-
-
-@pytest.mark.asyncio
-async def test_sweep_counts_an_attempt_before_making_it(sweep, monkeypatch):
-    """The counter must survive the rollback of the wake it is counting.
-
-    Bumped inside the failing transaction it would roll back with it, and the
-    cap would never be reached.
-    """
-    order: list[str] = []
-
-    class _Recording:
-        def __init__(self, uow):
-            pass
-
-        async def resolve(self, *, wait):
-            order.append("wake")
-            raise RuntimeError("boom")
-
-    monkeypatch.setattr(sweep.module, "AgentWaitService", _Recording)
-    original = sweep.service._count_attempt
-
-    async def _spy(wait):
-        order.append("count")
-        return await original(wait)
-
-    monkeypatch.setattr(sweep.service, "_count_attempt", _spy)
-    sweep.listed = [_wait(scheduled_at=datetime.now(timezone.utc))]
-
-    await sweep.service.reconcile_due_waits()
-    assert order == ["count", "wake"]
-
-
-@pytest.mark.asyncio
-async def test_one_bad_wait_does_not_stop_the_rest_of_the_batch(sweep, monkeypatch):
-    """Each wait gets its own session, so a rollback is contained."""
-    bad, good = _wait(), _wait()
-
-    class _FailsTheFirst:
-        def __init__(self, uow):
-            pass
-
-        async def resolve(self, *, wait):
-            if wait.id == bad.id:
-                raise RuntimeError("boom")
-            sweep.woke.append(wait.id)
-            return True
-
-    monkeypatch.setattr(sweep.module, "AgentWaitService", _FailsTheFirst)
-    sweep.listed = [bad, good]
-
-    assert await sweep.service.reconcile_due_waits() == 1
-    assert sweep.woke == [good.id]
-
-
 # -- Stop, on a sleeping agent -------------------------------------------------
 
 
@@ -580,14 +393,27 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
         async def find_active_for_conversation(self, conversation_id):
             return wait
 
+        async def claim(self, wait_id):
+            return wait if wait.status is AgentWaitStatus.ACTIVE else None
+
         async def update(self, updated):
             return updated
 
+    disarmed: list = []
+
+    async def _disarm(work, ended):
+        disarmed.append(ended.id)
+
     class _Conversations:
+        async def lock_conversation(self, conversation_id):
+            return None
+
         async def set_conversation_status(self, *, conversation_id, status):
             statuses.append(status)
 
     monkeypatch.setattr(stops, "AgentConversationWaitRepository", _Waits)
+    monkeypatch.setattr(stops, "disarm_wait", _disarm)
+    monkeypatch.setattr(stops.WorkWriter, "of", staticmethod(lambda uow: None))
 
     conversations = _Conversations()
     service = stops.StopCoordinator(
@@ -607,12 +433,10 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     conversation = SimpleNamespace(id=wait.conversation_id, status=None)
     await service._cancel_active_wait(conversation=conversation)
 
-    # CANCELLED is the whole of the cancellation. There is no second system to
-    # tell: the poller's due query filters on ACTIVE and
-    # `find_active_by_external_ref` ignores anything that is not, so this row
-    # is now invisible to both. There used to be a `cancel_snooze_wake` call
-    # here, which by the end was `del timer_id`.
+    # CANCELLED, and its queued timer dropped in the same transaction; a
+    # timer already running finds the wait ended under the row lock.
     assert wait.status is AgentWaitStatus.CANCELLED
+    assert disarmed == [wait.id]
     assert statuses == [ConversationStatus.STOPPED]
     assert conversation.status is ConversationStatus.STOPPED
 

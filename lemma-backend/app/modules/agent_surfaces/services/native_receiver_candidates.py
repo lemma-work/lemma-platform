@@ -12,9 +12,11 @@ table rather than another branch in a chain.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from uuid import UUID
 
 from app.core.config import reveal_secret
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.credentials import (
@@ -179,8 +181,73 @@ def candidate_from_surface(
     return build(surface, credentials) if build is not None else None
 
 
+def enabled_receiver_platforms() -> set[SurfacePlatform]:
+    """The platforms this deployment runs native receivers for."""
+    platforms: set[SurfacePlatform] = set()
+    if surface_settings.enable_telegram_polling_mode:
+        platforms.add(SurfacePlatform.TELEGRAM)
+    if surface_settings.enable_slack_socket_mode:
+        platforms.add(SurfacePlatform.SLACK)
+    if surface_settings.enable_resend_polling_mode:
+        platforms.add(SurfacePlatform.RESEND)
+    return platforms
+
+
+async def load_receiver_candidates(
+    uow: SqlAlchemyUnitOfWork,
+) -> list[NativeReceiverCandidate]:
+    """One candidate per upstream credential the deployment should be polling.
+
+    Surfaces sharing a credential (one Resend key serves every pod address, one
+    Slack app many workspaces) merge into one candidate serving all of them.
+    """
+    platforms = enabled_receiver_platforms()
+    if not platforms:
+        return []
+    from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
+        SqlAlchemySurfaceAccountAdapter,
+    )
+    from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+        SurfaceRepository,
+    )
+
+    repository = SurfaceRepository(uow)
+    account_port = SqlAlchemySurfaceAccountAdapter(uow)
+    surfaces = await repository.list_active_native_receiver_surfaces(platforms)
+    account_cache: dict[UUID, CredentialPayload] = {}
+    candidates: dict[str, NativeReceiverCandidate] = {}
+    system_telegram = (
+        system_telegram_candidate() if SurfacePlatform.TELEGRAM in platforms else None
+    )
+    if system_telegram is not None:
+        candidates[system_telegram.key] = system_telegram
+    for surface in surfaces:
+        credentials = await receiver_credentials(surface, account_port, account_cache)
+        if credentials is None:
+            continue
+        candidate = candidate_from_surface(surface, credentials)
+        if candidate is None:
+            continue
+        candidate = replace(candidate, pod_ids=(surface.pod_id,))
+        existing = candidates.get(candidate.key)
+        if existing is None:
+            candidates[candidate.key] = candidate
+        else:
+            candidates[candidate.key] = NativeReceiverCandidate(
+                key=existing.key,
+                platform=existing.platform,
+                surface_ids=tuple(sorted({*existing.surface_ids, surface.id})),
+                credential_label=existing.credential_label,
+                credentials=existing.credentials,
+                pod_ids=tuple(sorted({*existing.pod_ids, surface.pod_id})),
+            )
+    return list(candidates.values())
+
+
 __all__ = [
     "candidate_from_surface",
+    "enabled_receiver_platforms",
+    "load_receiver_candidates",
     "receiver_credentials",
     "system_telegram_candidate",
 ]

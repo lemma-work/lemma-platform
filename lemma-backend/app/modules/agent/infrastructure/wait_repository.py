@@ -1,13 +1,12 @@
 """Reads and writes for ``agent_conversation_waits``.
 
 Split out of ``repositories.py``: the waits table is its own aggregate with its
-own lifecycle (claim under a lock, sweep past-due rows), and the module it came
+own lifecycle (claim under a lock), and the module it came
 from is already twice the architecture ratchet's file-size limit.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -23,8 +22,8 @@ from app.modules.agent.infrastructure.models import AgentConversationWaitModel
 class AgentConversationWaitRepository:
     """Reads and writes for ``agent_conversation_waits``.
 
-    Deliberately narrow: create, resolve by external ref, claim under a lock,
-    and list past-due rows for the sweep. Anything richer belongs in a service —
+    Deliberately narrow: create, find, and claim under a lock. The wait's
+    timer is a work item written beside the row, not a query over it. Anything richer belongs in a service —
     this table exists to answer "what is this conversation waiting on", and a
     repository that grows opinions about *why* is how the workflow wait table
     stayed clean and this one would not.
@@ -49,7 +48,6 @@ class AgentConversationWaitRepository:
             status=wait.status.value,
             external_ref=wait.external_ref,
             scheduled_at=wait.scheduled_at,
-            wake_attempts=wait.wake_attempts,
             spec=dict(wait.spec or {}),
         )
         self.session.add(model)
@@ -102,8 +100,9 @@ class AgentConversationWaitRepository:
     async def claim(self, wait_id: UUID) -> AgentConversationWaitEntity | None:
         """Lock the row and hand it back only if it is still ACTIVE.
 
-        The timer wake and the reconciliation sweep can both fire for the same
-        wait; whichever gets the lock second sees a non-ACTIVE row and stops.
+        A timer, a finished child, an answer and a stop can all race for the
+        same wait; whichever gets the lock second sees a non-ACTIVE row and
+        stops.
         """
         stmt = (
             select(AgentConversationWaitModel)
@@ -124,49 +123,8 @@ class AgentConversationWaitRepository:
         model.status = wait.status.value
         model.spec = dict(wait.spec or {})
         model.completed_at = wait.completed_at
-        model.wake_attempts = wait.wake_attempts
-        # `scheduled_at` moves, now that a polled wait re-arms itself between
-        # checks rather than waking. The lease has to be dropped with it: the
-        # claim that is re-arming this row holds it for FIRE_LEASE_SECONDS (60),
-        # which would swallow every check of a wait that re-arms in ten.
+        # `scheduled_at` moves as a polled wait re-arms between checks; it is
+        # what the conversation reports as "wakes at".
         model.scheduled_at = wait.scheduled_at
-        model.fire_lease_until = None
         await self.session.flush()
         return model.to_entity()
-
-    async def record_wake_attempt(self, wait_id: UUID) -> int:
-        """Increment the attempt counter and return the new value.
-
-        Called in a transaction of its own, *before* the wake it counts — a wake
-        that raises rolls back everything it touched, so a counter bumped inside
-        it would roll back too and the wait would retry forever.
-        """
-        model = await self.session.get(AgentConversationWaitModel, wait_id)
-        if model is None:
-            return 0
-        model.wake_attempts = (model.wake_attempts or 0) + 1
-        await self.session.flush()
-        return model.wake_attempts
-
-    async def list_active_due(
-        self, *, due_before: datetime, limit: int = 100
-    ) -> list[AgentConversationWaitEntity]:
-        """ACTIVE waits already overdue by the caller's grace period.
-
-        Feeds the sweep that self-heals a lost scheduler event, so ``due_before``
-        is deliberately in the past: a wait that merely reached ``scheduled_at``
-        is being woken by its own timer right now, and sweeping it there would
-        race the wake it is supposed to be a backstop for. A wait legitimately
-        scheduled into the future is left alone either way.
-        """
-        stmt = (
-            select(AgentConversationWaitModel)
-            .where(
-                AgentConversationWaitModel.status == AgentWaitStatus.ACTIVE.value,
-                AgentConversationWaitModel.scheduled_at <= due_before,
-            )
-            .order_by(AgentConversationWaitModel.created_at)
-            .limit(limit)
-        )
-        models = (await self.session.execute(stmt)).scalars().all()
-        return [model.to_entity() for model in models]

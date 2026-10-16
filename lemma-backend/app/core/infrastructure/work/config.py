@@ -27,6 +27,9 @@ class ClassDefaults:
     #: than ``slots`` on purpose -- a job holds none while it does its I/O, and
     #: a fast handler is bounded by its statement timeout.
     db_slots: int
+    #: Seconds running handlers get on shutdown before they are cancelled and
+    #: released. None = WORK_SHUTDOWN_GRACE_SECONDS.
+    shutdown_grace: int | None = None
 
 
 #: Lease, slots per process, per-namespace cap and DB connections for each
@@ -34,7 +37,22 @@ class ClassDefaults:
 #: long it may run.
 CLASS_DEFAULTS: dict[WorkClass, ClassDefaults] = {
     WorkClass.EVENTS: ClassDefaults(timedelta(seconds=30), 32, 16, 6),
-    WorkClass.INTERACTIVE: ClassDefaults(timedelta(seconds=60), 64, 32, 3),
+    # Per-pod cap 48, above the automation class's 32. An agent turn holds its
+    # slot for the whole turn, including the time it sits idle waiting on an
+    # Agent Host -- and an Agent Host runs up to 20 at once by default -- so a
+    # pod's cap has to cover its busiest burst of person-driven turns *plus* a
+    # host's worth of idle ones, or a pod that uses a host gets its web chats
+    # queued behind turns doing nothing. 32 left no room above what the
+    # busiest pods already run at once; 48 adds most of a host on top, and
+    # still leaves a quarter of one process's slots for every other pod. A pod
+    # that needs more gets an override (WORK_LIMIT_OVERRIDES_JSON), not a
+    # bigger default for everyone. The grace is long enough for a turn
+    # to reach its next step boundary (most model calls end inside it) and
+    # release with nothing charged; a turn still mid-call when it runs out is
+    # cancelled and resumes from its last committed step under a new lease.
+    WorkClass.INTERACTIVE: ClassDefaults(
+        timedelta(seconds=60), 64, 48, 3, shutdown_grace=90
+    ),
     WorkClass.AUTOMATION: ClassDefaults(timedelta(seconds=60), 64, 32, 3),
     WorkClass.DELIVERY: ClassDefaults(timedelta(seconds=30), 32, 8, 2),
     WorkClass.INGESTION: ClassDefaults(timedelta(seconds=120), 4, 4, 2),
@@ -155,8 +173,19 @@ class WorkSettings(BaseSettings):
         ge=0,
         description=(
             "On shutdown, how long running handlers get to finish or reach a "
-            "safe point before they are cancelled. Whatever is still owned "
-            "afterwards is released back to the queue with nothing charged."
+            "safe point before they are cancelled, for classes with no grace "
+            "of their own (interactive has 90 s built in). Whatever is still "
+            "owned afterwards is released back to the queue with nothing "
+            "charged."
+        ),
+    )
+    work_shutdown_grace_json: str = Field(
+        default="",
+        description=(
+            "Per-class shutdown grace in whole seconds, overriding both the "
+            "built-in class graces and WORK_SHUTDOWN_GRACE_SECONDS, e.g. "
+            '{"interactive": 120}. The pod\'s termination grace must exceed '
+            "the longest of them, or the platform kills what is still draining."
         ),
     )
     work_gauge_interval_seconds: float = Field(
@@ -221,6 +250,21 @@ def class_db_slots(cls: WorkClass) -> int:
         _class_int_overrides(work_settings.work_db_slots_json, "WORK_DB_SLOTS_JSON")
     )
     return overrides.get(cls, CLASS_DEFAULTS[cls].db_slots)
+
+
+def class_shutdown_grace(cls: WorkClass) -> float:
+    """Seconds this class's running handlers get on shutdown."""
+    overrides = dict(
+        _class_int_overrides(
+            work_settings.work_shutdown_grace_json, "WORK_SHUTDOWN_GRACE_JSON"
+        )
+    )
+    if cls in overrides:
+        return float(overrides[cls])
+    builtin = CLASS_DEFAULTS[cls].shutdown_grace
+    if builtin is not None:
+        return float(builtin)
+    return work_settings.work_shutdown_grace_seconds
 
 
 def default_max_running(cls: WorkClass) -> int:

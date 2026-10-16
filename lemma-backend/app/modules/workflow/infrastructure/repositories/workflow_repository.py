@@ -128,8 +128,15 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
         return self._to_entity(row[0], row[1]) if row else None
 
     async def get_for_update(self, flow_id: UUID) -> Optional[WorkflowEntity]:
+        # NO KEY UPDATE, not UPDATE: a start inserts its run first, and that
+        # row's foreign key holds KEY SHARE on this one. FOR UPDATE conflicts
+        # with KEY SHARE, so two concurrent starts of a capped workflow each
+        # waited on the other's -- a deadlock. NO KEY UPDATE does not conflict
+        # with KEY SHARE and still serialises the admission checks.
         stmt = (
-            select(WorkflowModel).where(WorkflowModel.id == flow_id).with_for_update()
+            select(WorkflowModel)
+            .where(WorkflowModel.id == flow_id)
+            .with_for_update(key_share=True)
         )
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -28,6 +27,15 @@ class _FakeUow:
     def __init__(self):
         self.session = object()
 
+    async def commit(self):
+        return None
+
+    async def rollback(self):
+        return None
+
+    def after_commit(self, callback):
+        del callback
+
 
 @asynccontextmanager
 async def _fake_uow_ctx():
@@ -42,6 +50,9 @@ class _FakeUowFactory:
 class _FakeStore:
     def __init__(self):
         self.exports: dict = {}
+
+    async def stage_export(self, uow, state: ExportState) -> None:
+        await self.save_export(state)
 
     async def save_export(self, state: ExportState) -> None:
         state.touch()
@@ -59,13 +70,15 @@ class _FakeQueue:
         self.calls: list[dict] = []
         self._return_none = return_none
 
-    async def enqueue(self, job_name, *, context=None, _job_id=None):
+    async def queue_job(self, uow, kind, payload, *, pod_id, dedup_key):
         self.calls.append(
-            {"job_name": job_name, "context": context, "_job_id": _job_id}
+            {
+                "job_name": kind,
+                "context": payload.model_dump(mode="json"),
+                "_job_id": dedup_key,
+            }
         )
-        if self._return_none:
-            return None
-        return SimpleNamespace(id=_job_id)
+        return not self._return_none
 
 
 class _FakeStaging:
@@ -128,12 +141,15 @@ async def test_start_export_saves_queued_and_enqueues_with_dedup_id():
     # Enqueued once with the deterministic dedup id + string-coerced context.
     assert len(queue.calls) == 1
     call = queue.calls[0]
-    assert call["job_name"] == "export_pod_bundle"
+    assert call["job_name"] == "pod_bundle.export"
     assert call["_job_id"] == export_job_id(state.export_id)
     assert call["context"] == {
         "export_id": str(state.export_id),
         "pod_id": str(pod_id),
         "user_id": str(user_id),
+        # How the request arrived, for the analytics the job raises.
+        "origin": None,
+        "origin_platform": None,
     }
 
 

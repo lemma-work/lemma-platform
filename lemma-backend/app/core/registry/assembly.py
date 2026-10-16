@@ -18,27 +18,16 @@ from app.core.registry.contract import LemmaModule
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
-    from faststream.redis import RedisBroker
-
-    from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext
+    from app.core.infrastructure.work.process import WorkerContext
 
 logger = get_logger(__name__)
-
-
-def configure_stream_topology(modules: Sequence[LemmaModule]) -> None:
-    from app.core.infrastructure.events.stream_subscriber import (
-        declare_stream_groups,
-    )
-
-    declare_stream_groups(group for module in modules for group in module.stream_groups)
 
 
 def configure_resource_names(modules: Sequence[LemmaModule]) -> None:
     """Collect how each module maps a resource name to a row id.
 
-    Called from both process entry points, beside `configure_stream_topology`
-    and for the same reason: a grant resolved in the worker has to mean what it
-    means in the API.
+    Called from both process entry points: a grant resolved in the worker has
+    to mean what it means in the API.
     """
     from app.core.authorization.resource_names import declare_resource_names
 
@@ -93,7 +82,7 @@ def configure_namespace_directory(modules: Sequence[LemmaModule]) -> None:
 
 
 def register_module_work(modules: Sequence[LemmaModule]) -> None:
-    """Import every module's work kinds and fact subscriptions.
+    """Import every module's work kinds, fact subscriptions and analytics projections.
 
     Both the API and the worker need them: the API enqueues kinds and emits
     facts, the worker claims them. Idempotent, because importing is.
@@ -101,12 +90,23 @@ def register_module_work(modules: Sequence[LemmaModule]) -> None:
     for module in modules:
         if module.register_work is not None:
             module.register_work()
+        # Same reach, same reason: the process that commits a domain event is
+        # the one whose sink projects it.
+        if module.register_analytics is not None:
+            module.register_analytics()
+
+
+def register_module_periodic_work(modules: Sequence[LemmaModule]) -> None:
+    """Import every module's periodic work: the worker's, armed at its boot."""
+    register_module_work(modules)
+    for module in modules:
+        if module.register_periodic_work is not None:
+            module.register_periodic_work()
 
 
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
     """Include every module's API routers, in module-list then thunk order."""
     register_module_work(modules)
-    configure_stream_topology(modules)
     configure_resource_names(modules)
     configure_pod_liveness(modules)
     configure_plan_limits(modules)
@@ -116,52 +116,6 @@ def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> No
             continue
         for router in module.routers():
             app.include_router(router)
-
-
-def register_streaq_tasks(modules: Sequence[LemmaModule]) -> None:
-    """Import each module's ``@streaq_task``/``@streaq_cron`` modules.
-
-    Pure import-for-side-effect: the decorators register tasks on the shared
-    ``streaq_worker`` singleton. Must run at import scope of the worker
-    entrypoint (``app/events.py``), before ``broker.start()``.
-    """
-    for module in modules:
-        if module.register_streaq is not None:
-            module.register_streaq()
-
-
-def import_module_tasks(modules: Sequence[LemmaModule]) -> None:
-    """Import every module's task definitions, without wiring a broker.
-
-    ``register_streaq`` is not the only thunk that carries ``@streaq_task``:
-    plenty of modules define their tasks alongside their FastStream handlers,
-    so importing ``event_routers`` is what registers those. The worker gets
-    both because ``wire_module_events`` calls both. A process that only
-    *publishes* jobs needs the same imports to know which lane each task runs
-    on, but has no broker to include the routers on — so it comes here instead.
-    """
-    register_module_work(modules)
-    for module in modules:
-        if module.register_streaq is not None:
-            module.register_streaq()
-        if module.event_routers is not None:
-            module.event_routers()
-
-
-def wire_module_events(modules: Sequence[LemmaModule], broker: "RedisBroker") -> None:
-    """Register streaq tasks then include every module's FastStream routers."""
-    register_module_work(modules)
-    configure_stream_topology(modules)
-    configure_resource_names(modules)
-    configure_pod_liveness(modules)
-    configure_plan_limits(modules)
-    configure_namespace_directory(modules)
-    register_streaq_tasks(modules)
-    for module in modules:
-        if module.event_routers is None:
-            continue
-        for router in module.event_routers():
-            broker.include_router(router)
 
 
 async def enter_api_lifespans(
@@ -182,7 +136,7 @@ async def enter_api_lifespans(
 
 
 async def enter_worker_lifespans(
-    stack: AsyncExitStack, modules: Sequence[LemmaModule], context: "AppWorkerContext"
+    stack: AsyncExitStack, modules: Sequence[LemmaModule], context: "WorkerContext"
 ) -> None:
     """Enter every module's worker lifespan hooks on the given exit stack."""
     for module in modules:

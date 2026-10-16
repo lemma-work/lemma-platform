@@ -3371,9 +3371,9 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
     assert run.status_code == status.HTTP_201_CREATED, run.text
     run_id = run.json()["id"]
 
-    # The wait is written with its `workflow.notify_form` job, which the
-    # session's worker runs: the notification arrives shortly after the run.
-    async def _form_notifications() -> list[dict]:
+    # The FORM notification is written by the run's `workflow.notify_form`
+    # item, which the worker runs after the run's transaction commits.
+    async def form_notifications() -> list[dict]:
         inbox = await authenticated_client.get(f"/pods/{pod_id}/notifications")
         assert inbox.status_code == status.HTTP_200_OK, inbox.text
         return [
@@ -3384,9 +3384,10 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
 
     notification = (
         await eventually(
-            label="the form assignee's notification",
-            probe=_form_notifications,
-            done=bool,
+            label="the form's notification",
+            probe=form_notifications,
+            done=lambda found: len(found) == 1,
+            timeout_seconds=30,
         )
     )[0]
     assert notification["responds_through_action"] is True

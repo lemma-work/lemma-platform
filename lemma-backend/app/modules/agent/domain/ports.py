@@ -19,7 +19,6 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
-    StaleAgentRunRef,
 )
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.pending_interactions import (
@@ -184,6 +183,18 @@ class ConversationRepository(Protocol):
         self, *, conversation_id: UUID, user_id: UUID, pod_id: UUID
     ) -> ConversationListCursor | None: ...
 
+    async def find_child_by_spawn_call(
+        self, *, parent_id: UUID, spawn_call: str
+    ) -> Conversation | None: ...
+
+    async def set_spawn_call(self, conversation_id: UUID, spawn_call: str) -> None: ...
+
+    async def list_unpaired_tool_calls(
+        self, agent_run_id: UUID, *, limit: int = 64
+    ) -> list[Message]: ...
+
+    async def last_run_message(self, agent_run_id: UUID) -> Message | None: ...
+
     async def find_spawned_child(
         self, *, parent_id: UUID, parent_run_id: UUID, spawn_key: str
     ) -> Conversation | None: ...
@@ -223,28 +234,6 @@ class ConversationRepository(Protocol):
         self,
         conversation_id: UUID,
     ) -> AgentRun | None: ...
-
-    async def list_stale_active_runs(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StaleAgentRunRef]: ...
-
-    async def list_active_runs_pending_liveness(
-        self,
-        *,
-        cutoff_seconds: int,
-        decided_after_seconds: int,
-        limit: int = 200,
-    ) -> list[StaleAgentRunRef]: ...
-
-    async def list_runs_stuck_stopping(
-        self,
-        *,
-        cutoff_seconds: int,
-        limit: int = 200,
-    ) -> list[StaleAgentRunRef]: ...
 
     async def run_is_replay_safe(self, agent_run_id: UUID) -> bool: ...
 
@@ -367,12 +356,11 @@ class ConversationRepository(Protocol):
         approval_id: str,
     ) -> bool: ...
 
-    async def approval_execution_claim_expired(
+    async def approval_execution_claimed(
         self,
         *,
         conversation_id: UUID,
         approval_id: str,
-        stale_after_seconds: int,
     ) -> bool: ...
 
     async def get_approval_decision(
@@ -387,6 +375,10 @@ class ConversationRepository(Protocol):
         *,
         conversation_id: UUID,
     ) -> set[str]: ...
+
+    async def tool_call_id_of_message(
+        self, *, conversation_id: UUID, message_id: UUID
+    ) -> str | None: ...
 
     async def get_tool_call(
         self,

@@ -4,7 +4,7 @@ Seven operations, replacing `app/composition/agent_notifications.py`. That file
 existed because `agent` importing `agent_surfaces` would have closed a loop: the
 eighth function on it, `deliver_replies_if_settled`, ran the *other* way, into
 `agent`, to bring an asking conversation back once nothing it asked was
-outstanding. The loop is cut by `NotificationSettledEvent` -- `agent_surfaces`
+outstanding. The loop is cut by the `NotificationSettled` fact -- `agent_surfaces`
 says the conversation is owed nothing and `agent` decides what to do about it --
 so this direction is free to be an ordinary contract import.
 

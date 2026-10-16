@@ -10,7 +10,6 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.events.identity_work import stage_identity_work
 from app.modules.identity.domain.errors import (
@@ -54,12 +53,9 @@ class OrganizationRepository(OrganizationRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def _collect_events(
         self,

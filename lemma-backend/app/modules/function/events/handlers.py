@@ -1,4 +1,4 @@
-"""Function module crons: run and revision retention.
+"""Function module periodic work: run and revision retention.
 
 Queued runs are work items now (``events/run_work.py``), and so are their
 deadlines (``events/run_deadline.py``); nothing here starts or recovers a run.
@@ -13,21 +13,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from faststream.redis import RedisRouter
-
 from app.core.infrastructure.db.session import get_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
+from app.core.infrastructure.work import periodic_job
 from app.modules.function.config import function_settings, revision_settings
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
-
-router = RedisRouter()
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
@@ -53,7 +49,7 @@ async def _guard_cron(task_name: str, body: Coroutine[Any, Any, None]) -> None:
         )
 
 
-@streaq_cron("17 * * * *", name="prune_function_runs")
+@periodic_job("function.runs_prune", every=timedelta(hours=1))
 async def prune_function_runs() -> None:
     """Reclaim finished runs past the retention window.
 
@@ -103,10 +99,11 @@ async def _prune_function_runs() -> None:
         )
 
 
-@streaq_cron(
-    revision_settings.function_revision_retention_cron,
-    name="sweep_function_revisions",
-    lane=Lane.BULK,
+@periodic_job(
+    "function.revisions_sweep",
+    every=timedelta(
+        seconds=revision_settings.function_revision_retention_interval_seconds
+    ),
 )
 async def sweep_function_revisions() -> None:
     """Daily backstop for revisions whose retention window has passed.
@@ -116,7 +113,7 @@ async def sweep_function_revisions() -> None:
     function that stops being edited, whose surplus revisions would otherwise
     age forever with nothing re-evaluating them.
 
-    Bulk lane: it is slow, bursty and touches object storage.
+    Admin class: it is slow, bursty and touches object storage.
     """
     # Through the module's shared cron boundary, which is why this module keeps
     # exactly one broad catch rather than one per schedule.

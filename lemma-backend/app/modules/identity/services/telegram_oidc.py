@@ -21,7 +21,6 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.config import reveal_secret, settings
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.helpers.identifiers import normalize_mobile_digits, normalize_mobile_e164
 from app.modules.identity.infrastructure.mobile_number_claims import (
     acquire_mobile_number_claim_lock,
@@ -29,7 +28,7 @@ from app.modules.identity.infrastructure.mobile_number_claims import (
 )
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
-from app.modules.identity.domain.events import UserMobileChangedEvent
+from app.modules.identity.events.identity_work import emit_mobile_changed
 from app.modules.identity.config import (
     TELEGRAM_OIDC_AUTHORIZATION_ENDPOINT,
     TELEGRAM_OIDC_ISSUER,
@@ -334,14 +333,15 @@ class TelegramOIDCService:
                 raise TelegramOIDCError("This mobile number is already in use")
             user.mobile_number = phone_number
             user.mobile_verified_at = datetime.now(timezone.utc)
+            # In the transaction that changes the number: surfaces unbind what
+            # resolved through the old one.
+            await emit_mobile_changed(session, user_id)
             try:
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
                 raise TelegramOIDCError("This mobile number is already in use") from exc
         await get_user_cache().invalidate(user_id)
-        phone_changed = UserMobileChangedEvent(user_id=user_id)
-        await EventPublisher.publish(phone_changed.stream_name(), phone_changed)
 
     async def close(self) -> None:
         # The client is shared process-wide; closing it here would break

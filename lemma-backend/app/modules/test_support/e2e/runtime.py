@@ -734,7 +734,8 @@ async def full_stack(
         # spent its whole grace draining, overran, and got SIGKILLed. SIGKILL
         # cannot be trapped, so coverage's `sigterm = true` handler never
         # flushed and the subprocess's coverage was lost.
-        "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
+        "WORK_SHUTDOWN_GRACE_SECONDS": "1",
+        "WORK_SHUTDOWN_GRACE_JSON": '{"interactive": 1}',
         "DEBUG": "true",
         "EMAIL_TRANSPORT": "filesystem",
         "EMAIL_OUTPUT_DIR": settings.email_output_dir,
@@ -758,7 +759,7 @@ async def full_stack(
             text=True,
         )
         readiness_markers = (
-            '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+            '"logger": "app.core.infrastructure.work.process"',
             '"event": "service.started"',
         )
         startup_ok = False

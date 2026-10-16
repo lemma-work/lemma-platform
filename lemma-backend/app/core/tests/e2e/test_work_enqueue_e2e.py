@@ -162,7 +162,16 @@ async def test_periodic_arming_is_idempotent_and_each_run_rearms_the_next(
             await arm_periodics(session, registry, classes)
             await session.commit()
     assert await work_db.count("dedup_key = 'periodic:tick'") == 1
+    # The first run waits out the name's phase, so periodics armed by one boot
+    # do not all fall due together.
+    first_run = await work_db.scalar(
+        "SELECT run_at - now() FROM work_items WHERE dedup_key = 'periodic:tick'"
+    )
+    phase = registry.periodics()[0].phase
+    assert isinstance(first_run, timedelta)
+    assert phase - timedelta(seconds=5) < first_run <= phase
 
+    await make_due(work_db.sessions)
     assert await run_until_idle(work_db.sessions, registry=registry) == 1
     next_run = await work_db.scalar(
         "SELECT run_at - now() FROM work_items WHERE dedup_key = 'periodic:tick' "
@@ -189,6 +198,63 @@ async def test_periodic_arming_is_idempotent_and_each_run_rearms_the_next(
     assert await work_db.count("dedup_key = 'periodic:tick' AND state = 'queued'") == 1
 
 
+async def test_two_workers_arming_at_once_start_one_chain(
+    work_db: WorkDb, registry: WorkRegistry
+) -> None:
+    """Two workers booting together: the second waits for the first's arming.
+
+    Without the arming lock the second worker's check runs before the first
+    commits, its insert waits on the first's uncommitted row, and if that row
+    is claimed (``running``) before the insert rechecks, the dedup index no
+    longer sees a conflict -- two chains, each re-arming itself forever.
+    """
+    _fast(registry, "demo.tick")
+    registry.periodic("tick", timedelta(minutes=5), "demo.tick")
+    classes = [WorkClass.EVENTS]
+
+    async with work_db.sessions() as first:
+        assert await arm_periodics(first, registry, classes) == 1
+
+        async def second_worker() -> int:
+            async with work_db.sessions() as session:
+                armed = await arm_periodics(session, registry, classes)
+                await session.commit()
+                return armed
+
+        second = asyncio.create_task(second_worker())
+        await asyncio.sleep(0.3)
+        assert not second.done(), "the second worker must wait for the first"
+        await first.commit()
+    # The first worker's dispatcher claims its item before the second looks.
+    dispatcher = dispatcher_for(work_db.sessions, WorkClass.EVENTS, registry=registry)
+    await make_due(work_db.sessions)
+    claimed = await dispatcher.claim_once()
+    assert await second == 0
+    assert await work_db.count("dedup_key = 'periodic:tick'") == 1
+    await dispatcher.execute(claimed[0])
+
+    # And racing for real, twenty times, with a dispatcher claiming throughout.
+    for _ in range(20):
+        await work_db.execute("DELETE FROM work_items")
+
+        async def arm() -> None:
+            async with work_db.sessions() as session:
+                await arm_periodics(session, registry, classes)
+                await session.commit()
+
+        async def claim() -> None:
+            await make_due(work_db.sessions)
+            await dispatcher.claim_once()
+
+        await asyncio.gather(arm(), arm(), claim(), arm())
+        assert (
+            await work_db.count(
+                "dedup_key = 'periodic:tick' AND state IN ('queued', 'running')"
+            )
+            == 1
+        )
+
+
 async def test_a_dead_periodic_is_recreated_at_the_next_boot(
     work_db: WorkDb, registry: WorkRegistry
 ) -> None:
@@ -203,6 +269,46 @@ async def test_a_dead_periodic_is_recreated_at_the_next_boot(
         await session.commit()
     assert await work_db.count("state = 'queued'") == 1
     assert await work_db.count("state = 'dead'") == 1
+
+
+async def test_a_periodic_that_keeps_failing_goes_dead_and_its_chain_goes_on(
+    work_db: WorkDb, registry: WorkRegistry
+) -> None:
+    """A failed tick is a failed item: retried, then dead -- and re-armed.
+
+    The runtime records the failure (attempts, ``last_error``, the dead row);
+    the dead transaction queues the next tick ``every`` later, so a body that
+    keeps raising never stops the sweep until a deploy re-arms it.
+    """
+    from app.core.infrastructure.work import periodic_job
+
+    calls: list[int] = []
+
+    @periodic_job("demo.failing_tick", every=timedelta(hours=1), work_registry=registry)
+    async def failing_tick() -> None:
+        calls.append(1)
+        raise RuntimeError("the sweep failed")
+
+    async with work_db.sessions() as session:
+        await arm_periodics(session, registry, [WorkClass.ADMIN])
+        await session.commit()
+    for _ in range(3):  # the default policy: three attempts
+        await make_due(work_db.sessions)
+        await run_until_idle(work_db.sessions, registry=registry)
+    assert len(calls) == 3
+    key = "dedup_key = 'periodic:demo.failing_tick'"
+    assert await work_db.count(f"{key} AND state = 'dead'") == 1
+    assert (
+        await work_db.scalar(
+            f"SELECT last_error FROM work_items WHERE {key} AND state = 'dead'"
+        )
+        or ""
+    ).find("the sweep failed") >= 0
+    next_run = await work_db.scalar(
+        f"SELECT run_at - now() FROM work_items WHERE {key} AND state = 'queued'"
+    )
+    assert isinstance(next_run, timedelta)
+    assert timedelta(minutes=59) < next_run <= timedelta(hours=1)
 
 
 class _Finished(Fact):
@@ -285,7 +391,7 @@ async def test_notify_is_sent_on_the_class_channel_at_commit_only(
 
     import asyncpg
 
-    from app.core.infrastructure.events.outbox_wake import asyncpg_connect_kwargs
+    from app.core.infrastructure.db.direct_connection import asyncpg_connect_kwargs
 
     url = work_db.engine.url.render_as_string(hide_password=False)
     listener = await asyncpg.connect(
@@ -329,7 +435,7 @@ async def test_work_a_handler_enqueues_wakes_its_own_process_not_the_database(
     """
     import asyncpg
 
-    from app.core.infrastructure.events.outbox_wake import asyncpg_connect_kwargs
+    from app.core.infrastructure.db.direct_connection import asyncpg_connect_kwargs
 
     _fast(registry)
 

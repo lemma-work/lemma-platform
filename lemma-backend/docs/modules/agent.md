@@ -13,16 +13,27 @@ sandbox lifecycle belongs to [workspace](workspace.md).
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Agent CRUD/permissions, conversations/messages/SSE, runtime profiles, Agent Host pairing/dispatch, tools, widgets |
-| Redis consumer | Converts agent lifecycle events into queued work and title generation |
-| streaq tasks | Run agents, generate titles, reconcile orphaned runs |
-| Published stream | `agent_events` |
+| Work kinds | `agent.turn` (`interactive`) and `agent.turn.automation` (`automation`), one per run and one at a time per conversation, written with the run; `agent.title`; `agent.approval.execute`, written with an approval decision; `agent.wait.fire`, `agent.wait.poll` and `agent.wait.resolve_child` for paused turns; `agent.followup`, `agent.subagent_result`, `pod_ask.deliver` and `agent.replies_arrived`, written in a finished run's transaction |
+| Facts emitted | `AgentRunFinished` in every run's terminal transaction; workflow, schedule, surfaces and the parent's wait subscribe |
+| Periodic work | `agent.host_dispatch_reconcile` (5 min), `agent.host_retained_state_cleanup` (daily) |
+| After-commit projection | Drops a cached memory-brief section when the file behind it is written, from the committed `datastore.file.*` events |
 | Mounted MCP apps | Conversation and pod tool servers are assembled by the backend root using agent services |
 
-Durable lifecycle events are staged in the PostgreSQL outbox and reach Redis
-Streams only through the core message bus. Transient token/status frames use the
-core realtime-channel port with a Redis Pub/Sub adapter; each SSE connection
-leases one subscription connection and releases it on completion, failure, or
-cancellation.
+Everything that must follow a run's end is a work item or a fact written in the
+transaction that ends it, so a crash between the end and its follow-ups cannot
+lose one. Each step of a turn (a tool call, its return, the answer) commits
+fenced by the turn's claim, so a worker that lost the turn's lease cannot add a
+second answer, and a resumed turn whose answer had committed ends on it without
+asking the model again. Lemma's database being unreachable mid-turn interrupts
+the turn, which resumes; it is never recorded as the model failing. Transient token/status frames use the core realtime-channel port with
+a Redis Pub/Sub adapter; each SSE connection leases one subscription connection
+and releases it on completion, failure, or cancellation.
+
+Migration `0056_agent_surface_bundle_work` arms every active wait. A turn that
+was running on the old transport, and a conversation paused on an approval that
+was decided but not yet executed, are failed with a message asking the person
+to continue; nothing is replayed
+([cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13)).
 
 ## Main data model
 

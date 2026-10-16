@@ -4,6 +4,9 @@ import os
 
 import pytest
 
+#: Fixtures every suite may ask for by name.
+pytest_plugins = ["app.modules.test_support.e2e.committed_events"]
+
 # Tests are deterministic and self-contained: they set the config they need (via
 # fixtures / the defaults below / monkeypatch), NOT a developer's local ``.env``.
 # A leaked ``.env`` makes the suite non-deterministic — a value present locally

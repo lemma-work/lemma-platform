@@ -31,7 +31,6 @@ class FakeUnitOfWork(IUnitOfWork):
         self.committed = False
         self.rolled_back = False
         self.collected_events: list[object] = []
-        self._message_bus = None
 
     async def commit(self) -> None:
         self.committed = True
@@ -55,9 +54,6 @@ class FakeUnitOfWork(IUnitOfWork):
     def collect_events(self, events) -> None:
         if events:
             self.collected_events.extend(events)
-
-    def set_message_bus(self, message_bus) -> None:
-        self._message_bus = message_bus
 
 
 class _EmptyResult:

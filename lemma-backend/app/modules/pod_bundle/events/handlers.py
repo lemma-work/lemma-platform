@@ -1,6 +1,4 @@
-"""Streaq tasks for pod bundle jobs.
-
-Imported for side effects by ``module.register_streaq`` at worker startup.
+"""The bodies of the pod bundle jobs; ``work.py`` runs them as work items.
 
 Export job phases:
   (a) mark ``EXPORTING`` + publish status
@@ -9,32 +7,28 @@ Export job phases:
   (c) NO DB: upload the bytes to object storage
   (d) short state write ``READY`` (staging_key, bundle_filename, completed_at) +
       publish completed
-On failure: mark ``FAILED`` + publish error. Domain/bundle errors are terminal
-(swallowed after marking FAILED); infrastructure errors re-raise so streaq
-retries — a retry re-plans a fresh export against current pod state, so it is
-always safe.
+On failure: mark ``FAILED`` + publish error. Domain errors are terminal; an
+export's infrastructure error re-raises so the item retries (a fresh export is
+always safe), an import's is terminal for the person, who retries it.
+A stopping worker leaves at a ``yield_point``, past every ``except Exception``.
 """
 
 from __future__ import annotations
 
 import tempfile
+from datetime import timedelta
 from uuid import UUID
 
-from streaq import StreaqRetry
-
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.jobs.streaq_runtime import (
-    Lane,
-    AppWorkerContext,
-    streaq_task,
-    streaq_worker,
-)
+from app.core.infrastructure.work import Defer
 from app.core.log.log import get_logger
-from app.core.origin import OriginKind
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.events import analytics as bundle_analytics
+from app.modules.pod_bundle.events.work import BundleWorkerContext, yield_point
+from app.modules.pod_bundle.events.work import worker_context as _worker_ctx
 from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleStagingMissingError,
@@ -71,7 +65,7 @@ class _ImportCancellation(Exception):
     pass
 
 
-def _github_import_fetcher(worker_ctx: AppWorkerContext, state: ImportState):
+def _github_import_fetcher(worker_ctx: BundleWorkerContext, state: ImportState):
     runner = None
     if state.account_id is not None:
         runner = _github_import_operation_runner(worker_ctx=worker_ctx, state=state)
@@ -103,7 +97,7 @@ async def _raise_if_cancelled(store, import_id: UUID) -> None:
 
 
 async def _resolve_import_replacements(
-    worker_ctx: AppWorkerContext,
+    worker_ctx: BundleWorkerContext,
     state: ImportState,
     *,
     pod_id: UUID,
@@ -187,11 +181,10 @@ async def _settle_import_state_conflict(store, staging, import_id: UUID) -> bool
     }
 
 
-@streaq_task(name="export_pod_bundle", lane=Lane.BULK)
 async def export_pod_bundle(context: dict[str, str | None]) -> None:
     from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 
-    worker_ctx: AppWorkerContext = streaq_worker.context
+    worker_ctx = _worker_ctx()
     export_id = UUID(str(context["export_id"]))
     pod_id = UUID(str(context["pod_id"]))
     user_id = UUID(str(context["user_id"]))
@@ -208,6 +201,7 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
         return
 
     try:
+        yield_point()
         # (a) EXPORTING
         retrying = state.status is ExportStatus.FAILED
         state.status = ExportStatus.EXPORTING
@@ -290,16 +284,17 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
             ),
         )
     except DomainError as exc:
-        # Bundle/domain errors are terminal — mark FAILED and swallow (streaq
-        # retrying would fail identically).
+        # Bundle/domain errors are terminal — mark FAILED and swallow (a retry
+        # would fail identically).
         await _fail(store, state, str(exc))
         logger.warning(
             "pod_bundle.handlers.pod_bundle_export_s_terminal.degraded",
             export_id=export_id,
         )
-    except Exception:
+    except Exception as exc:
+        raise_if_database_unavailable(exc)
         # Infrastructure error (DB blip, object storage). Mark FAILED for the UI,
-        # then re-raise so streaq retries with a fresh attempt.
+        # then re-raise so the work item retries with a fresh attempt.
         await _fail(store, state, "Export failed due to a transient error.")
         logger.debug(
             "pod_bundle.handlers.pod_bundle_export_s_retryable.propagated",
@@ -323,7 +318,6 @@ async def _fail(store, state: ExportState, message: str) -> None:
         )
 
 
-@streaq_task(name="plan_pod_import", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def plan_pod_import(context: dict[str, str | None]) -> None:
     """Diff a staged bundle against the pod and produce a resumable plan.
 
@@ -331,7 +325,7 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
     so it is safe to retry. Terminal on a malformed/missing bundle; the user
     re-uploads to try again.
     """
-    worker_ctx: AppWorkerContext = streaq_worker.context
+    worker_ctx = _worker_ctx()
     import_id = UUID(str(context["import_id"]))
 
     store = get_pod_bundle_state_store()
@@ -357,14 +351,14 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
             "pod_bundle.handlers.pod_bundle_plan_s_terminal.degraded",
             import_id=import_id,
         )
-    except Exception:
+    except Exception as exc:
+        raise_if_database_unavailable(exc)
         await _fail_import(store, state, "Planning failed due to a transient error.")
-        logger.debug(
-            "pod_bundle.handlers.pod_bundle_plan_s_retryable.propagated",
+        logger.warning(
+            "pod_bundle.handlers.pod_bundle_plan_transient.failed",
             import_id=import_id,
             exc_info=True,
         )
-        raise
 
 
 async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> None:
@@ -416,10 +410,9 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
     )
 
 
-@streaq_task(name="import_pod_github", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def import_pod_github(context: dict[str, str | None]) -> None:
     """Fetch a GitHub zipball, using the selected connector account when set."""
-    worker_ctx: AppWorkerContext = streaq_worker.context
+    worker_ctx = _worker_ctx()
     import_id = UUID(str(context["import_id"]))
 
     store = get_pod_bundle_state_store()
@@ -459,6 +452,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
         )
         await store.save_import(state)
 
+        yield_point()
         await _plan_from_staging(worker_ctx, store, staging, state)
     except _ImportCancellation:
         await _finalize_import_cancellation(store, staging, state)
@@ -469,37 +463,37 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
     except DomainError as exc:
         if _is_retryable_import_error(exc) and state.attempt < 3:
             await _record_import_retry(store, state, exc)
-            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+            raise Defer(timedelta(seconds=min(state.attempt**2, 9))) from exc
         await _fail_import(store, state, exc)
         logger.warning(
             "pod_bundle.handlers.github_import_s_terminal_s.degraded",
             import_id=import_id,
         )
     except Exception as exc:
+        raise_if_database_unavailable(exc)
         if state.attempt < 3:
             await _record_import_retry(store, state, exc)
-            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+            raise Defer(timedelta(seconds=min(state.attempt**2, 9))) from exc
         await _fail_import(
             store,
             state,
             exc,
             public_message="GitHub import failed after three transient attempts.",
         )
-        logger.debug(
-            "pod_bundle.handlers.github_import_s_retryable_s.propagated",
+        logger.warning(
+            "pod_bundle.handlers.github_import_transient.failed",
             import_id=import_id,
             exc_info=True,
         )
 
 
-@streaq_task(name="import_pod_url", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def import_pod_url(context: dict[str, str | None]) -> None:
     """Copy a lemma-origin source object (an export or an uploaded bundle) into
     this import's own staging, then plan — one job per ``import_id``. The source
     is read straight from object storage (verified at start), so there is no
     server-side HTTP fetch and no SSRF surface. Making the import self-contained
     lets the source expire independently."""
-    worker_ctx: AppWorkerContext = streaq_worker.context
+    worker_ctx = _worker_ctx()
     import_id = UUID(str(context["import_id"]))
     source_kind = str(context["source_kind"])
     source_id = UUID(str(context["source_id"]))
@@ -530,6 +524,7 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         state.staging_key = await staging.put_archive("pod-imports", import_id, data)
         await store.save_import(state)
 
+        yield_point()
         await _plan_from_staging(worker_ctx, store, staging, state)
     except _ImportCancellation:
         await _finalize_import_cancellation(store, staging, state)
@@ -542,23 +537,22 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         logger.warning(
             "pod_bundle.handlers.url_import_s_terminal_s.degraded", import_id=import_id
         )
-    except Exception:
+    except Exception as exc:
+        raise_if_database_unavailable(exc)
         await _fail_import(store, state, "URL import failed due to a transient error.")
-        logger.debug(
-            "pod_bundle.handlers.url_import_s_retryable_s.propagated",
+        logger.warning(
+            "pod_bundle.handlers.url_import_transient.failed",
             import_id=import_id,
             exc_info=True,
         )
-        raise
 
 
-@streaq_task(name="apply_pod_import", lane=Lane.BULK, origin=OriginKind.IMPORT)
 async def apply_pod_import(context: dict[str, str | None]) -> None:
     """Apply an approved plan step by step: each step runs in its own short UoW
-    (commit) then a Redis checkpoint, so a crash resumes from the first pending
+    (commit) then a durable checkpoint, so a crash resumes from the first pending
     step and the idempotent upserts converge. Records a recipe on the pod when
     every step lands."""
-    worker_ctx: AppWorkerContext = streaq_worker.context
+    worker_ctx = _worker_ctx()
     import_id = UUID(str(context["import_id"]))
     pod_id = UUID(str(context["pod_id"]))
     user_id = UUID(str(context["user_id"]))
@@ -614,6 +608,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             publish_manifest.prepare_published_bundle(bundle_root)
 
             while (step := state.plan.next_pending_step()) is not None:
+                yield_point()  # every earlier step is committed and checkpointed
                 await _raise_if_cancelled(store, import_id)
                 step.status = StepStatus.RUNNING
                 state.current_step = step.index
@@ -747,14 +742,14 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             "pod_bundle.handlers.pod_bundle_apply_s_terminal.degraded",
             import_id=import_id,
         )
-    except Exception:
+    except Exception as exc:
+        raise_if_database_unavailable(exc)
         await _fail_import(store, state, "Apply failed due to a transient error.")
-        logger.debug(
-            "pod_bundle.handlers.pod_bundle_apply_s_retryable.propagated",
+        logger.warning(
+            "pod_bundle.handlers.pod_bundle_apply_transient.failed",
             import_id=import_id,
             exc_info=True,
         )
-        raise
 
 
 def _apply_failure_message(state: ImportState, step, exc: Exception) -> str:
@@ -802,7 +797,7 @@ async def _checkpoint(store, state: ImportState, step) -> None:
 
 
 async def _resolve_importer_pod_member_id(
-    worker_ctx: AppWorkerContext, *, pod_id: UUID, user_id: UUID
+    worker_ctx: BundleWorkerContext, *, pod_id: UUID, user_id: UUID
 ) -> str | None:
     """The importing user's own pod-member id in the target pod — what a
     ``pod_member`` (``${..._assignee}``) variable resolves to when the importer
@@ -830,7 +825,7 @@ async def _resolve_importer_pod_member_id(
     return str(member_id) if member_id is not None else None
 
 
-async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> None:
+async def _record_recipe(worker_ctx: BundleWorkerContext, state: ImportState) -> None:
     """Append a durable :class:`PodRecipe` to the pod's config in a short UoW."""
     from datetime import datetime, timezone
 
@@ -880,7 +875,7 @@ async def _record_import_retry(
 
 def _github_import_operation_runner(
     *,
-    worker_ctx: AppWorkerContext,
+    worker_ctx: BundleWorkerContext,
     state: ImportState,
 ):
     async def run(operation_name: str, payload: dict) -> dict:

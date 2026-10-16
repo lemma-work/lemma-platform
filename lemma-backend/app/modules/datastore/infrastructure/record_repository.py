@@ -5,61 +5,37 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import DBAPIError
 
 from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.errors import (
-    DatastoreConflictError,
-    DatastoreInfrastructureError,
     DatastoreRecordNotFoundError,
     DatastoreValidationError,
 )
 from app.modules.datastore.domain.ports import (
     DatastoreRecordRepositoryPort,
     DatastoreSchemaPort,
-    RecordEventFactory,
 )
 from app.modules.datastore.domain.record_entities import RecordEntity
 from app.modules.datastore.infrastructure.record_errors import (
     raise_record_read_error,
-    raise_record_write_error,
 )
 from app.modules.datastore.infrastructure.record_filter_sql import (
     build_filter_predicate,
 )
-from app.modules.datastore.infrastructure.record_optimistic_lock import (
-    apply_expected_updated_at,
-    primary_key_scope,
-    raise_missing_or_stale,
-)
 from app.modules.datastore.infrastructure.record_page import (
     order_by_clause,
     rows_and_total,
-)
-from app.modules.datastore.infrastructure.record_update_sql import (
-    build_assignments,
-    build_update_statement,
-    bulk_conflict_clause,
-    bulk_insert_statement,
-    build_bulk_statements,
-    order_bulk_keys,
-    split_previous_image,
 )
 from app.modules.datastore.infrastructure.readonly_query import (
     QueryRows,
     execute_readonly_query,
 )
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
-from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.infrastructure.record_indexes import ensure_listing_index_for
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.value_converter import ValueConverter
 from app.core.log.log import get_logger
-from app.core.domain.events import DomainEvent
-from app.modules.datastore.infrastructure.transactional_events import (
-    ensure_datastore_event_outbox,
-    stage_domain_events,
-)
 from app.modules.datastore.infrastructure import record_logged_writes as logged
 from app.modules.datastore.changes.capture import ChangeCapture
 
@@ -133,77 +109,9 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
 
         return values
 
-    async def _bulk_write_records(
-        self,
-        ctx: TableContext,
-        records: list[dict[str, Any]],
-        user_id: UUID,
-        *,
-        upsert: bool,
-        event_factory: RecordEventFactory | None = None,
-    ) -> int:
-        if not records:
-            return 0
-        await ensure_datastore_event_outbox()
-
-        prepared_records: list[dict[str, Any]] = []
-        all_keys: set[str] = set()
-        for record in records:
-            converted = convert_record(ctx.columns, record, skip_auto=False)
-            values = self._serialize_record_values(ctx, converted, user_id)
-            prepared_records.append(values)
-            all_keys.update(values.keys())
-
-        ordered_keys = order_bulk_keys(ctx.primary_key_column, all_keys)
-        conflict_sql = bulk_conflict_clause(ctx, ordered_keys) if upsert else ""
-        statements = (
-            build_bulk_statements(ctx, ordered_keys, prepared_records, conflict_sql)
-            if event_factory is not None
-            else []
-        )
-
-        try:
-            async with self.schema_manager.session_factory() as session:
-                if ctx.enable_rls:
-                    await self.schema_manager.set_rls_context(
-                        session, RowPrincipal.for_user(user_id)
-                    )
-
-                if event_factory is None:
-                    # No subscriber: executemany is cheapest, nothing needs the rows.
-                    await session.execute(
-                        text(bulk_insert_statement(ctx, ordered_keys) + conflict_sql),
-                        [
-                            {key: record.get(key) for key in ordered_keys}
-                            for record in prepared_records
-                        ],
-                    )
-                else:
-                    # Convert each chunk's rows right after its own execute.
-                    #
-                    # Batching every conversion until after the last statement
-                    # looks tidier and is measurably worse: the events have to
-                    # be staged in this transaction for the outbox to be atomic,
-                    # so the work cannot leave it, and collecting it into one
-                    # stretch turns N short gaps into a single long one. Tried
-                    # exactly that, and the worst gap on this line went from
-                    # 784ms to 2163ms -- with row locks held throughout. The
-                    # metric that matters is the longest contiguous gap, not the
-                    # number of them.
-                    events: list[DomainEvent] = []
-                    for sql, params in statements:
-                        result = await session.execute(text(sql), params)
-                        events.extend(
-                            event_factory(self._row_to_entity(dict(row._mapping), ctx))
-                            for row in result.fetchall()
-                        )
-                    await stage_domain_events(session, events)
-
-                await session.commit()
-                return len(prepared_records)
-        except DBAPIError as exc:
-            logger.debug("datastore.record.bulk_write.propagated", exc_info=True)
-            raise_record_write_error(exc, operation="bulk write records", ctx=ctx)
+    # Every write appends its changes to the pod's change log in the same
+    # statement (``ChangeCapture``, ``record_logged_writes``): there is no
+    # other write path.
 
     async def create_record(
         self,
@@ -211,48 +119,23 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         data: dict[str, Any],
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
-        changes: ChangeCapture | None = None,
+        changes: ChangeCapture,
+        existing_on_conflict: bool = False,
     ) -> RecordEntity:
-        if changes is not None:
-            return await logged.create_logged(self, ctx, data, user_id, changes)
-        converted_data = convert_record(ctx.columns, data, skip_auto=False)
-        if event_factory is not None:
-            await ensure_datastore_event_outbox()
+        """Insert one row; ``existing_on_conflict`` returns the row a repeat hits.
 
-        columns: list[str] = []
-        values = self._serialize_record_values(ctx, converted_data, user_id)
-        placeholders: list[str] = []
-
-        for key in values.keys():
-            columns.append(f'"{key}"')
-            placeholders.append(f":{key}")
-
-        sql = (
-            f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" '
-            f"({', '.join(columns)}) VALUES ({', '.join(placeholders)}) RETURNING *"
+        With it, a create whose primary key is already taken is not an error:
+        it is the same create again (``services/record_idempotency``), and the
+        stored row comes back with no second change.
+        """
+        return await logged.create_logged(
+            self,
+            ctx,
+            data,
+            user_id,
+            changes,
+            existing_on_conflict=existing_on_conflict,
         )
-
-        try:
-            async with self.schema_manager.session_factory() as session:
-                if ctx.enable_rls:
-                    await self.schema_manager.set_rls_context(
-                        session, RowPrincipal.for_user(user_id)
-                    )
-                result = await session.execute(text(sql), values)
-                row = result.fetchone()
-
-                if not row:
-                    raise DatastoreInfrastructureError("Failed to create record")
-
-                entity = self._row_to_entity(dict(row._mapping), ctx)
-                if event_factory is not None:
-                    await stage_domain_events(session, [event_factory(entity)])
-                await session.commit()
-                return entity
-        except DBAPIError as exc:
-            logger.debug("datastore.record.create.propagated", exc_info=True)
-            raise_record_write_error(exc, operation="create record", ctx=ctx)
 
     async def bulk_create_records(
         self,
@@ -260,15 +143,10 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         records: list[dict[str, Any]],
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
-        changes: ChangeCapture | None = None,
+        changes: ChangeCapture,
     ) -> int:
-        if changes is not None:
-            return await logged.bulk_write_logged(
-                self, ctx, records, user_id, changes, upsert=False
-            )
-        return await self._bulk_write_records(
-            ctx, records, user_id, upsert=False, event_factory=event_factory
+        return await logged.bulk_write_logged(
+            self, ctx, records, user_id, changes, upsert=False
         )
 
     async def bulk_upsert_records(
@@ -277,15 +155,10 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         records: list[dict[str, Any]],
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
-        changes: ChangeCapture | None = None,
+        changes: ChangeCapture,
     ) -> int:
-        if changes is not None:
-            return await logged.bulk_write_logged(
-                self, ctx, records, user_id, changes, upsert=True
-            )
-        return await self._bulk_write_records(
-            ctx, records, user_id, upsert=True, event_factory=event_factory
+        return await logged.bulk_write_logged(
+            self, ctx, records, user_id, changes, upsert=True
         )
 
     async def get_record(
@@ -441,96 +314,20 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         data: dict[str, Any],
         user_id: UUID,
         *,
+        changes: ChangeCapture,
         enforce_user_scope: bool = True,
-        event_factory: RecordEventFactory | None = None,
         expected_updated_at: datetime | None = None,
-        changes: ChangeCapture | None = None,
     ) -> RecordEntity:
-        if changes is not None:
-            return await logged.update_logged(
-                self,
-                ctx,
-                record_id,
-                data,
-                user_id,
-                changes,
-                enforce_user_scope=enforce_user_scope,
-                expected_updated_at=expected_updated_at,
-            )
-        if event_factory is not None:
-            await ensure_datastore_event_outbox()
-        parsed_id = ctx.parse_primary_key(record_id)
-        mutable_data, set_clauses, params = build_assignments(
-            ctx, convert_record(ctx.columns, data), parsed_id
-        )
-
-        if not mutable_data:
-            return await self.get_record(
-                ctx,
-                parsed_id,
-                user_id,
-                enforce_user_scope=enforce_user_scope,
-            )
-
-        where_clauses = [f'"{ctx.primary_key_column}" = :id']
-        self._apply_current_user_scope(
+        return await logged.update_logged(
+            self,
             ctx,
-            where_clauses,
-            params,
+            record_id,
+            data,
             user_id,
+            changes,
             enforce_user_scope=enforce_user_scope,
+            expected_updated_at=expected_updated_at,
         )
-        if expected_updated_at is not None:
-            apply_expected_updated_at(ctx, where_clauses, params, expected_updated_at)
-
-        changed_columns = sorted(mutable_data.keys())
-        sql, previous_alias = build_update_statement(
-            ctx,
-            set_clauses=set_clauses,
-            where_clauses=where_clauses,
-            capture_previous=event_factory is not None,
-        )
-
-        try:
-            async with self.schema_manager.session_factory() as session:
-                if ctx.enable_rls:
-                    await self.schema_manager.set_rls_context(
-                        session,
-                        RowPrincipal.for_user(
-                            user_id, is_pod_admin=not enforce_user_scope
-                        ),
-                    )
-
-                result = await session.execute(text(sql), params)
-                row = result.fetchone()
-                if not row:
-                    if expected_updated_at is not None:
-                        scope, scope_params = primary_key_scope(
-                            ctx,
-                            parsed_id,
-                            user_id,
-                            enforce_user_scope=enforce_user_scope,
-                        )
-                        await raise_missing_or_stale(
-                            session, ctx, where_clauses=scope, params=scope_params
-                        )
-                    raise DatastoreRecordNotFoundError(
-                        "Record not found or update failed"
-                    )
-
-                row_mapping = dict(row._mapping)
-                previous = split_previous_image(
-                    row_mapping, previous_alias, changed_columns
-                )
-                entity = self._row_to_entity(row_mapping, ctx)
-                if event_factory is not None:
-                    await stage_domain_events(
-                        session, [event_factory(entity, changed_columns, previous)]
-                    )
-                await session.commit()
-                return entity
-        except DBAPIError as exc:
-            raise_record_write_error(exc, operation="update record", ctx=ctx)
 
     async def delete_record(
         self,
@@ -538,55 +335,14 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         record_id: Any,
         user_id: UUID,
         *,
+        changes: ChangeCapture,
         enforce_user_scope: bool = True,
-        event_factory: RecordEventFactory | None = None,
-        changes: ChangeCapture | None = None,
     ) -> RecordEntity:
-        if changes is not None:
-            return await logged.delete_logged(
-                self,
-                ctx,
-                record_id,
-                user_id,
-                changes,
-                enforce_user_scope=enforce_user_scope,
-            )
-        if event_factory is not None:
-            await ensure_datastore_event_outbox()
-        parsed_id = ctx.parse_primary_key(record_id)
-        where_clauses = [f'"{ctx.primary_key_column}" = :id']
-        params: dict[str, Any] = {"id": parsed_id}
-        self._apply_current_user_scope(
+        return await logged.delete_logged(
+            self,
             ctx,
-            where_clauses,
-            params,
+            record_id,
             user_id,
+            changes,
             enforce_user_scope=enforce_user_scope,
         )
-        sql = (
-            f'DELETE FROM "{ctx.schema_name}"."{ctx.table_name}" '
-            f"WHERE {' AND '.join(where_clauses)} RETURNING *"
-        )
-
-        async with self.schema_manager.session_factory() as session:
-            if ctx.enable_rls:
-                await self.schema_manager.set_rls_context(
-                    session,
-                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
-                )
-            try:
-                result = await session.execute(text(sql), params)
-                row = result.fetchone()
-                if row is None:
-                    raise DatastoreRecordNotFoundError()
-                entity = self._row_to_entity(dict(row._mapping), ctx)
-                if event_factory is not None:
-                    await stage_domain_events(session, [event_factory(entity)])
-                await session.commit()
-            except IntegrityError as exc:
-                await session.rollback()
-                raise DatastoreConflictError(
-                    "Cannot delete: this record is still referenced by other "
-                    "records. Remove or reassign those first."
-                ) from exc
-            return entity

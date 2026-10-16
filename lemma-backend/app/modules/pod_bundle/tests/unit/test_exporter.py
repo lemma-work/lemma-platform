@@ -234,7 +234,7 @@ def patched_exporter(monkeypatch):
 
     # Pod fetch: PodRepository(uow).get(pod_id) -> object with name.
     class _FakePodRepo:
-        def __init__(self, uow, message_bus=None):
+        def __init__(self, uow):
             pass
 
         async def get(self, pod_id):

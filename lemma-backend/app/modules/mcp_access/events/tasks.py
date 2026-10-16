@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.infrastructure.db.session import get_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
+from app.core.infrastructure.work import periodic_job
 from app.core.log.log import get_logger
 from app.modules.mcp_access.infrastructure.repositories import McpAccessRepository
 from app.modules.mcp_access.infrastructure.subscription_repository import (
@@ -25,10 +25,10 @@ logger = get_logger(__name__)
 SWEEP_BATCH = 500
 SWEEP_BATCHES_PER_RUN = 20
 """At most this many batches an hour: a sweep that is far behind catches up
-over a few runs rather than holding the bulk lane."""
+over a few runs rather than holding an admin slot."""
 
 
-@streaq_cron("37 * * * *", name="sweep_mcp_access_grants", lane=Lane.BULK)
+@periodic_job("mcp_access.grants_sweep", every=timedelta(hours=1))
 async def sweep_mcp_access_grants() -> None:
     uow_factory = SessionUnitOfWorkFactory(get_session_maker())
     ended = 0
@@ -49,7 +49,7 @@ async def sweep_mcp_access_grants() -> None:
 LAPSED_KEPT = timedelta(days=7)
 
 
-@streaq_cron("47 * * * *", name="sweep_mcp_event_subscriptions", lane=Lane.BULK)
+@periodic_job("mcp_access.event_subscriptions_sweep", every=timedelta(hours=1))
 async def sweep_mcp_event_subscriptions() -> None:
     """Event subscriptions that can never deliver again: lapsed for a week, or
     on a revoked connection. Revoking keeps the grant row, so the table's

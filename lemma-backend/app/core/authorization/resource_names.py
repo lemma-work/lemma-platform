@@ -82,8 +82,9 @@ def _require_registry() -> None:
         raise RuntimeError(
             "resource-name registry is empty: no module has declared its "
             "resource names. `configure_resource_names` runs from "
-            "`include_module_routers` and `wire_module_events`; a process that "
-            "resolves grants must have gone through one of them."
+            "`include_module_routers` (the API) and the work process's start "
+            "(`app.core.infrastructure.work.process`); a process that resolves "
+            "grants must have gone through one of them."
         )
 
 

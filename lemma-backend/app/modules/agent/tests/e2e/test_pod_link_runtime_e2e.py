@@ -19,7 +19,7 @@ from fastapi import status
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.events import AgentRunStartedEvent
+from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.pod_asks import ANSWER_SOURCE, AskMode
 from app.modules.agent.domain.value_objects import ConversationStatus, MessageKind
 from app.modules.agent.infrastructure.harnesses.mock_model import (
@@ -107,7 +107,7 @@ async def _start_scripted(conversation_id: UUID, script: list[dict[str, object]]
 
     The ask opened the run with the enqueue suppressed, so the script is on the
     thread before the worker first reads it. The event is the one the ask would
-    have published.
+    have written.
     """
     async with create_uow_from_session_maker(async_session_maker) as uow:
         conversations = ConversationRepository(uow)
@@ -117,16 +117,8 @@ async def _start_scripted(conversation_id: UUID, script: list[dict[str, object]]
         found = await conversations.get_conversation(conversation_id, include_runs=True)
         assert found is not None
         run = found.agent_runs[-1]
-        conversations.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation_id,
-                    agent_run_id=run.id,
-                    user_id=found.user_id,
-                    pod_id=found.pod_id,
-                    agent_name=None,
-                )
-            ]
+        await stage_agent_turn(
+            uow, turn_for(found, run_id=run.id, user_id=found.user_id)
         )
         await uow.commit()
 

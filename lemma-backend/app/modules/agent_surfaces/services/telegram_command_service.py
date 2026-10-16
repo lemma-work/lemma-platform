@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 
@@ -180,7 +181,14 @@ async def _retry_failed_conversation(
                 agent_name=context.agent_name,
             )
             return True
-        except DomainError, RuntimeError, SQLAlchemyError, TypeError, ValueError:
+        except (
+            DomainError,
+            RuntimeError,
+            SQLAlchemyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise_if_database_unavailable(exc)
             return False
 
     async with uow_factory() as scoped_uow:

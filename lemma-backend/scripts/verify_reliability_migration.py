@@ -191,12 +191,20 @@ def main() -> int:
             """
             SELECT to_regclass(name) IS NOT NULL
             FROM unnest(ARRAY[
-                'domain_event_outbox', 'domain_event_inbox', 'schedule_runs',
-                'pod_bundle_jobs', 'pod_bundle_job_steps'
+                'schedule_runs', 'pod_bundle_jobs', 'pod_bundle_job_steps'
             ]) AS name
             """
         )
         assert all(row[0] for row in cursor.fetchall())
+        # 0056 queues the cutover sweep and drops nothing: an older image can
+        # still be rolled back to, so both tables of the old transport stay.
+        cursor.execute(
+            """
+            SELECT to_regclass('domain_event_outbox') IS NOT NULL,
+                   to_regclass('domain_event_inbox') IS NOT NULL
+            """
+        )
+        assert cursor.fetchone() == (True, True)
         cursor.execute(
             """
             SELECT consecutive_failures
@@ -271,11 +279,10 @@ def main() -> int:
         )
         # This runs at head, so it asserts the schema as it finally stands.
         # 0003 created ix_schedule_runs_retryable_recovery for the recovery
-        # sweep; 0018 replaced it with ix_schedule_runs_recoverable because the
-        # original predicate covered RECEIVED/PROCESSING/FAILED while the query
-        # asks about PROCESSING/FAILED/DISPATCHED, so Postgres could never use
-        # it. The property under test is unchanged -- the recovery sweep has a
-        # supporting index -- only the name is.
+        # sweep and 0018 renamed it ix_schedule_runs_recoverable. Nothing reads
+        # that order any more (a run's outcome reaches its schedule run in the
+        # run's finishing transaction), but the previous release still does,
+        # so it stays until 0057_drop_old_transport.
         cursor.execute(
             """
             SELECT

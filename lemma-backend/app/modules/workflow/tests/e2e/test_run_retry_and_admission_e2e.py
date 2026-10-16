@@ -122,6 +122,7 @@ async def test_retry_resumes_at_the_failed_function_without_rerunning_the_agent(
     await _retry(client, pod_id, run["id"], 409)
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_run_that_failed_at_its_agent_is_not_retried(
     authenticated_client: AsyncClient,
@@ -143,6 +144,9 @@ async def test_a_run_that_failed_at_its_agent_is_not_retried(
     assert (await _get_run(client, pod_id, run["id"]))["status"] == "FAILED"
 
 
+_OK = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+
+
 async def _form_workflow(
     client: AsyncClient, pod_id: str, *, limit: int | None
 ) -> dict:
@@ -152,19 +156,14 @@ async def _form_workflow(
         name=f"limited-{uuid4().hex[:6]}",
         start={"type": "MANUAL"},
         nodes=[
-            {
-                "id": "approve",
-                "type": "FORM",
-                "config": {
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {"ok": {"type": "boolean"}},
-                    }
-                },
-            },
+            {"id": "intake", "type": "FORM", "config": {"input_schema": _OK}},
+            {"id": "approve", "type": "FORM", "config": {"input_schema": _OK}},
             {"id": "end", "type": "END"},
         ],
-        edges=[{"id": "e1", "source": "approve", "target": "end"}],
+        edges=[
+            {"id": "e0", "source": "intake", "target": "approve"},
+            {"id": "e1", "source": "approve", "target": "end"},
+        ],
     )
     if limit is None:
         return workflow
@@ -188,6 +187,10 @@ async def test_a_run_past_the_limit_waits_its_turn_instead_of_failing(
 
     first = await _create_run(client, pod_id, workflow_name)
     assert first["status"] == "WAITING"
+    # Past its entry form the run has started, and holds the one place.
+    await _submit_form(
+        client, pod_id, first["id"], node_id="intake", inputs={"ok": True}
+    )
     second = await _create_run(client, pod_id, workflow_name)
     assert second["status"] == "RUNNING"
     assert second["active_wait"]["wait_type"] == "QUEUED"
@@ -200,4 +203,48 @@ async def test_a_run_past_the_limit_waits_its_turn_instead_of_failing(
     admitted = await _get_run(client, pod_id, second["id"])
     assert admitted["status"] == "WAITING"
     assert admitted["active_wait"]["wait_type"] == "HUMAN"
-    assert admitted["active_wait"]["node_id"] == "approve"
+    assert admitted["active_wait"]["node_id"] == "intake"
+
+
+@pytest.mark.asyncio
+async def test_an_unsubmitted_entry_form_holds_no_place(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """Opening "Run now" and walking away must not wedge a limited workflow:
+    a run still on its entry form has run nothing."""
+    client = authenticated_client
+    pod_id = await _create_pod(client, fixed_test_org["id"], "Workflow Forms")
+    workflow_name = (await _form_workflow(client, pod_id, limit=1))["name"]
+
+    abandoned = await _create_run(client, pod_id, workflow_name)
+    later = await _create_run(client, pod_id, workflow_name)
+    for run in (abandoned, later):
+        assert run["status"] == "WAITING", run
+        assert run["active_wait"]["wait_type"] == "HUMAN", run["active_wait"]
+        assert run["active_wait"]["node_id"] == "intake"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_starts_of_a_limited_workflow_do_not_deadlock(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """Each start inserts its run (KEY SHARE on the workflow row through the
+    foreign key) and then locks the row to count. FOR UPDATE there deadlocked
+    concurrent starts against each other's KEY SHARE: 11 of 12 failed."""
+    import asyncio
+
+    client = authenticated_client
+    pod_id = await _create_pod(client, fixed_test_org["id"], "Workflow Burst")
+    workflow_name = (await _form_workflow(client, pod_id, limit=2))["name"]
+
+    responses = await asyncio.gather(
+        *(
+            client.post(f"/pods/{pod_id}/workflows/{workflow_name}/runs")
+            for _ in range(8)
+        )
+    )
+    assert [r.status_code for r in responses].count(201) == 8, [
+        (r.status_code, r.text[:200]) for r in responses if r.status_code != 201
+    ]

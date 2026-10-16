@@ -609,31 +609,6 @@ wheels = [
 ]
 
 [[package]]
-name = "coredis"
-version = "6.9.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "beartype" },
-    { name = "deprecated" },
-    { name = "exceptiongroup" },
-    { name = "packaging" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/82/81/03a1f56c2fdce5d6382cfade9b39522f2f09de00cf6087a857437901dcc6/coredis-6.9.0.tar.gz", hash = "sha256:041a8e93f637deb702b9fdf20656e856069ae53ae17ff51db078934afad0cc52", size = 225240, upload-time = "2026-08-31T05:26:02.807Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/0b/509cc1d1ca33b40e2d24515d5ef10eee2e38f4a130b154ee09bf6693f045/coredis-6.9.0-cp314-cp314-macosx_10_13_x86_64.whl", hash = "sha256:53f11ace8877773027a1117329f7ae6356b260ce67e4b988fbcee0d78febfb91", size = 426911, upload-time = "2026-08-31T05:25:50.756Z" },
-    { url = "https://files.pythonhosted.org/packages/47/29/be2db139f5a0e8322d88d262bc9db902d610e8171e60fad7397a6d58fc96/coredis-6.9.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:5ee639cb8b3140af553442d28e0c7f3dcd73aa84d68e83a37a028a05b1a028a2", size = 423888, upload-time = "2026-08-31T05:25:52.06Z" },
-    { url = "https://files.pythonhosted.org/packages/85/c2/fee5f5479e8da76c1014329df3acbda13f187a144c64ba3d4c30dbaf545f/coredis-6.9.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:4559b716dea713fe68d4c238c22e93b567ff60c7d5ad10f4f3d0fb49f711a309", size = 444196, upload-time = "2026-08-31T05:25:53.302Z" },
-    { url = "https://files.pythonhosted.org/packages/ee/65/ece68df741032223cea9d26a2f0e8662b6c6dc74a76e3f272abdff6d1073/coredis-6.9.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:522fca836b1e863803e0474fc400fa83d51ce48dade709f2d6c1acfc6acc5f7f", size = 444960, upload-time = "2026-08-31T05:25:54.687Z" },
-    { url = "https://files.pythonhosted.org/packages/ff/7f/3ddae141736f6574d1120c97ad7473cd0a76a860cb4c4f4bb500f67d126d/coredis-6.9.0-cp314-cp314t-macosx_10_13_x86_64.whl", hash = "sha256:a60bb0d066d876b2ab3d7fd6bee4ec115624d85f82ec64e6d69e9732b551d6ee", size = 438972, upload-time = "2026-08-31T05:25:56.146Z" },
-    { url = "https://files.pythonhosted.org/packages/3d/3e/ccc6287c328de09544db9e492e9269c6eba01e19fb30f809f3d80678c719/coredis-6.9.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:75c8b6590c94946526e717a90224bf223f3371257b2ae71a26f272915a4cb142", size = 436588, upload-time = "2026-08-31T05:25:57.476Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/46/dcc31e69e1ea419c7d18c91fc408711335ffc9dfb26904d57b41ef7c107f/coredis-6.9.0-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7dfbf87856435ba8b22f75d1e9d2f0eaaa95dca2386d81dcab4e9aa4c39d6749", size = 458757, upload-time = "2026-08-31T05:25:58.724Z" },
-    { url = "https://files.pythonhosted.org/packages/77/62/be5c12af7f10004270e9fdad35998660a476ebb44302fadf63aa47369126/coredis-6.9.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a84495e184875df1c0ab8faee22f4335a502532aebc2593baded19c22296ee7f", size = 459116, upload-time = "2026-08-31T05:26:00.192Z" },
-    { url = "https://files.pythonhosted.org/packages/96/b7/98e3be05f8147a659d553670fd80316bc39acd5868dc8e9eb005e9050df2/coredis-6.9.0-py3-none-any.whl", hash = "sha256:651060d697f6b37b9cbbc307d514a965598307a2d55ab7512152a49cf1b1dd90", size = 271409, upload-time = "2026-08-31T05:26:01.571Z" },
-]
-
-[[package]]
 name = "courlan"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -996,24 +971,6 @@ lua = [
 ]
 
 [[package]]
-name = "fast-depends"
-version = "3.0.8"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f8/6d/787a21ca8043a8fdb737cf28f645e94a46fc30b44a31de54573299156bad/fast_depends-3.0.8.tar.gz", hash = "sha256:896b16f79a512b6ea1df721b0aa1708a192a06f964be6597e01fcf5412559101", size = 18382, upload-time = "2026-03-02T19:54:28.649Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1d/1d/e4843e4eeb65f51447b8c22d200d12d8f94f27c97e77bb7162515cc8d61f/fast_depends-3.0.8-py3-none-any.whl", hash = "sha256:4c52c8a3907bca46d43e70e4364d6d016872d9a3aae4bc0c1c85e72e0a6a21c7", size = 25507, upload-time = "2026-03-02T19:54:27.594Z" },
-]
-
-[package.optional-dependencies]
-pydantic = [
-    { name = "pydantic" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1205,29 +1162,6 @@ server = [
     { name = "uvicorn" },
     { name = "watchfiles" },
     { name = "websockets" },
-]
-
-[[package]]
-name = "faststream"
-version = "0.7.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "fast-depends", extra = ["pydantic"] },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d8/7b/bba48f21d1283a56e420ea4b72a44a9dacafdb20a29665c028f0cc615301/faststream-0.7.4.tar.gz", hash = "sha256:1700b8729cca4ebd5873da675495639826737bb4a4e64eae50dbaefae657bf13", size = 335422, upload-time = "2026-08-07T13:35:36.559Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/b6/979dfdd970e6a4606680698c05de199e597261175b53963e11907c0eb7d2/faststream-0.7.4-py3-none-any.whl", hash = "sha256:57fe079ff32efd90b5ff5d56b71a4c47cae12544b2e1b791751e30031f8f3bad", size = 563184, upload-time = "2026-08-07T13:35:34.938Z" },
-]
-
-[package.optional-dependencies]
-cli = [
-    { name = "typer" },
-    { name = "watchfiles" },
-]
-redis = [
-    { name = "redis" },
 ]
 
 [[package]]
@@ -2016,13 +1950,13 @@ dependencies = [
     { name = "asyncpg" },
     { name = "authlib" },
     { name = "composio" },
+    { name = "crontab" },
     { name = "cryptography" },
     { name = "curl-cffi" },
     { name = "email-validator" },
     { name = "fastapi", extra = ["standard"] },
     { name = "fastembed" },
     { name = "fastmcp" },
-    { name = "faststream", extra = ["cli", "redis"] },
     { name = "genai-prices" },
     { name = "greenlet" },
     { name = "httpx2" },
@@ -2050,7 +1984,6 @@ dependencies = [
     { name = "scalar-fastapi" },
     { name = "slack-sdk" },
     { name = "sqlglot" },
-    { name = "streaq" },
     { name = "structlog" },
     { name = "summarization-pydantic-ai" },
     { name = "supertokens-python" },
@@ -2108,6 +2041,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "authlib", specifier = ">=1.6.6" },
     { name = "composio", specifier = ">=0.11.0" },
+    { name = "crontab", specifier = ">=1.0.5" },
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "curl-cffi", specifier = ">=0.16.0" },
     { name = "e2b", marker = "extra == 'e2b'", specifier = ">=2.37.0" },
@@ -2115,7 +2049,6 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128.0" },
     { name = "fastembed", specifier = ">=0.7.4" },
     { name = "fastmcp", specifier = ">=4.0.1" },
-    { name = "faststream", extras = ["cli", "redis"], specifier = ">=0.6.4" },
     { name = "genai-prices", specifier = "==0.1.11" },
     { name = "google-cloud-kms", marker = "extra == 'gcp-kms'", specifier = ">=3.0.0" },
     { name = "google-cloud-secret-manager", marker = "extra == 'gcp-kms'", specifier = ">=2.20.0" },
@@ -2146,7 +2079,6 @@ requires-dist = [
     { name = "scalar-fastapi", specifier = ">=1.6.1" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
     { name = "sqlglot", specifier = ">=25.0.0" },
-    { name = "streaq", specifier = ">=6.3.4" },
     { name = "structlog", specifier = ">=25.4.0" },
     { name = "summarization-pydantic-ai", specifier = ">=0.1.11" },
     { name = "supertokens-python", specifier = "==0.31.3" },
@@ -4361,22 +4293,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b5/b4/205b0d5241d934e8add0c38aa924c4f9fb7330834ff11e5444db964ec3f9/starlette-1.6.0.tar.gz", hash = "sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b", size = 2716969, upload-time = "2026-08-08T18:27:57.512Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/cb/6a6a47d5b464bd08695d254f3da6e7986cc70c9fa5d778eda57538edfe56/starlette-1.6.0-py3-none-any.whl", hash = "sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c", size = 75969, upload-time = "2026-08-08T18:27:56.196Z" },
-]
-
-[[package]]
-name = "streaq"
-version = "7.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "coredis" },
-    { name = "crontab" },
-    { name = "typer" },
-    { name = "watchfiles" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/4d/d8081b30f38fad8b69c6c86328a4e5f04aa0e556cb2629521ffb82eea26f/streaq-7.2.0.tar.gz", hash = "sha256:d34a1419b7d19a0c99c64e8925eff818a394a8abc25d3604aa7a389b08b6dff4", size = 36545, upload-time = "2026-09-03T17:49:51.972Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/85/db/c2e865fd75e6f49be5766ab02d604ebc0767c0938b961423cb248108202c/streaq-7.2.0-py3-none-any.whl", hash = "sha256:9d246bc0a75960c089feb341ae49c3ce629ce9efa6748b3749a2ae5ca682f997", size = 43732, upload-time = "2026-09-03T17:49:50.866Z" },
 ]
 
 [[package]]

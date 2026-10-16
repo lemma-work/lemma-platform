@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.infrastructure.work import limits as work_limits
 from app.core.infrastructure.work.claim import Candidate, take
+from app.core.infrastructure.work.config import CLASS_DEFAULTS
 from app.core.infrastructure.work.context import FastContext
 from app.core.infrastructure.work.db import (
     DbBudget,
@@ -45,6 +46,7 @@ from app.core.registry.contract import LemmaModule
 
 HOURLY_10 = Rate(10, 3600)
 POD = UUID("11111111-1111-1111-1111-111111111111")
+_INTERACTIVE_CAP = CLASS_DEFAULTS[WorkClass.INTERACTIVE].max_running
 ORG = UUID("22222222-2222-2222-2222-222222222222")
 BUCKET = BucketId("email_out", "")
 
@@ -324,7 +326,9 @@ async def test_slug_and_prefix_rules_reach_a_pod_through_the_declared_directory(
         ]
     )
     port = ConfiguredWorkLimitPort(raw_overrides=raw)
-    assert (await port.limits_for(f"pod:{POD}")).cap(WorkClass.INTERACTIVE) == 32
+    assert (await port.limits_for(f"pod:{POD}")).cap(
+        WorkClass.INTERACTIVE
+    ) == _INTERACTIVE_CAP
     work_limits.declare_namespace_directory(_Directory())
     try:
         limits = await port.limits_for(f"pod:{POD}")

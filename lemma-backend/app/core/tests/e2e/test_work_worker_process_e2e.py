@@ -7,8 +7,8 @@ One worker, three things a deployment depends on:
 * every work metric reaches an OTLP collector with its class label intact --
   the export view drops any label it does not know, so a metric can be
   emitted and still arrive as one undifferentiated series;
-* SIGTERM drains at once: a running job is released, uncharged, while
-  streaq's own shutdown grace is still holding the process open.
+* SIGTERM drains at once: a running job is released, uncharged, and the
+  process exits 0 well inside its grace.
 """
 
 from __future__ import annotations
@@ -28,14 +28,12 @@ from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
 )
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
-from streaq import Worker
 
-from app.core.infrastructure.jobs.lanes import Lane, lane_queue_name
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e.worker_process import production_worker_process
 
-pytestmark = [pytest.mark.e2e, pytest.mark.worker]
+pytestmark = [pytest.mark.e2e, pytest.mark.worker, pytest.mark.drives_work]
 
 postgres_container = e2e_fixtures.postgres_container
 supertokens_container = e2e_fixtures.supertokens_container
@@ -152,8 +150,6 @@ async def test_a_real_worker_runs_schedules_exports_metrics_and_drains_on_sigter
                 "WORK_GAUGE_INTERVAL_SECONDS": "0.5",
                 "WORK_POLL_INTERVAL_SECONDS": "0.2",
                 "WORK_SHUTDOWN_GRACE_SECONDS": "10",
-                # Long, so a drain that waited for it would be seen waiting.
-                "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "30",
                 "OBSERVABILITY_ENABLED": "true",
                 "OTEL_TRACES_EXPORTER": "none",
                 "OTEL_LOGS_EXPORTER": "none",
@@ -212,15 +208,6 @@ async def test_a_real_worker_runs_schedules_exports_metrics_and_drains_on_sigter
             assert "work_kind" in collector.seen["lemma.work.handler.duration"]
             assert "error_class" in collector.seen["lemma.work.dead"]
 
-            # Hold streaq's grace open with a task that outlives it.
-            client = Worker(
-                redis_url=e2e_settings.redis_url,
-                queue_name=lane_queue_name(Lane.INTERACTIVE),
-            )
-            async with client:
-                await client.enqueue_unsafe("e2e_work_hold_grace")
-            await asyncio.sleep(1.0)
-
             worker.process.send_signal(signal.SIGTERM)
             signalled = time.monotonic()
             released = await eventually(
@@ -235,16 +222,21 @@ async def test_a_real_worker_runs_schedules_exports_metrics_and_drains_on_sigter
                 interval_seconds=0.05,
             )
             drained_after = time.monotonic() - signalled
-            still_running = worker.process.poll() is None
-            worker.process.send_signal(signal.SIGKILL)
+            exit_code = await asyncio.to_thread(worker.process.wait, 20)
+            exited_after = time.monotonic() - signalled
             log = worker.read_log_tail()
     finally:
         await engine.dispose()
 
-    print(f"released {released} {drained_after:.2f}s after SIGTERM")
+    print(
+        f"released {released} {drained_after:.2f}s after SIGTERM; "
+        f"exited {exit_code} after {exited_after:.2f}s"
+    )
     assert drained_after < 3.0, log
-    assert still_running, "the worker exited before streaq's grace ended:\n" + log
+    assert exit_code == 0, log
+    assert exited_after < 10.0, log
     assert '"event": "work.runtime.stopping"' in log
+    assert '"event": "service.stopped"' in log
 
 
 async def _async(value: dict[str, set[str]]) -> dict[str, set[str]]:

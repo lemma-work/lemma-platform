@@ -1,7 +1,7 @@
 name: Backend E2E
 
 # The fast backend end-to-end suite. This is a REAL e2e run — Postgres, Redis,
-# SuperTokens, the streaq workers, and the fake provider servers all run for real
+# SuperTokens, the worker processes, and the fake provider servers all run for real
 # (from testcontainers on the runner). Only the two nondeterministic/expensive
 # externals are stubbed: the LLM (a deterministic FunctionModel) and the sandbox
 # workspace (an in-process fake) — so it needs NO model API keys and NO Docker

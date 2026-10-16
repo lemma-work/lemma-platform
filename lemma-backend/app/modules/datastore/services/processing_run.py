@@ -16,11 +16,16 @@ from uuid import UUID
 
 import httpx
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.embeddings.embeddings import EmbeddingProviderError
 from app.core.embeddings.local_embedder import EmbeddingModelUnavailableError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.work import Unavailable, UnavailableEvidence
+from app.core.infrastructure.work import (
+    Unavailable,
+    UnavailableEvidence,
+    database_down,
+)
 from app.modules.datastore.domain.errors import DocumentExtractionUnavailableError
 from app.modules.datastore.infrastructure.models import DatastoreFile
 from app.modules.datastore.services.search.indexing_availability import (
@@ -113,6 +118,9 @@ def unavailable_for(exc: BaseException) -> Unavailable | None:
     # The message is ours, never the exception's: it is stored on the work item,
     # and a provider's error text can carry anything.
     detail = f"{type(exc).__name__}: dependency unavailable"
+    if is_database_unavailable(exc):
+        # Lemma's own database: the document is not at fault.
+        return database_down(exc)
     if isinstance(exc, DocumentExtractionUnavailableError):
         retry_after = exc.retry_after_seconds
         return Unavailable(

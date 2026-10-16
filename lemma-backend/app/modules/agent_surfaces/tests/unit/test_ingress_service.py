@@ -1178,14 +1178,14 @@ def _claim_journal(service) -> list[str]:
     return entries
 
 
-async def test_the_routed_dedup_claim_does_not_hold_a_pooled_connection():
-    """The Redis claim in the middle of the routed ingress path.
+async def test_the_routed_message_claim_is_taken_on_the_session_it_guards():
+    """The message claim in the middle of the routed ingress path.
 
-    `claim_message` is a `SET NX EX` against Redis reached with the request's
-    unit of work open. Everything above it on this path has only read, so the
-    connection genuinely goes back for it; the writes that follow (the
-    external-user upsert, the conversation link) re-acquire one, which is the
-    correct shape rather than a hold across the round trip.
+    It is a durable row now (``surface_message_claims``), written on the
+    request's own unit of work so it commits -- or rolls back -- with the
+    conversation binding it guards. So it is taken on the open session, with
+    no release in front of it: a release there would be a commit of the half
+    of the work that came before the claim.
     """
     surface = _teams_surface()
     user_id = uuid4()
@@ -1224,8 +1224,8 @@ async def test_the_routed_dedup_claim_does_not_hold_a_pooled_connection():
         SurfacePlatformWebhookIngress(source="teams", payload={}, headers={})
     )
 
-    assert "claim" in entries, "the webhook never reached its dedup claim"
-    assert entries[entries.index("claim") - 1] == "release", entries
+    assert "claim" in entries, "the webhook never reached its message claim"
+    assert entries[entries.index("claim") - 1] != "release", entries
 
 
 async def test_the_unrouted_dedup_claim_does_not_hold_a_pooled_connection():

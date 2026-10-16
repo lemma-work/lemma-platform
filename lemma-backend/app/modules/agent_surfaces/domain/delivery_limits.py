@@ -16,12 +16,13 @@ and by no layer above:
   enqueueing a message -- is retried by the inbox or the job that hit it, with no
   send underneath to multiply against.
 
-- **A final answer the adapter gave up on for a transient reason**, with no part
-  of it delivered, is owed (``services/owed_reply``): sent again later, after
-  the wait the platform asked for, by a deferred job that is itself never
-  retried by streaq. That is not a layer stacking on the adapter -- nothing is
-  retried at the same time, and each later attempt is one adapter send -- it is
-  the same send moved onto the platform's own clock.
+- **A message the adapter gave up on for a transient reason**, with no part of
+  it delivered, goes back to PENDING in ``surface_deliveries`` and the
+  destination pump (``surface.reply``) tries it again after the wait the
+  platform asked for (``domain/deliveries.RETRY_DELAYS``). That is not a layer
+  stacking on the adapter -- nothing is retried at the same time, and each
+  later attempt is one adapter send -- it is the same send moved onto the
+  platform's own clock.
 
 Every count is bounded by ``MAX_ATTEMPTS``, first try included.
 
@@ -35,11 +36,5 @@ MAX_ATTEMPTS = 3
 #: An outbound send, retried by the adapter.
 MAX_DELIVERY_ATTEMPTS = MAX_ATTEMPTS
 
-#: An inbox consumer or the surface job, for failures that are not sends.
+#: ``surface.ingest``, for failures that are not sends.
 CONSUMER_ATTEMPTS = MAX_ATTEMPTS
-
-#: Deferred attempts at an owed final answer, after the inline one.
-OWED_REPLY_ATTEMPTS = MAX_ATTEMPTS
-
-#: streaq's own tries for one deferred attempt: it reschedules itself instead.
-OWED_REPLY_JOB_TRIES = 1

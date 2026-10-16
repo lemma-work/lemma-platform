@@ -36,6 +36,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.work import (
+    was_database_unavailable,
     DeadContext,
     Defer,
     Exponential,
@@ -163,6 +164,11 @@ def _cancel_handler(build: DispatcherFactory):
 
 def dead_message(reason: str, last_error: str | None) -> str:
     """What a person reads on a queued run that could not be started."""
+    if reason == "unavailable_exhausted" and was_database_unavailable(last_error):
+        return (
+            "Function never started: Lemma's database was unavailable until "
+            "the run's start deadline. Nothing ran, so it is safe to retry."
+        )
     if reason == "unavailable_exhausted":
         return (
             "Function never started: its sandbox could not be reached before "

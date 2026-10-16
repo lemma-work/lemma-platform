@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -5,22 +6,29 @@ import pytest
 from httpx import AsyncClient
 from starlette import status
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.events import AgentRunCompletedEvent
-from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
+from app.modules.agent.domain.value_objects import (
+    AgentRunFinishResult,
+    AgentRunStatus,
+    ConversationStatus,
+)
+from app.modules.agent.services.run_followups import run_finished_fact
+from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.function.domain.entities import FunctionRunStatus
-from app.core.infrastructure.work import WorkClass, WorkRegistry
+from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
 )
 from app.modules.function.infrastructure.models import FunctionModel, FunctionRunModel
+from app.modules.workflow.domain.wait import WorkflowRunWaitType
+from app.modules.workflow.events.agent_resume_work import register_agent_resume_work
 from app.modules.workflow.events.run_work import register_run_work
 from app.modules.pod.infrastructure.models.pod_models import PodMember
-from app.modules.test_support.fakes import PassthroughEventInbox
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
@@ -30,7 +38,6 @@ from app.modules.test_support.e2e_authz import (
 from app.modules.workflow.api.workflow_run_controller import MAX_RUN_PAGE_SIZE
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.start import WorkflowStartType
-from app.modules.workflow.events import handlers as wf_handlers
 from app.modules.workflow.api.dependencies import build_workflow_engine
 from app.modules.workflow.services.run_resume_service import RunResumeService
 
@@ -292,38 +299,6 @@ async def _wait_for_run(
     )
 
 
-class _FakeLogger:
-    def info(self, *args, **kwargs):
-        pass
-
-    def debug(self, *args, **kwargs):
-        pass
-
-    def error(self, *args, **kwargs):
-        pass
-
-
-class _InlineResumeJobQueue:
-    """Stands in for the streaq worker: runs the enqueued workflow-resume jobs
-    inline through the real RunResumeService so the
-    event -> workflow handler -> resume -> engine -> stepper chain executes
-    deterministically in-process (without the subprocess worker or a sandbox).
-    """
-
-    def __init__(self):
-        self.enqueued: list[tuple[str, dict]] = []
-
-    async def enqueue(self, job_name: str, **kwargs):
-        self.enqueued.append((job_name, kwargs))
-        async with create_uow_from_session_maker(async_session_maker) as uow:
-            service = RunResumeService(build_workflow_engine(uow))
-            if job_name == "resume_workflow_run_for_agent":
-                await service.resume_for_agent_conversation(
-                    conversation_id=kwargs["agent_conversation_id"],
-                )
-        return SimpleNamespace(id=kwargs.get("_job_id"))
-
-
 async def _end_function_run(
     function_run_id: str, *, output_data: dict | None = None, error: str | None = None
 ) -> None:
@@ -350,6 +325,7 @@ async def _end_function_run(
 
 _WORKFLOW_WORK = WorkRegistry()
 register_run_work(_WORKFLOW_WORK)
+register_agent_resume_work(_WORKFLOW_WORK)
 
 
 async def _drive_function_completed(function_run_id: str, output_data: dict) -> None:
@@ -361,27 +337,32 @@ async def _drive_function_failed(function_run_id: str, error: str) -> None:
 
 
 async def _drive_agent_event(conversation_id: str, *, status: AgentRunStatus) -> None:
-    """Drive the REAL workflow agent event handler. The handler only enqueues a
-    resume when an active AGENT wait exists, so a late/stale event is a no-op."""
+    """The agent run's end, as its finalize announces it: ``AgentRunFinished``,
+    and the workflow's ``workflow.resume_for_agent`` run in-process. The
+    subscriber resumes only an ACTIVE AGENT wait, so a late or stale finish is
+    a no-op."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        agent_run = await ConversationRepository(
-            uow
-        ).get_latest_agent_run_for_conversation(
+        repository = ConversationRepository(uow)
+        conversation = await repository.get_conversation(UUID(conversation_id))
+        agent_run = await repository.get_latest_agent_run_for_conversation(
             UUID(conversation_id),
         )
-        assert agent_run is not None
-        agent_run_id = agent_run.id
-    event = AgentRunCompletedEvent(
-        conversation_id=UUID(conversation_id),
-        agent_run_id=agent_run_id,
-        status=status,
-    ).model_dump(mode="json")
-    await wf_handlers.handle_agent_run_event(
-        event,
-        _FakeLogger(),
-        job_queue=_InlineResumeJobQueue(),
-        uow_factory=wf_handlers.provide_uow_factory(),
-        inbox=PassthroughEventInbox(),
+        assert conversation is not None and agent_run is not None
+        await facts.emit(
+            uow,
+            run_finished_fact(
+                conversation,
+                run_id=agent_run.id,
+                finish=AgentRunFinishResult(
+                    status=status,
+                    conversation_status=ConversationStatus(status.value),
+                    updated=True,
+                ),
+            ),
+        )
+        await uow.commit()
+    await run_until_idle(
+        async_session_maker, registry=_WORKFLOW_WORK, classes=[WorkClass.EVENTS]
     )
 
 
@@ -1146,6 +1127,7 @@ async def test_duplicate_function_completion_event_is_idempotent(
     assert len(record_steps) == 1
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_agent_failure_fails_workflow_run(
     authenticated_client: AsyncClient,
@@ -1438,6 +1420,7 @@ async def test_form_submit_validates_against_schema_and_merges_defaults(
     assert run["execution_context"]["intake"] == {"category": "a", "note": "n/a"}
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_agent_without_output_schema_resumes_workflow_with_answer(
     authenticated_client: AsyncClient,
@@ -1491,6 +1474,7 @@ async def test_agent_without_output_schema_resumes_workflow_with_answer(
     assert run["execution_context"]["ack"] == {"answer": "All done here."}
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_cancel_waiting_run_and_drop_stale_completion(
     authenticated_client: AsyncClient,
@@ -1577,25 +1561,30 @@ async def test_reconciliation_recovers_lost_agent_completion(
     # Complete the conversation WITHOUT notifying the workflow (lost event).
     async with create_uow_from_session_maker(async_session_maker) as uow:
         conversation_repo = ConversationRepository(uow)
-        conversation = await conversation_repo.get_conversation(UUID(conversation_id))
-        conversation.status = ConversationStatus.COMPLETED
-        conversation.output = {"answer": 42}
-        await conversation_repo.update_conversation(conversation)
+        await conversation_repo.set_conversation_status(
+            conversation_id=UUID(conversation_id),
+            status=ConversationStatus.COMPLETED,
+        )
+        await uow.session.execute(
+            sa_update(ConversationModel)
+            .where(ConversationModel.id == UUID(conversation_id))
+            .values(output_data={"answer": 42})
+        )
         await uow.commit()
 
-    # Sweep with a zero threshold so the fresh wait qualifies as stale.
-    import app.modules.workflow.services.run_resume_service as rrs
-
-    original = rrs.RECONCILE_AFTER
-    rrs.RECONCILE_AFTER = rrs.timedelta(seconds=0)
-    try:
-        async with create_uow_from_session_maker(async_session_maker) as uow:
-            acted = await RunResumeService(
-                build_workflow_engine(uow)
-            ).reconcile_stale_waits()
-    finally:
-        rrs.RECONCILE_AFTER = original
-    assert acted == 1
+    # At the wait's ceiling its expiry item finds the conversation finished
+    # and resumes the run, as the completion would have.
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        engine = build_workflow_engine(uow)
+        wait = await engine.wait_repo.find_active_by_external_ref(
+            WorkflowRunWaitType.AGENT, conversation_id
+        )
+        assert wait is not None
+        again = await RunResumeService(engine).expire_agent_wait(
+            wait, now=datetime.now(timezone.utc)
+        )
+        await uow.commit()
+    assert again is None
 
     fetched = await _get_run(authenticated_client, pod_id, run["id"])
     assert fetched["status"] == "COMPLETED"

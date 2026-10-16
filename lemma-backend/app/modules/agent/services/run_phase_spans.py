@@ -1,6 +1,6 @@
 """Named spans for the fixed setup work an agent run does before the model.
 
-Between the worker picking up ``process_agent_run`` and the first byte leaving
+Between the worker picking up an ``agent.turn`` and the first byte leaving
 for the provider there is a flat run of roughly three dozen SQL spans. The
 exporter strips statement text, so in a production trace that stretch is one
 opaque block: measurable in total (p50 ~0.5s, p90 ~4.7s) and unattributable in

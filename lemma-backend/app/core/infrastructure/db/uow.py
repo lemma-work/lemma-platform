@@ -2,17 +2,13 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.dialects.postgresql import insert
 
+from app.core.analytics.domain_events import offer_committed
 from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
 from app.core.infrastructure.db.transaction_locks import (
     clear_transaction_scoped_lock,
 )
 from app.core.domain.uow import IUnitOfWork
-from app.core.domain.message_bus import MessageBus
-from app.core.infrastructure.events.models import DomainEventInbox, DomainEventOutbox
-from app.core.infrastructure.events.settled_by_work import settled_inbox_rows
-from app.core.infrastructure.events.outbox_wake import notify_outbox_wake
 from app.core.log.log import get_logger
 
 if TYPE_CHECKING:
@@ -22,19 +18,19 @@ logger = get_logger(__name__)
 
 
 class SqlAlchemyUnitOfWork(IUnitOfWork):
-    """SQLAlchemy unit of work with transactional event staging.
+    """SQLAlchemy unit of work; committed domain events go to the after-commit sink.
 
-    Collected domain events are inserted into the outbox before the database
-    commit. A separate dispatcher publishes them, so a Redis outage cannot lose
-    a successfully committed domain change.
-    Repositories call `collect_events()` after saving aggregates.
+    Repositories call ``collect_events()`` after saving aggregates. Nothing the
+    product depends on reads those events any more: work that must follow a
+    change is a work item or a fact written in this transaction
+    (``core/infrastructure/work``). After a successful commit the events go to
+    the domain-event sink (``app.core.analytics.domain_events``), whose
+    projections -- analytics, cache invalidation -- are best effort. A
+    rolled-back transaction offers nothing.
     """
 
-    def __init__(self, session: AsyncSession, message_bus: MessageBus | None = None):
+    def __init__(self, session: AsyncSession):
         self.session = session
-        # Kept as a constructor compatibility shim for callers that still pass
-        # a bus. Publication never occurs from inside the UoW.
-        self._message_bus = message_bus
         self._pending_events: list["DomainEvent"] = []
         self._after_commit: list[Callable[[], Awaitable[None]]] = []
         # Back-reference so a service that only holds the session can still
@@ -64,10 +60,6 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         """
         self._after_commit.append(callback)
 
-    def set_message_bus(self, message_bus: MessageBus) -> None:
-        """Backward-compatible no-op setter; dispatch is outbox-driven."""
-        self._message_bus = message_bus
-
     def collect_events(self, events: Sequence["DomainEvent"]) -> None:
         """Collect domain events for publishing on commit.
 
@@ -83,62 +75,18 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
             await self.rollback()
 
     async def commit(self) -> None:
-        """Stage pending events and commit them with domain state."""
-        await self._stage_pending_events()
+        """Commit, then hand the collected events to the after-commit sink."""
         await self.session.commit()
         # The transaction that held any advisory lock has ended, so a later
         # release in this request is free to commit again.
         clear_transaction_scoped_lock(self.session)
-        self._pending_events.clear()
+        committed, self._pending_events = self._pending_events, []
+        # Product analytics projects committed events after the commit, in
+        # batches, off this task: it can neither block nor fail the commit.
+        offer_committed(committed)
         callbacks, self._after_commit = self._after_commit, []
         for callback in callbacks:
             await callback()
-
-    async def _stage_pending_events(self) -> None:
-        if not self._pending_events:
-            return
-
-        rows = [
-            {
-                "id": event.event_id,
-                "stream": event.stream_name(),
-                "event_type": event.event_type,
-                "schema_version": event.schema_version,
-                "producer": event.producer,
-                "payload": event.model_dump(mode="json"),
-                "occurred_at": event.occurred_at,
-                "correlation_id": event.correlation_id,
-                "causation_id": event.causation_id,
-                "request_id": event.request_id,
-            }
-            for event in self._pending_events
-        ]
-        # executemany, not `.values(rows)`: the latter renders every row inline,
-        # so the compiled SQL is a function of the batch size and the statement
-        # cache misses on every size it has not seen. Measured on the datastore
-        # twin of this insert as a 1027ms event-loop stall inside the
-        # transaction. Same fix, same reason.
-        await self.session.execute(
-            insert(DomainEventOutbox).on_conflict_do_nothing(index_elements=["id"]),
-            rows,
-        )
-        # Consumers this release moved to work items are settled here, in the
-        # same transaction: their work was written with the event.
-        settled = settled_inbox_rows(self._pending_events)
-        if settled:
-            await self.session.execute(
-                insert(DomainEventInbox).on_conflict_do_nothing(
-                    index_elements=["consumer", "event_id"]
-                ),
-                settled,
-            )
-        # In the same transaction as the insert, so the dispatcher can never be
-        # woken for rows a rollback erased, nor before they are visible.
-        await notify_outbox_wake(self.session)
-        logger.debug(
-            "infrastructure.uow.staged_domain_events_transactional_outbox.observed",
-            event_count=len(rows),
-        )
 
     async def rollback(self) -> None:
         """Rollback transaction and discard pending events and callbacks."""

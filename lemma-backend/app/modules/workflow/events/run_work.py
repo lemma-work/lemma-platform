@@ -66,6 +66,7 @@ from app.modules.workflow.domain.start import WorkflowStartType
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.execution.resume_target import ResumeTarget
 from app.modules.workflow.execution.wait_ceiling import ceiling_seconds, expiry_error
+from app.modules.workflow.services.run_resume_service import RunResumeService
 from app.modules.workflow.services.schedule_start_service import ScheduleStartService
 from app.modules.workflow.execution.run_admission import admit_queued_runs
 from app.modules.workflow.execution.wait_work import (
@@ -178,10 +179,21 @@ async def expire_wait(ctx: FastContext, payload: WaitWork) -> None:
     wait = await engine.wait_repo.get(payload.wait_id)
     if wait is None or wait.status != WorkflowRunWaitStatus.ACTIVE:
         return
+    now = datetime.now(UTC)
+    if wait.wait_type is WorkflowRunWaitType.AGENT:
+        again = await RunResumeService(engine).expire_agent_wait(wait, now=now)
+        if again is not None:
+            await ctx.work.add(
+                WORKFLOW_WAIT_EXPIRE,
+                ctx.item.ns,
+                payload,
+                run_at=again,
+                dedup_key=f"workflow-expire:{wait.id}",
+            )
+        return
     seconds = ceiling_seconds(wait)
     if seconds is None:
         return
-    now = datetime.now(UTC)
     created = wait.created_at or now
     if created.tzinfo is None:
         created = created.replace(tzinfo=UTC)

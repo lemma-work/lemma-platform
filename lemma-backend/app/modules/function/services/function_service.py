@@ -492,7 +492,7 @@ class FunctionService:
             ),
         )
 
-        function = await self.repository.get_for_update(function.id)
+        function = await self.repository.get_for_share(function.id)
         if function is None:
             raise FunctionNotFoundError(f"Function {name} not found")
 

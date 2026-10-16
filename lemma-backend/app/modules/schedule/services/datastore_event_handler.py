@@ -190,7 +190,6 @@ def trigger_change(change: Change, *, table_name: str) -> TriggerChange:
         occurred_at=change.at,
         from_outside=change.outside_actor is not None,
         metadata=metadata,
-        legacy_event_id=str(change.event_id) if change.event_id is not None else None,
     )
 
 

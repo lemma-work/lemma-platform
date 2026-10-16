@@ -14,15 +14,15 @@ from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import WorkWriter
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.events import AgentRunStopRequestedEvent
 from app.modules.agent.domain.pausing_tools import (
     USER_PAUSING_TOOL_NAMES,
     WAIT_TOOL_NAME,
 )
 from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
 from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
-from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
+from app.modules.agent.domain.value_objects import ConversationStatus
 from app.modules.agent.domain.wait import AgentWaitWakeReason
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
@@ -38,7 +38,9 @@ from app.modules.agent.services.realtime import (
     message_payload,
     publish_conversation_event,
 )
+from app.modules.agent.services.run_stop import stop_run
 from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.services.wait_timers import disarm_wait
 from app.modules.agent.tools.waiting.models import (
     build_wait_result,
     elapsed_seconds,
@@ -98,22 +100,18 @@ class StopCoordinator:
                     conversation.id
                 )
             )
-            finish_result = await self.conversation_repository.finish_agent_run(
-                agent_run_id=active_run.id,
-                status=AgentRunStatus.STOP_REQUESTED,
+            # A turn still queued is dropped and the run ends STOPPED here; one a
+            # worker holds is asked to stop and ends at its next check.
+            finish_result = await stop_run(
+                self.uow,
+                self.conversation_repository,  # type: ignore[arg-type]
+                pod_id=conversation.pod_id,
+                conversation_id=conversation.id,
+                run_id=active_run.id,
                 stamp={STOP_REQUESTED_AFTER_SEQUENCE: said_before_stop},
             )
             if finish_result is not None:
                 conversation.status = finish_result.conversation_status
-            self.conversation_repository.collect_events(
-                [
-                    AgentRunStopRequestedEvent(
-                        conversation_id=conversation.id,
-                        agent_run_id=active_run.id,
-                        user_id=user_id,
-                    )
-                ]
-            )
             await self.uow.commit()
             return conversation
 
@@ -147,12 +145,25 @@ class StopCoordinator:
         What is deliberately skipped is ``start_resume_run_if_ready``: Stop means
         the agent does not wake.
         """
-        wait = await self.wait_repository.find_active_for_conversation(conversation.id)
+        active = await self.wait_repository.find_active_for_conversation(
+            conversation.id
+        )
+        if active is None:
+            return
+        # Under the conversation's lock and then the wait's, like every other
+        # ending: a timer firing now either took them first (and woke it --
+        # this finds it ended) or waits for this commit and finds it
+        # CANCELLED. Exactly one of the two happens.
+        await self.conversation_repository.lock_conversation(conversation.id)
+        wait = await self.wait_repository.claim(active.id)
         if wait is None:
             return
 
         wait.cancel()
         await self.wait_repository.update(wait)
+        # Its queued timer goes with it, in this transaction. A poll already
+        # running re-reads the wait under the lock and does not re-arm.
+        await disarm_wait(WorkWriter.of(self.uow), wait)
         await self.conversation_repository.set_conversation_status(
             conversation_id=conversation.id,
             status=ConversationStatus.STOPPED,
@@ -170,11 +181,6 @@ class StopCoordinator:
                 note_to_self=(wait.spec or {}).get("note_to_self"),
             ),
         )
-        # Nothing to cancel. The wait row is the timer: the poller's due query
-        # filters on ACTIVE, and `find_active_by_external_ref` ignores anything
-        # that is not, so completing the wait above is what stops it firing.
-        # This used to call through `app/composition/agent_snooze_scheduler.py`,
-        # whose `cancel_snooze_wake` had already been reduced to `del timer_id`.
 
     async def _deny_unresolved_pauses(
         self, *, conversation: Conversation, user_id: UUID

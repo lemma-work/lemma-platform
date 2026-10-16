@@ -29,6 +29,7 @@ from app.core.infrastructure.work.rates import DEFAULT_RATES
 from app.core.infrastructure.work.types import WorkClass, validate_namespace
 
 POD = UUID("11111111-1111-1111-1111-111111111111")
+_INTERACTIVE_CAP = CLASS_DEFAULTS[WorkClass.INTERACTIVE].max_running
 ORG = UUID("22222222-2222-2222-2222-222222222222")
 
 
@@ -113,14 +114,16 @@ async def test_slug_rules_need_a_directory_and_org_rules_match_org_namespaces() 
         {"org_id": str(ORG), "max_running": {"automation": 9}},
     )
     bare = ConfiguredWorkLimitPort(raw_overrides=raw)
-    assert (await bare.limits_for(f"pod:{POD}")).cap(WorkClass.INTERACTIVE) == 32
+    assert (await bare.limits_for(f"pod:{POD}")).cap(
+        WorkClass.INTERACTIVE
+    ) == _INTERACTIVE_CAP
     assert (await bare.limits_for(f"org:{ORG}")).cap(WorkClass.AUTOMATION) == 9
 
     known = ConfiguredWorkLimitPort(raw_overrides=raw, directory=_Directory("acme"))
     limits = await known.limits_for(f"pod:{POD}")
     # Both match; the org id is more specific than the slug.
     assert limits.cap(WorkClass.AUTOMATION) == 9
-    assert limits.cap(WorkClass.INTERACTIVE) == 32
+    assert limits.cap(WorkClass.INTERACTIVE) == _INTERACTIVE_CAP
     assert limits.cap(WorkClass.EVENTS) == CLASS_DEFAULTS[WorkClass.EVENTS].max_running
 
 

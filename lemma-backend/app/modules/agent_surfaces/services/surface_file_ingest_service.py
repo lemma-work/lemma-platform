@@ -17,6 +17,7 @@ answers as though the person had attached nothing.
 
 from __future__ import annotations
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from collections.abc import Awaitable, Callable
@@ -559,7 +560,8 @@ class SurfaceFileIngestService:
                 attempts=_NAME_ATTEMPTS,
             )
             return AttachmentFailure(name=label, reason="it could not be saved")
-        except Exception:
+        except Exception as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.file_ingest.attachment_store_failed.degraded",
                 platform=platform,

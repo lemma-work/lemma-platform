@@ -25,7 +25,6 @@ from app.core.authorization.dependencies import (
     require_resource_action,
 )
 from app.core.authorization.permissions import Permissions
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.function.infrastructure.repositories import (
     FunctionRepository,
@@ -157,12 +156,10 @@ def build_function_service(uow) -> FunctionService:
     """Construct a bound FunctionService (single wiring source). Used by read
     endpoints and as the per-phase collaborator the use case builds inside each
     short UoW."""
-    message_bus = get_message_bus()
     return FunctionService(
-        function_repository=FunctionRepository(uow, message_bus=message_bus),
+        function_repository=FunctionRepository(uow),
         run_repository=FunctionRunRepository(
             uow,
-            message_bus=message_bus,
         ),
         storage_factory=get_function_storage_factory(),
         icon_service=create_icon_service(),

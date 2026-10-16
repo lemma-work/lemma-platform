@@ -21,7 +21,7 @@ def test_apps_settings_own_archive_limits(monkeypatch):
         "app_release_keep_last": 10,
         "app_release_keep_days": 30,
         "app_release_max_keep": 20,
-        "app_release_retention_cron": "20 4 * * *",
+        "app_release_retention_interval_seconds": 86_400,
         "app_release_retention_batch": 200,
         "app_release_retention_budget_seconds": 60.0,
         # Moved from `app/core/config.py`: only this module reads it. Off

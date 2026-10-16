@@ -47,7 +47,6 @@ from app.core.test_shared_containers import (
     shared_postgres,
     shared_redis,
 )
-from app.modules.schedule.config import schedule_settings
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -271,24 +270,13 @@ async def _close_e2e_process_clients() -> None:
     Call it only through the ``e2e_process_clients`` fixture, which exists to
     put it after every fixture that could still be using one of these -- see
     that fixture for what goes wrong when it runs earlier.
-
-    The message bus is deliberately not in the list, and nothing else in the
-    harness closes it either. It is the one process-wide client an E2E request
-    cannot open: ``SqlAlchemyUnitOfWork`` stages domain events in the outbox
-    and a separate dispatcher publishes them, so no request path ever reaches
-    ``FastStreamRedisMessageBus._get_broker``. The only connect in this process
-    is ``app/app.py``'s lifespan, which closes it in the same ``finally``.
-    Measured rather than assumed: ``_get_broker`` is called 0 times across the
-    112 tests of ``app/modules/pod/tests/e2e``, and exactly as many times as
-    ``close`` on a suite that runs ``backend_server``.
     """
 
     from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
     from app.core.infrastructure.channels.channel_service import channel_service
     from app.core.infrastructure.db.session import close_engine
-    from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
-    from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-        close_surface_event_dedup_store,
+    from app.modules.agent_surfaces.infrastructure.adapters.stranger_reply_window import (
+        close_stranger_reply_window,
     )
     from app.modules.datastore.infrastructure.session import close_datastore_engine
     from app.modules.identity.infrastructure.user_cache import close_user_cache
@@ -305,13 +293,10 @@ async def _close_e2e_process_clients() -> None:
         "close_workspace_tool_runtimes", close_workspace_tool_runtimes
     )
     await _run_cleanup_step("reset_workspace_store_state", reset_workspace_store_state)
-    await _run_cleanup_step(
-        "close_surface_event_dedup_store", close_surface_event_dedup_store
-    )
+    await _run_cleanup_step("close_stranger_reply_window", close_stranger_reply_window)
     await _run_cleanup_step("close_user_cache", close_user_cache)
     await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
     await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
-    await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
     await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
     await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
     await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
@@ -832,9 +817,6 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     datastore_settings.datastore_database_url = (
         f"{base_url}/{_postgres_worker_datastore_db_name(worker_id)}"
     )
-    # Every schema a test makes is new, so record writes go to the change log
-    # from the first one, as they do once a deployment's backfill is done.
-    datastore_settings.datastore_change_log_mode = "on"
     settings.redis_url = test_redis_url
     settings.supertokens_core_url = get_supertokens_url(supertokens_container)
     settings.environment = "testing"
@@ -954,21 +936,9 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     datastore_settings.e2e_disable_worker_file_autoindex = True
     os.environ.setdefault("E2E_DISABLE_WORKER_FILE_AUTOINDEX", "true")
 
-    # The schedule poller is a real background loop in the worker subprocess,
-    # defaulting to a 5s production cadence. Every schedule/wait-until test
-    # that goes through the HTTP API + poller (rather than calling the claim
-    # function directly, as test_due_schedule_claimer_e2e.py does) pays that
-    # full cadence. Setting the attribute alone does nothing for the worker --
-    # it re-reads its own config from its own environment at startup, not
-    # this process's settings singleton -- so set os.environ too, same as
-    # E2E_LLM_MODE/E2E_DISABLE_WORKER_FILE_AUTOINDEX above; the worker's
-    # env={**os.environ, ...} already inherits it, no extra Popen key needed.
-    schedule_settings.schedule_poll_interval_seconds = 0.5
-    os.environ["SCHEDULE_POLL_INTERVAL_SECONDS"] = "0.5"
-
-    # The same argument as the schedule poller, for the other production
-    # cadences the suite sits through. Each is a background loop the tests wait
-    # on rather than drive, so the production interval is pure latency here.
+    # The production cadences the suite sits through. Each is a background
+    # loop the tests wait on rather than drive, so the production interval is
+    # pure latency here.
     # Attribute + os.environ for the same reason as above: the worker subprocess
     # re-reads its own config from its own environment.
     #
@@ -1025,7 +995,6 @@ def _import_e2e_models() -> None:
     module first. The other modules listed below re-export their submodels
     through a package ``__init__``, so importing the package is enough.
     """
-    from app.core.infrastructure.events import models as event_models
     from app.core.infrastructure.work import models as work_models
     from app.modules.agent.infrastructure import models as agent_models
     from app.modules.agent.infrastructure import runtime_models as agent_runtime_models
@@ -1055,7 +1024,6 @@ def _import_e2e_models() -> None:
     _ = (
         workspace_models,
         agent_runtime_models,
-        event_models,
         work_models,
         user_models,
         organization_models,
@@ -1215,7 +1183,8 @@ async def worker(e2e_settings, sandbox_reachable_backend):
                 # spent its whole grace draining, overran, and got SIGKILLed. SIGKILL
                 # cannot be trapped, so coverage's `sigterm = true` handler never
                 # flushed and the subprocess's coverage was lost.
-                "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
+                "WORK_SHUTDOWN_GRACE_SECONDS": "1",
+                "WORK_SHUTDOWN_GRACE_JSON": '{"interactive": 1}',
                 "DEBUG": "true",
                 "EMAIL_TRANSPORT": "filesystem",
                 # `settings`, not `e2e_settings`: they are the same object --
@@ -1242,7 +1211,7 @@ async def worker(e2e_settings, sandbox_reachable_backend):
         )
 
         readiness_markers = (
-            '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+            '"logger": "app.core.infrastructure.work.process"',
             '"event": "service.started"',
         )
         startup_ok = False

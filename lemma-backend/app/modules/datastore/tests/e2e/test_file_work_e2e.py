@@ -312,83 +312,51 @@ async def test_a_retry_is_allowed_once_per_cooldown(
     assert again.json()["code"] == "DATASTORE_RETRY_TOO_SOON"
 
 
-async def test_only_files_in_flight_at_the_cutover_get_work_items(
+async def test_the_cutover_carries_no_file_over_and_a_retry_indexes_it(
     pod_api: DatastoreApi, file_work: FileWork, monkeypatch
 ) -> None:
-    """The migration's seed replays nothing old.
-
-    A row touched within the window was being uploaded or extracted as the
-    release went out, and is carried over. Anything older -- and every
-    ``FAILED`` row -- waits as ``FAILED`` until someone retries it.
-    """
+    """The migration's seed replays nothing: every waiting or mid-extraction
+    file ends FAILED with a note to retry, nothing is queued, and a retry is
+    what processes it."""
     monkeypatch.setattr(datastore_settings, "e2e_disable_worker_file_autoindex", True)
-    cases = {
-        "live-pending": ("PENDING", False),
-        "live-processing": ("PROCESSING", False),
-        "stale-pending": ("PENDING", True),
-        "stale-processing": ("PROCESSING", True),
-        "failed": ("FAILED", True),
-        "completed": ("COMPLETED", True),
-        "failed-permanent": ("FAILED_PERMANENT", True),
+    states = ["PENDING", "PROCESSING", "FAILED", "COMPLETED", "FAILED_PERMANENT"]
+    rows = {
+        state: await _upload_pdf(pod_api, f"legacy-{state.lower()}.pdf")
+        for state in states
     }
-    rows = {name: await _upload_pdf(pod_api, f"legacy-{name}.pdf") for name in cases}
-    for name, (state, stale) in cases.items():
+    for state, row in rows.items():
         await file_work.execute(
-            "UPDATE datastore_files SET status = :status, processing_attempts = 2, "
-            "updated_at = CASE WHEN :stale THEN now() - interval '2 hours' "
-            "ELSE updated_at END WHERE id = :id",
+            "UPDATE datastore_files SET status = :status WHERE id = :id",
             status=state,
-            stale=stale,
-            id=rows[name]["id"],
+            id=row["id"],
         )
+
+    for _ in range(2):  # a re-run changes nothing more
+        for statement in _seed_statements():
+            await file_work.execute(statement)
+
     assert await file_work.queued() == 0
+    for state, expected in (
+        ("PENDING", "FAILED"),
+        ("PROCESSING", "FAILED"),
+        ("FAILED", "FAILED"),
+        ("COMPLETED", "COMPLETED"),
+        ("FAILED_PERMANENT", "FAILED_PERMANENT"),
+    ):
+        assert (await file_work.row(rows[state]["id"]))["status"] == expected, state
+    for state in ("PENDING", "PROCESSING"):
+        note = (await file_work.row(rows[state]["id"]))["last_processing_error"]
+        assert "before the upgrade" in note, state
 
-    for statement in _seed_statements():
-        await file_work.execute(statement)
-    # The migration and a release still running the old code can overlap;
-    # seeding twice is one item each.
-    for statement in _seed_statements():
-        await file_work.execute(statement)
-
-    # `processing_attempts` is the token an *old* worker fences on. One holding
-    # token 2 on a PROCESSING row must not see it reissued: the seed moves it
-    # on, once, however often it runs. A PENDING row holds no live claim.
-    expected = {
-        "live-pending": ("PENDING", 2, 1),
-        "live-processing": ("PENDING", 3, 1),
-        "stale-pending": ("FAILED", 3, 0),
-        "stale-processing": ("FAILED", 3, 0),
-        "failed": ("FAILED", 2, 0),
-        "completed": ("COMPLETED", 2, 0),
-        "failed-permanent": ("FAILED_PERMANENT", 2, 0),
-    }
-    for name, (status_, token, items) in expected.items():
-        row = await file_work.row(rows[name]["id"])
-        assert (row["status"], row["processing_attempts"]) == (status_, token), name
-        assert len(await file_work.items(rows[name]["id"])) == items, name
-    for name in ("stale-pending", "stale-processing"):
-        assert (
-            "before the upgrade"
-            in (await file_work.row(rows[name]["id"]))["last_processing_error"]
-        )
-
-    await file_work.drain()
-    for name in ("live-pending", "live-processing"):
-        assert (await file_work.row(rows[name]["id"]))["status"] == "COMPLETED"
-    assert (await file_work.row(rows["stale-pending"]["id"]))["status"] == "FAILED", (
-        "a file older than the cutover was processed without anyone asking"
-    )
-
-    # Asking is what processes it.
     monkeypatch.setattr(datastore_settings, "e2e_disable_worker_file_autoindex", False)
     retried = await pod_api.request(
         "POST",
         f"/pods/{pod_api.pod_id}/datastore/files/by-path/retry-processing",
-        params={"path": rows["stale-pending"]["path"]},
+        params={"path": rows["PENDING"]["path"]},
     )
     assert retried.status_code == status.HTTP_200_OK, retried.text
     await file_work.drain()
-    assert (await file_work.row(rows["stale-pending"]["id"]))["status"] == "COMPLETED"
+    assert (await file_work.row(rows["PENDING"]["id"]))["status"] == "COMPLETED"
 
 
 def _seed_statements() -> list[str]:

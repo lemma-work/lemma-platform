@@ -208,6 +208,59 @@ async def migrate_pod_schema(
     return version
 
 
+async def ensure_change_log(engine: AsyncEngine, schema_name: str) -> None:
+    """A record write's readiness check: ``schema_name`` carries the change log.
+
+    After the first write in a process, a memo hit. Otherwise one read without
+    a lock; only a schema neither migrated to version 3 nor already holding the
+    change log runs DDL here, and then only the change log's two small tables
+    -- never the version-2 step, whose rewrite of the search chunks grows with
+    the pod and is the background backfill's (``pod_schema.migrate``) work. A
+    schema with no search chunks yet is cheap all the way, and is migrated
+    properly.
+    """
+    if pod_schema_memo.change_log_ready(schema_name):
+        return
+    if not POD_SCHEMA_RE.fullmatch(schema_name):
+        raise ValueError(f"not a pod schema: {schema_name!r}")
+    async with engine.connect() as conn:
+        version = await _read_version(conn, schema_name)
+        has_log, has_chunks = (
+            await conn.execute(
+                text(
+                    "SELECT to_regclass(:changes) IS NOT NULL, "
+                    "to_regclass(:chunks) IS NOT NULL"
+                ),
+                {
+                    "changes": f'"{schema_name}".reserved_changes',
+                    "chunks": f'"{schema_name}".reserved_chunks',
+                },
+            )
+        ).one()
+    if version >= POD_SCHEMA_LATEST:
+        pod_schema_memo.remember(schema_name, version)
+        return
+    if version >= CHANGE_LOG_VERSION or has_log:
+        pod_schema_memo.remember_change_log(schema_name)
+        return
+    if not has_chunks:
+        await migrate_pod_schema(engine, schema_name, target=CHANGE_LOG_VERSION)
+        return
+    logger.info(
+        "datastore.pod_schema_migrations.change_log_ahead_of_backfill.observed",
+        schema_name=schema_name,
+        version=version,
+    )
+    await _ensure_globals(engine)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:schema_name))"),
+            {"schema_name": schema_name},
+        )
+        await create_change_log(conn, schema_name)
+    pod_schema_memo.remember_change_log(schema_name)
+
+
 async def schemas_below(engine: AsyncEngine, version: int) -> int:
     """How many pod schemas are not yet at ``version``."""
     async with engine.connect() as conn:

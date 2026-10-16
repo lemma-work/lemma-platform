@@ -4,9 +4,14 @@ The run row is claimed ``FILTERING`` -- unique on the event -- and committed
 *before* the model is asked, and it names the work item that claimed it. So:
 
 * a duplicate delivery of the event finds the row and does nothing;
-* a replay of this item after a crash or a lost lease finds its own claim and
-  does not ask again -- the call may already have been made and billed, so
-  the event is dead-lettered as interrupted, for a person to retry by hand;
+* a replay of this item after an interruption -- a crash, a lost lease, the
+  database unreachable while the verdict was being recorded -- finds its own
+  claim. The question has no effect until its verdict commits with the fire,
+  so asking again is safe; what it costs is a second billed call. So the claim
+  counts its asks and the replay asks again up to ``MAX_FILTER_ASKS``; an
+  event interrupted that many times is dead-lettered as interrupted -- a run
+  a person can retry, not counted on the breaker, since it is the
+  deployment's interruption and not the schedule's failure;
 * a provider that refuses before answering (rate limited, unreachable)
   releases the claim and the item retries later, uncharged.
 
@@ -37,6 +42,7 @@ from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleRunStat
 from app.modules.schedule.repositories.fire_ledger import FireLedger
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.repositories.schedule_run_repository import (
+    FILTER_INTERRUPTED,
     FILTER_NOT_CONFIGURED,
     FILTER_UNAVAILABLE,
 )
@@ -54,10 +60,12 @@ from app.modules.usage.contracts import UsageLimitExceededError
 
 logger = get_logger(__name__)
 
-#: The filter's claim was found by the item that made it: the model may have
-#: answered (and billed) before the crash. Not the schedule's fault.
-FILTER_INTERRUPTED = "ScheduleFilterInterrupted"
 _CLAIMED_BY = "filter_item_id"
+_ASKS = "filter_asks"
+#: How many times one event's filter question may be asked across
+#: interruptions: one replay, so an outage that cut the first answer off does
+#: not lose the event, and a poison event cannot bill indefinitely.
+MAX_FILTER_ASKS = 2
 
 
 class ScheduleFilter:
@@ -170,7 +178,7 @@ async def _claim(
             source_event_id=payload.source_event_id,
             target_kind=target_kind_of(schedule),
             payload=payload.payload,
-            metadata={**payload.metadata, _CLAIMED_BY: str(ctx.item.id)},
+            metadata={**payload.metadata, _CLAIMED_BY: str(ctx.item.id), _ASKS: 1},
             llm_output=None,
             source_occurred_at=payload.source_occurred_at,
             status=ScheduleRunStatus.FILTERING,
@@ -181,23 +189,39 @@ async def _claim(
             return schedule, reservation.run_id
         if reservation.status != ScheduleRunStatus.FILTERING:
             return None  # already judged: fired, skipped or given up on
-        claimed_by = await _claimant(uow, reservation.run_id)
-    if claimed_by == str(ctx.item.id):
-        logger.warning(
-            "schedule.filter.interrupted",
-            schedule_id=str(payload.schedule_id),
-            pod_id=ctx.item.ns,
-        )
-        await _dead_letter(ctx, payload, FILTER_INTERRUPTED)
+        asks = await _ask_again(uow, reservation.run_id, ctx.item.id)
+    if asks is None:
+        return None  # another item's claim
+    logger.warning(
+        "schedule.filter.interrupted",
+        schedule_id=str(payload.schedule_id),
+        pod_id=ctx.item.ns,
+        asks=asks,
+    )
+    if asks <= MAX_FILTER_ASKS:
+        return schedule, reservation.run_id
+    await _dead_letter(ctx, payload, FILTER_INTERRUPTED)
     return None
 
 
-async def _claimant(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> str | None:
+async def _ask_again(
+    uow: SqlAlchemyUnitOfWork, run_id: UUID, item_id: UUID
+) -> int | None:
+    """This item's own claim: count one more ask and return the count.
+
+    ``None`` when the claim is another item's (or gone). Counted in the claim's
+    transaction, so the count survives the next interruption too.
+    """
     model = await FireLedger(uow.session).lock(run_id)
     if model is None:
         return None
-    value = (model.fire_metadata or {}).get(_CLAIMED_BY)
-    return value if isinstance(value, str) else None
+    metadata = dict(model.fire_metadata or {})
+    if metadata.get(_CLAIMED_BY) != str(item_id):
+        return None
+    previous = metadata.get(_ASKS)
+    asks = (previous if isinstance(previous, int) else 1) + 1
+    model.fire_metadata = {**metadata, _ASKS: asks}
+    return asks
 
 
 async def _release(ctx: JobContext, run_id: UUID) -> None:

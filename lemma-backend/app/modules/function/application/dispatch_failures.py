@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import httpx
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.work import Released
 from app.core.redaction import redact_text
 from app.modules.function.contracts.runtime import RuntimeTerminalRequest
 from sandbox_runtime.errors import (
@@ -112,3 +114,16 @@ def execution_error(exc: BaseException) -> str:
     if isinstance(exc, ValueError) and "token expires" in str(exc):
         return "Function execution exceeds delegated token lifetime"
     return "Function execution failed"
+
+
+def not_a_failure(exc: Exception, *, queued: bool, started: bool) -> bool:
+    """Signals for the caller, not outcomes of the run: a full pod, a sandbox
+    not up yet, or a queued run stopped before its start."""
+    if isinstance(exc, (PodAtCapacity, SandboxNotReady)):
+        return True
+    if not started and is_database_unavailable(exc):
+        # Lemma's database could not be reached before the function was sent
+        # anywhere: nothing ran, so the run is retried, not failed. Once it
+        # started, the result is the sandbox's and failing is what records it.
+        return True
+    return queued and not started and isinstance(exc, Released)

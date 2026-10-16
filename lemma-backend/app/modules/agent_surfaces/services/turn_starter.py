@@ -1,6 +1,6 @@
 """Starting the agent's turn on what arrived, in short scopes around long I/O.
 
-The worker task `process_surface_message` is the only caller, and `execute_chat`
+The work item `surface.ingest` is the only production caller, and `execute_chat`
 is the only method it calls. That is why this is its own object: the ingress
 service took *either* a unit of work *or* a factory, and in factory mode seven
 collaborators were `None` and about forty of its ninety-two methods would have
@@ -11,21 +11,25 @@ So the second one is this, and the constructor says what it is: a factory, an
 adapter registry, file ingest, and the dedup store. There is nothing here that
 holds a connection, because that is the whole point of the shape --
 `start_agent_chat` runs platform API calls, file ingestion and voice
-transcription, and only then opens a short scope to write. What it writes with
+transcription, and only then opens a short scope to write -- the ingest item's
+fenced completion, so the message and the item's end are one commit. What it
+writes with
 lives in `surface_inbound_message` as free functions over a unit of work, which
 is what those became once nothing needed them to be methods on a namespace.
 """
 
 from __future__ import annotations
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
-import sys
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
@@ -41,9 +45,6 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
-from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-    get_surface_event_dedup_store,
-)
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -76,7 +77,8 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     every_attachment_failed,
 )
 from app.modules.agent_surfaces.domain.decision_card import CardRetirement
-from app.modules.agent_surfaces.services.held_replies import deliver_held_replies
+from app.modules.agent_surfaces.services.held_replies import stage_held_replies
+from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedupStore
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
@@ -89,7 +91,6 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
     transcribe_voice_attachments,
     write_inbound_message,
 )
-from app.modules.agent_surfaces.services.delivery_claims import release_ingress_claim
 from app.modules.agent_surfaces.services.telegram_command_service import (
     handle_telegram_command,
     handle_typed_retry,
@@ -101,6 +102,13 @@ logger = get_logger(__name__)
 type Reprepare = Callable[
     [SurfacePlatformWebhookIngress], Awaitable[AgentSurfaceContext | None]
 ]
+#: The transaction the inbound message is written in. ``surface.ingest`` hands
+#: in its fenced completion, so the message, the run, its ``agent.turn`` item
+#: and the inbound row going ROUTED commit together or not at all.
+type WriteScope = Callable[[], AbstractAsyncContextManager[SqlAlchemyUnitOfWork]]
+#: Takes a reply that is not a run (a stranger's sign-up link, a refusal) to
+#: deliver it durably instead of sending it here. True: taken.
+type ReplySink = Callable[[SurfaceReplyContext], Awaitable[bool]]
 
 _COULD_NOT_READ = "I couldn't read that message. Could you send it again?"
 PROCESSING_FAILED_REPLY = "I couldn't process that message. Please send it again."
@@ -120,8 +128,12 @@ class SurfaceTurnStarter:
         ingest_memo: AttachmentIngestMemo | None = None,
         reprepare: Reprepare | None = None,
         roster_reads: RosterReads = roster_reads,
+        write_scope: WriteScope | None = None,
+        reply_sink: ReplySink | None = None,
     ) -> None:
         self.uow_factory = uow_factory
+        self.write_scope: WriteScope = write_scope or uow_factory
+        self.reply_sink = reply_sink
         self.roster_reads = roster_reads
         # Shared with the file ingest by Redis key, not by instance: what a
         # retry reuses is keyed on the message, whichever object reads it.
@@ -136,22 +148,23 @@ class SurfaceTurnStarter:
         self.file_ingest_service = file_ingest_service or SurfaceFileIngestService(
             adapter_registry=self.adapter_registry
         )
-        self.event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
+        self.event_dedup_store = event_dedup_store or SurfaceEventDedupStore(
+            uow_factory=uow_factory
+        )
 
     async def execute_chat(self, context: AgentSurfaceContext) -> None:
         """Answer, or -- for a sender we cannot place -- say so once and stop.
 
-        Takes the parsed context. It used to also accept a raw dict and
-        re-validate it through a `TypeAdapter`, which nothing ever needed:
-        `SurfaceProcessMessageTaskPayload.context` is an `AgentSurfaceContext`,
-        so pydantic has already validated it by the time the worker has a
-        payload at all.
+        Takes the parsed context, prepared by ``surface.ingest`` from the
+        stored inbound row.
         """
         adapter = self.adapter_registry.get(context.platform)
         if adapter is None:
             return
 
         if isinstance(context, SurfaceReplyContext):
+            if self.reply_sink is not None and await self.reply_sink(context):
+                return
             # Credentials are needed only to send the automated fallback.
             await deliver_fallback_reply(
                 adapter=adapter,
@@ -202,15 +215,6 @@ class SurfaceTurnStarter:
         except platform_transport_errors():
             pass
 
-        # Their message reopened a closed reply window: what waited for that
-        # goes first, so the answer to this message follows it.
-        await deliver_held_replies(
-            adapter=adapter,
-            credentials=credentials,
-            event=context.event,
-            conversation_id=context.conversation_id,
-            uow_factory=self.uow_factory,
-        )
         ingest = await self._ingest_files(context, credentials)
         ingested: list[IngestedAttachment] = ingest.saved
         metadata = _message_metadata(context, ingest)
@@ -253,8 +257,17 @@ class SurfaceTurnStarter:
         # was mostly the agent talking to itself about its own plumbing -- and
         # it is no longer true: `PendingUserMessagesCapability` steers these
         # into the run already going, which answers all of them at once.
-        async with self.uow_factory() as uow:
+        async with self.write_scope() as uow:
             finished = await write_inbound_message(context, message_text, metadata, uow)
+            # Their message reopened a closed reply window: what waited for it
+            # is written out now, ahead of the answer this message will get,
+            # and the destination pump sends them in that order.
+            await stage_held_replies(
+                uow,
+                conversation_id=context.conversation_id,
+                pod_id=context.pod_id,
+                platform=context.platform,
+            )
         for tool_call_ids, reason in (
             (finished.superseded, CardRetirement.SUPERSEDED),
             (finished.answered, CardRetirement.ANSWERED),
@@ -270,24 +283,6 @@ class SurfaceTurnStarter:
             # Nothing a person sent is empty: a body we failed to fetch or
             # parse. The write declined it, and silence reads as being ignored.
             await self.tell_sender(context, _COULD_NOT_READ)
-
-    async def execute_queued_chat(
-        self, context: AgentSurfaceContext, *, last_try: bool
-    ) -> None:
-        """``execute_chat`` for the worker job, which retries what raises.
-
-        On the last try a message that failed is one nobody will answer, so the
-        person is told once rather than left waiting. Not for a cancellation (a
-        BaseException): that is the worker going away, and the job is
-        redelivered rather than lost.
-        """
-        finished = False
-        try:
-            await self.execute_chat(context)
-            finished = True
-        finally:
-            if not finished and last_try and isinstance(sys.exception(), Exception):
-                await self.tell_sender(context, PROCESSING_FAILED_REPLY)
 
     async def tell_sender(self, context: AgentSurfaceContext, message: str) -> None:
         """A short reply to the person, outside any run, at most once per window.
@@ -337,8 +332,8 @@ class SurfaceTurnStarter:
         if self.reprepare is None or not context.event.raw_payload:
             await self.tell_sender(context, PROCESSING_FAILED_REPLY)
             return
-        # Preparing it again takes the delivery claim again.
-        await release_ingress_claim(context, event_dedup_store=self.event_dedup_store)
+        # Preparing it again takes the message claim again; it is this
+        # inbound row's own, so it is granted.
         rerouted = await self.reprepare(
             SurfacePlatformWebhookIngress(
                 source=context.platform.value.lower(),
@@ -436,6 +431,7 @@ class SurfaceTurnStarter:
                 credentials=credentials,
             )
         except Exception as exc:
+            raise_if_database_unavailable(exc)
             # `ingest_attachments` reports a per-file failure itself, so
             # reaching here is the whole call coming apart. This was a
             # `suppress`, which left `ingest` empty -- indistinguishable

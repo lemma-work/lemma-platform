@@ -488,21 +488,6 @@ async def test_a_receiver_that_keeps_failing_is_paused_until_the_app_refreshes(
     assert shown["paused_at"] is None and shown["last_error"] is None
 
 
-@contextlib.contextmanager
-def _change_log_on():
-    from app.modules.datastore.changes.gate import reset_change_log_gate
-    from app.modules.datastore.config import datastore_settings
-
-    previous = datastore_settings.datastore_change_log_mode
-    datastore_settings.datastore_change_log_mode = "on"
-    reset_change_log_gate()
-    try:
-        yield
-    finally:
-        datastore_settings.datastore_change_log_mode = previous
-        reset_change_log_gate()
-
-
 async def _run(*classes) -> int:
     """Hand watched writes' wakes off, then run ``classes`` until idle."""
     from app.core.infrastructure.db.session import async_session_maker
@@ -551,68 +536,65 @@ async def test_new_rows_reach_the_receiver_once_through_the_change_log(
     from app.core.infrastructure.work import WorkClass
     from app.modules.mcp_access.events import event_deliveries
 
-    with _change_log_on():
-        pod_id = test_pod["id"]
-        _, _, sub_id, table, _ = await _subscribed(
-            mcp_client, authenticated_client, pod_id, receiver
+    pod_id = test_pod["id"]
+    _, _, sub_id, table, _ = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    await _run(WorkClass.EVENTS)  # the subscriber row, at the horizon
+    from app.modules.datastore.changes.subscribers import SubscriberTable
+
+    start = await SubscriberTable(UUID(pod_id)).get(f"mcp:{sub_id}")
+    assert start is not None
+    added = await _add_rows(authenticated_client, pod_id, table, 3)
+    await _run(WorkClass.EVENTS)
+    assert [record for record, _ in await _owed(sub_id)] == added
+    await _run(WorkClass.DELIVERY)
+    # Sent concurrently, so in no particular order.
+    assert sorted(e["data"]["record_id"] for e in receiver.events) == sorted(added)
+    ids = [event["_headers"]["webhook-id"] for event in receiver.events]
+    assert len(set(ids)) == 3 and all(i.startswith("chg_") for i in ids)
+    assert all(event["_headers"]["subscription"] == sub_id for event in receiver.events)
+
+    # The page delivered again from the start: nothing is owed twice.
+    from app.modules.datastore.tests.e2e.change_log_support import rewind
+
+    await rewind(UUID(pod_id), f"mcp:{sub_id}", to=start.cursor)
+    await _run(WorkClass.EVENTS, WorkClass.DELIVERY)
+    assert len(await _owed(sub_id)) == 3 and len(receiver.events) == 3
+
+    # The receiver took the fourth, then the worker died before its
+    # completion committed: the state that leaves is an unsettled delivery
+    # with its item still owed. It is sent again with the same id, and is
+    # owed once.
+    from sqlalchemy import text
+
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work import WorkWriter, pod_namespace
+
+    [fourth] = await _add_rows(authenticated_client, pod_id, table, 1)
+    await _run(WorkClass.EVENTS, WorkClass.DELIVERY)
+    async with async_session_maker() as session:
+        delivery_id = await session.scalar(
+            text(
+                "UPDATE mcp_event_deliveries SET delivered_at = NULL, outcome = NULL "
+                "WHERE record_id = :record RETURNING id"
+            ),
+            {"record": fourth},
         )
-        await _run(WorkClass.EVENTS)  # the subscriber row, at the horizon
-        from app.modules.datastore.changes.subscribers import SubscriberTable
-
-        start = await SubscriberTable(UUID(pod_id)).get(f"mcp:{sub_id}")
-        assert start is not None
-        added = await _add_rows(authenticated_client, pod_id, table, 3)
-        await _run(WorkClass.EVENTS)
-        assert [record for record, _ in await _owed(sub_id)] == added
-        await _run(WorkClass.DELIVERY)
-        # Sent concurrently, so in no particular order.
-        assert sorted(e["data"]["record_id"] for e in receiver.events) == sorted(added)
-        ids = [event["_headers"]["webhook-id"] for event in receiver.events]
-        assert len(set(ids)) == 3 and all(i.startswith("chg_") for i in ids)
-        assert all(
-            event["_headers"]["subscription"] == sub_id for event in receiver.events
+        await WorkWriter(session).add(
+            event_deliveries.DELIVER,
+            pod_namespace(UUID(pod_id)),
+            event_deliveries.DeliveryRef(delivery_id=delivery_id),
+            rate_key=f"mcp:{sub_id}",
         )
-
-        # The page delivered again from the start: nothing is owed twice.
-        from app.modules.datastore.tests.e2e.change_log_support import rewind
-
-        await rewind(UUID(pod_id), f"mcp:{sub_id}", to=start.cursor)
-        await _run(WorkClass.EVENTS, WorkClass.DELIVERY)
-        assert len(await _owed(sub_id)) == 3 and len(receiver.events) == 3
-
-        # The receiver took the fourth, then the worker died before its
-        # completion committed: the state that leaves is an unsettled delivery
-        # with its item still owed. It is sent again with the same id, and is
-        # owed once.
-        from sqlalchemy import text
-
-        from app.core.infrastructure.db.session import async_session_maker
-        from app.core.infrastructure.work import WorkWriter, pod_namespace
-
-        [fourth] = await _add_rows(authenticated_client, pod_id, table, 1)
-        await _run(WorkClass.EVENTS, WorkClass.DELIVERY)
-        async with async_session_maker() as session:
-            delivery_id = await session.scalar(
-                text(
-                    "UPDATE mcp_event_deliveries SET delivered_at = NULL, outcome = NULL "
-                    "WHERE record_id = :record RETURNING id"
-                ),
-                {"record": fourth},
-            )
-            await WorkWriter(session).add(
-                event_deliveries.DELIVER,
-                pod_namespace(UUID(pod_id)),
-                event_deliveries.DeliveryRef(delivery_id=delivery_id),
-                rate_key=f"mcp:{sub_id}",
-            )
-            await session.commit()
-        await _run(WorkClass.DELIVERY)
-        again = [e for e in receiver.events if e["data"]["record_id"] == fourth]
-        assert len(again) == 2
-        assert again[0]["_headers"]["webhook-id"] == again[1]["_headers"]["webhook-id"]
-        owed = await _owed(sub_id)
-        assert [record for record, _ in owed] == [*added, fourth]
-        assert {outcome for _, outcome in owed} == {"sent"}
+        await session.commit()
+    await _run(WorkClass.DELIVERY)
+    again = [e for e in receiver.events if e["data"]["record_id"] == fourth]
+    assert len(again) == 2
+    assert again[0]["_headers"]["webhook-id"] == again[1]["_headers"]["webhook-id"]
+    owed = await _owed(sub_id)
+    assert [record for record, _ in owed] == [*added, fourth]
+    assert {outcome for _, outcome in owed} == {"sent"}
 
 
 async def test_deliveries_past_a_subscriptions_rate_wait_and_are_not_charged(
@@ -622,37 +604,36 @@ async def test_deliveries_past_a_subscriptions_rate_wait_and_are_not_charged(
 
     from app.core.infrastructure.work import WorkClass
 
-    with _change_log_on():
-        pod_id = test_pod["id"]
-        _, _, sub_id, table, _ = await _subscribed(
-            mcp_client, authenticated_client, pod_id, receiver
+    pod_id = test_pod["id"]
+    _, _, sub_id, table, _ = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    await _run(WorkClass.EVENTS)
+    await _add_rows(authenticated_client, pod_id, table, 5)
+    await _run(WorkClass.EVENTS)
+    async with _session_factory()() as uow:
+        await uow.session.execute(
+            text(
+                "UPDATE work_queues SET rates = COALESCE(rates, '{}'::jsonb) || "
+                '\'{"mcp_delivery": {"limit": 2, "per_seconds": 3600}}\'::jsonb '
+                "WHERE class = 'delivery' AND ns = :ns"
+            ),
+            {"ns": f"pod:{pod_id}"},
         )
-        await _run(WorkClass.EVENTS)
-        await _add_rows(authenticated_client, pod_id, table, 5)
-        await _run(WorkClass.EVENTS)
-        async with _session_factory()() as uow:
+        await uow.commit()
+    await _run(WorkClass.DELIVERY)
+    assert len(receiver.events) == 2, "two tokens, two sends"
+    async with _session_factory()() as uow:
+        waiting = (
             await uow.session.execute(
                 text(
-                    "UPDATE work_queues SET rates = COALESCE(rates, '{}'::jsonb) || "
-                    '\'{"mcp_delivery": {"limit": 2, "per_seconds": 3600}}\'::jsonb '
-                    "WHERE class = 'delivery' AND ns = :ns"
+                    "SELECT state, attempts, run_at > now() FROM work_items "
+                    "WHERE kind = 'mcp.deliver' AND ns = :ns"
                 ),
                 {"ns": f"pod:{pod_id}"},
             )
-            await uow.commit()
-        await _run(WorkClass.DELIVERY)
-        assert len(receiver.events) == 2, "two tokens, two sends"
-        async with _session_factory()() as uow:
-            waiting = (
-                await uow.session.execute(
-                    text(
-                        "SELECT state, attempts, run_at > now() FROM work_items "
-                        "WHERE kind = 'mcp.deliver' AND ns = :ns"
-                    ),
-                    {"ns": f"pod:{pod_id}"},
-                )
-            ).all()
-        assert [tuple(row) for row in waiting] == [("queued", 0, True)] * 3
+        ).all()
+    assert [tuple(row) for row in waiting] == [("queued", 0, True)] * 3
 
 
 async def test_the_sweep_removes_what_can_never_deliver_again(
@@ -745,50 +726,49 @@ async def test_a_paused_subscription_holds_none_of_the_pods_log(
         EventSubscriptionRepository,
     )
 
-    with _change_log_on():
-        pod_id = test_pod["id"]
-        token, params, sub_id, table, _ = await _subscribed(
-            mcp_client, authenticated_client, pod_id, receiver
-        )
-        await _run(WorkClass.EVENTS)
-        subscribers = SubscriberTable(UUID(pod_id))
-        assert await subscribers.get(f"mcp:{sub_id}") is not None
+    pod_id = test_pod["id"]
+    token, params, sub_id, table, _ = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    await _run(WorkClass.EVENTS)
+    subscribers = SubscriberTable(UUID(pod_id))
+    assert await subscribers.get(f"mcp:{sub_id}") is not None
 
-        now = datetime.now(timezone.utc)
-        async with _session_factory()() as uow:
-            repository = EventSubscriptionRepository(uow)
-            for _ in range(PAUSE_AFTER_FAILURES):
-                await repository.record_delivery(sub_id, now=now, error="http_500")
-            await uow.commit()
-        await _run(WorkClass.EVENTS)  # the sync the pause asked for
-        assert await subscribers.get(f"mcp:{sub_id}") is None
+    now = datetime.now(timezone.utc)
+    async with _session_factory()() as uow:
+        repository = EventSubscriptionRepository(uow)
+        for _ in range(PAUSE_AFTER_FAILURES):
+            await repository.record_delivery(sub_id, now=now, error="http_500")
+        await uow.commit()
+    await _run(WorkClass.EVENTS)  # the sync the pause asked for
+    assert await subscribers.get(f"mcp:{sub_id}") is None
 
-        missed = await _add_rows(authenticated_client, pod_id, table, 3)
-        await _run(WorkClass.EVENTS)
-        assert not {record for record, _ in await _owed(sub_id)} & set(missed)
-        # Old enough to go, and nobody holds it: retention takes it.
-        await log_final()
-        async with get_datastore_engine().begin() as conn:
-            await conn.execute(
-                text(
-                    f"UPDATE {changes_table(schema_name_for_pod(UUID(pod_id)))} "
-                    "SET at = now() - interval '2 hours'"
-                )
+    missed = await _add_rows(authenticated_client, pod_id, table, 3)
+    await _run(WorkClass.EVENTS)
+    assert not {record for record, _ in await _owed(sub_id)} & set(missed)
+    # Old enough to go, and nobody holds it: retention takes it.
+    await log_final()
+    async with get_datastore_engine().begin() as conn:
+        await conn.execute(
+            text(
+                f"UPDATE {changes_table(schema_name_for_pod(UUID(pod_id)))} "
+                "SET at = now() - interval '2 hours'"
             )
-        assert await retain(UUID(pod_id), await subscribers.all()) >= 3
+        )
+    assert await retain(UUID(pod_id), await subscribers.all()) >= 3
 
-        refreshed = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
-        assert "result" in refreshed, refreshed
-        await _run(WorkClass.EVENTS)
-        assert await subscribers.get(f"mcp:{sub_id}") is not None
-        [after] = await _add_rows(authenticated_client, pod_id, table, 1)
-        # Read below the cluster's oldest open transaction: in a shared CI run
-        # another test's can hold the new row back past one delivery pass.
-        await log_final()
-        from app.core.infrastructure.db.session import async_session_maker
-        from app.core.infrastructure.work.testing import make_due
+    refreshed = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+    assert "result" in refreshed, refreshed
+    await _run(WorkClass.EVENTS)
+    assert await subscribers.get(f"mcp:{sub_id}") is not None
+    [after] = await _add_rows(authenticated_client, pod_id, table, 1)
+    # Read below the cluster's oldest open transaction: in a shared CI run
+    # another test's can hold the new row back past one delivery pass.
+    await log_final()
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work.testing import make_due
 
-        await make_due(async_session_maker, kind="changes.deliver")
-        await _run(WorkClass.EVENTS)
-        owed = [record for record, _ in await _owed(sub_id)]
-        assert after in owed and not set(owed) & set(missed)
+    await make_due(async_session_maker, kind="changes.deliver")
+    await _run(WorkClass.EVENTS)
+    owed = [record for record, _ in await _owed(sub_id)]
+    assert after in owed and not set(owed) & set(missed)

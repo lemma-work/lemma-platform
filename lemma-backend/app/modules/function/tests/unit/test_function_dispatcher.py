@@ -708,3 +708,54 @@ async def test_our_own_deadline_is_not_retried() -> None:
         )
 
     assert len(attempts) == 1
+
+
+def test_lemmas_database_unreachable_before_the_start_is_not_a_failed_run() -> None:
+    """Nothing was sent to a sandbox: the run is retried, not failed. Once it
+    started, the outcome is the function's and failing records it."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.modules.function.application.dispatch_failures import not_a_failure
+    from app.modules.function.events.run_work import dead_message
+
+    class _TooMany(Exception):
+        sqlstate = "53300"
+
+    down = OperationalError("SELECT", {}, _TooMany("too many clients"))
+    assert not_a_failure(down, queued=True, started=False)
+    assert not_a_failure(ConnectionRefusedError(), queued=False, started=False)
+    assert not not_a_failure(down, queued=True, started=True)
+    assert not not_a_failure(RuntimeError("boom"), queued=True, started=False)
+    assert "database" in dead_message(
+        "unavailable_exhausted", "Unavailable: database unavailable: OperationalError"
+    )
+    assert "sandbox" in dead_message("unavailable_exhausted", "Unavailable: sandbox")
+
+
+@pytest.mark.asyncio
+async def test_a_queued_run_hands_back_its_slot_when_the_sandbox_is_slow(
+    monkeypatch,
+) -> None:
+    """A queued run holds one of the pod's automation slots while it waits for
+    its sandbox -- shared with titles, schedule starts and filters. It waits a
+    minute, not its whole start deadline, then gives the slot back for its
+    item to retry; the endpoint keeps loading meanwhile."""
+    from app.modules.function.application.dispatch_failures import SandboxNotReady
+
+    dispatch = _dispatch(mode=FunctionDispatchMode.ASYNCHRONOUS).model_copy(
+        update={"deadline_at": datetime.now(timezone.utc) + timedelta(minutes=30)}
+    )
+    dispatcher = _dispatcher(AsyncMock())
+    asked: list[datetime | None] = []
+
+    async def slow_endpoint(_dispatch, *, execution_ends_at, wait_until=None):
+        asked.append(wait_until)
+        raise TimeoutError("function runtime endpoint was not ready")
+
+    monkeypatch.setattr(dispatcher, "_runtime_endpoint", slow_endpoint)
+
+    with pytest.raises(SandboxNotReady):
+        await dispatcher._execute_dispatch(dispatch.run_id, dispatch, queued=True)
+    [wait_until] = asked
+    assert wait_until is not None
+    assert wait_until <= datetime.now(timezone.utc) + timedelta(seconds=61)

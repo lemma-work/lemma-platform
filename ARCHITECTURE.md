@@ -41,12 +41,12 @@ flowchart TB
 
     subgraph backend["lemma-backend"]
         API["API<br/>FastAPI · 14 modules"]
-        WORKER["Worker<br/>streaq jobs · cron schedules"]
+        WORKER["Worker<br/>work runtime · periodic work"]
     end
 
     subgraph state["State"]
         PG[("PostgreSQL<br/>app db + datastore db")]
-        REDIS[("Redis<br/>streams · cache · job queue")]
+        REDIS[("Redis<br/>cache · pub/sub · locks")]
         OBJ[("Object storage<br/>local · S3 · GCS · Azure")]
         ST["SuperTokens<br/>sessions"]
     end
@@ -89,17 +89,17 @@ Two process roles, from the same codebase:
 | Process | Entrypoint | Owns |
 |---|---|---|
 | API | `app/app.py` | HTTP, WebSockets, authorization, durable writes |
-| Worker | `app/worker.py` | streaq jobs, event consumers, long I/O, time triggers |
+| Worker | `app/worker.py` | The work runtime: work items from the `work_items` table, long I/O, time triggers |
 
-There is no third scheduler process. Time triggers are streaq crons registered
-on the worker's lanes (`@streaq_cron`,
-`app/core/infrastructure/jobs/streaq_runtime.py`), so they run wherever the
-worker does.
+There is no third scheduler process. A TIME schedule is a `schedule.fire` work
+item due at its next occurrence, and recurring maintenance is periodic work
+(`periodic_job`, `app/core/infrastructure/work/periodic_jobs.py`), so both run
+wherever the worker does.
 
 Desktop and `make dev` run an **all-in-one** variant (`local_app.py`) that hosts
 both in one process; `deploy/compose/` runs them as separate containers. That is
 a packaging choice, not a different architecture — the module boundaries and the
-event path are identical.
+work path are identical.
 
 → [Module guide](lemma-backend/docs/modules/README.md) · one document per module,
 each naming the tables it owns.
@@ -160,7 +160,7 @@ the backend, so neither has to depend on the other.
 |---|---|---|
 | **PostgreSQL — app db** | Users, pods, agents, workflows, functions, connectors, schedules, runs | Alembic migrations; every module names the tables it owns |
 | **PostgreSQL — datastore db** | Pod tables, records, files metadata | Separate database, per-pod schemas, queried under row-level security by a lower-privilege role |
-| **Redis** | Domain event streams, streaq job queue, caches | All data caching goes through Redis — never an in-process dict |
+| **Redis** | Caches, realtime pub/sub, locks and rate windows | All data caching goes through Redis — never an in-process dict. No queue lives here: background work is in PostgreSQL |
 | **Object storage** | Uploaded files, derived documents, app bundles, icons | `local`, `s3`, `gcs`, or `azure` |
 | **SuperTokens** | Sessions and auth recipes | Self-hosted; no managed auth dependency |
 
@@ -176,34 +176,41 @@ Two rules follow from the pool being small (10 + 10 overflow per process):
 
 ## How work moves
 
-State changes and the events announcing them commit **in the same transaction**:
+A state change and the work it causes commit **in the same transaction**: the
+work is a row in `work_items`, written through `WorkWriter` (or a fact a
+subscriber turns into rows), and the worker's work runtime claims it.
 
 ```mermaid
 sequenceDiagram
     participant C as Caller
     participant A as API
     participant DB as PostgreSQL
-    participant R as Redis Stream
     participant W as Worker
 
     C->>A: request
-    A->>DB: domain write + outbox row (one transaction)
+    A->>DB: domain write + work item (one transaction)
     A-->>C: response
-    DB->>R: dispatcher publishes outbox rows
-    R->>W: at-least-once delivery
-    W->>DB: inbox row (idempotent)
-    W->>W: do the work
-    Note over W: failure → bounded retry → dead-letter
+    DB-->>W: NOTIFY (a hint; the worker also polls)
+    W->>DB: claim under a lease (fair across pods)
+    W->>W: do the work, heartbeating the lease
+    W->>DB: effects + delete the item (one transaction)
+    Note over W: failure → bounded retry → dead, domain state terminal
 ```
 
 Consequences a contributor has to design around:
 
-- **Delivery is at-least-once.** Consumers must be idempotent and inbox-backed.
-- **Validation errors acknowledge; infrastructure errors re-raise** so the
-  message is retried rather than silently dropped.
-- **Downstream job IDs are deterministic**, so a replay does not duplicate work.
-- Anything that outlives a request belongs in a streaq job, not a request
-  handler.
+- **A job can run again.** A lease that expires (a crash, a deploy past its
+  grace) puts the item back. Database effects in the completing transaction
+  are exactly once; anything outside the database needs its own idempotency
+  key.
+- **Write the item where the cause commits**, never after: an item enqueued
+  after the commit is the gap this design closes.
+- **Dedup keys are deterministic**, so a twin enqueue coalesces.
+- Anything that outlives a request belongs in a work item, not a request
+  handler. Committed domain events go only to the after-commit sink
+  (analytics, cache invalidation); nothing durable may depend on them.
+
+→ [Work runtime operations](lemma-backend/docs/operators/reliability.md)
 
 ## Invariants
 

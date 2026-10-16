@@ -88,10 +88,7 @@ class DatastoreFileProcessingStateMixin:
         run is alive, and a run reaching here holds the item's lease -- so a
         PROCESSING row it finds was left by a run that died. The token moves
         on, which is what fences the dead run if it was only stalled.
-
-        ``processing_attempts`` moves on too, as it always has: an old release
-        still running during the deploy fences on it, and the 0054 seed moved
-        it past every token such a worker holds.
+        ``processing_attempts`` counts the claim too.
         """
         result = await self.session.execute(
             update(DatastoreFile)

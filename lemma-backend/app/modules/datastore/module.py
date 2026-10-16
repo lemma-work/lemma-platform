@@ -231,16 +231,14 @@ def _register_work() -> None:
 
     # Every process: a schedule or MCP subscription change (API) writes
     # `changes.sync_subscribers`; the worker claims every change-log kind.
-    import app.modules.datastore.changes.converter  # noqa: F401
     import app.modules.datastore.changes.horizon  # noqa: F401
     import app.modules.datastore.changes.retention  # noqa: F401
     import app.modules.datastore.changes.work  # noqa: F401
 
 
-def _register_streaq() -> None:
+def _register_periodic_work() -> None:
     import app.modules.datastore.events.handlers  # noqa: F401
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
-    import app.modules.datastore.events.outbox_retention_tasks  # noqa: F401
 
     # Work-runtime kinds, registered here so the worker's dispatchers can
     # claim them; the API registers ``file_work`` by importing the repository
@@ -335,8 +333,8 @@ module = LemmaModule(
     name="datastore",
     resource_names=_resource_names,
     routers=_routers,
-    register_streaq=_register_streaq,
     register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
     # Nothing here may scale with data: see `test_boot_hooks.py`. The query
     # role and its grants are ensured lazily; the change handoff starts a loop
     # and reads nothing at boot.

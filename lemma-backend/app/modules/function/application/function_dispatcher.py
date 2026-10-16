@@ -24,10 +24,10 @@ from app.modules.function.application.dispatch_failures import (
     runtime_failure_message,
 )
 from app.modules.function.application.function_run_token import function_run_token
-from app.core.infrastructure.work import Released
 from app.modules.function.application.dispatch_failures import (
     PodAtCapacity,
     SandboxNotReady,
+    not_a_failure,
 )
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
@@ -79,6 +79,9 @@ _START_ALLOWANCE_SECONDS = 60
 
 #: How long a synchronous call waits between looks at a full pod's gate.
 _CAPACITY_POLL_SECONDS = (0.25, 2.0)
+#: A queued run's wait for its sandbox before it hands back its work slot (one
+#: of the pod's automation slots, shared with titles and schedule starts).
+_QUEUED_ENDPOINT_WAIT = timedelta(seconds=60)
 
 POD_AT_CAPACITY_ERROR = (
     "Function never started: its pod was running as many functions as it can "
@@ -88,14 +91,6 @@ START_DEADLINE_ERROR = (
     "Function never started before its start deadline. Nothing ran, so it is "
     "safe to retry."
 )
-
-
-def _not_a_failure(exc: Exception, *, queued: bool, started: bool) -> bool:
-    """Signals for the caller, not outcomes of the run: a full pod, a sandbox
-    not up yet, or a queued run stopped before its start."""
-    if isinstance(exc, (PodAtCapacity, SandboxNotReady)):
-        return True
-    return queued and not started and isinstance(exc, Released)
 
 
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
@@ -215,8 +210,12 @@ class FunctionDispatcher:
         execution_ends_at = self._now() + timedelta(
             seconds=dispatch.execution_seconds + _START_ALLOWANCE_SECONDS
         )
+        bound = min(dispatch.deadline_at, self._now() + _QUEUED_ENDPOINT_WAIT)
+        wait_until = bound if queued else None
         endpoint_task = create_inherited_task(
-            self._runtime_endpoint(dispatch, execution_ends_at=execution_ends_at)
+            self._runtime_endpoint(
+                dispatch, execution_ends_at=execution_ends_at, wait_until=wait_until
+            )
         )
         token_task = create_inherited_task(
             self._function_session_token(dispatch, valid_until=execution_ends_at)
@@ -237,8 +236,8 @@ class FunctionDispatcher:
                         token_task,
                         organization_task,
                     )
-                except SandboxUnavailable as exc:
-                    if not queued:
+                except (SandboxUnavailable, TimeoutError) as exc:
+                    if not queued:  # its item retries; the endpoint keeps loading
                         raise
                     raise SandboxNotReady(str(exc)) from exc
             if before_start is not None:
@@ -277,7 +276,7 @@ class FunctionDispatcher:
             # `agent_runner_service` re-raises at the same boundary and for the
             # same reason -- swallowing it there made every interrupted run look
             # like a success, and a deploy ended every conversation in flight.
-            if not isinstance(exc, Exception) or _not_a_failure(
+            if not isinstance(exc, Exception) or not_a_failure(
                 exc, queued=queued, started=started is not None
             ):
                 raise

@@ -5,7 +5,6 @@
 * ``capture`` -- the write path: slim rows always, snapshots while watched.
 * ``subscribers`` / ``work`` -- durable subscribers: sync, handoff, deliver,
   retention.
-* ``converter`` -- the cutover from the datastore outbox and stream.
 
 Other modules reach this through ``app.modules.datastore.contracts.changes``.
 """

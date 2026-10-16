@@ -7,7 +7,6 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.models import (
     RoleAssignmentModel,
@@ -42,12 +41,9 @@ class PodRepository(PodRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def _collect_events(self, entity: PodEntity | PodMemberEntity) -> None:
         if hasattr(entity, "collect_events"):
@@ -194,12 +190,9 @@ class PodMemberRepository(PodMemberRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def _collect_events(self, entity: PodEntity | PodMemberEntity) -> None:
         if hasattr(entity, "collect_events"):
@@ -451,12 +444,9 @@ class PodJoinRequestRepository(PodJoinRequestRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def _collect_events(self, entity: PodJoinRequestEntity) -> None:
         if hasattr(entity, "collect_events"):

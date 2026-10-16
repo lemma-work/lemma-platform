@@ -214,7 +214,7 @@ PACKED_SHARDS = 3
 # Two, not three. Three was generalised from the one shard ever measured at it
 # -- the old `pod` shard, 94 tests of pure API work -- and it does not hold for
 # a packed bin. Each xdist worker runs its own SuperTokens container and its
-# own streaq worker subprocess, so three of them on a four-vCPU runner starve
+# own worker subprocess, so three of them on a four-vCPU runner starve
 # the async workers the tests are waiting on. It shows up as a *condition*
 # wait timing out with a generous budget rather than as a slow assert:
 # test_apply_destructive_requires_confirmation blew a 90-second wait for a

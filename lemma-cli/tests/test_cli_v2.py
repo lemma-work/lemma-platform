@@ -272,7 +272,12 @@ def test_pods_list_marks_selected_pod(monkeypatch):
         return fn(
             fake_client,
             SimpleNamespace(
-                config={"defaults": {"org_id": "org-1", "pod_id": "pod-2"}}
+                config={
+                    "defaults": {
+                        "org_id": "99999999-9999-9999-9999-999999999999",
+                        "pod_id": "pod-2",
+                    }
+                }
             ),
         )
 
@@ -281,7 +286,7 @@ def test_pods_list_marks_selected_pod(monkeypatch):
     result = runner.invoke(app, ["pods", "list", "--limit", "5"])
 
     assert result.exit_code == 0, result.stdout
-    assert captured == {"org_id": "org-1", "limit": 5}
+    assert captured == {"org_id": "99999999-9999-9999-9999-999999999999", "limit": 5}
     assert "Sales" in result.stdout
     assert "yes" in result.stdout
 

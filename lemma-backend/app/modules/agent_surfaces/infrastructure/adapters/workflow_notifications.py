@@ -43,6 +43,7 @@ from uuid import UUID
 from httpx import HTTPError
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.composition import build_notification_service
@@ -175,6 +176,7 @@ class WorkflowNotificationAdapter:
                 idempotency_key=f"wf:{run_id}:{node_id}",
             )
         except _SURVIVABLE as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "workflow.notifications.form_notify_failed.degraded",
                 run_id=str(run_id),

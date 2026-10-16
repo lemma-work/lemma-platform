@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping
 
 import asyncpg
 
-from app.core.infrastructure.events.outbox_wake import asyncpg_connect_kwargs
+from app.core.infrastructure.db.direct_connection import asyncpg_connect_kwargs
 from app.core.infrastructure.work.types import WorkClass
 from app.core.infrastructure.work.writer import wake_channel
 from app.core.log.log import get_logger

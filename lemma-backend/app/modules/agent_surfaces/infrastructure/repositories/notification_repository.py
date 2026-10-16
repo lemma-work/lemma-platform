@@ -304,21 +304,6 @@ class NotificationRepository:
         )
         return int(result.scalar_one())
 
-    async def list_past_due(
-        self, *, limit: int = 100, now: datetime | None = None
-    ) -> list[NotificationEntity]:
-        result = await self.session.execute(
-            select(NotificationModel)
-            .where(
-                NotificationModel.status == NotificationStatus.OPEN.value,
-                NotificationModel.expires_at.is_not(None),
-                NotificationModel.expires_at <= (now or datetime.now(timezone.utc)),
-            )
-            .order_by(NotificationModel.expires_at.asc())
-            .limit(limit)
-        )
-        return [m.to_entity() for m in result.scalars().all()]
-
     async def list_by_ids(
         self,
         *,

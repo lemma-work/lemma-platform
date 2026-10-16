@@ -34,7 +34,6 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunState,
 )
 from app.modules.agent.domain.entities import Agent
-from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.pausing_tools import SUSPENDED_WHILE_PARKED_KEY
 from app.modules.agent.domain.queued_messages import WAITING_ON_ANSWER
@@ -45,9 +44,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     MessageKind,
 )
-from app.modules.agent.events.queued_followup import (
-    start_followup_run_for_queued_messages,
-)
+from app.modules.agent.events.run_followup_work import start_queued_followup_for
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
@@ -273,15 +270,9 @@ async def _cancel_requested(run_id: UUID) -> list[str]:
 
 
 async def _completed(seeded: Seeded, run_id: UUID) -> UUID | None:
-    """Deliver the run's completion event, as the worker publishes it."""
-    run = next(r for r in await runs(seeded.conversation_id) if r.id == run_id)
-    return await start_followup_run_for_queued_messages(
-        AgentRunCompletedEvent(
-            conversation_id=seeded.conversation_id,
-            agent_run_id=run_id,
-            status=run.status,
-        ),
-        uow_factory=uow_factory(),
+    """Run the run's ``agent.followup``, as its finalize writes it."""
+    return await start_queued_followup_for(
+        seeded.conversation_id, run_id, uow_factory=uow_factory()
     )
 
 

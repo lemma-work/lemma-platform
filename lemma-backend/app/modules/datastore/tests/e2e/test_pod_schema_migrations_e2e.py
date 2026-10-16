@@ -33,6 +33,7 @@ from app.modules.datastore.infrastructure.pod_schema_migrations import (
     CHUNKS_VERSION,
     POD_SCHEMA_LATEST,
     all_pod_schemas_at_least,
+    ensure_change_log,
     forget_all,
     migrate_pod_schema,
     pod_schema_version,
@@ -279,3 +280,82 @@ async def test_search_reads_either_version_and_v2_keeps_the_data(
     assert await service.rename_folder("/finance", "/archive/finance")
     assert await _search(service, "/archive") == ["/archive/finance/forecast.pdf"]
     assert await _search(service, "/finance") == []
+
+
+async def _exists(engine: AsyncEngine, relation: str) -> bool:
+    async with engine.connect() as conn:
+        return bool(
+            await conn.scalar(
+                text("SELECT to_regclass(:r) IS NOT NULL"), {"r": relation}
+            )
+        )
+
+
+async def test_a_record_write_never_runs_the_chunk_rewrite(engine: AsyncEngine) -> None:
+    """A schema the backfill has not reached, holding search chunks, gets the
+    change log alone on its first record write; the version-2 rewrite of its
+    chunks stays the backfill's, which later finds the log already there."""
+    schema = schema_name_for_pod(uuid4())
+    async with engine.begin() as conn:
+        await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+    await migrate_pod_schema(engine, schema, target=CHUNKS_VERSION)
+    await _legacy_chunks(engine, schema, uuid4())
+
+    await ensure_change_log(engine, schema)
+
+    assert await _exists(engine, f'"{schema}".reserved_changes')
+    assert await _exists(engine, f'"{schema}".reserved_change_subscribers')
+    assert not await _exists(engine, f'"{schema}".search_files'), "no v2 step"
+    assert await pod_schema_version(engine, schema) == CHUNKS_VERSION
+    await ensure_change_log(engine, schema)  # the memo: nothing to do
+
+    await migrate_pod_schema(engine, schema)
+    assert await pod_schema_version(engine, schema) == POD_SCHEMA_LATEST
+    assert await _exists(engine, f'"{schema}".search_files')
+
+
+async def test_a_schema_without_chunks_is_migrated_properly_on_its_first_write(
+    engine: AsyncEngine,
+) -> None:
+    [schema] = await _create_schemas(engine, 1)
+
+    await ensure_change_log(engine, schema)
+
+    assert await pod_schema_version(engine, schema) == POD_SCHEMA_LATEST
+    assert await _exists(engine, f'"{schema}".reserved_changes')
+
+
+async def test_rerunning_the_change_log_step_takes_no_lock_a_writer_holds(
+    engine: AsyncEngine,
+) -> None:
+    """A writer holds the change log's tables the way a record write does; the
+    backfill re-running version 3 on that live schema must not wait on it.
+
+    It used to: ``CREATE INDEX IF NOT EXISTS`` and ``ADD COLUMN IF NOT EXISTS``
+    lock before they find nothing to do, and against a writer's lock order the
+    two deadlocked (seen in the agent e2e suite).
+    """
+    from uuid import uuid4 as new_id
+
+    from app.modules.datastore.changes.schema import (
+        changes_table,
+        create_change_log,
+        subscribers_table,
+    )
+
+    [schema] = await _create_schemas(engine, 1)
+    await ensure_change_log(engine, schema)
+    async with engine.connect() as writer:
+        await writer.begin()
+        await writer.execute(text(f"SELECT count(*) FROM {subscribers_table(schema)}"))
+        await writer.execute(
+            text(
+                f"INSERT INTO {changes_table(schema)} (table_id, op, record_id) "
+                "VALUES (CAST(:t AS uuid), 'I', 'r1')"
+            ),
+            {"t": str(new_id())},
+        )
+        async with engine.begin() as backfill:
+            await backfill.execute(text("SET LOCAL lock_timeout = '2s'"))
+            await create_change_log(backfill, schema)
+        await writer.rollback()

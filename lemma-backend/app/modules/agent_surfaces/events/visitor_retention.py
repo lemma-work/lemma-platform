@@ -10,7 +10,8 @@ would end it. A contact's conversation is never swept here; it is the pod's to
 keep or forget.
 
 Bounded batches, as ``mcp_access`` sweeps its grants: a sweep that is far
-behind catches up over a few runs rather than holding the bulk lane.
+behind catches up over a few runs rather than holding the admin class. Run by
+the ``surfaces.web_visitors`` periodic (``events/periodic_work``).
 """
 
 from __future__ import annotations
@@ -18,13 +19,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
-from app.core.infrastructure.db.session import get_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import (
-    SessionUnitOfWorkFactory,
-    UnitOfWorkFactory,
-)
-from app.core.infrastructure.jobs.streaq_runtime import Lane, streaq_cron
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts.outsider_retention import (
     delete_idle_outsider_conversations,
@@ -83,16 +79,3 @@ async def sweep_web_visitors(
     sessions = await _drain(uow_factory, _sessions, at)
     conversations = await _drain(uow_factory, _conversations, at)
     return codes, sessions, conversations
-
-
-@streaq_cron("41 * * * *", name="sweep_web_visitors", lane=Lane.BULK)
-async def sweep_web_visitors_task() -> None:
-    codes, sessions, conversations = await sweep_web_visitors(
-        SessionUnitOfWorkFactory(get_session_maker())
-    )
-    logger.info(
-        "agent_surfaces.tasks.sweep_web_visitors.observed",
-        codes=codes,
-        sessions=sessions,
-        conversations=conversations,
-    )

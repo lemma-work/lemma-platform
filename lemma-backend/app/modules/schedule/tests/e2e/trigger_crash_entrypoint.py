@@ -19,7 +19,6 @@ import asyncio
 import sys
 from pathlib import Path
 
-import app.events  # noqa: F401  every module's kinds, as the worker imports them
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import dispatcher_for
@@ -29,6 +28,9 @@ from app.modules.schedule.services.trigger_filter import (
     ScheduleFilter,
     install_schedule_filter,
 )
+from app.worker import register_worker_modules
+
+register_worker_modules()  # every module's kinds, as the worker registers them
 
 
 async def _hang(marker: Path) -> None:

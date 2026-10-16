@@ -32,9 +32,8 @@ from app.modules.agent_surfaces.contracts.whatsapp import (
 from app.core.config import settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.log.log import get_logger
-from app.modules.identity.domain.events import UserMobileChangedEvent
+from app.modules.identity.events.identity_work import emit_mobile_changed
 from app.modules.identity.infrastructure.mobile_number_claims import (
     acquire_mobile_number_claim_lock,
     get_other_mobile_number_owner_id,
@@ -445,6 +444,9 @@ class WhatsAppMobileVerificationService:
                 return False
             user.mobile_number = sender_phone
             user.mobile_verified_at = datetime.now(timezone.utc)
+            # In the transaction that changes the number: surfaces unbind what
+            # resolved through the old one.
+            await emit_mobile_changed(session, claim.user_id)
             try:
                 await session.commit()
             except IntegrityError:
@@ -457,8 +459,6 @@ class WhatsAppMobileVerificationService:
         self, *, redis: Redis, claim: _ClaimedVerification
     ) -> None:
         await get_user_cache().invalidate(claim.user_id)
-        phone_changed = UserMobileChangedEvent(user_id=claim.user_id)
-        await EventPublisher.publish(phone_changed.stream_name(), phone_changed)
         await redis.eval(
             _COMPLETE_LUA,
             1,

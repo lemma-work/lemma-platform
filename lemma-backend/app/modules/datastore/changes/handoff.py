@@ -21,10 +21,10 @@ from contextlib import asynccontextmanager
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.core.infrastructure.events.outbox_wake import OutboxWakeListener
+from app.core.infrastructure.db.notify_listener import NotifyWakeListener
 from app.core.infrastructure.work import WorkWriter
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -107,7 +107,7 @@ class ChangeHandoff:
             wake.clear()
             try:
                 await self.drain()
-            except (DBAPIError, OperationalError, OSError) as exc:
+            except (SQLAlchemyError, OSError) as exc:
                 # The rows stay; the next pass hands them off.
                 self._incident.record_failure(error_type=type(exc).__name__)
             else:
@@ -119,7 +119,7 @@ async def change_handoff_lifespan(
     engine: AsyncEngine, main_sessions: SessionMaker, *, database_url: str
 ) -> AsyncIterator[ChangeHandoff]:
     handoff = ChangeHandoff(engine, main_sessions)
-    listener = OutboxWakeListener(
+    listener = NotifyWakeListener(
         database_url, label="change-pending", channel=PENDING_CHANNEL
     )
     listen = create_background_task(listener.run(), name="change-pending-listener")

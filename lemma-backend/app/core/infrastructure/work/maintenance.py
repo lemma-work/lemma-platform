@@ -99,12 +99,27 @@ async def refresh_queues(
     return changed
 
 
+#: Serializes boot-time arming across processes. Without it two workers
+#: booting together both see no live item and both add one: the second insert
+#: waits on the first's uncommitted row in the dedup index, and if that row has
+#: been claimed (``running``) by the time it rechecks, it no longer conflicts --
+#: two chains, each re-arming itself forever. Under the lock the second worker
+#: sees the first's item, queued or running, and adds nothing.
+_ARM_LOCK = text("SELECT pg_advisory_xact_lock(:key)")
+_ARM_LOCK_KEY = 0x776F726B70657231  # "workper1"
+
+
 async def arm_periodics(
     session: AsyncSession, work_registry: WorkRegistry, classes: list[WorkClass]
 ) -> int:
-    """Boot-time upsert of every periodic whose kind runs in this process."""
+    """Boot-time upsert of every periodic whose kind runs in this process.
+
+    Idempotent across processes (see ``_ARM_LOCK``); the caller commits, which
+    releases the lock.
+    """
     writer = WorkWriter(session, registry=work_registry)
     armed = 0
+    await session.execute(_ARM_LOCK, {"key": _ARM_LOCK_KEY})
     for spec in work_registry.periodics():
         handler = work_registry.find(spec.kind)
         if handler is None or handler.cls not in classes:
@@ -115,7 +130,11 @@ async def arm_periodics(
         if await session.scalar(_DEAD_PERIODIC, params):
             logger.warning("work.periodic.recreated", name=spec.name, kind=spec.kind)
         await writer.add(
-            spec.kind, SYSTEM_NAMESPACE, spec.payload, dedup_key=spec.dedup_key
+            spec.kind,
+            SYSTEM_NAMESPACE,
+            spec.payload,
+            dedup_key=spec.dedup_key,
+            delay=spec.phase,
         )
         armed += 1
     return armed

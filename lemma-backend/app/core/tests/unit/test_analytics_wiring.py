@@ -59,8 +59,8 @@ def test_the_worker_configures_the_sink_it_emits_through() -> None:
         Path(__file__).resolve().parents[3]
         / "core"
         / "infrastructure"
-        / "jobs"
-        / "streaq_runtime.py"
+        / "work"
+        / "process.py"
     ).read_text()
 
     assert "start_analytics()" in source, (

@@ -60,7 +60,8 @@ measure steady state.
 
 `DATASTORE_BENCH_CONCURRENCY` controls only concurrent HTTP uploads.
 `DATASTORE_EXTRACTION_CONCURRENCY` controls the end-to-end processing slots in
-each worker process; queued Streaq tasks wait for a slot. The latter limit is
+each worker process (the `ingestion` class's slots); queued `file.process`
+items wait for a slot. The latter limit is
 process-local, so multiple worker replicas multiply the deployment-wide
 concurrency. A limit of five bounds work at five pipelines but does not make the
 memory used by five simultaneous Kreuzberg responses and embedding/indexing

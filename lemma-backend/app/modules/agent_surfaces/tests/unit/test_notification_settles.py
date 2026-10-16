@@ -18,7 +18,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
+from app.modules.agent_surfaces.contracts.notification_facts import (
+    NotificationSettled,
+)
+from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    RecordingNotificationWork,
+)
 from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
     NotificationOriginKind,
@@ -79,16 +84,12 @@ def _service(*, outstanding: int, notification: NotificationEntity):
         external_user_repository=AsyncMock(),
         egress=AsyncMock(),
         pod_membership_port=AsyncMock(),
+        work=RecordingNotificationWork(),
     )
 
 
-def _announced(service) -> list[NotificationSettledEvent]:
-    return [
-        event
-        for call in service.uow.collect_events.call_args_list
-        for event in call.args[0]
-        if isinstance(event, NotificationSettledEvent)
-    ]
+def _announced(service) -> list[NotificationSettled]:
+    return list(service.work.settled_facts)
 
 
 @pytest.mark.asyncio
@@ -101,7 +102,6 @@ async def test_the_last_answer_announces_that_the_conversation_is_settled():
 
     [event] = _announced(service)
     assert event.conversation_id == conversation_id
-    assert event.notification_id == notification.id
     assert event.pod_id == notification.pod_id
 
 

@@ -63,6 +63,10 @@ def _no_typing_keepalive(monkeypatch):
 #: the pod's own surfaces to bound its search. A later message finds its exact
 #: key first and asks neither.
 #:
+#: The reply is one more: the finalize's ``surface.reply_for_run`` reads the
+#: conversation's link to name the destination its delivery row queues behind,
+#: and the pump's send resolves it again (as the observer's send did).
+#:
 #: Every run also asks the links once whether its conversation is the one that
 #: answers people outside the pod (``outsider_audience``). Deliberately asked of
 #: the link and never skipped: the conversation's own mark is metadata a client
@@ -70,13 +74,13 @@ def _no_typing_keepalive(monkeypatch):
 #: stranger that member's authority.
 _FIRST_MESSAGE = {
     "agent_surfaces": 7,
-    "agent_surface_conversation_links": 9,
+    "agent_surface_conversation_links": 10,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
 _LATER_MESSAGE = {
     "agent_surfaces": 5,
-    "agent_surface_conversation_links": 7,
+    "agent_surface_conversation_links": 8,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }

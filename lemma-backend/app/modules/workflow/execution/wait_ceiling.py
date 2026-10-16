@@ -2,8 +2,7 @@
 
 The ceiling exists to catch a hang: without it a step that never answers holds
 its run open forever, and the run reads as still going rather than broken. Its
-expiry is a ``workflow.wait_expire`` item written with the wait (and, for an
-AGENT wait until agent finalize emits facts, the reconciliation sweep).
+expiry is a ``workflow.wait_expire`` item written with the wait.
 
 * A machine wait (function, decision, agent) gets
   ``WORKFLOW_WAIT_MAX_AGE_SECONDS``, or the step's own ``timeout_seconds`` when

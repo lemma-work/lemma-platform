@@ -16,10 +16,10 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | --- | --- |
 | API routers | Table, record, SQL query, file, signed/public file, and WebSocket change APIs |
 | Work kinds | `file.process` and `file.cleanup` (`ingestion`), written in the transaction that uploads, updates or deletes; `pod_schema.migrate`, `pod_schema.backfill`, `datastore.parent_backfill` and `datastore.storage_copy` (`admin`), the backfills armed as periodics |
-| streaq tasks | Nightly, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables); purge expired signed-link rows |
-| API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily, and the datastore outbox table is created by the first record write |
-| Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item; the outbox dispatcher only while the change log is not on |
-| Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly) and `changes.drain` (cutover) (`admin`); see [Record change log](#record-change-log) |
+| Periodic work | Daily, drop the schemas of pods deleted more than `DATASTORE_ORPHAN_SCHEMA_RETENTION_DAYS` ago (0 disables, `datastore.orphan_schemas_reap`) and purge expired signed-link rows (`datastore.signed_links_purge`) |
+| API lifespan | Starts local embeddings when configured. Nothing that reads stored data: the query role is ensured lazily |
+| Worker lifespan | Runs the change-log handoff (LISTEN on the datastore database plus a poll), which turns a watched write's wake row into a `changes.deliver` item |
+| Change-log work kinds | `changes.sync_subscribers`, `changes.deliver` (`events`), `changes.retention` (hourly, `admin`); see [Record change log](#record-change-log) |
 
 ## Storage model
 
@@ -94,6 +94,20 @@ transaction id is below the oldest transaction still open
 (`pg_snapshot_xmin`), which is what makes a read final and gap-free. The cost
 of that rule is that delivery and the live socket wait for the **oldest open
 transaction on the datastore database's cluster**, whatever it is doing.
+
+A record write never migrates its pod schema. It checks the change log is
+there (`ensure_change_log`): a per-process memo, or one unlocked read. A schema
+the `pod_schema.backfill` periodic (armed at the first worker boot of a release
+that adds a pod-schema version) has not reached yet gets only the change log's
+own two tables, never the search-chunk rewrite of version 2.
+
+**Cutover.** Record writes used to stage events in the datastore database's
+`domain_event_outbox`, which a dispatcher published to `datastore.events` for
+the `schedule-datastore-events` and `mcp-access-event-deliveries` consumer
+groups. Every write appends to the change log now. A record event the old
+transport still owed is not carried over: a trigger or MCP subscription sees
+the changes written after the upgrade. See
+[the cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13).
 
 **Operating it.** A transaction left open on the datastore database -- an
 `idle in transaction` session, a long migration, a stuck backfill, or the main
@@ -184,9 +198,11 @@ sizing should be driven by the embedding backend.
 
 ## Dependencies and consumers
 
-Agents expose datastore/file tools; schedules consume record events; bundles
-export/import schemas and seed data. The module uses identity/pod context and
-publishes the shared `datastore_events` stream.
+Agents expose datastore/file tools; DATASTORE triggers and MCP event
+subscriptions read the record change log; bundles export/import schemas and
+seed data. The module uses identity/pod context. Its committed `datastore.*`
+domain events feed the after-commit sink only (analytics and the agent
+memory-brief invalidation).
 
 ## Tests and operations
 

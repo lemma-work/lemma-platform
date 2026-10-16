@@ -16,16 +16,16 @@ from uuid import UUID, uuid4
 import fakeredis
 import pytest
 
+from app.modules.agent_surfaces.domain.deliveries import (
+    ConversationTarget,
+    DeliveryContent,
+)
+from app.modules.agent_surfaces.services.delivery_sender import PlatformDeliverySender
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.caches import (
     PENDING_DISPLAY_PATHS,
     surface_caches,
-)
-from app.modules.agent.domain.value_objects import (
-    AgentEvent,
-    AgentEventType,
-    MessageDraft,
 )
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
 from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
@@ -38,9 +38,6 @@ from app.modules.agent_surfaces.services.pending_envelope import (
     RunFiles,
     held_display_paths,
     remember_display_path,
-)
-from app.modules.agent_surfaces.services.progress_observer import (
-    SurfaceAgentRunProgressObserver,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     _delivering_adapter,
@@ -154,7 +151,7 @@ async def test_files_come_out_in_the_order_they_were_shown():
     ]
 
 
-# --- a failed final email keeps its files, for that run only -----------------
+# --- a reply that did not arrive keeps its run's files, for that run only ----
 
 
 @pytest.fixture
@@ -207,21 +204,22 @@ def _email_world(conversation_id: UUID):
     return egress, adapter
 
 
-def _observer_for(egress) -> SurfaceAgentRunProgressObserver:
-    return SurfaceAgentRunProgressObserver(
+async def _send_reply(egress, conversation_id: UUID, run_id: UUID, answer: str) -> None:
+    """The run's reply, as the destination pump sends its delivery row."""
+    row = SimpleNamespace(
+        id=uuid4(),
+        agent_run_id=run_id,
+        surface_id=None,
+        target=ConversationTarget(conversation_id=conversation_id).model_dump(
+            mode="json"
+        ),
+        content=DeliveryContent(text=answer, attach_files_of_run=run_id).model_dump(
+            mode="json"
+        ),
+    )
+    await PlatformDeliverySender(
         uow_factory=_UowFactory(), egress_factory=lambda _uow: egress
-    )
-
-
-async def _run_to_the_end(observer, conversation, run_id: UUID, answer: str) -> None:
-    ctx = SimpleNamespace(agent_run_id=run_id)
-    await observer.on_run_started(conversation, ctx)
-    await observer.on_event(
-        AgentEvent(type=AgentEventType.MESSAGE, data=MessageDraft.of_text(answer)),
-        conversation,
-        ctx,
-    )
-    await observer.on_run_finished(conversation, ctx)
+    )(row)
 
 
 def _attachments(adapter, call_index: int) -> list[str]:
@@ -233,18 +231,13 @@ async def test_a_failed_final_email_keeps_its_files_for_that_run_and_no_other(
     pod_files,
 ):
     conversation_id = uuid4()
-    conversation = SimpleNamespace(
-        id=conversation_id, metadata={"surface_platform": "RESEND"}
-    )
     egress, adapter = _email_world(conversation_id)
     run_a, run_b = uuid4(), uuid4()
     await remember_display_path(conversation_id, RunFiles(run_a), "/me/q3.pdf")
 
     # Run A's final email fails to go out.
     adapter.send_message.side_effect = TimeoutError("resend is down")
-    await _run_to_the_end(
-        _observer_for(egress), conversation, run_a, "Here is the Q3 report."
-    )
+    await _send_reply(egress, conversation_id, run_a, "Here is the Q3 report.")
     assert await held_display_paths(conversation_id, RunFiles(run_a)) == [
         "/me/q3.pdf"
     ], "the failed reply's files survive the end of the run"
@@ -258,9 +251,7 @@ async def test_a_failed_final_email_keeps_its_files_for_that_run_and_no_other(
         metadata={"retry_action": True},
         attach_files_of=RunFiles(run_a),
     )
-    await _run_to_the_end(
-        _observer_for(egress), conversation, run_b, "An unrelated answer."
-    )
+    await _send_reply(egress, conversation_id, run_b, "An unrelated answer.")
     assert [_attachments(adapter, i) for i in range(2)] == [[], []]
     assert await held_display_paths(conversation_id, RunFiles(run_a)) == ["/me/q3.pdf"]
 
@@ -278,36 +269,13 @@ async def test_a_failed_final_email_keeps_its_files_for_that_run_and_no_other(
 
 async def test_a_delivered_final_email_releases_its_files_with_the_run(pod_files):
     conversation_id = uuid4()
-    conversation = SimpleNamespace(
-        id=conversation_id, metadata={"surface_platform": "RESEND"}
-    )
     egress, adapter = _email_world(conversation_id)
     run = uuid4()
     await remember_display_path(conversation_id, RunFiles(run), "/me/q3.pdf")
 
-    await _run_to_the_end(
-        _observer_for(egress), conversation, run, "Here is the Q3 report."
-    )
+    await _send_reply(egress, conversation_id, run, "Here is the Q3 report.")
 
     assert _attachments(adapter, 0) == ["q3.pdf"]
-    assert await held_display_paths(conversation_id, RunFiles(run)) == []
-
-
-async def test_a_run_that_ends_without_a_reply_discards_what_it_held(pod_files):
-    conversation_id = uuid4()
-    conversation = SimpleNamespace(
-        id=conversation_id, metadata={"surface_platform": "RESEND"}
-    )
-    egress, _adapter = _email_world(conversation_id)
-    run = uuid4()
-    await remember_display_path(conversation_id, RunFiles(run), "/me/q3.pdf")
-    observer = _observer_for(egress)
-    ctx = SimpleNamespace(agent_run_id=run)
-
-    # No answer text at all: nothing will ever carry the files.
-    await observer.on_run_started(conversation, ctx)
-    await observer.on_run_finished(conversation, ctx)
-
     assert await held_display_paths(conversation_id, RunFiles(run)) == []
 
 

@@ -28,7 +28,6 @@ from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationInvitation,
 )
 from app.modules.identity.infrastructure.models.user_models import User
-from app.core.infrastructure.events.models import DomainEventOutbox
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.domain.events import UserSignedUpEvent
 from app.modules.identity.events.identity_work import IDENTITY_EMAIL
@@ -407,6 +406,7 @@ async def test_domain_without_explicit_mx_is_rejected_before_account_creation(
 async def test_emailpassword_verification_welcome_and_password_reset_filesystem_flow(
     async_client: AsyncClient,
     e2e_settings,
+    committed_events,
 ):
     email = f"realistic-auth-{uuid4().hex[:10]}@example.com"
     original_password = "OriginalPassword@123"
@@ -469,19 +469,12 @@ async def test_emailpassword_verification_welcome_and_password_reset_filesystem_
     # Verification creates one welcome event and, in the same transaction, one
     # `identity.email` item. Running the work delivers it through the
     # filesystem email adapter; running it again sends nothing more.
-    async with async_session_maker() as session:
-        welcome_events = list(
-            (
-                await session.scalars(
-                    select(DomainEventOutbox).where(
-                        DomainEventOutbox.event_type
-                        == UserSignedUpEvent.get_event_type()
-                    )
-                )
-            ).all()
-        )
+    welcome_events = [
+        payload
+        for payload in committed_events.of_type(UserSignedUpEvent.get_event_type())
+        if payload.get("email") == email
+    ]
     assert len(welcome_events) == 1
-    assert welcome_events[0].payload["email"] == email
     async with async_session_maker() as session:
         welcome_items = await session.scalar(
             text(

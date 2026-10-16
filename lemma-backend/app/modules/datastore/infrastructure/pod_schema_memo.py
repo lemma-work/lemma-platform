@@ -11,12 +11,33 @@ from __future__ import annotations
 
 from app.core.bounded import BoundedDict
 
+#: ``pod_schema_migrations.CHANGE_LOG_VERSION``, which imports this module.
+_CHANGE_LOG_VERSION = 3
+
 # Bounded like every process-lifetime memo keyed by something that grows: an
 # evicted schema costs one primary-key read, never a wrong answer. There is one
 # pod-data database per process, so the schema name is the key.
 _at_latest: BoundedDict[str, int] = BoundedDict(
     8192, name="datastore.pod_schema_versions"
 )
+
+
+#: Schemas below the latest version that already carry the change log -- what
+#: a record write needs -- so the write path asks the database once, not per
+#: write, while the background backfill has not reached them yet.
+_change_log_ready: BoundedDict[str, bool] = BoundedDict(
+    8192, name="datastore.pod_schema_change_log"
+)
+
+
+def change_log_ready(schema_name: str) -> bool:
+    return bool(_change_log_ready.get(schema_name)) or (
+        known_version(schema_name) >= _CHANGE_LOG_VERSION
+    )
+
+
+def remember_change_log(schema_name: str) -> None:
+    _change_log_ready[schema_name] = True
 
 
 def known_version(schema_name: str) -> int:
@@ -29,7 +50,9 @@ def remember(schema_name: str, version: int) -> None:
 
 def forget(schema_name: str) -> None:
     _at_latest.pop(schema_name, None)
+    _change_log_ready.pop(schema_name, None)
 
 
 def forget_all() -> None:
     _at_latest.clear()
+    _change_log_ready.clear()

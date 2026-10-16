@@ -11,6 +11,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
+
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
@@ -24,7 +26,6 @@ from app.modules.agent.domain.value_objects import (
 )
 import app.modules.agent.services.conversation_retry_service as retry_service_module
 from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.test_support.fakes import EmptyResultSession
 
 
 def _run(
@@ -89,7 +90,7 @@ def _service(
         collect_events=MagicMock(),
         commit=AsyncMock(),
         # The pod names no default runtime of its own.
-        session=EmptyResultSession(),
+        session=RecordingWorkSession(),
     )
     service = ConversationService(
         uow=uow,
@@ -175,7 +176,7 @@ async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_me
     # Re-pointing the teammate at another model is how a retired-model failure
     # is fixed, so the retry must not replay the dead runtime.
     assert check.checked == [_CURRENT_RUNTIME]
-    uow.collect_events.assert_called_once()
+    assert uow.session.kinds() == ["agent.turn"]
     uow.commit.assert_awaited_once()
     # Asked about this one run, not handed every run of the conversation.
     repository.run_is_replay_safe.assert_awaited_once_with(failed_run.id)

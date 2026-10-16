@@ -731,6 +731,35 @@ async def test_schedule_apply_maps_manifest_to_entity(tmp_path, monkeypatch):
     assert entity.config == {"cron": "0 2 * * *"}
 
 
+async def test_a_one_time_schedule_that_already_ran_is_left_out(tmp_path, monkeypatch):
+    """A pod exported after its one-time schedule fired carries it; creating
+    one in the past is refused, which used to fail the import half applied."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "schedules" / "launch" / "launch.json",
+        {
+            "name": "launch",
+            "schedule_type": "TIME",
+            "workflow_name": "score_flow",
+            "config": {"scheduled_at": "2020-01-01T09:00:00"},
+        },
+    )
+    _write(
+        root / "schedules" / "later" / "later.json",
+        {
+            "name": "later",
+            "schedule_type": "TIME",
+            "workflow_name": "score_flow",
+            "config": {"scheduled_at": "2999-01-01T09:00:00Z"},
+        },
+    )
+    fake = FakeScheduleOperations().patch(monkeypatch)
+    applier = _grant_applier(root)
+    await applier.apply_step(_step(StepKind.SCHEDULE, "launch"))
+    await applier.apply_step(_step(StepKind.SCHEDULE, "later"))
+    assert [entity.name for entity in fake.created] == ["later"]
+
+
 async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monkeypatch):
     """Regression test: account_id, connector_trigger_id, filter_instruction and
     filter_output_schema were previously dropped on apply even when the bundle

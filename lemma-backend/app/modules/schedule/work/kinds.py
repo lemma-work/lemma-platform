@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, JsonValue
 from app.core.infrastructure.work import SYSTEM_NAMESPACE, pod_namespace
 
 #: Write the next ``schedule.fire`` for a TIME schedule whose cursor is missing
-#: or was set outside the write paths (cutover seeding, legacy rows).
+#: or was set outside the write paths (the migration that armed existing rows).
 SCHEDULE_ARM = "schedule.arm"
 #: One occurrence of a TIME schedule, due at ``fire_at``.
 SCHEDULE_FIRE = "schedule.fire"

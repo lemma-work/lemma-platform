@@ -27,7 +27,6 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.authorization.permissions import Permissions
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.pod.domain.pod_entities import PodMemberEntity
 from app.modules.pod.domain.roles import PodRole
 from app.modules.pod.infrastructure.models.pod_models import Pod
@@ -173,7 +172,6 @@ async def add_pod_member(
         resolved_role = PodRole(pod_role)
     except ValueError:
         resolved_role = PodRole.USER
-    message_bus = get_message_bus()
     entity = PodMemberEntity(
         pod_id=pod_id,
         organization_member_id=organization_member_id,
@@ -189,7 +187,7 @@ async def add_pod_member(
         first_name=names[0] if names else None,
         last_name=names[1] if len(names) > 1 else None,
     )
-    member = await PodMemberRepository(uow, message_bus=message_bus).create(entity)
+    member = await PodMemberRepository(uow).create(entity)
     await PodRoleService(uow).sync_member_roles(
         pod_id=pod_id,
         pod_member_id=member.id,

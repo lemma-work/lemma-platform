@@ -240,9 +240,7 @@ async def test_telegram_group_mention_from_non_member_is_ignored(
     """Group mentions stay pod-member gated and never post onboarding/access
     prompts into the group."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import (
-        build_surface_ingress,
-    )
+    from app.modules.agent_surfaces.composition import build_surface_ingress
     from app.modules.test_support.e2e_authz import signup_user
 
     _wire_native_telegram(monkeypatch, fake_telegram)
@@ -401,9 +399,7 @@ async def test_telegram_group_without_mention_is_ignored(
     """A plain group message that does NOT mention the bot is ignored (no reply),
     so the bot only speaks when addressed."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import (
-        build_surface_ingress,
-    )
+    from app.modules.agent_surfaces.composition import build_surface_ingress
 
     _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]
@@ -439,9 +435,7 @@ async def test_telegram_group_mention_of_other_user_is_ignored(
     the mentioned user, so the parser records it for bot-identity verification
     and the ingress enrichment confirms it is not the bot before ignoring."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import (
-        build_surface_ingress,
-    )
+    from app.modules.agent_surfaces.composition import build_surface_ingress
 
     _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]

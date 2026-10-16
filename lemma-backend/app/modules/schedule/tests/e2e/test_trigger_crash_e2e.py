@@ -169,7 +169,7 @@ async def test_a_start_killed_before_its_commit_starts_the_agent_exactly_once(
     assert await scalar(conversations, id=started["target_run_id"]) == 1
 
 
-async def test_a_filter_killed_mid_call_never_calls_the_model_twice(
+async def test_a_filter_killed_mid_call_is_asked_once_more_and_fires(
     authenticated_client: AsyncClient,
     fixed_test_org,
     fixed_test_user,
@@ -192,10 +192,10 @@ async def test_a_filter_killed_mid_call_never_calls_the_model_twice(
     await _expire_and_rerun(WorkClass.AUTOMATION)
     await asyncio.sleep(0)
 
-    assert counting_filter.asked == []
+    # Asked once more by the replay (the verdict had not committed), and no
+    # more: the killed worker's call is not repeated a third time.
+    assert counting_filter.asked == ["evt-crash"]
     assert calls.read_text().splitlines() == ["evt-crash"]
     [settled] = await runs(schedule.id)
-    assert (settled["status"], settled["error_type"]) == (
-        "DEAD_LETTERED",
-        "ScheduleFilterInterrupted",
-    )
+    assert settled["status"] == "DISPATCHED"
+    assert settled["metadata"]["filter_asks"] == 2

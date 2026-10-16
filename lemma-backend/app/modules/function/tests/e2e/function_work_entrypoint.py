@@ -5,11 +5,10 @@
 * the decision provider: a question is answered ``E2E_DECISION_ANSWER``.
 
 Both are bound before the worker's modules are imported, because the work
-kinds capture them at registration. Run as a module so every lane starts as in
-production.
+kinds capture them at registration. Run as a module, as production runs
+``app.worker``.
 """
 
-import asyncio
 import os
 
 from app.modules.decisions.contracts import (
@@ -35,8 +34,10 @@ class _FixedAnswer:
 
 _decide.decision_maker = lambda: _FixedAnswer()  # type: ignore[assignment]
 
-import app.events  # noqa: E402,F401  every module's kinds, as app.worker imports them
-from app.core.infrastructure.jobs.streaq_runtime import run_worker_lanes  # noqa: E402
+from app.worker import register_worker_modules  # noqa: E402
+
+register_worker_modules()  # every module's kinds, as the worker registers them
+from app.worker import main  # noqa: E402
 from app.modules.function.api import dependencies  # noqa: E402
 from app.modules.function.config import function_settings  # noqa: E402
 from app.modules.function.tests.e2e.function_work_support import (  # noqa: E402
@@ -50,4 +51,4 @@ dependencies.build_function_dispatcher = loopback_dispatcher_factory(  # type: i
 
 
 if __name__ == "__main__":
-    asyncio.run(run_worker_lanes())
+    main()

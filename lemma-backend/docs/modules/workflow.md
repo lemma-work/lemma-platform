@@ -16,8 +16,8 @@ work, and resumes from function, agent, schedule, or user-form events.
 | Work kinds (JOB) | `workflow.decide` (ask a decision node's question), `workflow.notify_form` (tell a form's assignee) |
 | Fact subscription | `FunctionRunFinished` -> `workflow.resume` |
 | Facts emitted | `WorkflowRunFinished` in every terminal transaction; `WorkflowStartRefused` when a start item gives up |
-| Redis consumers | Agent completion (`workflow-agent-events`) and schedule-fired events, until those modules emit facts |
-| cron | Reconcile stale AGENT waits every five minutes, for the same reason |
+| Fact subscription | `AgentRunFinished` -> `workflow.resume_for_agent`, for a run started by an AGENT step |
+| Periodic work | `workflow.waits_prune` (hourly) |
 
 ## Main data model
 

@@ -5,7 +5,6 @@ from app.core.config import reveal_secret
 import hashlib
 
 from collections.abc import Collection
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -60,11 +59,9 @@ def _identity_claim_lock_key(
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
     """Repository for agent surface installations."""
 
-    def __init__(self, uow: IUnitOfWork, message_bus: Any = None):
+    def __init__(self, uow: IUnitOfWork):
         self.uow = uow
         self.session: Session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     def _collect_events(self, entity: AgentSurfaceEntity) -> None:
         events = entity.collect_events()

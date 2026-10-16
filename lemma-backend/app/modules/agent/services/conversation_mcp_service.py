@@ -17,6 +17,7 @@ from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -467,7 +468,8 @@ class ConversationMCPService:
                 organization_id=organization_id,
                 user_id=user_id,
             )
-        except DomainError, RuntimeError, SQLAlchemyError:
+        except (DomainError, RuntimeError, SQLAlchemyError) as exc:
+            raise_if_database_unavailable(exc)
             # Named rather than bare: these are what resolution actually fails
             # with -- an archived or deleted profile, a missing repository, a
             # database that will not answer. Anything else is a bug and should

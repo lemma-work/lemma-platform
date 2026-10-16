@@ -198,9 +198,8 @@ class McpEventDelivery(UUIDCreatedBase):
     Written by the change log's delivery in the transaction that decides the
     change matches, unique on ``(subscription, change)``: a page delivered twice
     (a crash between that commit and the cursor moving) owes nothing twice.
-    ``change_key`` is the change's ``xid:seq``, or the old event's id for a
-    change converted at cutover. ``delivered_at`` is set when the receiver took
-    it or it was let go; ``outcome`` says which.
+    ``change_key`` is the change's ``xid:seq``. ``delivered_at`` is set when the
+    receiver took it or it was let go; ``outcome`` says which.
     """
 
     __tablename__ = "mcp_event_deliveries"

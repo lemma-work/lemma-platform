@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import (
+    was_database_unavailable,
     DeadContext,
     Exponential,
     JobContext,
@@ -121,6 +122,12 @@ def dead_message(reason: str, last_error: str | None) -> str:
         return f"document_unprocessable: {last_error or 'processing failed repeatedly'}"
     if reason == "unavailable_exhausted":
         hours = datastore_settings.document_processing_unavailable_budget_seconds / 3600
+        if was_database_unavailable(last_error):
+            return (
+                "database_unavailable: Lemma's database was unavailable for "
+                f"longer than {hours:g} hours while this document waited; "
+                "nothing is wrong with the document, so upload it again"
+            )
         return (
             "extractor_unavailable: the document extractor or embedding provider "
             f"was unavailable for longer than {hours:g} hours"

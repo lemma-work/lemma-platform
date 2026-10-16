@@ -37,7 +37,8 @@ def _refusing_observer(touched: list[str]) -> SurfaceAgentRunProgressObserver:
         raise AssertionError("a private note's run reached for the platform")
 
     return SurfaceAgentRunProgressObserver(
-        uow_factory=_uow_factory, egress_factory=_egress_factory
+        uow_factory=_uow_factory,
+        egress_factory=_egress_factory,
     )
 
 

@@ -82,6 +82,15 @@ class ConversationModel(UUIDAuditBase):
             unique=True,
             postgresql_where=text("origin_id IS NOT NULL"),
         ),
+        # One child per spawning call: a resumed turn re-runs an interrupted
+        # `spawn_subagent` under its recorded call id and gets the same child.
+        Index(
+            "uq_agent_conv_spawn_call",
+            "parent_id",
+            "spawn_tool_call_id",
+            unique=True,
+            postgresql_where=text("spawn_tool_call_id IS NOT NULL"),
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(
@@ -123,6 +132,9 @@ class ConversationModel(UUIDAuditBase):
         index=True,
     )
     conversation_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: ``<parent run id>:<tool call id>`` of the ``spawn_subagent`` call that
+    #: created this child; unique per parent (``uq_agent_conv_spawn_call``).
+    spawn_tool_call_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     #: Put away, not deleted: the row stays, the listing skips it, and a new
     #: message clears it (`append_message`).
     is_archived: Mapped[bool] = mapped_column(

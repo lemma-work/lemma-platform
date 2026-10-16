@@ -13,9 +13,10 @@ dropped. The agent carried on as though it had never asked, and the person
 believed their approval had been carried out -- PS-AGENT-020 says an approval
 means the described action is performed.
 
-So the two halves here: while the holder could still be working, the pause is
-left alone and the card stays up; once it definitively cannot be, the transcript
-says so.
+Two items for one approval never run at once (the concurrency key), so an
+``agent.approval.execute`` attempt that finds the claim already taken knows its
+holder is gone: the lease it held expired. The transcript says so, at that
+lease expiry rather than 35 minutes later, and the turn resumes.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
 from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.test_support.fakes import EmptyResultSession
 
 pytestmark = pytest.mark.unit
@@ -62,8 +64,7 @@ class _Uow:
 class _Repository:
     """One conversation whose approval was claimed and never returned."""
 
-    def __init__(self, *, claim_expired: bool) -> None:
-        self.claim_expired = claim_expired
+    def __init__(self) -> None:
         self.conversation_id = uuid7()
         self.run_id = uuid7()
         self.call = Message.create(
@@ -82,13 +83,6 @@ class _Repository:
     # The claim is already held by the attempt that died, and it is one-shot.
     async def claim_approval_execution(self, **_kwargs) -> bool:
         return False
-
-    async def approval_execution_claim_expired(
-        self, *, conversation_id, approval_id, stale_after_seconds
-    ) -> bool:
-        del conversation_id, approval_id
-        assert stale_after_seconds > 0
-        return self.claim_expired
 
     async def get_approval_decision(self, **_kwargs):
         return (AgentRunApprovalDecision.APPROVE_ONCE, {})
@@ -162,8 +156,8 @@ class _AgentRepository:
         return self.agent
 
 
-def _coordinator(monkeypatch: pytest.MonkeyPatch, *, claim_expired: bool):
-    repository = _Repository(claim_expired=claim_expired)
+def _coordinator(monkeypatch: pytest.MonkeyPatch):
+    repository = _Repository()
     uow = _Uow()
     monkeypatch.setattr(
         "app.modules.agent.services.pause_resume.publish_conversation_event",
@@ -189,53 +183,73 @@ def _conversation(repository: _Repository):
         pod_id=_POD_ID,
         organization_id=None,
         agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+        metadata={},
+        parent_id=None,
     )
 
 
-@pytest.mark.asyncio
-async def test_a_live_execution_is_left_to_finish(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An approved command can legitimately run for minutes. Until its holder is
-    past the reconcile job's own ceiling it may still be working, so nothing is
-    written over it and no resume run is started."""
-    coordinator, repository = _coordinator(monkeypatch, claim_expired=False)
-
-    await coordinator.resolve_user_approval_internal(
-        conversation=_conversation(repository),
+async def _record_and_resume(coordinator, repository, *, claimed: bool) -> None:
+    paused = await coordinator.paused_call(
+        conversation_id=repository.conversation_id, approval_id=_APPROVAL_ID
+    )
+    assert paused is not None
+    conversation = _conversation(repository)
+    await coordinator.record_unconfirmed_execution(
+        conversation=conversation,
         approval_id=_APPROVAL_ID,
-        user_id=uuid4(),
-        pod_id=_POD_ID,
+        paused=paused,
         decision=AgentRunApprovalDecision.APPROVE_ONCE,
+        response={},
+        claimed=claimed,
     )
+    # The resume run is counted where it is created; staging its turn needs a
+    # database this fake does not have.
+    with suppress_agent_run_enqueue():
+        await coordinator.resume_after_return(
+            conversation=conversation,
+            approval_id=_APPROVAL_ID,
+            paused_run_id=paused.agent_run_id,
+            tool_args=paused.tool_args,
+            user_id=uuid4(),
+            pod_id=_POD_ID,
+            agent_name=None,
+        )
 
-    assert repository.appended == []
-    assert repository.created_runs == 0
 
-
-@pytest.mark.asyncio
-async def test_an_abandoned_execution_is_written_down_not_dropped(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Past that ceiling nothing can still be running under the claim. The
-    approval gets a terminal return saying so, which is what the resumed run
-    replays -- rather than resuming with the request missing entirely."""
-    coordinator, repository = _coordinator(monkeypatch, claim_expired=True)
-
-    await coordinator.resolve_user_approval_internal(
-        conversation=_conversation(repository),
-        approval_id=_APPROVAL_ID,
-        user_id=uuid4(),
-        pod_id=_POD_ID,
-        decision=AgentRunApprovalDecision.APPROVE_ONCE,
-    )
-
+def _the_return(repository: _Repository) -> dict:
     returns = [m for m in repository.appended if m.kind == MessageKind.TOOL_RETURN]
     assert [m.tool_call_id for m in returns] == [_APPROVAL_ID]
     result = returns[0].tool_result
     assert isinstance(result, dict), result
     assert result["success"] is False, result
     assert result["executed"] is False, result
-    assert "cannot re-run" in str(result["error"]), result
+    return result
+
+
+@pytest.mark.asyncio
+async def test_an_abandoned_execution_is_written_down_not_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The claim was taken and its holder lost its lease: the tool may have
+    run. The approval gets a terminal return saying so, which is what the
+    resumed run replays -- rather than resuming with the request missing."""
+    coordinator, repository = _coordinator(monkeypatch)
+
+    await _record_and_resume(coordinator, repository, claimed=True)
+
+    assert "cannot re-run" in str(_the_return(repository)["error"])
     # And the turn is unblocked rather than left waiting forever.
+    assert repository.created_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_an_execution_that_never_started_says_nothing_ran(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its item went dead before the claim: nothing ran, and it says so."""
+    coordinator, repository = _coordinator(monkeypatch)
+
+    await _record_and_resume(coordinator, repository, claimed=False)
+
+    assert "did not run" in str(_the_return(repository)["error"])
     assert repository.created_runs == 1

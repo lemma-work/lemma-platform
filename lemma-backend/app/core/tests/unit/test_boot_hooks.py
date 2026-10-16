@@ -28,8 +28,8 @@ ALLOWED_BOOT_HOOKS: dict[str, str] = {
     ),
     "api:agent._drain_agent_host_links": "shutdown only; drains live links",
     "api:function._close_runtime_http_clients": "shutdown only; closes HTTP clients",
-    "api:agent_surfaces._dedup_store_lifespan": (
-        "logs webhook security settings; closes the dedupe store on shutdown"
+    "api:agent_surfaces._webhook_security_lifespan": (
+        "logs webhook security settings; releases the stranger-window client on shutdown"
     ),
     "api:agent_surfaces._telegram_manager_webhook_lifespan": (
         "starts one background registration task; does not await it"
@@ -48,15 +48,11 @@ ALLOWED_BOOT_HOOKS: dict[str, str] = {
         "reads only schedules already past the failure threshold, which the "
         "breaker keeps near empty"
     ),
-    "worker:schedule._schedule_poller": "starts one background poller task",
     "worker:agent._report_system_model_pricing": (
         "compares the static model catalog with the static price table"
     ),
     "worker:function._close_runtime_http_clients": (
         "shutdown only; closes HTTP clients"
-    ),
-    "worker:agent_surfaces._surface_event_receiver": (
-        "starts background receiver tasks; does not await them"
     ),
 }
 

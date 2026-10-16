@@ -37,8 +37,8 @@ py/ineffectual-statement lemma-backend/app/modules/web_login/api/controllers/web
 # which predates this work, and the two imports that put onboarding on it are
 # made inside the function that needs them -- `ingress_service.py:332` and
 # `identity_resolution_service.py:181` -- which is the remedy for a cycle, not
-# an instance of one. Nothing imports in a cycle at run time; `app.events`
-# imports clean and the worker boots. `check_architecture.py`, which is this
+# an instance of one. Nothing imports in a cycle at run time; `app.worker`
+# registers every module clean and the worker boots. `check_architecture.py`, which is this
 # repository's gate for exactly this question, reports 0 cycles. Removing the
 # edges CodeQL names means moving `validate_personal_dm_route` and the
 # contracts it reads out from under the services layer, which is a change to

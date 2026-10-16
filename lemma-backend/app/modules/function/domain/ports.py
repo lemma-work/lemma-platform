@@ -23,6 +23,10 @@ class FunctionRepositoryPort(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_for_share(self, owner_id: UUID) -> FunctionEntity | None:
+        raise NotImplementedError
+
+    @abstractmethod
     async def mark_revisions_purged(self, version_ids: tuple[UUID, ...]) -> None:
         raise NotImplementedError
 

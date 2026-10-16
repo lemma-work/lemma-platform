@@ -8,7 +8,6 @@ from sqlalchemy import select
 from app.modules.connectors.infrastructure.repositories.catalog_rows import (
     aconvert_valid_rows,
 )
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.auth_config import (
@@ -26,12 +25,9 @@ class AuthConfigRepository(
         self,
         uow: SqlAlchemyUnitOfWork,
         encryption: SecretEncryptionPort,
-        message_bus: MessageBus | None = None,
     ):
         super().__init__(uow, AuthConfig, AuthConfigEntity)
         self.encryption = encryption
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
         data = entity.model_dump(exclude_unset=True)

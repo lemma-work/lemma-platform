@@ -10,11 +10,26 @@ sessions.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from collections.abc import Iterator
 
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
+
+#: In-process tasks that run on their own schedule, not on behalf of the work
+#: being measured: the analytics sink projects committed events after the
+#: commit, on its own task, whenever it gets to them. Counted, the setup's
+#: projections land in whichever window happens to be open.
+_BACKGROUND_TASKS = frozenset({"analytics-domain-events"})
+
+
+def _on_background_task() -> bool:
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        return False
+    return task is not None and task.get_name() in _BACKGROUND_TASKS
 
 
 @contextmanager
@@ -30,7 +45,8 @@ def counted_queries() -> Iterator[list[str]]:
     statements: list[str] = []
 
     def before(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
+        if not _on_background_task():
+            statements.append(statement)
 
     event.listen(Engine, "before_cursor_execute", before)
     try:

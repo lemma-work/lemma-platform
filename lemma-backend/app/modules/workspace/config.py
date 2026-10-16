@@ -154,14 +154,14 @@ class WorkspaceSettings(BaseSettings):
             "rather than lost work. 0 disables the sweep."
         ),
     )
-    sweep_cron: str = Field(
-        default="2-59/5 * * * *",
-        validation_alias=AliasChoices("WORKSPACE_SWEEP_CRON"),
+    sweep_interval_seconds: int = Field(
+        default=300,
+        ge=30,
+        validation_alias=AliasChoices("WORKSPACE_SWEEP_INTERVAL_SECONDS"),
         description=(
-            "How often idle release and orphan reclaim run. Orphan reclaim is "
-            "what stops a container or paid sandbox outliving the row that "
-            "owned it, so this is a cost control. Offset off the round minute "
-            "on purpose -- see test_cron_schedule_spread."
+            "How often idle release and orphan reclaim run, as a periodic work "
+            "item. Orphan reclaim is what stops a container or paid sandbox "
+            "outliving the row that owned it, so this is a cost control."
         ),
     )
 

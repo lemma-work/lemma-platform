@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID, uuid7
 
 from pydantic import BaseModel, JsonValue
@@ -60,11 +60,6 @@ _ENSURE_QUEUE = text(
 )
 
 _DROP_QUEUED = text("DELETE FROM work_items WHERE ns = :ns AND state = 'queued'")
-_CANCEL_QUEUED = text(
-    "DELETE FROM work_items"
-    " WHERE dedup_key = :dedup_key AND state = 'queued' AND ns = :ns"
-)
-
 # Postgres folds identical notifications within one transaction into one.
 _NOTIFY = text("SELECT pg_notify(:channel, '')")
 
@@ -210,6 +205,88 @@ class WorkWriter:
         result = await self._session.execute(_DROP_QUEUED, {"ns": ns})
         return int(result.rowcount)  # type: ignore[attr-defined]
 
+    async def cancel(self, kind: str, ns: str, dedup_key: str) -> CancelOutcome:
+        """Delete the queued ``kind`` item keyed ``dedup_key``, in this transaction.
+
+        * ``"dropped"`` -- it was queued (due or not) and is gone with this commit.
+        * ``"running"`` -- a worker holds an item with this key. It is left alone:
+          the caller tells it to stop through domain state, which a running
+          handler must re-read before it writes. A queued twin is still dropped.
+        * ``"absent"`` -- nothing queued or running under the key (finished,
+          never written, or dead -- dead items are kept for inspection).
+
+        Race-free against a dispatcher: a claim that locked the row first
+        commits it as ``running`` and this delete then finds nothing queued; a
+        delete that locked it first is skipped by the claim (``SKIP LOCKED``)
+        and the row is gone at commit. Either way exactly one of "it ran" and
+        "it was dropped" happens.
+        """
+        spec = self._registry.get(kind)
+        validate_namespace(ns)
+        key = {"kind": kind, "ns": ns, "cls": spec.cls.value, "dedup_key": dedup_key}
+        dropped = await self._session.scalar(_CANCEL_QUEUED, key)
+        if await self._session.scalar(_RUNNING_WITH_KEY, key) is not None:
+            return "running"
+        return "dropped" if dropped is not None else "absent"
+
+    async def cancel_matching(
+        self, kind: str, ns: str, match: Mapping[str, JsonValue]
+    ) -> int:
+        """Delete queued ``kind`` items of ``ns`` whose payload contains ``match``.
+
+        For items written without a dedup key; returns how many went. Running
+        items are left alone, as with ``cancel``. ``match`` is JSON containment
+        (``payload @> match``), so ``{"wait_id": "..."}`` matches every item
+        whose payload carries that wait id.
+        """
+        spec = self._registry.get(kind)
+        validate_namespace(ns)
+        result = await self._session.execute(
+            _CANCEL_MATCHING,
+            {
+                "kind": kind,
+                "ns": ns,
+                "cls": spec.cls.value,
+                "match": _match_json(match),
+            },
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
+    async def reschedule(
+        self,
+        kind: str,
+        ns: str,
+        dedup_key: str,
+        *,
+        run_at: datetime | None = None,
+        delay: timedelta | None = None,
+    ) -> RescheduleOutcome:
+        """Move the queued ``kind`` item keyed ``dedup_key`` to ``run_at`` (+ ``delay``).
+
+        Earlier or later; ``run_at`` defaults to now. ``"moved"`` when a queued
+        item took the new time, ``"running"`` when a worker holds it (left as
+        it is), ``"absent"`` otherwise. Nothing about its budget changes:
+        attempts, lease losses and an unavailability streak carry over.
+        """
+        spec = self._registry.get(kind)
+        validate_namespace(ns)
+        params = {
+            "kind": kind,
+            "ns": ns,
+            "cls": spec.cls.value,
+            "dedup_key": dedup_key,
+            "run_at": run_at,
+            "delay_seconds": (delay or timedelta(0)).total_seconds(),
+        }
+        due_soon = await self._session.scalar(_RESCHEDULE_QUEUED, params)
+        if due_soon is not None:
+            if due_soon:
+                await self._notify(spec.cls)
+            return "moved"
+        if await self._session.scalar(_RUNNING_WITH_KEY, params) is not None:
+            return "running"
+        return "absent"
+
     async def _ensure_queue(self, cls: WorkClass, ns: str) -> None:
         """Make sure (class, ns) has a queue row, without locking it in this transaction.
 
@@ -237,19 +314,6 @@ class WorkWriter:
             await connection.execute(_ENSURE_QUEUE, params)
             await connection.commit()
 
-    async def cancel(self, ns: str, dedup_key: str) -> int:
-        """Delete the queued item ``dedup_key`` names, in this transaction.
-
-        For an item whose reason went away -- a wait's expiry once the wait
-        resolved: left queued, it would still be claimed, only to find nothing
-        to do. A running item is left alone; its handler re-checks.
-        """
-        validate_namespace(ns)
-        result = await self._session.execute(
-            _CANCEL_QUEUED, {"ns": ns, "dedup_key": dedup_key}
-        )
-        return int(result.rowcount)  # type: ignore[attr-defined]
-
     async def _notify(self, cls: WorkClass) -> None:
         if cls in self._notified:
             return
@@ -266,6 +330,11 @@ class WorkWriter:
         await self._session.execute(_NOTIFY, {"channel": wake_channel(cls)})
 
 
+def _match_json(match: Mapping[str, JsonValue]) -> str:
+    """On the loop, deliberately: a containment filter is a key or two."""
+    return json.dumps(dict(match), separators=(",", ":"))
+
+
 def _payload_json(
     model: type[BaseModel], payload: BaseModel | Mapping[str, JsonValue] | None
 ) -> str:
@@ -274,3 +343,51 @@ def _payload_json(
     else:
         validated = model.model_validate(dict(payload or {}))
     return json.dumps(validated.model_dump(mode="json"), separators=(",", ":"))
+
+
+#: What ``WorkWriter.cancel`` found under the key.
+type CancelOutcome = Literal["dropped", "running", "absent"]
+#: What ``WorkWriter.reschedule`` found under the key.
+type RescheduleOutcome = Literal["moved", "running", "absent"]
+
+# The dedup index (unique, queued only) finds the row; kind, class and ns are
+# checked too so a key reused by another kind or pod is never touched. A plain
+# DELETE waits for a claim holding the row and then re-checks ``state``, so a
+# row that claim just took is not deleted.
+_CANCEL_QUEUED = text(
+    """
+    DELETE FROM work_items
+     WHERE dedup_key = :dedup_key AND state = 'queued'
+       AND kind = :kind AND ns = :ns AND class = :cls
+    RETURNING id
+    """
+)
+
+_CANCEL_MATCHING = text(
+    """
+    DELETE FROM work_items
+     WHERE class = :cls AND ns = :ns AND state = 'queued' AND kind = :kind
+       AND payload @> CAST(:match AS jsonb)
+    """
+)
+
+# Through work_items_running (class, ns): running rows have no dedup index.
+_RUNNING_WITH_KEY = text(
+    """
+    SELECT 1 FROM work_items
+     WHERE class = :cls AND ns = :ns AND state = 'running'
+       AND kind = :kind AND dedup_key = :dedup_key
+     LIMIT 1
+    """
+)
+
+_RESCHEDULE_QUEUED = text(
+    """
+    UPDATE work_items
+       SET run_at = COALESCE(CAST(:run_at AS timestamptz), now())
+                    + make_interval(secs => :delay_seconds)
+     WHERE dedup_key = :dedup_key AND state = 'queued'
+       AND kind = :kind AND ns = :ns AND class = :cls
+    RETURNING run_at <= now() + interval '1 second'
+    """
+)

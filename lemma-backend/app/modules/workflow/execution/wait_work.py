@@ -9,11 +9,12 @@ committed wait always has whatever ends it:
 | TIME     | ``workflow.resume`` at ``scheduled_at``                           |
 | DECISION | ``workflow.decide``, ``workflow.wait_expire``                     |
 | HUMAN    | ``workflow.notify_form`` when assigned, ``workflow.wait_expire``  |
-| AGENT    | none yet: the agent's own run, and the AGENT branch of the sweep  |
+| AGENT    | ``workflow.wait_expire``; woken by ``AgentRunFinished``         |
 | QUEUED   | none: admitted in the transaction that ends a run of the flow    |
 
 A FUNCTION wait is woken by ``workflow.resume`` too, written through the facts
-registry by the function run's own terminal transition.
+registry by the function run's own terminal transition; an AGENT wait by
+``workflow.resume_for_agent``, from the agent run's (``agent_resume_work.py``).
 
 The handlers live in ``events/run_work.py`` (FAST: resume, expire, start) and
 ``events/step_jobs.py`` (JOB: decide, notify). Writing a kind needs it
@@ -79,6 +80,14 @@ def _registered() -> None:
     import app.modules.workflow.events.step_jobs  # noqa: F401
 
 
+async def cancel_wait_expire(work: WorkWriter, *, pod_id: UUID, wait_id: UUID) -> None:
+    """Drop a resolved wait's queued expiry: claimed, it would find nothing to do."""
+    _registered()
+    await work.cancel(
+        WORKFLOW_WAIT_EXPIRE, pod_namespace(pod_id), wait_expire_key(wait_id)
+    )
+
+
 async def write_timer(
     work: WorkWriter, *, pod_id: UUID, external_ref: str, fire_at: datetime
 ) -> None:
@@ -110,19 +119,18 @@ async def write_wait_items(
     """The items every new wait gets from the engine: its expiry, its notice."""
     _registered()
     ns = pod_namespace(wait.pod_id)
-    if wait.wait_type is not WorkflowRunWaitType.AGENT:
-        # An AGENT wait's expiry depends on why the agent is waiting, which
-        # only its status says; the sweep keeps that branch until agent
-        # finalize emits facts.
-        deadline = expires_at(wait, now=now)
-        if deadline is not None:
-            await work.add(
-                WORKFLOW_WAIT_EXPIRE,
-                ns,
-                WaitWork(wait_id=wait.id),
-                run_at=deadline,
-                dedup_key=wait_expire_key(wait.id),
-            )
+    # An AGENT wait's expiry also depends on why the agent is waiting, which
+    # only its status says: the handler reads it at the deadline and re-arms
+    # for a waiting agent (``RunResumeService.expire_agent_wait``).
+    deadline = expires_at(wait, now=now)
+    if deadline is not None:
+        await work.add(
+            WORKFLOW_WAIT_EXPIRE,
+            ns,
+            WaitWork(wait_id=wait.id),
+            run_at=deadline,
+            dedup_key=wait_expire_key(wait.id),
+        )
     if (
         wait.wait_type is WorkflowRunWaitType.HUMAN
         and wait.assigned_pod_member_id is not None

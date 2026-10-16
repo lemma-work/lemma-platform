@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
+    _slack_stream_text,
     wait_for_messages,
     wait_for_slack_text,
 )
@@ -136,6 +137,11 @@ async def test_progress_opens_one_native_stream_on_slack(
     Kept apart from the pair above because the assertion is about a lifecycle
     — one start, appends, and a stop naming the same message — rather than
     about an edit landing.
+
+    And the answer finishes *that* message, in place: the run's reply (sent by
+    the destination pump, not the run's observer) closes the stream the run
+    left open, so the thread holds one message carrying the whole answer -- no
+    stream taken down, no second message repeating it.
     """
     stage = await _staged(
         SurfacePlatform.SLACK,
@@ -181,3 +187,21 @@ async def test_progress_opens_one_native_stream_on_slack(
     assert len(message_store.get_all("SLACK_STREAM_STOP")) == 1, (
         f"expected one close, got {message_store.get_all('SLACK_STREAM_STOP')}"
     )
+    stream_ts = stops[-1]["ts"]
+    assert not [
+        call
+        for call in message_store.get_all("SLACK_DELETE")
+        if call.get("ts") == stream_ts
+    ], "the stream was taken down instead of finished with the answer"
+    streamed = "".join(
+        _slack_stream_text(chunk)
+        for chunk in message_store.get_all("SLACK_STREAM_APPEND")
+        if chunk.get("ts") == stream_ts
+    )
+    assert "Here is the answer" in streamed, streamed
+    posted = [
+        message
+        for message in message_store.get_all("SLACK")
+        if "Here is the answer" in json.dumps(message)
+    ]
+    assert posted == [], f"the answer was posted as a second message: {posted}"
