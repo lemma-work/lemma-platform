@@ -14,6 +14,8 @@ import { Code, Countdown, OpenWhatsApp } from "./mobile-verification";
 import { changes, draftOf, localTimezone, timezones } from "./profile-edit";
 import { useWhatsAppMobileVerification, useWhatsAppVerificationConfig } from "./use-mobile-verification";
 
+const TIMEZONE_RETRY_DELAYS = [1_000, 2_000, 4_000] as const;
+
 function readSettled(userId: string): boolean {
     try {
         return localStorage.getItem(settledKey(userId)) === "1";
@@ -71,11 +73,33 @@ export function FirstProfileStep() {
         if (!needsTimezoneSync(user.data, { dialogOpen: decision.open })) return;
         const zone = localTimezone();
         if (!zone) return;
-        syncedZone.current = true;
-        void lemma().users.upsertProfile({ timezone: zone }).then(
-            (next) => { queryClient.setQueryData(["current-user"], next); },
-            () => { syncedZone.current = false; },
-        );
+
+        let active = true;
+        let retryTimer: ReturnType<typeof setTimeout> | undefined;
+        let retryCount = 0;
+        const sync = () => {
+            if (!active) return;
+            syncedZone.current = true;
+            void lemma().users.upsertProfile({ timezone: zone }).then(
+                (next) => {
+                    if (active) queryClient.setQueryData(["current-user"], next);
+                },
+                () => {
+                    if (!active) return;
+                    syncedZone.current = false;
+                    const delay = TIMEZONE_RETRY_DELAYS[retryCount];
+                    if (delay === undefined) return;
+                    retryCount += 1;
+                    retryTimer = setTimeout(sync, delay);
+                },
+            );
+        };
+        sync();
+        return () => {
+            active = false;
+            syncedZone.current = false;
+            if (retryTimer !== undefined) clearTimeout(retryTimer);
+        };
     }, [decision, user.data, queryClient]);
 
     if (!decision?.open || !user.data) return null;
@@ -168,6 +192,7 @@ function FirstProfileDialog({
                         onChange={(event) => { save.reset(); setTimezone(event.target.value); }}
                         required
                     >
+                        {!timezone && <option value="" disabled>Select a timezone</option>}
                         {timezone && !zones.includes(timezone) && (
                             <option value={timezone}>{timezone}</option>
                         )}
