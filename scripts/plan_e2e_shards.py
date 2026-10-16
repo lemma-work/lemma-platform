@@ -144,7 +144,7 @@ PINNED = [
     {
         "name": "agent",
         "dirs": ["app/modules/agent/tests/e2e"],
-        "workers": 1,
+        "workers": 2,
         "markers": FAST_MARKERS,
         # False now, and derived rather than declared: with the two
         # `fast_workspace` files in their own group above, nothing left in this
@@ -172,10 +172,19 @@ PINNED = [
         # This note lived only in the generated JSON, where the next
         # regeneration would have deleted it and restored the false claim
         # above it. It belongs here, in the input.
+        #
+        # RE-MEASURED 2026-10-16, flipped to 2. CI run 38897825151 against
+        # baselines 38894541423, 38885721484, 38882019643: the shard's pytest
+        # step went from ~500s at workers=1 to 299s at workers=2, with 31% of
+        # the runner's CPU still idle, and nothing in it failed. The coverage
+        # spread above no longer matters to a gate: the floor is one combined
+        # total, not a per-shard number. Do not take this to 4, or raise the
+        # packed shards: workers=4 on packed shards was tried in the same
+        # experiment and broke real tests -- Postgres "too many clients",
+        # session-worker idle waits, timing checks starved of CPU.
         "why": (
-            "MEASURED 2026-08-22: xdist coverage race disproven, but the "
-            "per-run spread is 0.4pt against a 0.2pt bar -- re-measure before "
-            "raising"
+            "MEASURED 2026-10-16: pytest ~500s -> 299s at -n 2 with 31% CPU "
+            "idle (run 38897825151); -n 4 breaks co-tenant tests"
         ),
         "bins": 1,
     },

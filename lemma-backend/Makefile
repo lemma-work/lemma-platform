@@ -257,7 +257,11 @@ coverage-backend-e2e-shard:
 		-m "$(E2E_SHARD_MARKERS)" \
 		-o timeout=120 \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-$(COVERAGE_PHASE).xml
-	$(MAKE) coverage-backend-report COVERAGE_PHASE=$(COVERAGE_PHASE)
+# Combine only. The `coverage` job recombines every shard's raw
+# `.coverage.backend` and builds the one report anyone reads; the per-shard
+# text/json/xml/markdown reports cost ~25-35s of each shard's critical path.
+# `make coverage-backend-report COVERAGE_PHASE=...` still builds them locally.
+	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage combine
 
 coverage-backend-report:
 	@test -n "$(COVERAGE_PHASE)" || (echo "COVERAGE_PHASE is required" && exit 1)

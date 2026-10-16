@@ -1422,16 +1422,56 @@ def set_test_app_factory(factory) -> None:
     _test_app_factory = factory
 
 
+# One OpenAPI document per distinct route table per test process. Every test
+# builds a fresh app, and every `backend_server` runs that app's lifespan, which
+# builds the document up front because e2e serves `/openapi.json` -- 1-3s of
+# pydantic model-graph work per test, for a document that is identical as long
+# as the routes are. Keyed by the route table rather than shared outright, so
+# an app factory that mounts different routers still gets its own document.
+_OPENAPI_BY_ROUTES: dict[tuple, dict] = {}
+
+
+def _route_table_key(app) -> tuple:
+    # Title and version too: `custom_openapi` writes both into the document.
+    return (app.title, app.version) + tuple(
+        (
+            type(route).__name__,
+            getattr(route, "path", ""),
+            getattr(route, "name", ""),
+            tuple(sorted(getattr(route, "methods", None) or ())),
+            bool(getattr(route, "include_in_schema", True)),
+        )
+        for route in app.routes
+    )
+
+
+def _share_openapi_document(app):
+    build = app.openapi
+
+    def openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        key = _route_table_key(app)
+        schema = _OPENAPI_BY_ROUTES.get(key)
+        if schema is None:
+            schema = _OPENAPI_BY_ROUTES[key] = build()
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = openapi
+    return app
+
+
 @pytest.fixture(scope="function")
 def test_app(e2e_settings, db_manager, monkeypatch, tmp_path):
     _ensure_repo_root_on_path()
     _configure_local_datastore_runtime(monkeypatch, tmp_path)
     _reset_supertokens_testing_state()
     if _test_app_factory is not None:
-        return _test_app_factory()
+        return _share_openapi_document(_test_app_factory())
     from app.app import create_app
 
-    return create_app()
+    return _share_openapi_document(create_app())
 
 
 @pytest_asyncio.fixture(scope="function")

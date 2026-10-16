@@ -55,13 +55,13 @@
     {
       "name": "agent",
       "args": "app/modules/agent/tests/e2e --ignore=app/modules/agent/tests/e2e/test_agent_hermetic_journeys_e2e.py --ignore=app/modules/agent/tests/e2e/test_long_running_and_research_e2e.py",
-      "workers": 1,
+      "workers": 2,
       "markers": "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected",
       "needs_sandbox_images": false,
       "serial_seconds": 447.2,
       "tests": 332,
-      "estimated_seconds": 559.2,
-      "why_serial": "MEASURED 2026-08-22: xdist coverage race disproven, but the per-run spread is 0.4pt against a 0.2pt bar -- re-measure before raising"
+      "estimated_seconds": 335.6,
+      "why_serial": "MEASURED 2026-10-16: pytest ~500s -> 299s at -n 2 with 31% CPU idle (run 38897825151); -n 4 breaks co-tenant tests"
     },
     {
       "name": "surfaces",
