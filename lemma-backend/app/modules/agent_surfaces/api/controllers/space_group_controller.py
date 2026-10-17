@@ -301,8 +301,8 @@ async def group_timeline(
 ) -> GroupTimelineResponse:
     """What was said in the group, oldest first, as far as the pod kept it.
 
-    Kept for WhatsApp and Telegram groups. A Slack channel's history is
-    Slack's; it comes back empty here. An answer the bot made with one member's
+    The group's channel timeline, kept for WhatsApp and Telegram groups. A
+    Slack channel's history is Slack's; it comes back empty here. An answer the bot made with one member's
     own access comes back withheld to everybody else: they may not be able to
     see what it was made from.
     """
@@ -322,15 +322,15 @@ async def group_timeline(
     return GroupTimelineResponse(
         items=[
             GroupLineResponse(
-                author_name=item.line.author_name,
-                author_external_id=item.line.author_external_id,
+                author_name=item.author_name,
+                author_external_id=item.author_key,
                 in_pod=item.in_pod,
-                from_bot=item.line.from_agent,
-                text=None if item.withheld else item.line.text,
+                from_bot=item.from_agent,
+                text=None if item.withheld else item.text,
                 withheld=item.withheld,
-                at=item.line.created_at,
-                answered_name=item.line.answered_name,
-                answered_from_public=item.line.answered_from_public,
+                at=item.created_at,
+                answered_name=item.answered_name,
+                answered_from_public=item.answered_from_public,
             )
             for item in lines or []
         ]

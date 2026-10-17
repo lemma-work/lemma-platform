@@ -22,6 +22,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
+from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.contracts.agents import agent_name_for_id
 from app.modules.agent.contracts.contact_conversations import (
     CLIENT_NONCE_KEY,
@@ -33,6 +34,10 @@ from app.modules.agent_surfaces.domain.web_widgets import (
     WidgetAnswer,
     refused,
 )
+from app.modules.agent_surfaces.services.channel_lines import (
+    note_heard_on_web,
+    web_place,
+)
 from app.modules.agent_surfaces.services.outside_cap import (
     first_word_today,
     hand_to_a_person,
@@ -42,6 +47,7 @@ from app.modules.agent_surfaces.services.contact_keepers import answers
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.visitor_access import Visitor
 from app.modules.agent_surfaces.services.widget_directory import widget_by_key
+from app.modules.channels.contracts import ContactsHome, Source, source_for
 from app.modules.contacts.contracts import contact_by_id, open_anonymous_contact
 from app.modules.contacts.contracts.visitor_sessions import (
     VisitorSession,
@@ -132,8 +138,18 @@ class WebChat:
             if owner is None or await pod_member_id(uow, widget.pod_id, owner) is None:
                 raise refused("Nobody is answering this chat", 503, "unattended")
             session = await self._visitor_session(uow, visitor)
-            conversation_id = await self._visitor_conversation(
+            conversation_id, contact_id = await self._visitor_conversation(
                 uow, widget, session, owner=owner
+            )
+            await note_heard_on_web(
+                uow,
+                pod_id=widget.pod_id,
+                widget_id=widget.id,
+                session_id=session.id,
+                contact_id=contact_id,
+                conversation_id=conversation_id,
+                text=message,
+                display_name=await self._display_name(uow, session),
             )
             held = await held_for_a_person(
                 uow, pod_id=widget.pod_id, conversation_id=conversation_id
@@ -198,37 +214,60 @@ class WebChat:
         session: VisitorSession,
         *,
         owner: UUID,
-    ) -> UUID:
-        """The visitor's conversation, opened on their first word.
+    ) -> tuple[UUID, UUID]:
+        """The visitor's conversation, found or opened on their first word, and
+        their contact.
 
-        Theirs: it names the contact their browser is -- opened now if this is
-        the first thing they wrote -- and the member looking after the widget
-        keeps it.
+        The contact's one conversation with the widget's agent, in their
+        channel -- the one they may already have from another session, or from
+        a chat on another platform -- kept by the member looking after the
+        widget. Opened under the same lock, and in the same order, as an
+        inbound message opens one (``ConversationBinder``): authorized first,
+        since that commits, then locked, looked for again, and opened.
         """
         contact_id = await _visitor_contact_id(uow, session)
         if session.conversation_id is not None and await _session_answers(
             uow, session.conversation_id, contact_id
         ):
-            return session.conversation_id
-        agent_name = await agent_name_for_id(uow.session, widget.agent_id)
-        name = await self._display_name(uow, session)
-        context_token = set_current_context(
-            await create_authorization_data_service(uow).build_user_context(
-                user_id=owner, pod_id=widget.pod_id
-            )
+            return session.conversation_id, contact_id
+        place = await source_for(
+            uow,
+            pod_id=widget.pod_id,
+            place=web_place(widget_id=widget.id, session_id=session.id),
+            home=ContactsHome(contact_id=contact_id),
         )
-        try:
-            return await self._open_visitor_conversation(
+        found = await self._contacts_conversation(
+            uow, widget, place, owner=owner, contact_id=contact_id
+        )
+        if found is None:
+            found = await self._open_visitor_conversation(
                 uow,
                 widget,
                 session,
+                place,
                 owner=owner,
                 contact_id=contact_id,
-                agent_name=agent_name,
-                name=name,
             )
-        finally:
-            reset_current_context(context_token)
+        await attach_visitor_conversation(uow, session.id, conversation_id=found)
+        return found, contact_id
+
+    @staticmethod
+    async def _contacts_conversation(
+        uow: SqlAlchemyUnitOfWork,
+        widget: WebWidget,
+        place: Source,
+        *,
+        owner: UUID,
+        contact_id: UUID,
+    ) -> UUID | None:
+        return await channel_conversations.conversation_in_channel(
+            uow,
+            channel_id=place.channel_id,
+            pod_id=widget.pod_id,
+            agent_id=widget.agent_id,
+            user_id=owner,
+            contact_id=contact_id,
+        )
 
     async def _start_visitor_turn(
         self,
@@ -278,29 +317,52 @@ class WebChat:
         uow: SqlAlchemyUnitOfWork,
         widget: WebWidget,
         session: VisitorSession,
+        place: Source,
         *,
         owner: UUID,
         contact_id: UUID,
-        agent_name: str | None,
-        name: str | None,
     ) -> UUID:
-        conversation = await agent_conversations.open_surface_conversation(
-            uow,
-            pod_id=widget.pod_id,
-            agent_name=agent_name,
-            user_id=owner,
-            title=f"{widget.name}: {name or 'visitor'}"[:255],
-            metadata={
-                "source": "web_widget",
-                "web_widget_id": str(widget.id),
-                "web_session_id": str(session.id),
-            },
-            contact_id=contact_id,
+        agent_name = await agent_name_for_id(uow.session, widget.agent_id)
+        name = await self._display_name(uow, session)
+        context_token = set_current_context(
+            await create_authorization_data_service(uow).build_user_context(
+                user_id=owner, pod_id=widget.pod_id
+            )
         )
-        await attach_visitor_conversation(
-            uow, session.id, conversation_id=conversation.id
-        )
-        return conversation.id
+        try:
+            await agent_conversations.authorize_surface_conversation(
+                uow, pod_id=widget.pod_id, agent_name=agent_name, user_id=owner
+            )
+            await channel_conversations.lock_person_in_channel(
+                uow,
+                channel_id=place.channel_id,
+                pod_id=widget.pod_id,
+                agent_id=widget.agent_id,
+                person_id=contact_id,
+            )
+            found = await self._contacts_conversation(
+                uow, widget, place, owner=owner, contact_id=contact_id
+            )
+            if found is not None:
+                return found
+            conversation = await agent_conversations.open_surface_conversation(
+                uow,
+                pod_id=widget.pod_id,
+                agent_name=agent_name,
+                user_id=owner,
+                title=f"{widget.name}: {name or 'visitor'}"[:255],
+                metadata={
+                    "source": "web_widget",
+                    "web_widget_id": str(widget.id),
+                    "web_session_id": str(session.id),
+                },
+                contact_id=contact_id,
+                channel_id=place.channel_id,
+                require_execute_grant=False,
+            )
+            return conversation.id
+        finally:
+            reset_current_context(context_token)
 
     async def visitor_history(
         self, visitor: Visitor, *, after: int

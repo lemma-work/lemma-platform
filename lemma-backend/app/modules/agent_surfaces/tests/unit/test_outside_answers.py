@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -25,7 +25,16 @@ from app.modules.agent_surfaces.domain.errors import (
     NotificationTransitionError,
     OutsideAnswerNeedsApproval,
 )
-from app.modules.agent_surfaces.domain.groups import GroupLine, answer_withheld_from
+from app.modules.agent_surfaces.services.space_groups import (
+    TimelineLine,
+    timeline_line,
+)
+from app.modules.channels.contracts import (
+    ChannelMessage,
+    Principal,
+    Sender,
+    SenderKind,
+)
 from app.modules.agent_surfaces.domain.notification import (
     MAX_OUTSIDE_ANSWER_CHARS,
     NotificationEntity,
@@ -155,21 +164,42 @@ def test_the_approval_card_shows_every_word_and_where_it_goes():
 # ---------------------------------------------------- who a member's run sees
 
 
-def _line(**fields) -> GroupLine:
-    return GroupLine(text="x", created_at=datetime.now(timezone.utc), **fields)
+def _answer(*, for_: Principal | None) -> ChannelMessage:
+    agent = uuid4()
+    return ChannelMessage(
+        id=uuid4(),
+        channel_id=uuid4(),
+        sender=(
+            Sender.agent(agent, on_behalf_of=for_)
+            if for_ is not None
+            else Sender(kind=SenderKind.AGENT, agent_id=agent)
+        ),
+        text="The renewal is 40k.",
+        created_at=datetime.now(timezone.utc),
+    )
 
 
-def test_a_strangers_run_is_not_shown_an_answer_made_with_a_members_access():
-    member = uuid4()
-    for_a_member = _line(from_agent=True, answered_user_id=member)
-    from_public = _line(from_agent=True, answered_from_public=True)
-    said = _line(author_name="Dana")
+def _as_seen_by(line: ChannelMessage, viewer: UUID) -> TimelineLine:
+    return timeline_line(line, members=set(), names={}, viewer_id=viewer)
 
-    assert answer_withheld_from(for_a_member, None) is True
-    assert answer_withheld_from(from_public, None) is False
-    assert answer_withheld_from(said, None) is False
-    # On the group's page, the member it was for still reads it.
-    assert answer_withheld_from(for_a_member, member) is False
+
+def test_an_answer_made_with_a_members_access_is_theirs_alone_on_the_page():
+    member, colleague = uuid4(), uuid4()
+    answer = _answer(for_=Principal.member(member))
+
+    assert _as_seen_by(answer, member).withheld is False
+    assert _as_seen_by(answer, colleague).withheld is True
+
+
+def test_an_answer_to_a_contact_is_anybodys_to_read():
+    seen = _as_seen_by(_answer(for_=Principal.contact(uuid4())), uuid4())
+
+    assert (seen.withheld, seen.answered_from_public) == (False, True)
+
+
+def test_an_answer_nobody_can_say_was_for_whom_is_withheld():
+    """Fails closed: the person it was made for is no longer known."""
+    assert _as_seen_by(_answer(for_=None), uuid4()).withheld is True
 
 
 def test_a_members_run_is_not_shown_what_strangers_wrote():

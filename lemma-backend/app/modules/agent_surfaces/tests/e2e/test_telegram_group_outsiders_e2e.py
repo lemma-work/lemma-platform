@@ -23,6 +23,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.tests.e2e.group_timeline import timeline, say
+from app.modules.channels.contracts import Principal, Sender, SenderKind
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.contacts.infrastructure.models import ContactIdentityModel
 from app.modules.agent_surfaces.composition import build_app_event_handler
@@ -243,12 +245,14 @@ async def test_a_stranger_is_answered_for_the_pod_from_what_is_public(
     assert "price_list" in listed[-1]
     assert "customers" not in listed[-1]
 
-    # The pod's log of the group holds both sides.
-    lines = await SurfaceGroupRepository(db_session).recent_lines(group=group, limit=10)
-    said = [line.text for line in lines]
-    assert "@lemmabot what can you tell me?" in said
-    assert "I can share the price list." in said
-    assert any(line.from_agent for line in lines)
+    # The group's channel holds both sides, each said by who said it: the
+    # stranger as the contact they now are, the bot for that contact.
+    lines = {line.text: line.sender for line in await timeline(db_session, group)}
+    asked = lines["@lemmabot what can you tell me?"]
+    answered = lines["I can share the price list."]
+    assert asked.kind is SenderKind.CONTACT and asked.contact_id is not None
+    assert answered.kind is SenderKind.AGENT
+    assert answered.on_behalf_of == Principal.contact(asked.contact_id)
 
 
 async def test_a_reply_in_a_logged_group_still_says_what_it_replies_to(
@@ -278,12 +282,11 @@ async def test_a_reply_in_a_logged_group_still_says_what_it_replies_to(
     )
     group = await _adopt_group(db_session, UUID(surface["id"]))
     assert group is not None
-    await SurfaceGroupRepository(db_session).append_line(
-        group_id=group.id,
-        body="Proofs are due Friday.",
-        external_message_id="80",
-        author_external_id=str(MEMBER_TELEGRAM_ID),
-        author_name="Arjun",
+    await say(
+        db_session,
+        group,
+        "Proofs are due Friday.",
+        sender=Sender.member(UUID(fixed_test_user["id"]), display_name="Arjun"),
     )
     await db_session.commit()
     payload = _group_message(

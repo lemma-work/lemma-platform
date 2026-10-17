@@ -209,10 +209,10 @@ keep that rule:
 
 ## Conversations
 
-- One conversation per contact per bot, owned by the member who looks after the
-  bot, like the group's `~outsiders` conversation. All of a contact's channels
-  feed the same conversation, so a WhatsApp follow-up to an email request has the
-  history.
+- One conversation per contact per agent, in the contact's channel, owned by
+  the member who looks after the bot. All of a contact's places -- their chats,
+  email threads and web chat -- are sources of that channel and feed the same
+  conversation, so a WhatsApp follow-up to an email request has the history.
 - **Hand-off.** The agent can pass a conversation to a person. A member takes it
   over, replies are sent as the bot, and the agent stays quiet until it's handed
   back. Groups' take-over flow and private notes (`metadata.private_note`) carry
@@ -290,9 +290,8 @@ one:
   `channel` and `member` exist; `host` and `code` come with web widgets.
 - **Who looks after them.** When that member leaves the pod, its
   administrators are told, and the surface carries `contacts_warning` until
-  somebody else is chosen. A contact's conversation is found by its
-  `~contact:` link and moves, history and all, to whoever looks after
-  contacts now.
+  somebody else is chosen. A contact's conversation is found in their channel
+  and moves, history and all, to whoever looks after contacts now.
 - **Who the bot answers.** `config.contacts` on every surface, `answer`
   defaulting to `off`, `looked_after_by` defaulting to whoever turns it on and
   required to be a pod member. Only the pod's own bots answer contacts:
@@ -302,8 +301,7 @@ one:
   which everything the run builds takes its answer from: the CONTACT context,
   the tool allowlist and gate, the brief, the private-note labels and the
   metering scope. A member's note in a contact's chat is labelled as the
-  keeper's and never to be repeated. The routing link `~contact:{id}` is how a
-  conversation that lost its metadata is repaired, to the same contact. Names
+  keeper's and never to be repeated. Names
   reach the prompt sanitised and quoted. Audited as `contact:{id}`.
 - **Their own rows.** `contact_owned` on a datastore table adds `contact_id`,
   the `contact_columns` a contact may read, and the fail-closed row policy. A
@@ -366,14 +364,14 @@ one:
   oldest active email surface whose `contacts.answer` is not `off` and whose
   `looked_after_by` is still a member (`no_email_surface` when there is none),
   through `open_cold_email_thread` with a random `References` seed
-  (`follow_up_seed_id`). Only after the provider accepts it is a conversation
-  opened for the contact (owned by `looked_after_by`, `audience: contact`) and
-  linked under `~contact:{id}` with the seed as `external_thread_id`, so the
-  reply, authenticated and matched to the contact by its email identity, binds
-  to it in `ContactDoor`. Same daily cap and unsubscribe line; a failed send is
-  written as not sent into the latest conversation, and no link is made. The
-  web chat is left untouched, and the email thread becomes the latest
-  conversation for the next `latest` follow-up.
+  (`follow_up_seed_id`). Only after the provider accepts it is the thread made a
+  place of the contact's channel, keyed by the seed and their address, and the
+  mail written into their conversation with the agent there (owned by
+  `looked_after_by`, opened if they have none), so the reply, authenticated and
+  matched to the contact by its email identity, binds to it in `ContactDoor`.
+  Same daily cap and unsubscribe line; a failed send is written as not sent
+  into the latest conversation, and no place is made. The email thread
+  becomes the contact's latest place, where the next `latest` follow-up goes.
 - **Unverified email** is parked as an inbox note to the member who looks after
   contacts, once an hour per sender and at most
   `SURFACE_PARKED_MAIL_NOTES_PER_SURFACE_PER_HOUR` notes a bot, then one

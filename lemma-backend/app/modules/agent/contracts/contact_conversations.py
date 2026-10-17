@@ -26,7 +26,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import aliased
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import HANDED_TO_KEY, handed_to
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.value_objects import (
     MessageDraft,
@@ -356,32 +355,18 @@ async def move_contact_conversation(
     return bool(result.rowcount)
 
 
-async def conversation_handed_to(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, now: datetime
-) -> UUID | None:
-    """The member answering this conversation by hand right now, if one is."""
-    metadata = await uow.session.scalar(
-        select(ConversationModel.conversation_metadata).where(
-            ConversationModel.id == conversation_id
-        )
-    )
-    return handed_to(metadata, now=now)
-
-
 async def hold_outside_turn(
     uow: SqlAlchemyUnitOfWork,
     *,
     conversation_id: UUID,
     text: str,
     metadata: dict[str, object],
-    hand_to: UUID,
-    until: datetime,
     reply: str | None,
 ) -> None:
-    """Keep what somebody outside the pod wrote, start no run, and hand it over.
+    """Keep what somebody outside the pod wrote, and start no run.
 
     Their message goes into the conversation as any message would, so the
-    member taking it over reads what was asked. ``reply``, when given, is what
+    member answering it reads what was asked. ``reply``, when given, is what
     they were told instead of an answer, written as the bot's so the thread
     shows it.
     """
@@ -395,13 +380,6 @@ async def hold_outside_turn(
         agent_run_id=None,
         draft=MessageDraft.of_text(text, role=MessageRole.USER, metadata=metadata),
     )
-    # The append above holds the row FOR UPDATE, so this read-modify-write
-    # cannot lose a concurrent writer's keys.
-    model = await uow.session.get(ConversationModel, conversation_id)
-    if model is not None:
-        stored = dict(model.conversation_metadata or {})
-        stored[HANDED_TO_KEY] = {"user_id": str(hand_to), "until": until.isoformat()}
-        model.conversation_metadata = stored
     if reply:
         await conversations.append_message(
             conversation_id=conversation_id,

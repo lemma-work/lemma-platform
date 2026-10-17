@@ -107,6 +107,7 @@ class GroupUpdates:
             if not update.request_id or not update.external_channel_id:
                 return None
             group = await self.groups.confirm_created(
+                platform=update.platform,
                 request_id=update.request_id,
                 external_channel_id=update.external_channel_id,
                 title=update.title,
@@ -121,7 +122,9 @@ class GroupUpdates:
                 raise CreationNotYetRecorded(update.request_id)
             return group
         if update.kind is GroupUpdateKind.CREATE_FAILED and update.request_id:
-            await self.groups.forget_request(update.request_id)
+            await self.groups.forget_request(
+                platform=update.platform, request_id=update.request_id
+            )
             logger.warning(
                 "agent_surfaces.group_updates.creation_refused.degraded",
                 platform=update.platform,

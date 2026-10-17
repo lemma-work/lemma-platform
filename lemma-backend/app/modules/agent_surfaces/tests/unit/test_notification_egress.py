@@ -22,8 +22,10 @@ import pytest
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     RecordingNotificationWork,
 )
+from app.modules.channels.contracts import Source, SourceKind
+from app.modules.test_support.channel_lines_double import RecordingChannelLines
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfaceConfig,
     SurfacePlatform,
@@ -88,15 +90,18 @@ class _FakeRedis:
         return count
 
 
-def _link_for(surface: AgentSurfaceEntity) -> AgentSurfaceConversationLink:
-    """A thread this person has written to, recently enough to still be open."""
-    return AgentSurfaceConversationLink(
+def _place_for(surface: AgentSurfaceEntity, person: str = "U123") -> Source:
+    """A private chat this person has written to, recently enough to still be open."""
+    return Source(
+        id=uuid4(),
+        channel_id=uuid4(),
+        pod_id=surface.pod_id,
         surface_id=surface.id,
-        conversation_id=uuid4(),
         platform=surface.surface_type.value,
-        external_thread_id="C1",
-        external_user_id="U123",
+        kind=SourceKind.PRIVATE,
+        external_user_id=person,
         last_inbound_at=datetime.now(timezone.utc),
+        delivery_ref={"external_thread_id": "C1"},
     )
 
 
@@ -184,11 +189,13 @@ def conversations(monkeypatch):
     return operations
 
 
-def _links():
-    links = AsyncMock()
-    links.get_by_external_thread = AsyncMock(return_value=None)
-    links.create = AsyncMock(side_effect=lambda link: link)
-    return links
+def _egress(egress_port, *, seats=None, lines=None) -> NotificationEgress:
+    return NotificationEgress(
+        egress=egress_port,
+        uow=AsyncMock(),
+        seats=seats or InMemoryChannelSeats(),
+        lines=lines or RecordingChannelLines(),
+    )
 
 
 def _thread_for(
@@ -232,15 +239,13 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name(
     )
     egress_port = _egress_double()
 
-    egress = NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        conversation_link_repository=_links(),
-    )
+    egress = _egress(egress_port)
 
+    channel_id = uuid4()
     opened = await egress.open_conversation(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
         notification=notification,
+        channel_id=channel_id,
     )
 
     assert opened == conversation_id
@@ -250,32 +255,27 @@ async def test_the_conversation_is_opened_under_the_surface_agents_name(
     # The recipient owns the conversation, never the asker — their reply has to
     # run under their own permissions.
     assert kwargs["user_id"] == notification.recipient_user_id
+    assert kwargs["channel_id"] == channel_id
 
 
-async def test_a_cold_email_leaves_a_link_the_reply_will_match():
+async def test_a_cold_email_places_its_thread_where_the_reply_will_arrive():
     """The claim the whole ask/answer loop over email rests on.
 
-    An inbound reply is matched by ``get_by_external_thread`` on exactly these
-    five coordinates. Any one of them wrong and the reply opens a brand-new
-    conversation, the ``background_instruction`` never reaches the replying
-    agent, and the asking run waits for an answer that silently cannot arrive.
+    An inbound reply is placed by its surface, the thread and the sender's
+    address. Any one of them wrong and the reply lands at a place of its own,
+    in a conversation the notification never reached, and the asking run waits
+    for an answer that silently cannot arrive.
     """
     surface = _email_surface()
     notification = _notification()
     conversation_id = uuid4()
     seed = cold_thread_seed_id(notification_id=notification.id, surface=surface)
+    thread = _thread_for(surface, seed, "Bob@Example.com")
 
     egress_port = _egress_double()
-    egress_port.open_cold_email_thread.return_value = _thread_for(
-        surface, seed, "Bob@Example.com"
-    )
-    links = _links()
-
-    egress = NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        conversation_link_repository=links,
-    )
+    egress_port.open_cold_email_thread.return_value = thread
+    seats, lines = InMemoryChannelSeats(), RecordingChannelLines()
+    egress = _egress(egress_port, seats=seats, lines=lines)
 
     sent = await egress.send(
         DeliveryChannel(surface=surface, email_address="Bob@Example.com"),
@@ -285,21 +285,25 @@ async def test_a_cold_email_leaves_a_link_the_reply_will_match():
     )
 
     assert sent is True
-    created = links.create.await_args.args[0]
-    assert created.surface_id == surface.id
-    assert created.conversation_id == conversation_id
-    assert created.platform == "RESEND"
-    assert created.external_channel_id == "pod-1@ops.lemma.work"
-    assert created.external_thread_id == seed
+    [place] = seats.sources.values()
+    assert place.surface_id == surface.id
+    assert place.platform == "RESEND"
+    assert place.kind is SourceKind.PRIVATE
+    assert place.external_channel_id == seed
     # Lowercased, because that is what the inbound parser records as the sender.
-    assert created.external_user_id == "bob@example.com"
-    # They have not written to us; claiming otherwise would let an outbound
-    # masquerade as inbound activity when ranking someone's channels.
-    assert created.last_inbound_at is None
-    # The agent the conversation was opened under, which the reply is compared
-    # against -- see `test_notification_journey` for what it costs to omit it.
-    assert created.routed_agent_id == surface.agent_id
-    assert created.route_key == "email"
+    assert place.external_user_id == "bob@example.com"
+    # In the recipient's own channel, where their conversation with the agent is.
+    direct = ("DIRECT", notification.pod_id, notification.recipient_user_id)
+    assert seats.channels[direct] == place.channel_id
+    # How to write there again is the mail just sent. They have not written to
+    # us; claiming otherwise would let an outbound masquerade as inbound
+    # activity when ranking someone's channels.
+    assert place.delivery_ref == thread.last_event
+    assert place.last_inbound_at is None
+    # The mail is the place's first line, in the conversation it was sent from.
+    [line] = lines.opened_lines
+    assert (line.conversation_id, line.source_id) == (conversation_id, place.id)
+    assert line.external_message_id == "email-9"
 
 
 async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
@@ -310,12 +314,8 @@ async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
     into an explanation instead of a stack trace.
     """
     surface = _email_surface()
-    links = _links()
-    egress = NotificationEgress(
-        egress=_egress_double(),  # open_cold_email_thread returns None
-        uow=AsyncMock(),
-        conversation_link_repository=links,
-    )
+    seats = InMemoryChannelSeats()
+    egress = _egress(_egress_double(), seats=seats)  # cold open returns None
 
     sent = await egress.send(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
@@ -325,25 +325,20 @@ async def test_a_platform_that_cannot_cold_open_is_reported_not_crashed():
     )
 
     assert sent is False
-    links.create.assert_not_awaited()
+    assert not seats.sources
 
 
-async def test_no_link_is_written_when_the_send_raises():
-    """Order of operations: never point a link at a thread that does not exist.
+async def test_no_place_is_made_when_the_send_raises():
+    """Order of operations: never make a place for a thread that does not exist.
 
-    A link written before the send would swallow the person's reply into a
-    conversation nothing was ever delivered to — strictly worse than no link,
+    A place made before the send would swallow the person's reply into a
+    conversation nothing was ever delivered to — strictly worse than no place,
     because the reply looks handled.
     """
     egress_port = _egress_double()
     egress_port.open_cold_email_thread.side_effect = OSError("smtp down")
-    links = _links()
-
-    egress = NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        conversation_link_repository=links,
-    )
+    seats = InMemoryChannelSeats()
+    egress = _egress(egress_port, seats=seats)
 
     with pytest.raises(OSError):
         await egress.send(
@@ -353,7 +348,7 @@ async def test_no_link_is_written_when_the_send_raises():
             message="hello",
         )
 
-    links.create.assert_not_awaited()
+    assert not seats.sources
 
 
 async def test_redelivering_the_same_notification_reuses_its_thread():
@@ -370,51 +365,33 @@ async def test_redelivering_the_same_notification_reuses_its_thread():
     egress_port.open_cold_email_thread.return_value = _thread_for(
         surface, seed, "Bob@Example.com"
     )
-    links = _links()
-    links.get_by_external_thread.return_value = AgentSurfaceConversationLink(
-        surface_id=surface.id,
-        conversation_id=uuid4(),
-        platform="RESEND",
-        external_thread_id=seed,
-    )
+    seats = InMemoryChannelSeats()
+    egress = _egress(egress_port, seats=seats)
 
-    egress = NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        conversation_link_repository=links,
-    )
+    for _ in range(2):
+        sent = await egress.send(
+            DeliveryChannel(surface=surface, email_address="bob@example.com"),
+            conversation_id=uuid4(),
+            notification=notification,
+            message="What did you ship?",
+        )
+        assert sent is True
 
-    sent = await egress.send(
-        DeliveryChannel(surface=surface, email_address="bob@example.com"),
-        conversation_id=uuid4(),
-        notification=notification,
-        message="What did you ship?",
-    )
-
-    assert sent is True
-    links.create.assert_not_awaited()
+    assert len(seats.sources) == 1
 
 
 async def test_a_channel_with_a_live_thread_replies_into_it():
-    """The warm path: a chat surface with a link never touches cold open."""
+    """The warm path: a chat the person wrote in never touches cold open, and
+    the message goes to that chat."""
     surface = _email_surface()
     conversation_id = uuid4()
-    link = AgentSurfaceConversationLink(
-        surface_id=surface.id,
-        conversation_id=conversation_id,
-        platform="TELEGRAM",
-        external_thread_id="t1",
-    )
+    place = _place_for(surface, "u1")
     egress_port = _egress_double()
 
-    egress = NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        conversation_link_repository=_links(),
-    )
+    egress = _egress(egress_port)
 
     sent = await egress.send(
-        DeliveryChannel(surface=surface, link=link, external_user_id="u1"),
+        DeliveryChannel(surface=surface, source=place, external_user_id="u1"),
         conversation_id=conversation_id,
         notification=_notification(),
         message="What did you ship?",
@@ -422,6 +399,8 @@ async def test_a_channel_with_a_live_thread_replies_into_it():
 
     assert sent is True
     egress_port.send_agent_message_for_conversation.assert_awaited_once()
+    sent_to = egress_port.send_agent_message_for_conversation.await_args.kwargs["at"]
+    assert sent_to is place
     egress_port.open_cold_email_thread.assert_not_awaited()
 
 
@@ -473,12 +452,13 @@ def _notification_service(
         uow=AsyncMock(),
         notification_repository=AsyncMock(),
         surface_repository=surface_repo,
-        conversation_link_repository=_links(),
         external_user_repository=external_users,
         egress=_egress_double(),
         pod_membership_port=membership,
         surface_provisioner=provisioner,
         work=RecordingNotificationWork(),
+        seats=InMemoryChannelSeats(),
+        lines=RecordingChannelLines(),
     )
 
 
@@ -846,15 +826,7 @@ async def test_a_chat_channel_does_not_spend_the_email_budget(
         surfaces=(chat_surface,),
         external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
-    link = _link_for(chat_surface)
-    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
-        return_value=link
-    )
-    # A live conversation on that thread, so delivery continues it rather than
-    # opening a new one — the DM-reset check compares real timestamps.
-    conversations.surface_conversation.return_value = _Conversation(
-        link.conversation_id
-    )
+    service.channels.seats.add(_place_for(chat_surface))
     service.rate_limiter = NotificationRateLimiter(email_limit=0, redis=redis)
     service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
 
@@ -939,13 +911,7 @@ async def test_the_connection_is_released_before_the_platform_send(
         surfaces=(chat_surface,),
         external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
-    link = _link_for(chat_surface)
-    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
-        return_value=link
-    )
-    conversations.surface_conversation.return_value = _Conversation(
-        link.conversation_id
-    )
+    service.channels.seats.add(_place_for(chat_surface))
     service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
 
     order: list[str] = []
@@ -991,11 +957,7 @@ async def test_a_cold_open_carries_the_senders_name_to_the_platform():
         surface, seed, "bob@example.com"
     )
 
-    egress = NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        conversation_link_repository=_links(),
-    )
+    egress = _egress(egress_port)
 
     await egress.send(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
@@ -1028,11 +990,7 @@ async def test_a_named_agents_cold_mail_wears_its_name_when_the_caller_gave_none
     egress_port.open_cold_email_thread.return_value = _thread_for(
         surface, seed, "bob@example.com"
     )
-    egress = NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        conversation_link_repository=_links(),
-    )
+    egress = _egress(egress_port)
 
     await egress.send(
         DeliveryChannel(surface=surface, email_address="bob@example.com"),
@@ -1056,18 +1014,14 @@ async def test_an_unknown_agent_name_is_absent_rather_than_None():
     on a platform that had both.
     """
     surface = _email_surface()
-    link = _link_for(surface)
+    place = _place_for(surface)
     conversation_id = uuid4()
     egress_port = _egress_double()
 
-    egress = NotificationEgress(
-        egress=egress_port,
-        uow=AsyncMock(),
-        conversation_link_repository=_links(),
-    )
+    egress = _egress(egress_port)
 
     await egress.send(
-        DeliveryChannel(surface=surface, external_user_id="U123", link=link),
+        DeliveryChannel(surface=surface, external_user_id="U123", source=place),
         conversation_id=conversation_id,
         notification=_notification(),
         message="What did you ship?",
@@ -1103,9 +1057,7 @@ async def test_a_named_channel_beats_the_ranking_that_would_have_won():
     service = _notification_service(
         surfaces=(chat, mailbox), external_user=_identity("U123")
     )
-    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
-        return_value=_link_for(chat)
-    )
+    service.channels.seats.add(_place_for(chat))
     recipient = uuid4()
 
     by_default, _ = await service.resolve_channels(
@@ -1207,27 +1159,15 @@ async def test_the_workspace_they_actually_use_is_found_among_their_identities()
     """
     agent_id = uuid4()
     seen_last = _surface_for(agent_id, SurfacePlatform.SLACK)
-    where_they_talk = _surface_for(agent_id, SurfacePlatform.SLACK)
+    where_they_talk = _surface_for(
+        agent_id, SurfacePlatform.SLACK, pod_id=seen_last.pod_id
+    )
     service = _notification_service(surfaces=(seen_last, where_they_talk))
     service.channels.external_users.list_by_resolved_users = AsyncMock(
         # Freshest first, which is the order the repository returns.
         return_value=[_identity("U-OTHER"), _identity("U-THEIRS")]
     )
-    thread = AgentSurfaceConversationLink(
-        surface_id=where_they_talk.id,
-        conversation_id=uuid4(),
-        platform="SLACK",
-        external_thread_id="C1",
-        external_user_id="U-THEIRS",
-        last_inbound_at=datetime.now(timezone.utc),
-    )
-    service.channels.links.get_latest_by_surface_and_external_user = AsyncMock(
-        side_effect=lambda *, surface_id, external_user_id: (
-            thread
-            if surface_id == where_they_talk.id and external_user_id == "U-THEIRS"
-            else None
-        )
-    )
+    service.channels.seats.add(_place_for(where_they_talk, "U-THEIRS"))
 
     channels, reason = await service.resolve_channels(
         pod_id=seen_last.pod_id, recipient_user_id=uuid4(), actor_agent_id=agent_id
@@ -1251,9 +1191,7 @@ async def test_reachability_says_what_the_agent_can_choose_between():
     service.channels.external_users.list_by_resolved_users = AsyncMock(
         return_value=[_identity("U-PRIYA", user_id=priya)]
     )
-    service.channels.links.list_latest_by_surface_and_external_users = AsyncMock(
-        return_value={"U-PRIYA": _link_for(chat)}
-    )
+    service.channels.seats.add(_place_for(chat, "U-PRIYA"))
 
     reach = await service.reachable_channels(
         pod_id=chat.pod_id,
@@ -1334,22 +1272,15 @@ async def test_a_colleagues_authority_is_still_named(monkeypatch):
 # ------------------------------------------- sent once, and only where it landed
 
 
-def _chat_service_with_link(conversations, *, touched: datetime):
+def _chat_service(conversations):
     agent_id = uuid4()
     surface = _surface_for(agent_id, SurfacePlatform.SLACK)
     service = _notification_service(
         surfaces=(surface,),
         external_user=SimpleNamespace(external_user_id="U123", tenant_id="T123"),
     )
-    link = _link_for(surface)
-    links = service.channels.links
-    links.get_latest_by_surface_and_external_user = AsyncMock(return_value=link)
-    links.conversation_holds_notification = AsyncMock(return_value=False)
-    links.repoint_conversation_for_outbound = AsyncMock(return_value=link)
-    previous = _Conversation(link.conversation_id)
-    previous.updated_at = touched
-    conversations.surface_conversation.return_value = previous
-    return service, surface, agent_id, link
+    service.channels.seats.add(_place_for(surface))
+    return service, surface, agent_id
 
 
 async def test_a_send_whose_outcome_was_never_recorded_is_not_sent_again(
@@ -1361,9 +1292,7 @@ async def test_a_send_whose_outcome_was_never_recorded_is_not_sent_again(
     with the same key finds a send that may have landed rather than none at all.
     """
     _email_configured(monkeypatch)
-    service, surface, agent_id, _link = _chat_service_with_link(
-        conversations, touched=datetime.now(timezone.utc)
-    )
+    service, surface, agent_id = _chat_service(conversations)
     committed: dict[str, NotificationEntity] = {}
 
     async def create(entity: NotificationEntity) -> NotificationEntity:
@@ -1397,30 +1326,3 @@ async def test_a_send_whose_outcome_was_never_recorded_is_not_sent_again(
 
     service.egress.egress.send_agent_message_for_conversation.assert_awaited_once()
     assert committed["row"].delivery_status is NotificationDeliveryStatus.SENDING
-
-
-async def test_a_send_that_did_not_land_gives_the_thread_back(conversations):
-    """A cold thread is moved to a fresh conversation for the notification.
-
-    When nothing arrived there, the person's next message belongs where their
-    thread was; leaving the link moved cut it off from what they were doing.
-    """
-    service, surface, agent_id, link = _chat_service_with_link(
-        conversations, touched=datetime(2020, 1, 1, tzinfo=timezone.utc)
-    )
-    opened = conversations.open_surface_conversation.return_value.id
-    service.notifications.update = AsyncMock(side_effect=lambda entity: entity)
-    service.egress.egress.send_agent_message_for_conversation.return_value = False
-
-    await service.deliver(_notification(pod_id=surface.pod_id, actor_agent_id=agent_id))
-
-    moved, restored = (
-        service.channels.links.repoint_conversation_for_outbound.await_args_list
-    )
-    assert moved.kwargs["conversation_id"] == opened
-    assert restored.kwargs == {
-        "link_id": link.id,
-        "conversation_id": link.conversation_id,
-        "expected_conversation_id": opened,
-        "routed_agent_id": link.routed_agent_id,
-    }

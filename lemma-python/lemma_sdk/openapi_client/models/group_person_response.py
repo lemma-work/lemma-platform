@@ -18,7 +18,8 @@ class GroupPersonResponse:
     Attributes:
         in_pod (bool):
         name (str):
-        external_id (None | str | Unset):
+        external_id (None | str | Unset): Who they are to the pod -- ``member:<id>`` or ``contact:<id>`` -- the key a
+            timeline line's ``author_external_id`` matches.
         user_id (None | Unset | UUID):
     """
 

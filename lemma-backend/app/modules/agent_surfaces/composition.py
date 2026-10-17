@@ -56,9 +56,6 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (
     NotificationRepository,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
@@ -67,6 +64,7 @@ from app.modules.agent_surfaces.services.app_event_handler import AppEventHandle
 from app.modules.agent_surfaces.services.configuration_access import (
     ConfigurationAccess,
 )
+from app.modules.agent_surfaces.services.channel_places import ChannelSeatsInDatabase
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -139,7 +137,6 @@ def build_surface_delivery(uow: SqlAlchemyUnitOfWork) -> SurfaceDelivery:
     return SurfaceDelivery(
         uow=uow,
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
         adapter_registry=SurfacePlatformAdapterRegistry(),
         credential_resolver=SurfaceCredentialResolver(uow=uow),
     )
@@ -166,7 +163,7 @@ def build_member_reach(uow: SqlAlchemyUnitOfWork) -> MemberReach:
         egress=build_surface_egress(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         external_user_repository=ExternalSurfaceUserRepository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+        seats=ChannelSeatsInDatabase(uow),
     )
 
 
@@ -205,7 +202,6 @@ def build_surface_router(uow: SqlAlchemyUnitOfWork) -> SurfaceRouter:
     return SurfaceRouter(
         uow=uow,
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         identity_service=SurfaceIdentityResolutionService(uow, external_users),
         credential_resolver=SurfaceCredentialResolver(uow=uow),
@@ -217,7 +213,6 @@ def build_conversation_binder(uow: SqlAlchemyUnitOfWork) -> ConversationBinder:
     return ConversationBinder(
         uow=uow,
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
     )
 
 
@@ -228,7 +223,6 @@ def build_surface_ingress(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceIngressServi
         router=build_surface_router(uow),
         binder=build_conversation_binder(uow),
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
         credential_resolver=SurfaceCredentialResolver(uow=uow),
     )
 
@@ -256,7 +250,6 @@ def build_notification_service(uow: SqlAlchemyUnitOfWork) -> NotificationService
         uow=uow,
         notification_repository=NotificationRepository(uow),
         surface_repository=build_surface_repository(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
         external_user_repository=ExternalSurfaceUserRepository(uow),
         egress=build_surface_egress(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),

@@ -71,11 +71,6 @@ EXPECTED = [
         False,
     ),
     (
-        "surface_dm_conversation_reset_after_hours",
-        "SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS",
-        24,
-    ),
-    (
         "surface_outsider_turns_per_person_per_10_minutes",
         "SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES",
         10,

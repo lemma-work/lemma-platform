@@ -12,6 +12,9 @@ export type GroupLineResponse = {
      */
     answered_name?: (string | null);
     at: string;
+    /**
+     * The speaker's key among the group's people.
+     */
     author_external_id?: (string | null);
     author_name?: (string | null);
     from_bot: boolean;

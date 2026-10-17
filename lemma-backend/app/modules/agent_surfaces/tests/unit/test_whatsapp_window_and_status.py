@@ -25,7 +25,6 @@ from app.modules.agent_surfaces.caches import (
     surface_caches,
 )
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfaceConfig,
     SurfacePlatform,
@@ -48,6 +47,8 @@ from app.modules.agent_surfaces.services.member_reach import MemberReach
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
 )
+from app.modules.agent_surfaces.tests.unit.surface_doubles import AnsweredAt, answer_at
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
 
 def _statuses(*statuses: dict[str, Any]) -> dict[str, Any]:
@@ -153,15 +154,18 @@ async def test_a_proactive_send_outside_the_window_is_refused_not_dropped():
         surface_type=SurfacePlatform.WHATSAPP,
         config=SurfaceConfig(),
     )
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=uuid4(),
         platform="WHATSAPP",
         external_channel_id="pn-1",
         external_thread_id="15550001@pn-1",
         external_user_id="15550001",
+        last_event={"sender_external_user_id": "15550001"},
         last_inbound_at=datetime.now(timezone.utc) - timedelta(hours=25),
     )
+    seats = InMemoryChannelSeats()
+    answer_at(seats, link, [surface])
     egress = SimpleNamespace(send_agent_message_for_conversation=AsyncMock())
     reach = MemberReach(
         egress=egress,  # type: ignore[arg-type]
@@ -175,9 +179,7 @@ async def test_a_proactive_send_outside_the_window_is_refused_not_dropped():
                 ]
             )
         ),
-        conversation_link_repository=SimpleNamespace(  # type: ignore[arg-type]
-            get_latest_by_surface_and_external_user=AsyncMock(return_value=link)
-        ),
+        seats=seats,
     )
 
     refusal = await reach.send_to_member(

@@ -18,6 +18,8 @@ fail open if they are wrong:
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.conversation_binder import BoundThread
+
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -36,7 +38,6 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import contact_link_user
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
@@ -76,7 +77,11 @@ class _Binder:
 
     async def bind_conversation(self, **kwargs):
         self.seen = kwargs
-        return SimpleNamespace(conversation_id=uuid4()), "Where is my order?"
+        return BoundThread(
+            conversation_id=uuid4(),
+            source_id=uuid4(),
+            created_title="Where is my order?",
+        )
 
 
 class _Limiter:
@@ -420,8 +425,10 @@ async def test_a_contacts_turn_runs_in_their_own_conversation_as_them(pod):
 
     contact_id = binder.seen["contact_id"]
     assert binder.seen["resolved_user"].internal_user_id == pod.owner
-    assert binder.seen["resolved_user"].external_user_id == contact_link_user(
-        contact_id
+    # Their own id on the platform: it keys the place they wrote from.
+    assert (
+        binder.seen["resolved_user"].external_user_id
+        == _event().sender_external_user_id
     )
     assert context is not None
     assert context.audience.is_contact is True

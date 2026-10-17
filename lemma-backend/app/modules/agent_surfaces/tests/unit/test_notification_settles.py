@@ -13,6 +13,8 @@ made where the answer is recorded.
 
 from __future__ import annotations
 
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
+
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -80,7 +82,7 @@ def _service(*, outstanding: int, notification: NotificationEntity):
         uow=uow,
         notification_repository=notifications,
         surface_repository=AsyncMock(),
-        conversation_link_repository=AsyncMock(),
+        seats=InMemoryChannelSeats(),
         external_user_repository=AsyncMock(),
         egress=AsyncMock(),
         pod_membership_port=AsyncMock(),

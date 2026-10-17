@@ -36,6 +36,10 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.adapter_port import (
     SurfacePlatformAdapterPort,
 )
+from app.modules.agent_surfaces.services.channel_lines import (
+    ChannelLines,
+    ChannelLinesInDatabase,
+)
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
     Resumed,
@@ -142,6 +146,8 @@ async def write_inbound_message(
     message_text: str,
     metadata: dict[str, Any],
     uow: SqlAlchemyUnitOfWork,
+    *,
+    lines: ChannelLines | None = None,
 ) -> FinishedPauses:
     """Persist the inbound message, or resume the run it answers.
 
@@ -189,6 +195,9 @@ async def write_inbound_message(
             platform=context.platform,
         )
         return FinishedPauses()
+    # On the channel's timeline whatever the message turns out to be -- an
+    # answer to a pause is still something the person said.
+    await (lines or ChannelLinesInDatabase(uow)).heard(context, text=message_text)
     auth_ctx = await create_authorization_data_service(uow).build_user_context(
         user_id=context.user_id,
         pod_id=context.pod_id,

@@ -31,7 +31,7 @@ flowchart LR
 
 The canonical registration order is identity, pod, pod bundle, datastore,
 schedule, connectors, agent, function, apps, workflow, agent surfaces,
-contacts, icon, usage, workspace, web login, MCP access, decisions, and analytics. Order affects router and lifespan registration, but
+contacts, channels, icon, usage, workspace, web login, MCP access, decisions, and analytics. Order affects router and lifespan registration, but
 modules should communicate through explicit ports or domain events rather than
 depending on import order.
 
@@ -49,12 +49,13 @@ depending on import order.
 | [function](function.md) | Versioned deterministic function definitions and sandboxed runs | `functions`, `function_runs` |
 | [apps](apps.md) | Pod app metadata, source/dist releases, and public asset hosting | `apps`, `app_releases` |
 | [workflow](workflow.md) | Workflow graphs, execution, waits, forms, and resumptions | `workflow_flows`, `workflow_flow_runs`, `workflow_run_waits` |
-| [agent_surfaces](agent_surfaces.md) | External chat/email ingress, identity mapping, and delivery | `agent_surfaces`, `agent_surface_external_users`, `agent_surface_conversation_links` |
+| [agent_surfaces](agent_surfaces.md) | External chat/email ingress, identity mapping, and delivery | `agent_surfaces`, `agent_surface_external_users`, `surface_deliveries` |
 | [icon](icon.md) | Public raster icon upload and retrieval | None; bytes live in public object/local storage |
 | [usage](usage.md) | Model-usage metering, reservations, limits, and reporting | `usage_records`, `usage_limit_counters`, `usage_contacts_caps` |
 | [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |
 | [mcp_access](mcp_access.md) | Outside MCP clients: the OAuth authorization server, consent, and connected clients | `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens`; pending authorizations and codes are short-lived Redis keys |
 | [contacts](contacts.md) | People a pod's bots answer who are not members, and the handles they are known by | `contacts`, `contact_identities` |
+| [channels](channels.md) | The places members, contacts and agents talk: one timeline per place, fed by outside sources | `channels`, `channel_sources`, `channel_messages`, `channel_participants`, `channel_agents` |
 | [decisions](decisions.md) | Stateless closed-question decisions over pluggable providers | None; the per-organization rate window is a short-lived Redis counter |
 
 ## Tables owned by core

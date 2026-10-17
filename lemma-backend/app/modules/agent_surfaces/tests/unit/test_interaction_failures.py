@@ -32,7 +32,7 @@ from app.modules.agent_surfaces.services.slack_socket_runner import (
     SlackSocketReceiverRunner,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
-    _ask_user_link,
+    _answered_in_thread,
     _slack_event,
     _slack_surface,
     _surface_conversation,
@@ -48,12 +48,9 @@ async def _tap(*, sender: str | None = None, decision: str = "APPROVE_ONCE"):
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
-    )
-    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.surface_conversation.return_value = _surface_conversation(
         surface, conversation_id=conversation_id
     )
@@ -133,7 +130,7 @@ async def test_a_refused_submitter_does_not_spend_the_replay_claim():
 async def test_a_gone_conversation_on_retry_is_acknowledged():
     service, adapter, interaction, _ = await _tap()
     interaction = interaction.model_copy(update={"action": "retry"})
-    service._refresh_interaction_conversation = AsyncMock(return_value=None)
+    agent_conversations.surface_conversation.return_value = None
 
     await service.handle_interaction(interaction)
 

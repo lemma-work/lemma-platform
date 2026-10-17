@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from app.modules.channels.contracts import MembersHome, Place, Source, SourceKind
+
+from dataclasses import replace
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -11,7 +14,6 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ConversationType,
     SurfaceCredentialMode,
@@ -38,11 +40,12 @@ from app.modules.agent_surfaces.services.pending_interaction_resume import (
     maybe_resume_pending_interaction,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    AnsweredAt,
     _ASK_USER_TOOL_ARGS,
     _ASK_USER_TOOL_ARGS_FLAT,
     _ASK_USER_QUESTIONS,
     _REQUEST_APPROVAL_TOOL_ARGS,
-    _ask_user_link,
+    _answered_in_thread,
     _conversation,
     _pending,
     _resend_surface,
@@ -55,6 +58,7 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     _telegram_surface,
     build_ingress_service,
     conversation_operations,  # noqa: F401  (autouse fixture)
+    surface_conversation,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -354,7 +358,7 @@ async def test_resolved_dm_with_no_route_gets_setup_reply():
     assert "set up or select a surface" in context.reply_message
 
 
-async def test_prepare_webhook_creates_conversation_link_for_resolved_user():
+async def test_prepare_webhook_places_the_message_and_opens_a_conversation_there():
     surface = _teams_surface()
     user_id = uuid4()
     conversation = _conversation(surface, user_id)
@@ -405,31 +409,53 @@ async def test_prepare_webhook_creates_conversation_link_for_resolved_user():
     assert create_kwargs["metadata"]["surface_id"] == str(surface.id)
     assert create_kwargs["metadata"]["surface_platform"] == "TEAMS"
     assert create_kwargs["metadata"]["external_thread_id"] == "17001"
-    service.conversation_link_repository.create.assert_awaited_once()
+    # A channel the bot was mentioned in is a shared place, and the
+    # conversation is opened in that place's channel.
+    [source] = service.seats.sources.values()
+    assert source.kind is SourceKind.SHARED
+    assert source.external_channel_id == "19:channel"
+    assert context.source_id == source.id
+    assert create_kwargs["channel_id"] == source.channel_id
 
 
-async def test_prepare_webhook_reuses_existing_conversation_link():
-    surface = _slack_surface()
-    user_id = uuid4()
-    conversation_id = uuid4()
-    link = AgentSurfaceConversationLink(
-        surface_id=surface.id,
-        conversation_id=conversation_id,
-        platform="SLACK",
-        external_channel_id="D123",
-        external_thread_id="D123",
-        external_user_id="U123",
-        routed_agent_id=surface.agent_id,
-        last_event={},
+async def _seated(service, surface, *, user_id, conversation_id, agent_id) -> Source:
+    """The member's private Slack chat, with their conversation with
+    ``agent_id`` already in its channel."""
+    place = await service.seats.source_for(
+        pod_id=surface.pod_id,
+        place=Place(
+            surface_id=surface.id,
+            platform="SLACK",
+            kind=SourceKind.PRIVATE,
+            external_channel_id=None,
+            external_user_id="U123",
+        ),
+        home=MembersHome(user_id=user_id),
     )
-    event = _slack_event()
+    service.seats.seat(
+        conversation_id,
+        channel_id=place.channel_id,
+        pod_id=surface.pod_id,
+        agent_id=agent_id,
+        person=user_id,
+    )
+    agent_conversations.surface_conversation.return_value = surface_conversation(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        pod_id=surface.pod_id,
+        agent_id=agent_id,
+    )
+    return place
+
+
+def _slack_dm_service(surface, user_id, *, conversation=None):
     adapter = AsyncMock()
-    adapter.parse_inbound_event.return_value = event
+    adapter.parse_inbound_event.return_value = _slack_event()
     adapter.fetch_sender_profile.return_value = SurfaceSenderProfile(
         external_user_id="U123",
         display_name="Sender",
     )
-    service = build_ingress_service(
+    return build_ingress_service(
         adapter=adapter,
         surfaces=[surface],
         resolved_user=ResolvedSurfaceUser(
@@ -437,7 +463,23 @@ async def test_prepare_webhook_reuses_existing_conversation_link():
             external_user_id="U123",
             display_name="Sender",
         ),
-        existing_link=link,
+        conversation=conversation,
+    )
+
+
+async def test_prepare_webhook_continues_the_persons_conversation_in_their_channel():
+    """However long ago, on whatever thread: the same person, the same agent,
+    the same conversation."""
+    surface = _slack_surface()
+    user_id = uuid4()
+    conversation_id = uuid4()
+    service = _slack_dm_service(surface, user_id)
+    place = await _seated(
+        service,
+        surface,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        agent_id=surface.agent_id,
     )
 
     context = await service.prepare_ingress(
@@ -446,44 +488,23 @@ async def test_prepare_webhook_reuses_existing_conversation_link():
 
     assert isinstance(context, SurfaceChatContext)
     assert context.conversation_id == conversation_id
+    assert context.source_id == place.id
     agent_conversations.open_surface_conversation.assert_not_called()
-    service.conversation_link_repository.update_last_event.assert_awaited_once()
 
 
-async def test_prepare_webhook_resets_dm_conversation_when_surface_agent_changes():
-    old_agent_id = uuid4()
-    new_agent_id = uuid4()
-    surface = _slack_surface(agent_id=new_agent_id)
+async def test_prepare_webhook_does_not_continue_another_agents_conversation():
+    """The surface now answers as another agent: that agent's conversation
+    with the person, not the old one's."""
+    surface = _slack_surface(agent_id=uuid4())
     user_id = uuid4()
-    old_conversation_id = uuid4()
     new_conversation = _conversation(surface, user_id)
-    link = AgentSurfaceConversationLink(
-        surface_id=surface.id,
-        conversation_id=old_conversation_id,
-        platform="SLACK",
-        external_channel_id="D123",
-        external_thread_id="D123",
-        external_user_id="U123",
-        routed_agent_id=old_agent_id,
-        last_event={},
-    )
-    event = _slack_event()
-    adapter = AsyncMock()
-    adapter.parse_inbound_event.return_value = event
-    adapter.fetch_sender_profile.return_value = SurfaceSenderProfile(
-        external_user_id="U123",
-        display_name="Sender",
-    )
-    service = build_ingress_service(
-        adapter=adapter,
-        surfaces=[surface],
-        resolved_user=ResolvedSurfaceUser(
-            internal_user_id=user_id,
-            external_user_id="U123",
-            display_name="Sender",
-        ),
-        conversation=new_conversation,
-        existing_link=link,
+    service = _slack_dm_service(surface, user_id, conversation=new_conversation)
+    await _seated(
+        service,
+        surface,
+        user_id=user_id,
+        conversation_id=uuid4(),
+        agent_id=uuid4(),
     )
 
     context = await service.prepare_ingress(
@@ -492,10 +513,7 @@ async def test_prepare_webhook_resets_dm_conversation_when_surface_agent_changes
 
     assert isinstance(context, SurfaceChatContext)
     assert context.conversation_id == new_conversation.id
-    update = service.conversation_link_repository.update_conversation.await_args.kwargs
-    assert update["routed_agent_id"] == new_agent_id
     agent_conversations.open_surface_conversation.assert_awaited_once()
-    service.conversation_link_repository.update_last_event.assert_not_called()
 
 
 async def test_an_allowed_channel_is_answered_by_the_surfaces_own_agent():
@@ -537,10 +555,12 @@ async def test_an_allowed_channel_is_answered_by_the_surfaces_own_agent():
 
     assert isinstance(context, SurfaceChatContext)
     assert context.conversation_id == conversation.id
-    created_link = service.conversation_link_repository.create.await_args.args[0]
-    assert created_link.routed_agent_id == surface.agent_id
-    assert created_link.route_key == "channel:C999"
-    assert created_link.conversation_kind == "CHANNEL"
+    metadata = agent_conversations.open_surface_conversation.await_args.kwargs[
+        "metadata"
+    ]
+    assert metadata["routed_agent_id"] == str(surface.agent_id)
+    assert metadata["route_key"] == "channel:C999"
+    assert metadata["conversation_kind"] == "CHANNEL"
 
 
 async def test_prepare_webhook_applies_identity_allow_domain_policy():
@@ -623,52 +643,7 @@ async def test_prepare_webhook_ignores_unconfigured_slack_channel():
     )
 
     assert context is None
-    service.conversation_link_repository.create.assert_not_awaited()
-
-
-async def test_prepare_webhook_resets_stale_dm_conversation_link():
-    surface = _slack_surface()
-    user_id = uuid4()
-    old_conversation_id = uuid4()
-    new_conversation = _conversation(surface, user_id)
-    link = AgentSurfaceConversationLink(
-        surface_id=surface.id,
-        conversation_id=old_conversation_id,
-        platform="SLACK",
-        external_channel_id="D123",
-        external_thread_id="D123",
-        external_user_id="U123",
-        last_event={},
-    )
-    link.updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
-    event = _slack_event()
-    adapter = AsyncMock()
-    adapter.parse_inbound_event.return_value = event
-    adapter.fetch_sender_profile.return_value = SurfaceSenderProfile(
-        external_user_id="U123",
-        display_name="Sender",
-    )
-    service = build_ingress_service(
-        adapter=adapter,
-        surfaces=[surface],
-        resolved_user=ResolvedSurfaceUser(
-            internal_user_id=user_id,
-            external_user_id="U123",
-            display_name="Sender",
-        ),
-        conversation=new_conversation,
-        existing_link=link,
-    )
-
-    context = await service.prepare_ingress(
-        SurfacePlatformWebhookIngress(source="slack", payload={}, headers={})
-    )
-
-    assert isinstance(context, SurfaceChatContext)
-    assert context.conversation_id == new_conversation.id
-    agent_conversations.open_surface_conversation.assert_awaited_once()
-    service.conversation_link_repository.update_conversation.assert_awaited_once()
-    service.conversation_link_repository.update_last_event.assert_not_called()
+    assert not service.seats.sources
 
 
 async def test_prepare_webhook_ignores_duplicate_external_message():
@@ -711,12 +686,9 @@ async def test_handle_interaction_resumes_via_approval_path():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
-    )
-    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     owner = link.external_user_id
     conversation = _surface_conversation(surface, conversation_id=conversation_id)
     agent_conversations.surface_conversation.return_value = conversation
@@ -743,14 +715,14 @@ async def test_handle_interaction_resumes_via_approval_path():
 
 
 @pytest.mark.parametrize(
-    "link_id, sender_id, why",
+    "person_id, sender_id, why",
     [
         ("U-owner", "U-mallory", "somebody else in the channel"),
-        (None, "U-mallory", "a link that never learned who it belongs to"),
+        (None, "U-mallory", "a place that never learned who it belongs to"),
         ("U-owner", None, "a payload that named no submitter"),
     ],
 )
-async def test_a_tap_we_cannot_attribute_resolves_nothing(link_id, sender_id, why):
+async def test_a_tap_we_cannot_attribute_resolves_nothing(person_id, sender_id, why):
     """The control in front of a native Approve, exercised end to end.
 
     It runs between the replay-dedup claim and `resolve_user_approval_internal`,
@@ -761,13 +733,12 @@ async def test_a_tap_we_cannot_attribute_resolves_nothing(link_id, sender_id, wh
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
-    link.external_user_id = link_id
-    adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
+    link = replace(
+        _answered_in_thread(surface, conversation_id, parsed_event),
+        external_user_id=person_id,
     )
-    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    adapter = AsyncMock()
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.surface_conversation.return_value = _surface_conversation(
         surface
     )
@@ -803,12 +774,9 @@ async def test_handle_interaction_routes_approval_decision(decision_value, expec
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
-    )
-    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     owner = link.external_user_id
     conversation = _surface_conversation(surface, conversation_id=conversation_id)
     agent_conversations.surface_conversation.return_value = conversation
@@ -832,32 +800,27 @@ async def test_handle_interaction_routes_approval_decision(decision_value, expec
     assert kwargs["response"] == {}
 
 
-async def test_handle_retry_resolves_conversation_from_current_thread_link():
+async def test_handle_retry_resolves_the_tappers_conversation_where_they_tapped():
     surface = _telegram_surface()
     user_id = uuid4()
     conversation = _conversation(surface, user_id)
     event = _telegram_event(chat_id="123", message_id="5")
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation.id,
         platform="TELEGRAM",
         external_channel_id="123",
         external_thread_id="123",
         external_user_id="777",
-        routed_agent_id=surface.agent_id,
         last_event=event.model_dump(mode="json"),
     )
     adapter = AsyncMock()
     service = build_ingress_service(
         adapter=adapter,
         surfaces=[surface],
-        existing_link=link,
+        answered=link,
     )
-    service.conversation_link_repository.find_surface_id_for_external_thread.return_value = surface.id
     agent_conversations.surface_conversation.return_value = conversation
-    service._refresh_interaction_conversation = AsyncMock(
-        return_value=(link, conversation, False)
-    )
     interaction = ParsedSurfaceInteraction(
         platform=SurfacePlatform.TELEGRAM,
         external_channel_id="123",
@@ -870,14 +833,6 @@ async def test_handle_retry_resolves_conversation_from_current_thread_link():
     await service.handle_interaction(interaction)
     retry = agent_conversations.retry_failed_run
 
-    service.conversation_link_repository.get_by_conversation_id.assert_not_awaited()
-    service.conversation_link_repository.get_by_external_thread.assert_awaited_once_with(
-        surface_id=surface.id,
-        platform="TELEGRAM",
-        external_channel_id="123",
-        external_thread_id="123",
-        external_user_id="777",
-    )
     retry.assert_awaited_once()
     assert retry.await_args.kwargs["conversation_id"] == conversation.id
     adapter.acknowledge_interaction.assert_awaited_once_with(
@@ -888,63 +843,13 @@ async def test_handle_retry_resolves_conversation_from_current_thread_link():
     )
 
 
-async def test_refresh_retry_uses_normal_agent_change_reset_policy():
-    old_agent_id = uuid4()
-    new_agent_id = uuid4()
-    surface = _telegram_surface(agent_id=new_agent_id)
-    user_id = uuid4()
-    old_conversation = _conversation(surface, user_id).model_copy(
-        update={"agent_id": old_agent_id}
-    )
-    new_conversation = _conversation(surface, user_id)
-    event = _telegram_event(chat_id="123", message_id="5")
-    link = AgentSurfaceConversationLink(
-        surface_id=surface.id,
-        conversation_id=old_conversation.id,
-        platform="TELEGRAM",
-        external_channel_id="123",
-        external_thread_id="123",
-        external_user_id="777",
-        # Even if denormalized route metadata was already updated, the actual
-        # conversation's agent remains authoritative for deciding to reset.
-        routed_agent_id=new_agent_id,
-        last_event=event.model_dump(mode="json"),
-    )
-    adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter,
-        surfaces=[surface],
-        conversation=new_conversation,
-        existing_link=link,
-    )
-    agent_conversations.surface_conversation.return_value = new_conversation
-
-    refreshed = await service._refresh_interaction_conversation(
-        link=link,
-        surface=surface,
-        conversation=old_conversation,
-    )
-
-    assert refreshed is not None
-    refreshed_link, refreshed_conversation, restarted = refreshed
-    assert restarted is True
-    assert refreshed_link.conversation_id == new_conversation.id
-    assert refreshed_conversation is new_conversation
-    agent_conversations.open_surface_conversation.assert_awaited_once()
-    update = service.conversation_link_repository.update_conversation.await_args.kwargs
-    assert update["conversation_id"] == new_conversation.id
-    assert update["routed_agent_id"] == new_agent_id
-
-
 async def test_maybe_resume_pending_interaction_handles_request_approval_approve():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
-    )
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     conversation = _surface_conversation(surface, conversation_id=conversation_id)
     agent_conversations.surface_conversation.return_value = conversation
     agent_conversations.pending_interaction.return_value = _pending(
@@ -967,11 +872,9 @@ async def test_maybe_resume_pending_interaction_handles_request_approval_deny():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
-    )
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     conversation = _surface_conversation(surface, conversation_id=conversation_id)
     agent_conversations.surface_conversation.return_value = conversation
     agent_conversations.pending_interaction.return_value = _pending(
@@ -993,11 +896,9 @@ async def test_maybe_resume_pending_interaction_parses_numbered_ask_user_option(
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
-    )
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     conversation = _surface_conversation(surface, conversation_id=conversation_id)
     agent_conversations.surface_conversation.return_value = conversation
     agent_conversations.pending_interaction.return_value = _pending(
@@ -1155,7 +1056,6 @@ def _claim_journal(service) -> list[str]:
     for target, label in (
         (service.adapter_registry.get(SurfacePlatform.SLACK), "adapter"),
         (service.surface_repository, "surfaces"),
-        (service.conversation_link_repository, "links"),
         (service.router.identity_service, "identity"),
         (service.router.pod_membership_port, "membership"),
     ):

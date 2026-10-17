@@ -1,31 +1,27 @@
-"""What the planner actually does with the two hot surface reads.
+"""What the planner actually does with the hot reads of an inbound message.
 
-Every index on these tables is now named by the query that needs it, in a
-comment beside its declaration. A comment is a claim, and this is the check:
-`EXPLAIN (ANALYZE, FORMAT JSON)` the two reads that run on every inbound
-message and assert the shape of the plan.
+Every index these reads need is named by the query that needs it, in a comment
+beside its declaration. A comment is a claim, and this is the check:
+`EXPLAIN (ANALYZE, FORMAT JSON)` the reads that run on every inbound message
+and assert the shape of the plan.
 
 Plan shape rather than statement counts, and rather than timings. A statement
 count cannot tell a constant-cost read from one that scans a table growing per
-thread -- the count is 1 either way, which is exactly the regression the
-continuity index exists to end. Timings on a laptop under Docker measure the
+chat -- the count is 1 either way. Timings on a laptop under Docker measure the
 laptop. What does not lie is which node the planner chose, and whether the rows
 it touched move when rows are added that the query is not for.
 
-Two claims, one per index:
+``ix_channel_sources_chat``
+    The places hearing one chat: which of the deployment's surfaces a group
+    message is for, and the group a reply in a thread belongs to.
 
-``ix_agent_surface_link_thread_continuity``
-    `find_surface_id_for_external_thread` is the only link read not scoped to a
-    surface -- it exists to find which surface a returning chat already lives
-    on. It matched the standalone `platform` btree before, so every inbound
-    message filtered and sorted a table that grows per thread across the whole
-    deployment.
+``ix_channel_sources_person``
+    One person's private chats: where a stranger who wrote before is answered,
+    which surface a returning person's chat continues on, and where to reach a
+    member.
 
 ``ix_agent_surface_routing``
-    Every routing read leads with `(surface_type, status)` and takes the result
-    in `(created_at, id)` order, which is the documented tiebreak when a sender
-    resolves to several candidates. Carrying the sort columns means the ordered
-    index scan is the answer, with no sort node.
+    Every routing read leads with `(surface_type, status)`.
 """
 
 from __future__ import annotations
@@ -39,14 +35,14 @@ from sqlalchemy import select, text
 from app.modules.pod.infrastructure.models.pod_models import Pod
 
 from app.modules.agent.infrastructure.models import AgentModel
-from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.infrastructure.models import (
-    AgentSurface,
-    AgentSurfaceConversationLinkModel,
+from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.channels.infrastructure.models import (
+    ChannelModel,
+    ChannelSourceModel,
 )
 
 pytestmark = pytest.mark.e2e
@@ -107,28 +103,35 @@ async def _surface(db_session, pod_id, agent_id, platform: str) -> AgentSurface:
     return surface
 
 
-async def _seed_threads(
-    db_session, surface_id: UUID, conversation_id, count: int, *, prefix: str
-):
-    """`count` links on one surface, each its own chat.
+async def _a_channel(db_session, pod_id) -> UUID:
+    """A channel the places can belong to. Which kind does not matter here:
+    neither read is keyed on it."""
+    channel = ChannelModel(id=uuid7(), pod_id=UUID(str(pod_id)), kind="GROUP")
+    db_session.add(channel)
+    await db_session.commit()
+    return channel.id
 
-    They all share a conversation because this is about how the *links* table is
-    read; the conversation column is not in the predicate.
-    """
+
+def _place(surface: AgentSurface, channel_id: UUID, *, chat=None, person=None):
+    return ChannelSourceModel(
+        id=uuid7(),
+        channel_id=channel_id,
+        pod_id=surface.pod_id,
+        surface_id=surface.id,
+        platform=_PLATFORM,
+        kind="PRIVATE" if person else "SHARED",
+        external_channel_id=chat,
+        external_user_id=person,
+    )
+
+
+async def _seed_places(
+    db_session, surface: AgentSurface, channel_id: UUID, count: int, *, prefix: str
+):
+    """`count` places on one surface: a group chat and a person's chat each."""
     for index in range(count):
-        db_session.add(
-            AgentSurfaceConversationLinkModel(
-                id=uuid7(),
-                surface_id=surface_id,
-                conversation_id=conversation_id,
-                platform=_PLATFORM,
-                external_channel_id=f"{prefix}-chat-{index}",
-                external_thread_id=f"{prefix}-chat-{index}",
-                external_user_id=f"{prefix}-user-{index}",
-                conversation_kind="DM",
-                last_event={},
-            )
-        )
+        db_session.add(_place(surface, channel_id, chat=f"{prefix}-chat-{index}"))
+        db_session.add(_place(surface, channel_id, person=f"{prefix}-user-{index}"))
     await db_session.commit()
 
 
@@ -168,171 +171,96 @@ def _rows_read(plan: dict, relation: str) -> int:
     )
 
 
-#: What one continuity lookup may touch, however many other chats exist. It
-#: finds a single thread; anything above a handful means the index was not used.
-_CONTINUITY_ROW_CEILING = 5
+#: What one lookup may touch, however many other chats exist. It finds a
+#: single place; anything above a handful means the index was not used.
+_ROW_CEILING = 5
 
-_CONTINUITY_SQL = """
-SELECT surface_id FROM agent_surface_conversation_links
+_CHAT_SQL = """
+SELECT id FROM channel_sources
 WHERE platform = :platform
-  AND external_thread_id = :thread
-  AND external_channel_id = :channel
-  AND external_user_id = :user
-ORDER BY updated_at DESC
-LIMIT 1
+  AND external_channel_id = :chat
+  AND external_user_id IS NULL
+ORDER BY created_at
+LIMIT 50
 """
 
-
-async def test_continuity_reads_an_index_not_the_platforms_whole_history(
-    test_pod, pod_agent_id, db_session
-):
-    """The rows it touches must not move when other people's chats are added.
-
-    Seeding is what makes the assertion mean anything: before this index the
-    planner used the standalone `platform` btree, so the same query touched
-    every link on the platform -- and the statement count stayed at one while
-    the work grew with the deployment.
-    """
-    surface = await _surface(db_session, test_pod["id"], pod_agent_id, _PLATFORM)
-    conversation_id = await _a_conversation(db_session, surface)
-    params = {
-        "platform": _PLATFORM,
-        "thread": "the-chat-under-test",
-        "channel": "the-chat-under-test",
-        "user": "the-person-under-test",
-    }
-    # The chat under test has to exist, or both plans emit nothing and the
-    # comparison below is two zeros. The first version of this test seeded only
-    # the crowd, so it held nothing still.
-    db_session.add(
-        AgentSurfaceConversationLinkModel(
-            id=uuid7(),
-            surface_id=surface.id,
-            conversation_id=conversation_id,
-            platform=_PLATFORM,
-            external_channel_id=params["channel"],
-            external_thread_id=params["thread"],
-            external_user_id=params["user"],
-            conversation_kind="DM",
-            last_event={},
-        )
-    )
-    await db_session.commit()
-
-    await _seed_threads(db_session, surface.id, conversation_id, 5, prefix="few")
-    await db_session.execute(text("ANALYZE agent_surface_conversation_links"))
-    few = await _plan(db_session, _CONTINUITY_SQL, params)
-
-    await _seed_threads(db_session, surface.id, conversation_id, 200, prefix="many")
-    await db_session.execute(text("ANALYZE agent_surface_conversation_links"))
-    many = await _plan(db_session, _CONTINUITY_SQL, params)
-
-    assert "ix_agent_surface_link_thread_continuity" in _index_names(many), (
-        f"continuity fell back to another plan: {_index_names(many)}"
-    )
-    read_few = _rows_read(few, "agent_surface_conversation_links")
-    read_many = _rows_read(many, "agent_surface_conversation_links")
-    assert read_few >= 1, (
-        "the chat under test was not found at all, so this measured nothing: "
-        f"{read_few} rows"
-    )
-    # Not equality. At six links a sequential scan is genuinely the cheaper
-    # plan and Postgres takes it, touching all six; at two hundred and six it
-    # switches to the index and touches one. The property is that the work does
-    # not *grow* with other people's chats -- so "no more than before", and a
-    # constant rather than a fraction of the table.
-    assert read_many <= read_few, (
-        "the continuity read grew with the platform's other chats: "
-        f"{read_few} rows at 6 links, {read_many} at 206"
-    )
-    assert read_many <= _CONTINUITY_ROW_CEILING, (
-        f"the continuity read touched {read_many} rows at 206 links; it is "
-        "meant to find one thread, not scan the platform's history"
-    )
-
-
-async def _a_conversation(db_session, surface: AgentSurface) -> UUID:
-    """A conversation id the links can point at."""
-    agent = await db_session.get(AgentModel, surface.agent_id)
-    conversation = ConversationModel(
-        id=uuid7(),
-        pod_id=surface.pod_id,
-        agent_id=surface.agent_id,
-        user_id=agent.user_id,
-        title="index plans",
-        conversation_metadata={},
-    )
-    db_session.add(conversation)
-    await db_session.commit()
-    return conversation.id
-
-
 _PERSON_SQL = """
-SELECT id FROM agent_surface_conversation_links
+SELECT id FROM channel_sources
 WHERE platform = :platform
-  AND external_user_id = :user
-  AND conversation_kind = 'DM'
+  AND external_user_id = :person
+  AND kind = 'PRIVATE'
   AND surface_id IN (:surface)
 ORDER BY coalesce(last_inbound_at, updated_at) DESC
 LIMIT 1
 """
 
 
-async def test_the_person_level_dm_read_is_bounded_by_the_surface_index(
-    test_pod, pod_agent_id, db_session
-):
-    """A first message asks "has this person chatted before" of every candidate.
-
-    `find_latest_dm_link_for_person` is the one link read keyed on the person
-    instead of a thread, and it is only affordable because it is always handed a
-    surface list: `(surface_id, external_user_id, ...)` is
-    `ix_agent_surface_link_surface_member`. Without the surface list the same
-    question would read every link of the platform, so the property held still is
-    that the rows it touches do not grow with other people's chats.
-    """
+async def _held_still(db_session, test_pod, pod_agent_id, *, sql, index, under_test):
+    """Plan ``sql`` at a few places and at hundreds: the index is used, and
+    the rows it touches do not grow with other people's chats."""
     surface = await _surface(db_session, test_pod["id"], pod_agent_id, _PLATFORM)
-    conversation_id = await _a_conversation(db_session, surface)
+    channel_id = await _a_channel(db_session, test_pod["id"])
     params = {
         "platform": _PLATFORM,
-        "user": "the-person-under-test",
+        "chat": "the-chat-under-test",
+        "person": "the-person-under-test",
         "surface": surface.id,
     }
-    db_session.add(
-        AgentSurfaceConversationLinkModel(
-            id=uuid7(),
-            surface_id=surface.id,
-            conversation_id=conversation_id,
-            platform=_PLATFORM,
-            external_channel_id="the-chat-under-test",
-            external_thread_id="the-chat-under-test",
-            external_user_id=params["user"],
-            conversation_kind="DM",
-            last_event={},
-        )
-    )
+    # The place under test has to exist, or both plans emit nothing and the
+    # comparison below is two zeros.
+    db_session.add(_place(surface, channel_id, **under_test(params)))
     await db_session.commit()
 
-    await _seed_threads(db_session, surface.id, conversation_id, 5, prefix="few")
-    await db_session.execute(text("ANALYZE agent_surface_conversation_links"))
-    few = await _plan(db_session, _PERSON_SQL, params)
+    await _seed_places(db_session, surface, channel_id, 5, prefix="few")
+    await db_session.execute(text("ANALYZE channel_sources"))
+    few = await _plan(db_session, sql, params)
 
-    await _seed_threads(db_session, surface.id, conversation_id, 200, prefix="many")
-    await db_session.execute(text("ANALYZE agent_surface_conversation_links"))
-    many = await _plan(db_session, _PERSON_SQL, params)
+    await _seed_places(db_session, surface, channel_id, 200, prefix="many")
+    await db_session.execute(text("ANALYZE channel_sources"))
+    many = await _plan(db_session, sql, params)
 
-    assert "ix_agent_surface_link_surface_member" in _index_names(many), (
-        f"the person-level read fell back to another plan: {_index_names(many)}"
+    assert index in _index_names(many), (
+        f"the read fell back to another plan: {_index_names(many)}"
     )
-    read_few = _rows_read(few, "agent_surface_conversation_links")
-    read_many = _rows_read(many, "agent_surface_conversation_links")
+    read_few = _rows_read(few, "channel_sources")
+    read_many = _rows_read(many, "channel_sources")
     assert read_few >= 1, (
-        "the person under test was not found, so this measured nothing"
+        f"the place under test was not found, so this measured nothing: {read_few}"
     )
+    # Not equality. At a dozen places a sequential scan is genuinely the
+    # cheaper plan and Postgres takes it; at hundreds it switches to the index
+    # and touches one. The property is that the work does not *grow* with other
+    # people's chats.
     assert read_many <= read_few, (
-        "the person-level read grew with the surface's other chats: "
-        f"{read_few} rows at 6 links, {read_many} at 206"
+        f"the read grew with other chats: {read_few} rows, then {read_many}"
     )
-    assert read_many <= _CONTINUITY_ROW_CEILING
+    assert read_many <= _ROW_CEILING, f"the read touched {read_many} rows"
+
+
+async def test_the_places_hearing_a_chat_are_read_by_the_chat_index(
+    test_pod, pod_agent_id, db_session
+):
+    await _held_still(
+        db_session,
+        test_pod,
+        pod_agent_id,
+        sql=_CHAT_SQL,
+        index="ix_channel_sources_chat",
+        under_test=lambda params: {"chat": params["chat"]},
+    )
+
+
+async def test_a_persons_private_places_are_read_by_the_person_index(
+    test_pod, pod_agent_id, db_session
+):
+    await _held_still(
+        db_session,
+        test_pod,
+        pod_agent_id,
+        sql=_PERSON_SQL,
+        index="ix_channel_sources_person",
+        under_test=lambda params: {"person": params["person"]},
+    )
 
 
 async def test_the_routing_index_is_exactly_the_routing_predicate(db_session):

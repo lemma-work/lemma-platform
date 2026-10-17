@@ -163,9 +163,9 @@ class SurfaceBehaviorConfigInput(BaseModel):
         default=None,
         deprecated=True,
         description=(
-            "Ignored. The DM reset window is a deployment-wide setting "
-            "(SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so "
-            "existing pod bundles and clients keep working."
+            "Ignored. A private chat is one conversation per agent and person, "
+            "however long it goes quiet. Still accepted so existing pod bundles "
+            "and clients keep working."
         ),
     )
     send_policy: SurfaceSendPolicyConfig = Field(

@@ -1,4 +1,8 @@
-"""The group tables come and go with their migration, and only with it."""
+"""The group tables come and go with their migration, and only with it.
+
+They lasted until channels (``0058_channels``), which keep a group as a place of
+its own channel; at head they are gone.
+"""
 
 import os
 import subprocess
@@ -74,5 +78,5 @@ def test_the_group_tables_upgrade_and_roll_back_cleanly() -> None:
         assert origin_columns() == set()
 
         migrate("upgrade", "head")
-        assert tables() == ("agent_surface_groups", "agent_surface_group_messages")
+        assert tables() == (None, None)
         assert origin_columns() == everything

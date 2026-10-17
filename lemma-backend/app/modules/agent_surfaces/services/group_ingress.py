@@ -19,9 +19,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
+from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.created_groups import (
     created_group_surfaces,
     named_in_group,
@@ -40,6 +38,7 @@ async def logged_and_addressed(
     *,
     adapter: SurfacePlatformAdapterPort,
     credential_resolver: SurfaceCredentialResolver,
+    seats: ChannelSeats,
     surfaces: Sequence[AgentSurfaceEntity],
     parsed: ParsedInboundSurfaceEvent,
 ) -> ParsedInboundSurfaceEvent:
@@ -48,7 +47,7 @@ async def logged_and_addressed(
     # Before anything decides whether this is for the bot: most of a group is
     # not, and all of it is what the log is for. Committed at once so no write
     # is held open across the platform calls that follow.
-    if await GroupLog(uow).note_inbound(list(surfaces), parsed):
+    if await GroupLog(uow, seats=seats).note_inbound(list(surfaces), parsed):
         await commit_now(uow)
     if surfaces and adapter.mention_is_provisional(parsed):
         parsed = await _settled_mention(
@@ -93,7 +92,7 @@ async def own_bot_group_message(
     adapter: SurfacePlatformAdapterPort,
     credential_resolver: SurfaceCredentialResolver,
     surface_repository,
-    links: SurfaceConversationLinkRepository,
+    seats: ChannelSeats,
     surface: AgentSurfaceEntity,
     parsed: ParsedInboundSurfaceEvent,
 ) -> ParsedInboundSurfaceEvent | None:
@@ -116,9 +115,10 @@ async def own_bot_group_message(
         uow,
         adapter=adapter,
         credential_resolver=credential_resolver,
+        seats=seats,
         surfaces=[surface],
         parsed=parsed,
     )
-    if not await admitted_surfaces([surface], parsed, links=links):
+    if not await admitted_surfaces([surface], parsed, seats=seats):
         return None
     return parsed

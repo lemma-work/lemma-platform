@@ -44,6 +44,7 @@ from app.modules.agent_surfaces.services.group_log import (
     RosterReads,
     for_member_run,
     group_background,
+    group_source,
     keeps_group_log,
     live_participants,
     roster_reads,
@@ -51,6 +52,7 @@ from app.modules.agent_surfaces.services.group_log import (
 from app.modules.agent_surfaces.services.surface_inbound_message import (
     fetch_channel_context,
 )
+from app.modules.channels.contracts import Principal, Reader, Source
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,12 +91,14 @@ async def run_background(
 ) -> RunBackground:
     """What this run is shown of the group, and who outside the pod reads it.
 
-    The pod's own log where it keeps one (Telegram, WhatsApp); otherwise the
-    platform's history, read live. Either way a member's run is not shown
+    The pod's own log where it keeps one (Telegram, WhatsApp) and it has lines;
+    otherwise the platform's history, read live. Either way a member's run is not shown
     what strangers wrote (``group_log``), and is told that they are there.
     """
     group, logged = await _group_background(uow_factory, context)
-    if logged is not None:
+    # A log with nothing in it yet -- a group first heard with this very
+    # message -- says less than the platform does: the message replied to.
+    if logged is not None and logged.lines:
         lines = [line.model_dump(mode="json") for line in logged.lines]
         withheld, outside = logged.withheld, list(logged.outside_authors)
         participants = logged.participants
@@ -183,15 +187,33 @@ async def _group_background(
         )
         if group is None:
             return None, None
+        source = await group_source(uow, group)
+        if source is None:
+            return None, None
         logged = await group_background(
             uow,
             group=group,
+            source=source,
             membership=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
             agent_display_name=context.agent_display_name,
-            for_stranger=context.audience.answers_outsiders,
-            asker_external_id=context.message_external_user_id,
+            reader=_reader(context, source),
+            asker=_asker(context),
         )
     return group, logged
+
+
+def _reader(context: SurfaceChatContext, source: Source) -> Reader | None:
+    """Whom this run reads the group as: its contact, a member, or nobody."""
+    audience = context.audience
+    if audience.contact_id is not None:
+        return Reader.contact(audience.contact_id, source_id=source.id)
+    return None if audience.answers_outsiders else Reader.member()
+
+
+def _asker(context: SurfaceChatContext) -> Principal:
+    if context.audience.contact_id is not None:
+        return Principal.contact(context.audience.contact_id)
+    return Principal.member(context.message_user_id)
 
 
 async def reply_all_audience(

@@ -82,7 +82,13 @@ class GroupResponse(BaseModel):
 
 class GroupPersonResponse(BaseModel):
     name: str
-    external_id: str | None = None
+    external_id: str | None = Field(
+        default=None,
+        description=(
+            "Who they are to the pod -- ``member:<id>`` or ``contact:<id>`` -- "
+            "the key a timeline line's ``author_external_id`` matches."
+        ),
+    )
     user_id: UUID | None = None
     in_pod: bool
 
@@ -107,7 +113,9 @@ class GroupListResponse(BaseModel):
 
 class GroupLineResponse(BaseModel):
     author_name: str | None = None
-    author_external_id: str | None = None
+    author_external_id: str | None = Field(
+        default=None, description="The speaker's key among the group's people."
+    )
     in_pod: bool
     from_bot: bool
     text: str | None = Field(

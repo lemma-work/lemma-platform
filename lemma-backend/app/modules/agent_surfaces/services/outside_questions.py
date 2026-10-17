@@ -32,12 +32,8 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.notification import NotificationEntity
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
+from app.modules.channels.contracts import SourceKind
+from app.modules.channels.contracts.places import reply_address
 
 #: The most of a stranger's question that is passed on.
 MAX_OUTSIDE_QUESTION_CHARS = 1000
@@ -73,33 +69,20 @@ async def outside_origin(
     conversation = await agent_conversations.surface_conversation(uow, conversation_id)
     if conversation is None or conversation.audience.contact_id is None:
         return None
-    links = SurfaceConversationLinkRepository(uow)
-    link = await links.get_by_conversation_id(conversation_id)
-    if link is None or link.conversation_kind != "CHANNEL":
+    address = await reply_address(uow, conversation_id)
+    heard = (address.ref or {}) if address is not None else {}
+    asked_by = heard.get("sender_display_name")
+    asked_by_name = _one_line(asked_by if isinstance(asked_by, str) else None, 255)
+    if address is None or address.source.kind is not SourceKind.SHARED:
         # A private conversation: a contact's chat or email thread, or a web
-        # visitor's (no link at all). Said so, rather than "in a group" the
-        # member would look for and not find.
-        asked_by = (link.last_event or {}).get("sender_display_name") if link else None
+        # visitor's. Said so, rather than "in a group" the member would look
+        # for and not find.
         return OutsideOrigin(
-            group_title=None,
-            asked_by_name=_one_line(
-                asked_by if isinstance(asked_by, str) else None, 255
-            ),
-            in_private=True,
+            group_title=None, asked_by_name=asked_by_name, in_private=True
         )
-    group = (
-        await SurfaceGroupRepository(uow.session).get(
-            surface_id=link.surface_id,
-            external_channel_id=link.external_channel_id,
-        )
-        if link.external_channel_id
-        else None
-    )
-    last_event = link.last_event or {}
-    asked_by = last_event.get("sender_display_name")
     return OutsideOrigin(
-        group_title=_one_line(group.title if group is not None else None, 255),
-        asked_by_name=_one_line(asked_by if isinstance(asked_by, str) else None, 255),
+        group_title=_one_line(address.source.title, 255),
+        asked_by_name=asked_by_name,
     )
 
 

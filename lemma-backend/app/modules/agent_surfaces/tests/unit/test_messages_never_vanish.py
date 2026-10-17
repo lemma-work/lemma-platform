@@ -8,6 +8,8 @@ to send it again. (A message whose ingest failed for good is the ingest item's
 
 from __future__ import annotations
 
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
+
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -141,7 +143,7 @@ async def test_a_sender_profile_the_platform_would_not_give_is_not_cached_as_nob
     router = SurfaceRouter(
         uow=SimpleNamespace(session=SimpleNamespace(info={})),  # type: ignore[arg-type]
         surface_repository=AsyncMock(),
-        conversation_link_repository=AsyncMock(),
+        seats=InMemoryChannelSeats(),
         pod_membership_port=AsyncMock(),
         identity_service=identity,  # type: ignore[arg-type]
         credential_resolver=AsyncMock(),
@@ -166,7 +168,7 @@ async def test_a_bug_reading_the_profile_is_not_hidden_as_a_stranger():
     router = SurfaceRouter(
         uow=SimpleNamespace(session=SimpleNamespace(info={})),  # type: ignore[arg-type]
         surface_repository=AsyncMock(),
-        conversation_link_repository=AsyncMock(),
+        seats=InMemoryChannelSeats(),
         pod_membership_port=AsyncMock(),
         identity_service=AsyncMock(),
         credential_resolver=AsyncMock(),

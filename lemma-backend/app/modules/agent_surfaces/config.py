@@ -245,17 +245,6 @@ class SurfaceSettings(BaseSettings):
             "short enough that coming back later still gets an answer."
         ),
     )
-    surface_dm_conversation_reset_after_hours: int = Field(
-        default=24,
-        description=(
-            "Hours since a person's last inbound DM after which their next "
-            "message opens a fresh Lemma conversation instead of continuing the "
-            "old one. This is the only way a surface decides which conversation "
-            "a message joins; what the agent then sees of that conversation is "
-            "the agent module's business. Set to 0 to never start a fresh DM "
-            "conversation on inactivity."
-        ),
-    )
     surface_outsider_turns_per_person_per_10_minutes: int = Field(
         default=10,
         description=(

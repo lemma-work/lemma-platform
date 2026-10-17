@@ -20,14 +20,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 
@@ -42,23 +38,21 @@ _WITHHELD_NOTE = (
 )
 
 
-async def outsiders_would_see(
-    uow: SqlAlchemyUnitOfWork,
+def outsiders_would_see(
     target: SurfaceEgressTarget,
     request: DisplayResourceRequest,
 ) -> bool:
     """Whether showing this resource here would show a member's data to outsiders."""
-    if request.type not in _MEMBER_DATA or target.link.conversation_kind != "CHANNEL":
+    if (
+        request.type not in _MEMBER_DATA
+        or not target.is_group
+        or target.surface.surface_type.is_email
+    ):
         return False
     if target.event.metadata.get("is_ext_shared_channel"):
         return True
-    channel_id = target.link.external_channel_id
-    if not channel_id:
-        return False
-    group = await SurfaceGroupRepository(uow.session).get(
-        surface_id=target.surface.id, external_channel_id=channel_id
-    )
-    return group is not None and (group.shared_externally or group.welcomes_outsiders)
+    group = target.source
+    return group.shared_externally or group.welcomes_outsiders
 
 
 async def deliver_withheld(

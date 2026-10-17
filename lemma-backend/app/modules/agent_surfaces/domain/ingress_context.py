@@ -72,6 +72,9 @@ class SurfaceChatContext(SurfaceContextBase):
     # them, and nothing the message says may be taken as that member deciding
     # anything -- see `write_inbound_message`.
     audience: Audience = Audience()
+    #: The channel source this message was said in, for its line on the
+    #: channel's timeline. Absent only on a context queued before channels.
+    source_id: UUID | None = None
 
 
 AgentSurfaceContext = Annotated[

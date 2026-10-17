@@ -249,9 +249,14 @@ it is asked, not skipped.
 ### PS-SURF-013 — A thread on the platform is a conversation in the pod
 **Status:** covered
 
-- When a person replies in a thread, the system shall continue the same
-  conversation rather than starting a new one.
-- When a person starts a new thread, the system shall start a new conversation.
+- When a person writes to an agent again -- in the same thread or a new one,
+  from another of the pod's numbers or bots, on another platform, after any
+  length of quiet -- the system shall continue their one conversation with
+  that agent rather than starting a new one.
+- When a different agent answers them, the system shall keep that agent's
+  conversation with them apart.
+- In a group, the system shall give each person their own conversation with
+  the agent there, apart from their private one.
 - The system shall make the conversation readable in the workspace, with the
   surface and thread it came from recorded on it.
 
@@ -330,7 +335,9 @@ is answered *for the pod*.
 
 - Where a platform will not let the bot read a group's history, the system shall
   keep its own record of what the bot heard in a group the pod knows, and of
-  what the bot said there.
+  what the bot said there, each line said by the member or contact who said it
+  -- making somebody outside the pod a contact the first time they speak, even
+  where the bot does not answer them.
 - When the bot answers in such a group, the system shall show it the recent
   record as background, marking what was said by people outside the pod.
 - When the bot answers in any group or channel, the system shall tell it that
@@ -611,8 +618,8 @@ remember where the bot is, who is in there, or what is waiting on them.
   answers, whom it answered and whether it answered from what the pod made
   Public. An answer made with one member's own access shall show its words to
   that member alone.
-- The system shall keep its record of a group for 90 days, and the bot shall say
-  so in the group when it arrives.
+- The system shall keep its record of a group, and the bot shall say so in the
+  group when it arrives.
 - The system shall never show a member's private conversation with the bot, or
   a note written to the agent in Lemma, as part of a group.
 - When the member who answers for a group switches its people outside the pod

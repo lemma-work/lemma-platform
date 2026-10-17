@@ -40,7 +40,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
 )
-from app.modules.agent_surfaces.domain.groups import SurfaceGroup, contact_link_user
+from app.modules.agent_surfaces.domain.groups import SurfaceGroup
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
@@ -225,12 +225,12 @@ class OutsiderDoor:
             display_name=parsed.sender_display_name or sender.display_name,
         )
         parsed = named_after(parsed, group)
-        link, created_title = await binder.bind_conversation(
+        bound = await binder.bind_conversation(
             surface=surface,
             parsed=parsed,
             resolved_user=ResolvedSurfaceUser(
                 internal_user_id=owner,
-                external_user_id=contact_link_user(contact.id),
+                external_user_id=sender.external_user_id,
                 display_name=contact.display_name or sender.display_name,
             ),
             route=route,
@@ -249,7 +249,8 @@ class OutsiderDoor:
             resolved_user=sender,
             user_id=owner,
             route=route,
-            conversation_id=link.conversation_id,
-            created_conversation_title=created_title,
+            conversation_id=bound.conversation_id,
+            source_id=bound.source_id,
+            created_conversation_title=bound.created_title,
             audience=Audience.contact(contact.id),
         )

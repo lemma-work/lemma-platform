@@ -73,6 +73,7 @@ from app.modules.agent_surfaces.services.one_reply_attachments import (
     release_held_files,
 )
 from app.modules.agent_surfaces.services.pending_envelope import RunFiles
+from app.modules.channels.contracts import Source
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 from app.modules.agent.contracts.interaction_replies import ask_user_request_dict
 from app.modules.agent_surfaces.services.surface_sign_in import (
@@ -155,15 +156,19 @@ class SurfaceEgress:
         metadata: dict[str, Any] | None = None,
         attach_files_of: RunFiles | None = None,
         sender_only: bool = False,
+        at: Source | None = None,
     ) -> bool:
         """Send a message; ``attach_files_of`` names the run whose held files ride it.
+
+        ``at`` is a place chosen for it -- a notification's -- rather than where
+        the conversation's answer would go.
 
         Left out, nothing is attached: a notification or a nudge is not the reply
         those files were shown for, and one run's files are never another's.
         ``sender_only`` keeps it to the person the thread answers, dropping the
         copies a reply-all would carry.
         """
-        target = await self.delivery.resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(conversation_id, at=at)
         if target is None:
             return False
         if sender_only:
@@ -257,7 +262,7 @@ class SurfaceEgress:
             tool_output=tool_output,
         )
         message_metadata = await self.delivery.egress_metadata(target, metadata)
-        if await outsiders_would_see(self.uow, target, display_request):
+        if outsiders_would_see(target, display_request):
             return await deliver_withheld(
                 self.delivery,
                 target,

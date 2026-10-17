@@ -108,7 +108,7 @@ async def send_on_first_channel(
             if not sent:
                 last_error = (
                     UndeliverableReason.COLD_OPEN_UNSUPPORTED
-                    if channel.link is None
+                    if channel.source is None
                     else f"{channel.platform.value} send returned no delivery."
                 )
         except (AgentSurfaceError, HTTPError, OSError) as exc:
@@ -132,7 +132,6 @@ async def send_on_first_channel(
                     platform=channel.platform.value,
                 )
                 return await notifications.update(notification)
-        await _give_the_thread_back(egress, channel, conversation_id)
 
     notification.mark_delivery_failed(last_error or "No channel accepted the message.")
     return await notifications.update(notification)
@@ -158,28 +157,3 @@ async def _email_budget_refusal(
     except EmailSendLimitExceeded as exc:
         return str(exc)
     return None
-
-
-async def _give_the_thread_back(
-    egress: NotificationEgress,
-    channel: DeliveryChannel,
-    conversation_id: UUID | None,
-) -> None:
-    """Undo the repoint a send that did not land made to the person's thread.
-
-    ``conversation_for`` may have moved the thread's link to a conversation it
-    opened for this notification. If nothing arrived there, the person's next
-    message belongs where their thread was. Compare-and-set on the conversation
-    the link was moved to, so a thread an inbound has since moved is left alone.
-    """
-    link = channel.link
-    if link is None or conversation_id is None:
-        return
-    if conversation_id == link.conversation_id:
-        return
-    await egress.links.repoint_conversation_for_outbound(
-        link_id=link.id,
-        conversation_id=link.conversation_id,
-        expected_conversation_id=conversation_id,
-        routed_agent_id=link.routed_agent_id,
-    )

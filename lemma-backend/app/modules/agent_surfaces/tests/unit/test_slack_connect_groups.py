@@ -132,6 +132,7 @@ def _door(group: SurfaceGroup) -> OutsiderDoor:
 
 def _slack_group(*, shared: bool) -> SurfaceGroup:
     return SurfaceGroup(
+        channel_id=uuid4(),
         pod_id=POD,
         surface_id=uuid4(),
         platform="SLACK",

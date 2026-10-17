@@ -37,9 +37,6 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -64,16 +61,16 @@ class AgentSurfaceIngressService(SurfaceInboundMixin, SurfaceInteractionMixin):
         router: SurfaceRouter,
         binder: ConversationBinder,
         surface_repository: SurfaceInstallationRepositoryPort,
-        conversation_link_repository: SurfaceConversationLinkRepository,
         credential_resolver: SurfaceCredentialResolver,
         adapter_registry: SurfacePlatformAdapterRegistry | None = None,
         event_dedup_store: SurfaceEventDedupStorePort | None = None,
     ):
         self.uow = uow
         self.router = router
+        #: Where things sit in channels: routing's own view of them.
+        self.seats = router.seats
         self.binder = binder
         self.surface_repository = surface_repository
-        self.conversation_link_repository = conversation_link_repository
         self.credential_resolver = credential_resolver
         # Defaults a caller with no opinion should not have to build: an
         # adapter registry is five stateless objects, and the dedup store takes

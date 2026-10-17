@@ -28,7 +28,6 @@ instead of a contact's.
 
 from __future__ import annotations
 
-from datetime import datetime
 from enum import StrEnum
 from typing import Self
 from uuid import UUID
@@ -39,12 +38,6 @@ from app.core.domain.errors import DomainError
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_asks import linked_asker_in
 from app.modules.agent.domain.value_objects import AgentToolset
-
-#: A conversation with people outside the pod that a member answers by hand
-#: for now, so the agent stays quiet in it: ``{"user_id", "until"}``. Not a
-#: protected key -- a member who drops it from the conversation's metadata has
-#: handed the conversation back.
-HANDED_TO_KEY = "handed_to"
 
 
 #: The toolsets a stranger's run keeps, when its agent has them. A first cut:
@@ -166,26 +159,6 @@ def run_audience(deps: object) -> Audience:
     """
     audience = getattr(deps, "audience", None)
     return audience if isinstance(audience, Audience) else Audience.member()
-
-
-def handed_to(metadata: dict[str, object] | None, *, now: datetime) -> UUID | None:
-    """The member answering this conversation by hand, while that lasts.
-
-    A hand-off ends by itself at ``until``: one made because the contacts cap
-    was reached lasts the month the cap counts, and the bot answering again
-    when the budget renews is the hand-back nobody has to remember.
-    """
-    raw = (metadata or {}).get(HANDED_TO_KEY)
-    if not isinstance(raw, dict):
-        return None
-    try:
-        member = UUID(str(raw.get("user_id")))
-        until = datetime.fromisoformat(str(raw.get("until")))
-    except ValueError:
-        return None
-    if until.tzinfo is None:
-        return None
-    return member if until > now else None
 
 
 class OutsiderRunRefused(DomainError):

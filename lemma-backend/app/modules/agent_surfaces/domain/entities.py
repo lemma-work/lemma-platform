@@ -543,36 +543,3 @@ _TENANT_KEY: dict[SurfacePlatform, Callable[[AgentSurfaceEntity], str | None]] =
     SurfacePlatform.TEAMS: lambda surface: surface.external_tenant_id,
     SurfacePlatform.SLACK: lambda surface: surface.external_workspace_id,
 }
-
-
-class AgentSurfaceConversationLink(Entity):
-    surface_id: UUID
-    conversation_id: UUID
-    platform: str
-    external_channel_id: str | None = None
-    external_thread_id: str
-    external_user_id: str | None = None
-    routed_agent_id: UUID | None = None
-    conversation_kind: str = "DM"
-    route_key: str | None = None
-    last_event: dict[str, Any] = Field(default_factory=dict)
-    last_message_id: str | None = None
-    # When this person last wrote to us. Distinct from ``updated_at``, which an
-    # outbound notification also bumps — keying the DM reset off ``updated_at``
-    # means a proactive message silently suppresses the reset and leaks
-    # yesterday's context into today. Also the ranking key when choosing which of
-    # someone's channels to reach them on: freshest inbound is the best available
-    # guess at where they are actually looking.
-    last_inbound_at: datetime | None = None
-
-    @property
-    def inbound_activity_at(self) -> datetime:
-        """Last inbound time, falling back to ``updated_at`` for legacy rows.
-
-        Rows written before ``last_inbound_at`` existed have NULL there, and for
-        those ``updated_at`` *was* the last inbound time, because until then only
-        inbound events wrote this row. The fallback is correct by definition, and
-        it has to survive in code as well as in the backfill: a row the backfill
-        touched can still be NULL if it was created by an older worker mid-deploy.
-        """
-        return self.last_inbound_at or self.updated_at

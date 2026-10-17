@@ -15821,8 +15821,8 @@ var LemmaClient = (() => {
      * Group Timeline
      * What was said in the group, oldest first, as far as the pod kept it.
      *
-     * Kept for WhatsApp and Telegram groups. A Slack channel's history is
-     * Slack's; it comes back empty here. An answer the bot made with one member's
+     * The group's channel timeline, kept for WhatsApp and Telegram groups. A
+     * Slack channel's history is Slack's; it comes back empty here. An answer the bot made with one member's
      * own access comes back withheld to everybody else: they may not be able to
      * see what it was made from.
      * @param podId
@@ -16525,6 +16525,197 @@ var LemmaClient = (() => {
       return this.client.request(
         () => AgentAsksService.agentPodLinkDisconnect(podId, askingPodId)
       );
+    }
+  };
+
+  // src/openapi_client/services/ChannelsService.ts
+  var ChannelsService = class {
+    /**
+     * List Channels
+     * The pod's channels this member sees, most recently active first.
+     * @param podId
+     * @param kind
+     * @param limit
+     * @param before
+     * @returns ChannelListResponse Successful Response
+     * @throws ApiError
+     */
+    static channelList(podId, kind, limit = 50, before) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "kind": kind,
+          "limit": limit,
+          "before": before
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Channel
+     * One channel, with the places it is fed from and the people in it.
+     * @param podId
+     * @param channelId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelGet(podId, channelId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Release Channel
+     * Hand the contact back to the channel's agents.
+     * @param podId
+     * @param channelId
+     * @returns ChannelResponse Successful Response
+     * @throws ApiError
+     */
+    static channelHandlerRelease(podId, channelId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/handler",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Take Channel
+     * Answer a contact by hand: their agent stays quiet until it is handed back.
+     * @param podId
+     * @param channelId
+     * @returns ChannelResponse Successful Response
+     * @throws ApiError
+     */
+    static channelHandlerTake(podId, channelId) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/channels/{channel_id}/handler",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Channel Messages
+     * The channel's timeline: who said what, when and where, oldest first.
+     * @param podId
+     * @param channelId
+     * @param limit
+     * @param before
+     * @returns ChannelMessagesResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageList(podId, channelId, limit = 50, before) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        query: {
+          "limit": limit,
+          "before": before
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Mark Channel Read
+     * Everything in the channel up to now has been read by this member.
+     * @param podId
+     * @param channelId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelMarkRead(podId, channelId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/read",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/channels.ts
+  var ChannelsNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    /** The pod's channels, most recently active first. Pass the opaque
+     *  `next_before` back as `before` for the next page. */
+    list(podId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelList(
+            podId,
+            options.kind,
+            (_a = options.limit) != null ? _a : 50,
+            options.before
+          );
+        }
+      );
+    }
+    /** One channel, with its sources and participants. */
+    get(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelGet(podId, channelId));
+    }
+    /** The channel's timeline, oldest first: who said what, when and where. The
+     *  newest page unless `before` is the previous page's `next_before`. */
+    messages(podId, channelId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelMessageList(podId, channelId, (_a = options.limit) != null ? _a : 50, options.before);
+        }
+      );
+    }
+    /** Note that the caller has read the channel up to now. */
+    markRead(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelMarkRead(podId, channelId));
+    }
+    /** Answer a contact's channel by hand: its agents stop answering there.
+     *  Takes `contact.message`. */
+    take(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelHandlerTake(podId, channelId));
+    }
+    /** Hand a contact's channel back to its agents. */
+    release(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelHandlerRelease(podId, channelId));
     }
   };
 
@@ -19956,6 +20147,7 @@ var LemmaClient = (() => {
       __publicField(this, "podGroups");
       /** The other pods a pod can ask, and the pods connected to ask it. */
       __publicField(this, "podLinks");
+      __publicField(this, "channels");
       __publicField(this, "contacts");
       /** The caller's own surfaces across all pods (grouped by platform). */
       __publicField(this, "notifications");
@@ -20020,6 +20212,7 @@ var LemmaClient = (() => {
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
       this.podGroups = new PodGroupsNamespace(this._generated);
       this.podLinks = new PodLinksNamespace(this._generated);
+      this.channels = new ChannelsNamespace(this._generated);
       this.contacts = new ContactsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }

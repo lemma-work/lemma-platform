@@ -22,7 +22,7 @@ class GroupLineResponse:
         in_pod (bool):
         answered_from_public (bool | Unset): On the bot's lines: answered from what the pod made Public. Default: False.
         answered_name (None | str | Unset): On the bot's lines: whom it answered.
-        author_external_id (None | str | Unset):
+        author_external_id (None | str | Unset): The speaker's key among the group's people.
         author_name (None | str | Unset):
         text (None | str | Unset): None where the line is withheld from the reader.
         withheld (bool | Unset): An answer the bot made with another member's own access: shown to that member alone.

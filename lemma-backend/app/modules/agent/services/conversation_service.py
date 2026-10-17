@@ -115,6 +115,7 @@ class ConversationService(ConversationPauses):
         metadata: dict[str, object] | None = None,
         require_execute_grant: bool = True,
         contact_id: UUID | None = None,
+        channel_id: UUID | None = None,
     ) -> Conversation:
         """A new conversation in the pod.
 
@@ -144,26 +145,14 @@ class ConversationService(ConversationPauses):
             if agent_name is not None
             else None
         )
-        # require_execute_grant is False only for self-spawn (an agent launching
+        # require_execute_grant is False for self-spawn (an agent launching
         # another instance of itself) — see SubAgentService.spawn. An agent has no
         # agent.execute grant on itself, but running another copy of the agent the
-        # user is already running is no privilege escalation.
+        # user is already running is no privilege escalation. And for a caller
+        # that checked first (`authorize_opening`) so that nothing in here
+        # releases its connection.
         if require_execute_grant:
-            # Dispatching a *named* agent checks agent.execute and agent.read
-            # together. agent.execute implies agent.read (IMPLIED_PERMISSIONS),
-            # so an execute-only grant satisfies both; checking read here anyway
-            # warms the decision cache for the run-load that follows and keeps
-            # the error complete for callers missing everything. The default
-            # pod agent (agent is None) needs only execute.
-            actions = [Permissions.AGENT_EXECUTE]
-            if agent is not None:
-                actions.append(Permissions.AGENT_READ)
-            await require_agent_actions(
-                user_id=user_id,
-                pod_id=pod_id,
-                agent_id=agent.id if agent else None,
-                actions=actions,
-            )
+            await self._require_execute(pod_id=pod_id, user_id=user_id, agent=agent)
         # A PROJECT is an explicit user choice (a pinned group); never coerce it.
         # Otherwise a structured-output agent implies a TASK conversation.
         if type == ConversationType.PROJECT:
@@ -177,6 +166,7 @@ class ConversationService(ConversationPauses):
             user_id=user_id,
             pod_id=pod_id,
             contact_id=contact_id,
+            channel_id=channel_id,
             organization_id=organization_id,
             agent_id=agent.id if agent else None,
             title=title,
@@ -188,6 +178,43 @@ class ConversationService(ConversationPauses):
         )
         await self._apply_inherited_cwd(conversation, parent=parent)
         return await self.conversation_repository.create_conversation(conversation)
+
+    async def authorize_opening(
+        self, *, pod_id: UUID, agent_name: str | None, user_id: UUID
+    ) -> None:
+        """Refuse, as ``create_conversation`` would, a person who may not run
+        this agent.
+
+        Checking releases the pooled connection -- it commits -- so a caller
+        holding a transaction-scoped lock around opening checks here first,
+        then opens with ``require_execute_grant=False``.
+        """
+        agent_name = _named_agent(agent_name)
+        agent = (
+            await resolve_agent_for_path(
+                self.agent_repository, pod_id=pod_id, agent_name=agent_name
+            )
+            if agent_name is not None
+            else None
+        )
+        await self._require_execute(pod_id=pod_id, user_id=user_id, agent=agent)
+
+    async def _require_execute(self, *, pod_id: UUID, user_id: UUID, agent) -> None:
+        # Dispatching a *named* agent checks agent.execute and agent.read
+        # together. agent.execute implies agent.read (IMPLIED_PERMISSIONS), so
+        # an execute-only grant satisfies both; checking read here anyway warms
+        # the decision cache for the run-load that follows and keeps the error
+        # complete for callers missing everything. The default pod agent
+        # (agent is None) needs only execute.
+        actions = [Permissions.AGENT_EXECUTE]
+        if agent is not None:
+            actions.append(Permissions.AGENT_READ)
+        await require_agent_actions(
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_id=agent.id if agent else None,
+            actions=actions,
+        )
 
     async def _apply_inherited_cwd(
         self,

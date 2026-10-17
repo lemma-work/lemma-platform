@@ -199,6 +199,20 @@ async def lemma_message_run_started_at(
     return run.started_at
 
 
+async def authorize_surface_conversation(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, agent_name: str | None, user_id: UUID
+) -> None:
+    """Refuse a person who may not run this agent, as opening would.
+
+    It releases the pooled connection while it checks, so a caller that opens
+    under a transaction-scoped lock checks here before taking the lock, and
+    opens with ``require_execute_grant=False``.
+    """
+    await _service(uow).authorize_opening(
+        pod_id=pod_id, agent_name=agent_name, user_id=user_id
+    )
+
+
 async def open_surface_conversation(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -209,6 +223,7 @@ async def open_surface_conversation(
     metadata: dict[str, object] | None = None,
     require_execute_grant: bool = True,
     contact_id: UUID | None = None,
+    channel_id: UUID | None = None,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
@@ -217,6 +232,7 @@ async def open_surface_conversation(
     permission to run the agent that is writing to them. Every inbound path
     leaves it on.
 
+    ``channel_id`` is the channel it works in (``channel_conversations``).
     ``contact_id`` opens a contact's conversation -- in a private chat, a group
     or a web page. ``user_id`` is then the member who looks after it, and every
     run in it authorizes as that contact (see ``domain/outsiders``).
@@ -233,6 +249,7 @@ async def open_surface_conversation(
         metadata=metadata,
         require_execute_grant=require_execute_grant,
         contact_id=contact_id,
+        channel_id=channel_id,
     )
     return _conversation(conversation)
 
@@ -556,6 +573,7 @@ __all__ = [
     "SurfaceConversation",
     "append_delivery_notice",
     "append_notification_message",
+    "authorize_surface_conversation",
     "conversation_metadata_value",
     "lemma_message_run_started_at",
     "open_surface_conversation",

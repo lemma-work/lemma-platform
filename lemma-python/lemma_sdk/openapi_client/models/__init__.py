@@ -111,6 +111,14 @@ _NAME_TO_MODULE = {
     'BulkUpdateRecordsRequest': 'bulk_update_records_request',
     'BulkUpdateRecordsRequestRecordsItem': 'bulk_update_records_request_records_item',
     'BundleSourceKind': 'bundle_source_kind',
+    'ChannelDetailResponse': 'channel_detail_response',
+    'ChannelKind': 'channel_kind',
+    'ChannelListResponse': 'channel_list_response',
+    'ChannelMessageResponse': 'channel_message_response',
+    'ChannelMessagesResponse': 'channel_messages_response',
+    'ChannelParticipantResponse': 'channel_participant_response',
+    'ChannelResponse': 'channel_response',
+    'ChannelSourceResponse': 'channel_source_response',
     'CodeRequest': 'code_request',
     'ColumnSchema': 'column_schema',
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
@@ -493,6 +501,7 @@ _NAME_TO_MODULE = {
     'SearchVertical': 'search_vertical',
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
+    'SenderKind': 'sender_kind',
     'SessionRequest': 'session_request',
     'SessionResponse': 'session_response',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
@@ -502,6 +511,7 @@ _NAME_TO_MODULE = {
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
+    'SourceKind': 'source_kind',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -755,6 +765,14 @@ if TYPE_CHECKING:
     from .bulk_update_records_request import BulkUpdateRecordsRequest
     from .bulk_update_records_request_records_item import BulkUpdateRecordsRequestRecordsItem
     from .bundle_source_kind import BundleSourceKind
+    from .channel_detail_response import ChannelDetailResponse
+    from .channel_kind import ChannelKind
+    from .channel_list_response import ChannelListResponse
+    from .channel_message_response import ChannelMessageResponse
+    from .channel_messages_response import ChannelMessagesResponse
+    from .channel_participant_response import ChannelParticipantResponse
+    from .channel_response import ChannelResponse
+    from .channel_source_response import ChannelSourceResponse
     from .code_request import CodeRequest
     from .column_schema import ColumnSchema
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
@@ -1137,6 +1155,7 @@ if TYPE_CHECKING:
     from .search_vertical import SearchVertical
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
+    from .sender_kind import SenderKind
     from .session_request import SessionRequest
     from .session_response import SessionResponse
     from .set_default_surface_request import SetDefaultSurfaceRequest
@@ -1146,6 +1165,7 @@ if TYPE_CHECKING:
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
+    from .source_kind import SourceKind
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1412,6 +1432,14 @@ __all__ = [
     'BulkUpdateRecordsRequest',
     'BulkUpdateRecordsRequestRecordsItem',
     'BundleSourceKind',
+    'ChannelDetailResponse',
+    'ChannelKind',
+    'ChannelListResponse',
+    'ChannelMessageResponse',
+    'ChannelMessagesResponse',
+    'ChannelParticipantResponse',
+    'ChannelResponse',
+    'ChannelSourceResponse',
     'CodeRequest',
     'ColumnSchema',
     'ColumnSchemaTypeParamsType0',
@@ -1794,6 +1822,7 @@ __all__ = [
     'SearchVertical',
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
+    'SenderKind',
     'SessionRequest',
     'SessionResponse',
     'SetDefaultSurfaceRequest',
@@ -1803,6 +1832,7 @@ __all__ = [
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
+    'SourceKind',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',

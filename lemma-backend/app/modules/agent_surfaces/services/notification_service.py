@@ -39,6 +39,14 @@ from app.modules.agent_surfaces.domain.notification import (
 )
 from app.modules.agent_surfaces.domain.ports import SurfaceNotificationEgressPort
 from app.modules.agent_surfaces.services.notification_delivery import DeliveryChannel
+from app.modules.agent_surfaces.services.channel_lines import (
+    ChannelLines,
+    ChannelLinesInDatabase,
+)
+from app.modules.agent_surfaces.services.channel_places import (
+    ChannelSeats,
+    ChannelSeatsInDatabase,
+)
 from app.modules.agent_surfaces.services.notification_channels import (
     NotificationChannelResolver,
     SurfaceProvisioner,
@@ -116,7 +124,6 @@ class NotificationService:
         uow,
         notification_repository,
         surface_repository,
-        conversation_link_repository,
         external_user_repository,
         egress: SurfaceNotificationEgressPort,
         pod_membership_port,
@@ -124,6 +131,8 @@ class NotificationService:
         rate_limiter=None,
         surface_provisioner: SurfaceProvisioner | None = None,
         work: NotificationWork | None = None,
+        seats: ChannelSeats | None = None,
+        lines: ChannelLines | None = None,
     ):
         self.uow = uow
         self.work = work or NotificationWork()
@@ -142,10 +151,11 @@ class NotificationService:
         self.rate_limiter = rate_limiter
         # Which surface can carry this to this person, and minting one when the
         # agent has none. See ``notification_channels``.
+        seats = seats or ChannelSeatsInDatabase(uow)
         self.channels = NotificationChannelResolver(
+            seats=seats,
             surface_repository=surface_repository,
             external_user_repository=external_user_repository,
-            conversation_link_repository=conversation_link_repository,
             pod_membership_port=pod_membership_port,
             surface_provisioner=surface_provisioner,
         )
@@ -155,7 +165,8 @@ class NotificationService:
         self.egress = NotificationEgress(
             egress=egress,
             uow=uow,
-            conversation_link_repository=conversation_link_repository,
+            seats=seats,
+            lines=lines or ChannelLinesInDatabase(uow),
         )
 
     # ------------------------------------------------------------------ create

@@ -37,10 +37,10 @@ def _no_typing_keepalive(monkeypatch):
     """Measure the message, not the clock.
 
     While a run is in progress the observer re-sends Telegram's typing indicator
-    every four seconds, and each re-send reads the conversation's link and its
+    every four seconds, and each re-send reads where the conversation's reply goes and its
     surface. How many fire depends on how long the run took, not on anything
     the message asked: a loaded CI worker crossed four seconds now and then and
-    read `links 8 vs 7, surfaces 5 vs 4`, which looked like a read growing with
+    read `links 8 vs 7, surfaces 5 vs 4` (as it was then), which looked like a read growing with
     the conversation and was a keep-alive. The opening indicator, sent once per
     run, is still counted.
     """
@@ -51,36 +51,32 @@ def _no_typing_keepalive(monkeypatch):
     )
 
 
-#: The tables this module owns, and the most statements one message may issue
-#: against each. Two budgets because the two messages do different work: the
-#: first creates the link, the external-user row and the conversation; the
-#: second finds them.
+#: The tables these messages touch that inbound owns or writes, and the most
+#: statements one message may issue against each. Two budgets because the two
+#: messages do different work: the first makes the person's place, their
+#: external-user row and the conversation; the second finds them.
 #:
-#: A chat's first message is also where "is this somebody's earlier private chat
-#: under another delivery address" is asked, and it is asked once by selection
-#: (which surface) and once by the binder (adopt its link), which is why links
-#: carry two more than a later message and surfaces one more -- the binder reads
-#: the pod's own surfaces to bound its search. A later message finds its exact
-#: key first and asks neither.
+#: ``channel_sources`` is most of it, and each read has a reason: selection
+#: asks which surface the person's chat is on; the binder finds the place and
+#: notes what it heard there; the heard line marks when they last wrote; and
+#: the answer's way out asks where the conversation's reply goes -- once to
+#: name the queue its delivery waits in, once for the typing indicator, and
+#: once more for the send itself. A read keyed by the conversation and joined to
+#: its lines counts here, against the table the statement names first.
 #:
-#: The reply is one more: the finalize's ``surface.reply_for_run`` reads the
-#: conversation's link to name the destination its delivery row queues behind,
-#: and the pump's send resolves it again (as the observer's send did).
-#:
-#: Every run also asks the links once whether its conversation is the one that
-#: answers people outside the pod (``outsider_audience``). Deliberately asked of
-#: the link and never skipped: the conversation's own mark is metadata a client
-#: can rewrite, and a run that wrongly believed it was a member's would hand a
-#: stranger that member's authority.
+#: ``channel_messages`` is the two lines: what they said, and what was said
+#: back.
 _FIRST_MESSAGE = {
     "agent_surfaces": 7,
-    "agent_surface_conversation_links": 10,
+    "channel_sources": 10,
+    "channel_messages": 2,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
 _LATER_MESSAGE = {
     "agent_surfaces": 5,
-    "agent_surface_conversation_links": 8,
+    "channel_sources": 9,
+    "channel_messages": 2,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }

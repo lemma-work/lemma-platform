@@ -12,14 +12,17 @@ Three decisions are pinned here, each of which fails open if it is wrong:
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.conversation_binder import BoundThread
+
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+from app.modules.agent_surfaces.services.channel_lines import answered_for
+from app.modules.channels.contracts import Principal
 from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     ConversationType,
     SurfaceConfig,
     ParsedInboundSurfaceEvent,
@@ -29,7 +32,6 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.groups import (
     SurfaceGroup,
-    contact_link_user,
 )
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
@@ -40,7 +42,6 @@ from app.modules.agent_surfaces.services.surface_inbound_message import (
     may_answer_a_pause,
 )
 from app.modules.agent_surfaces.services.group_log import (
-    answered_in_group,
     keeps_group_log,
 )
 from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
@@ -120,7 +121,11 @@ def test_the_pod_keeps_a_log_only_where_the_platform_keeps_no_history():
 
 def test_a_group_welcomes_outsiders_only_with_somebody_answering_for_them():
     group = SurfaceGroup(
-        pod_id=POD, surface_id=uuid4(), platform="TELEGRAM", external_channel_id=CHAT
+        channel_id=uuid4(),
+        pod_id=POD,
+        surface_id=uuid4(),
+        platform="TELEGRAM",
+        external_channel_id=CHAT,
     )
 
     assert not group.welcomes_outsiders
@@ -206,6 +211,7 @@ class _Contacts:
 
 def _welcoming_group() -> SurfaceGroup:
     return SurfaceGroup(
+        channel_id=uuid4(),
         pod_id=POD,
         surface_id=uuid4(),
         platform="TELEGRAM",
@@ -255,12 +261,14 @@ async def test_a_lemma_user_from_another_pod_is_an_outsider_here():
     [
         None,
         SurfaceGroup(
+            channel_id=uuid4(),
             pod_id=POD,
             surface_id=uuid4(),
             platform="TELEGRAM",
             external_channel_id=CHAT,
         ),
         SurfaceGroup(
+            channel_id=uuid4(),
             pod_id=POD,
             surface_id=uuid4(),
             platform="TELEGRAM",
@@ -312,7 +320,11 @@ class _Binder:
 
     async def bind_conversation(self, **kwargs):
         self.seen = kwargs
-        return SimpleNamespace(conversation_id=uuid4()), "when are proofs due?"
+        return BoundThread(
+            conversation_id=uuid4(),
+            source_id=uuid4(),
+            created_title="when are proofs due?",
+        )
 
 
 def _surface_entity():
@@ -355,9 +367,8 @@ async def test_a_strangers_turn_runs_as_their_contact_in_a_conversation_of_their
     contact = door.open_contact.by_handle[(IdentityKind.TELEGRAM, "777")]
     assert binder.seen["contact_id"] == contact.id
     assert binder.seen["resolved_user"].internal_user_id == OWNER
-    assert binder.seen["resolved_user"].external_user_id == contact_link_user(
-        contact.id
-    )
+    # Their own id on the platform: it keys the place they wrote from.
+    assert binder.seen["resolved_user"].external_user_id == "777"
     assert context.audience == Audience.contact(contact.id)
     assert context.user_id == OWNER
     # Who actually asked goes on the message, for whoever reads the thread.
@@ -435,36 +446,19 @@ def test_a_stranger_typing_approve_resolves_nothing():
 # ---------------------------------------------------------- whom it answered
 
 
-def _thread(external_user_id: str, *, last_sender: str | None):
-    return AgentSurfaceConversationLink(
-        surface_id=uuid4(),
-        conversation_id=uuid4(),
-        platform="TELEGRAM",
-        external_channel_id=CHAT,
-        external_thread_id=CHAT,
-        external_user_id=external_user_id,
-        conversation_kind="CHANNEL",
-        last_event={"sender_display_name": last_sender} if last_sender else {},
-    )
+def test_an_answer_to_a_contact_is_for_the_contact():
+    """Made from what the pod made Public, never with the keeper's access."""
+    contact_id = uuid4()
 
+    answered = answered_for(Audience.contact(contact_id), uuid4())
 
-def test_an_answer_to_a_stranger_says_it_came_from_what_is_public():
-    """The group's page shows it; the owner reads what their pod said, and why."""
-    answered = answered_in_group(_thread(contact_link_user(uuid4()), last_sender="Tom"))
-
-    assert (answered.name, answered.from_public) == ("Tom", True)
+    assert answered == Principal.contact(contact_id)
 
 
 def test_an_answer_to_a_member_was_on_their_own_access():
-    answered = answered_in_group(_thread("900100", last_sender="Arjun"))
+    member = uuid4()
 
-    assert (answered.name, answered.from_public) == ("Arjun", False)
-
-
-def test_an_answer_whose_asker_went_unnamed_names_nobody():
-    answered = answered_in_group(_thread(contact_link_user(uuid4()), last_sender=None))
-
-    assert answered.name is None
+    assert answered_for(Audience.member(), member) == Principal.member(member)
 
 
 # ------------------------------------------------------------- how often

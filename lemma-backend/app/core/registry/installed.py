@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from app.modules.agent.module import module as agent_module
 from app.modules.analytics.module import module as analytics_module
+from app.modules.channels.module import module as channels_module
 from app.modules.agent_surfaces.module import module as agent_surfaces_module
 from app.modules.datastore.module import module as datastore_module
 from app.modules.decisions.module import module as decisions_module
@@ -48,6 +49,7 @@ OSS_MODULES: tuple[LemmaModule, ...] = (
     workflow_module,
     agent_surfaces_module,
     contacts_module,
+    channels_module,
     icon_module,
     usage_module,
     workspace_module,

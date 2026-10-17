@@ -31,7 +31,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.services.interaction_acks import acknowledgement_for
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
-    _ask_user_link,
+    _answered_in_thread,
     _slack_event,
     _slack_surface,
     _surface_conversation,
@@ -78,12 +78,9 @@ async def _tapped(*, stands: AgentRunApprovalDecision, status: str = "reconciled
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = _adapter()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=link
-    )
-    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service = build_ingress_service(adapter=adapter, surfaces=[surface], answered=link)
     agent_conversations.surface_conversation.return_value = _surface_conversation(
         surface, conversation_id=conversation_id
     )
@@ -128,23 +125,17 @@ async def test_approve_handed_to_a_worker_is_not_reported_done_yet() -> None:
     assert ack["clear_actions"] is True
 
 
-async def test_a_tap_on_a_conversation_that_lost_its_thread_is_answered() -> None:
-    """The link moved to a newer conversation; the old card still names the old one.
-
-    It used to be dropped at debug, and a button that does nothing is tapped
-    again. Nothing is resolved: the thread proves who is in it now, not that the
-    old conversation was theirs.
-    """
+async def test_a_tap_naming_a_conversation_said_nowhere_resolves_nothing() -> None:
+    """The button's conversation id is unsigned. One with no place on this
+    surface is not provably the tapper's, and there is nobody it would be safe
+    to tell -- so nothing is resolved, and nothing is said."""
     surface = _slack_surface()
     parsed_event = _slack_event()
-    current = await _ask_user_link(surface, uuid4(), parsed_event)
+    current = _answered_in_thread(surface, uuid4(), parsed_event)
     adapter = _adapter()
     service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=current
+        adapter=adapter, surfaces=[surface], answered=current
     )
-    links = service.conversation_link_repository
-    links.get_by_conversation_id.return_value = None
-    links.find_surface_id_for_external_thread.return_value = surface.id
 
     await service.handle_interaction(
         ParsedSurfaceInteraction(
@@ -154,42 +145,12 @@ async def test_a_tap_on_a_conversation_that_lost_its_thread_is_answered() -> Non
             external_user_id=current.external_user_id,
             callback_id=f"{uuid4()}|call-1",
             approval_decision="APPROVE_ONCE",
-            dedup_id="tap-moved",
+            dedup_id="tap-elsewhere",
         ),
         authorized_surface_ids=[surface.id],
     )
 
     agent_conversations.resolve_pending_interaction.assert_not_awaited()
-    ack = adapter.acknowledge_interaction.await_args.kwargs
-    assert "moved or expired" in ack["text"]
-    assert ack["clear_actions"] is True
-
-
-async def test_a_moved_tap_from_somebody_else_in_the_thread_stays_silent() -> None:
-    surface = _slack_surface()
-    parsed_event = _slack_event()
-    current = await _ask_user_link(surface, uuid4(), parsed_event)
-    adapter = _adapter()
-    service = build_ingress_service(
-        adapter=adapter, surfaces=[surface], existing_link=current
-    )
-    links = service.conversation_link_repository
-    links.get_by_conversation_id.return_value = None
-    links.find_surface_id_for_external_thread.return_value = surface.id
-
-    await service.handle_interaction(
-        ParsedSurfaceInteraction(
-            platform=SurfacePlatform.SLACK,
-            external_channel_id=parsed_event.external_channel_id,
-            external_thread_id=parsed_event.external_thread_id,
-            external_user_id="U-somebody-else",
-            callback_id=f"{uuid4()}|call-1",
-            approval_decision="APPROVE_ONCE",
-            dedup_id="tap-moved-stranger",
-        ),
-        authorized_surface_ids=[surface.id],
-    )
-
     adapter.acknowledge_interaction.assert_not_awaited()
 
 

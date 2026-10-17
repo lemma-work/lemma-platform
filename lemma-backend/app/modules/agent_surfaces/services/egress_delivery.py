@@ -33,7 +33,6 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
 )
@@ -42,15 +41,11 @@ from app.modules.agent_surfaces.domain.envelope import (
     SurfaceEnvelope,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
-from app.modules.agent_surfaces.domain.groups import is_contact_link_user
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.modules.agent_surfaces.services.credential_resolver import (
@@ -60,12 +55,19 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 from app.modules.agent_surfaces.services.free_text_answer import (
     remember_a_prompt_that_arrived_as_words,
 )
-from app.modules.agent_surfaces.services.group_log import (
-    GroupLog,
-    answered_in_group,
+from app.modules.agent_surfaces.services.channel_lines import (
+    WRITTEN_BY_MEMBER,
+    ChannelLines,
+    ChannelLinesInDatabase,
 )
 from app.modules.agent_surfaces.services.group_names import sender_name_for
 from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
+from app.modules.channels.contracts import Source, SourceKind
+from app.modules.agent_surfaces.services.channel_places import (
+    ChannelSeats,
+    ChannelSeatsInDatabase,
+)
+from app.modules.channels.contracts.places import ReplyAddress
 
 logger = get_logger(__name__)
 
@@ -84,9 +86,10 @@ class SurfaceDelivery:
         *,
         uow: SqlAlchemyUnitOfWork,
         surface_repository: SurfaceInstallationRepositoryPort,
-        conversation_link_repository: SurfaceConversationLinkRepository,
         adapter_registry: SurfacePlatformAdapterRegistry,
         credential_resolver: SurfaceCredentialResolver,
+        channel_lines: ChannelLines | None = None,
+        seats: ChannelSeats | None = None,
     ) -> None:
         # Every one of these is required, and `uow` most of all. The service
         # this was carved out of took either a unit of work or a factory and
@@ -95,9 +98,10 @@ class SurfaceDelivery:
         # `getattr(self.uow, "session", None)`. There is one mode here.
         self.uow = uow
         self.surface_repository = surface_repository
-        self.conversation_link_repository = conversation_link_repository
         self.adapter_registry = adapter_registry
         self.credential_resolver = credential_resolver
+        self.channel_lines = channel_lines or ChannelLinesInDatabase(uow)
+        self.seats = seats or ChannelSeatsInDatabase(uow)
 
     async def egress_credentials(
         self,
@@ -129,40 +133,38 @@ class SurfaceDelivery:
         return await agent_name_for_surface(self.uow, surface)
 
     async def resolve_egress_target(
-        self, conversation_id: UUID
+        self, conversation_id: UUID, *, at: Source | None = None
     ) -> SurfaceEgressTarget | None:
-        """Resolve the surface/adapter/event for an outbound message.
+        """Where an outbound message for this conversation goes, and through what.
 
-        Returns None (never raises) when the conversation has no active surface
-        link or its stored ``last_event`` is missing/unparseable, so callers in
-        the agent-run path treat egress as best-effort.
+        The place the conversation's answer goes (``reply_address``): the
+        line being answered, or the place's last word -- or ``at``, a place
+        chosen for it, written to with what was last heard there. Returns None
+        (never raises) when there is none, or it cannot be written to, so
+        callers in the agent-run path treat egress as best-effort.
         """
-        link = await self.conversation_link_repository.get_by_conversation_id(
-            conversation_id
+        address = (
+            ReplyAddress(source=at, ref=at.delivery_ref)
+            if at is not None
+            else await self.seats.reply_address(conversation_id)
         )
-        if link is None:
+        if address is None:
             # The one ordinary answer, and the reason the rest are not. Every
             # agent run asks for an egress target, and most conversations are
-            # not on a surface at all -- somebody typed in the web app, and
+            # said nowhere outside Lemma -- somebody typed in the web app, and
             # there is nobody on a platform waiting. That stays `debug`.
             #
-            # Every branch below is different in kind: a link *exists*, so this
-            # conversation reached us from a platform and somebody there is
-            # waiting for an answer that is now not coming. Those are
-            # `warning`, because the failure is invisible from both ends --
-            # the run completes normally and the person just never hears back.
-            #
-            # Except a conversation that *was* opened from a platform and has
-            # since lost its link -- the thread was repointed at a newer one.
-            # Then somebody is waiting there too, and the answer goes nowhere.
-            surface_id = await agent_conversations.conversation_metadata_value(
+            # Except a conversation that *was* opened from a platform and whose
+            # place has since gone -- a group the platform deleted. Then
+            # somebody was waiting there, and the answer goes nowhere.
+            opened_on = await agent_conversations.conversation_metadata_value(
                 self.uow, conversation_id, "surface_id"
             )
-            if surface_id is not None:
+            if opened_on is not None:
                 logger.warning(
                     "agent_surfaces.egress.surface_conversation_lost_its_thread.degraded",
                     conversation_id=str(conversation_id),
-                    surface_id=surface_id,
+                    surface_id=opened_on,
                 )
                 return None
             logger.debug(
@@ -170,14 +172,21 @@ class SurfaceDelivery:
                 conversation_id=conversation_id,
             )
             return None
-
-        surface = await self.surface_repository.get(link.surface_id)
+        surface_id = address.source.surface_id
+        if surface_id is None:
+            # A web chat, which shows its answers on its own page. Every branch
+            # below is different in kind: the conversation reached us from a
+            # platform and somebody there is waiting for an answer that is now
+            # not coming.
+            return None
+        source = address.source
+        surface = await self.surface_repository.get(surface_id)
         if surface is None or not surface.is_active:
             logger.warning(
                 "agent_surfaces.egress.surface_cannot_answer.degraded",
                 conversation_id=str(conversation_id),
-                surface_id=str(link.surface_id),
-                platform=link.platform,
+                surface_id=str(source.surface_id),
+                platform=source.platform,
                 reason="deleted" if surface is None else "not active",
                 surface_status=None if surface is None else str(surface.status),
             )
@@ -193,16 +202,16 @@ class SurfaceDelivery:
             )
             return None
 
-        if not link.last_event:
+        if not address.ref:
             logger.warning(
-                "agent_surfaces.egress.link_has_no_inbound_event.degraded",
+                "agent_surfaces.egress.place_has_no_inbound_event.degraded",
                 conversation_id=str(conversation_id),
                 surface_id=str(surface.id),
                 platform=str(surface.surface_type),
             )
             return None
         try:
-            parsed_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
+            parsed_event = ParsedInboundSurfaceEvent.model_validate(address.ref)
         except ValidationError:
             # With the traceback: a stored event that no longer parses is a
             # shape change between writing it and reading it, and which field
@@ -225,66 +234,67 @@ class SurfaceDelivery:
             self.uow, conversation_id
         )
         if conversation is None:
-            # A link pointing at a conversation that is not there. Same class as
-            # the branches above -- somebody on a platform is waiting -- and not
-            # the ordinary "no link" case, which returned far earlier.
             logger.warning(
-                "agent_surfaces.egress.conversation_missing_for_link.degraded",
+                "agent_surfaces.egress.conversation_missing_for_place.degraded",
                 conversation_id=str(conversation_id),
                 surface_id=str(surface.id),
                 platform=str(surface.surface_type),
             )
             return None
 
-        if await self._answers_lemma_message(link):
+        if await self._answers_lemma_message(source, conversation_id):
             parsed_event = parsed_event.model_copy(update={"answers_inbound": False})
 
         return SurfaceEgressTarget(
-            link=link,
+            source=source,
+            conversation_id=conversation_id,
+            agent_id=conversation.agent_id,
             surface=surface,
             pod_id=conversation.pod_id,
             adapter=adapter,
             event=parsed_event,
             credentials=await self.egress_credentials(surface, event=parsed_event),
             conversation_user_id=conversation.user_id,
+            audience=conversation.audience,
         )
 
-    async def private_thread_for(
-        self, target: SurfaceEgressTarget
-    ) -> AgentSurfaceConversationLink | None:
-        """This person's own chat with the bot on this surface, if they have one.
+    async def private_thread_for(self, target: SurfaceEgressTarget) -> UUID | None:
+        """This person's own conversation with the agent on this surface, if any.
 
-        A group thread is where they last spoke, not somewhere private to reach
-        them, and ``find_latest_dm_link_for_person`` answers with a private
-        thread or with nothing -- so somebody whose only thread is a group is
-        unreachable this way rather than reachable in front of everybody.
-
-        The conversation's pod is checked as well as its surface's: a personal
-        DM arrives through a company's installation and is answered in the
-        person's own pod, and a word meant for one pod's member must not land in
-        another pod's conversation. So it is the latest private chat *in this
-        pod*, not the latest one checked afterwards -- a newer chat in their own
-        pod would otherwise hide this pod's. The shared outsiders' key is not a
-        platform identity at all, so there is nothing to look up for it.
+        A group is where they last spoke, not somewhere private to reach them:
+        this answers with the conversation of one of their private places on
+        this surface, in this pod -- a personal DM arrives through a company's
+        installation and is answered in the person's own pod, and a word meant
+        for one pod's member must not land in another pod's -- or with nothing,
+        so somebody whose only place is a group is unreachable this way rather
+        than reachable in front of everybody.
         """
-        external_user_id = target.link.external_user_id
-        if not external_user_id or is_contact_link_user(external_user_id):
+        external_user_id = target.person_external_id
+        if not external_user_id:
             return None
-        candidates = await self.conversation_link_repository.latest_dm_links_for_person(
+        places = await self.seats.person_places(
             platform=target.surface.surface_type.value,
             external_user_id=external_user_id,
             surface_ids=[target.surface.id],
             limit=_PRIVATE_THREADS_CHECKED,
         )
-        for private in candidates:
-            conversation = await agent_conversations.surface_conversation(
-                self.uow, private.conversation_id
+        for place in places:
+            if place.pod_id != target.pod_id or target.conversation_user_id is None:
+                continue
+            found = await self.seats.conversation_in_channel(
+                channel_id=place.channel_id,
+                pod_id=target.pod_id,
+                agent_id=target.agent_id,
+                user_id=target.conversation_user_id,
+                contact_id=target.audience.contact_id,
             )
-            if conversation is not None and conversation.pod_id == target.pod_id:
-                return private
+            if found is not None:
+                return found
         return None
 
-    async def _answers_lemma_message(self, link: AgentSurfaceConversationLink) -> bool:
+    async def _answers_lemma_message(
+        self, source: Source, conversation_id: UUID
+    ) -> bool:
         """Whether what goes out now answers a message typed in Lemma.
 
         The latest run was started from Lemma, and nobody in the chat has
@@ -292,14 +302,16 @@ class SurfaceDelivery:
         Only a group's conversation can hold such a run, so nothing else pays
         for the lookup.
         """
-        if link.conversation_kind != "CHANNEL":
+        if source.kind is not SourceKind.SHARED:
             return False
         started = await agent_conversations.lemma_message_run_started_at(
-            self.uow, link.conversation_id
+            self.uow, conversation_id
         )
         if started is None:
             return False
-        last_inbound = link.inbound_activity_at
+        last_inbound = source.last_inbound_at
+        if last_inbound is None:
+            return True
         if last_inbound.tzinfo is None:
             last_inbound = last_inbound.replace(tzinfo=timezone.utc)
         if started.tzinfo is None:
@@ -313,10 +325,11 @@ class SurfaceDelivery:
     ) -> dict[str, Any]:
         """The message metadata, with whoever is speaking filled in."""
         resolved = dict(metadata or {})
-        # The link first: it records which agent actually answered this thread,
-        # which is not always the one the surface points at now -- a surface can
-        # be moved to another agent, and older threads keep the name they wore.
-        agent_id = target.link.routed_agent_id or target.surface.agent_id
+        # The conversation's agent first: it is who actually answers, which is
+        # not always the one the surface points at now -- a surface can be
+        # moved to another agent, and older conversations keep the name they
+        # wore.
+        agent_id = target.agent_id or target.surface.agent_id
         agent = (
             await agent_conversations.surface_agent_identity(self.uow, agent_id)
             if agent_id
@@ -441,13 +454,21 @@ class SurfaceDelivery:
             envelope=envelope,
             receipt=receipt,
         )
-        # What the bot said in a group, for the pod's log of it. After the
-        # delivery, so the log never holds a line the group did not see.
-        if target.link.conversation_kind == "CHANNEL" and envelope.text:
-            await GroupLog(self.uow).note_agent_answer(
-                surface=target.surface,
-                external_channel_id=target.link.external_channel_id,
+        if envelope.text:
+            name = metadata.get("agent_display_name")
+            await self.channel_lines.said(
+                target=target,
+                conversation_id=conversation_id,
                 text=envelope.text,
-                answered=answered_in_group(target.link, target.conversation_user_id),
+                agent_display_name=name if isinstance(name, str) else None,
+                written_by=_member_id(metadata.get(WRITTEN_BY_MEMBER)),
             )
         return receipt
+
+
+def _member_id(value: object) -> UUID | None:
+    """The member a delivery names as its writer, if it names one."""
+    try:
+        return UUID(str(value)) if value else None
+    except ValueError:
+        return None

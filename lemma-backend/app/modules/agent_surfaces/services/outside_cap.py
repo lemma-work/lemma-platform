@@ -10,9 +10,10 @@ surface asks first, before any run starts, and when the cap is reached:
 * **They are told once a day** that a person from the pod will reply -- not on
   every message, which would be the bot talking to itself at them.
 * **The member is told** in their inbox, on the same once a day.
-* **The conversation is handed to the member** until the month the cap counts
-  ends (``agent.domain.outsiders.HANDED_TO_KEY``), so the bot stays quiet in it
-  even if the cap is raised mid-thread: someone is answering by hand now.
+
+A member can also step in by hand on a contact's channel, whatever the cap:
+while the channel has a handler (``channels``' ``handler_user_id``) no run
+starts for that contact either, until the member hands it back.
 
 Used by every place a run for somebody outside the pod starts: the chat and
 email surfaces (``SurfaceTurnStarter``) and web chat. All of it is in the
@@ -23,7 +24,6 @@ together.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -31,10 +31,10 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-from app.modules.agent.contracts.contact_conversations import (
-    conversation_handed_to,
-    hold_outside_turn,
+from app.modules.agent.contracts.channel_conversations import (
+    channel_of_conversation,
 )
+from app.modules.agent.contracts.contact_conversations import hold_outside_turn
 from app.modules.agent_surfaces.domain.notification import (
     NotificationDeliveryStatus,
     NotificationEntity,
@@ -45,6 +45,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.notification_reposit
 )
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
 from app.modules.agent_surfaces.services.outside_questions import quote
+from app.modules.channels.contracts import handler_of
 from app.modules.contacts.contracts import (
     answered_contacts_in_organization,
     contact_by_id,
@@ -60,7 +61,6 @@ from app.modules.usage.contracts.contacts_cap import (
     contacts_cap_reached,
     counts_contacts,
     room_for_another_contact,
-    this_month,
 )
 
 logger = get_logger(__name__)
@@ -85,17 +85,16 @@ async def held_for_a_person(
     *,
     pod_id: UUID,
     conversation_id: UUID,
-    now: datetime | None = None,
 ) -> bool:
     """Whether this contact's turn must wait for a member rather than run.
 
-    It must while a member has the conversation, while the organization's
-    contacts cap is reached, and when the contact would be one more than the
-    organization's bots may answer. A turn that may run marks its contact
-    answered, in the same transaction, so the count it was let in under holds.
+    It must while a member answers their channel by hand, while the
+    organization's contacts cap is reached, and when the contact would be one
+    more than the organization's bots may answer. A turn that may run marks its
+    contact answered, in the same transaction, so the count it was let in under
+    holds.
     """
-    now = now or datetime.now(timezone.utc)
-    if await conversation_handed_to(uow, conversation_id, now=now) is not None:
+    if await _handler(uow, conversation_id) is not None:
         return True
     organization_id = await pod_organization_id(uow, pod_id)
     if organization_id is None:
@@ -114,6 +113,12 @@ async def held_for_a_person(
         )
         return True
     return False
+
+
+async def _handler(uow: SqlAlchemyUnitOfWork, conversation_id: UUID) -> UUID | None:
+    """The member answering this conversation's channel by hand, if one is."""
+    channel_id = await channel_of_conversation(uow, conversation_id)
+    return await handler_of(uow, channel_id) if channel_id is not None else None
 
 
 async def _admitted(
@@ -171,27 +176,23 @@ async def hand_to_a_person(
     text: str,
     metadata: dict[str, object],
     tell: bool,
-    now: datetime | None = None,
 ) -> HeldTurn:
-    """Keep their message, hand the conversation over, and say so once a day.
+    """Keep their message for a person, and say so once a day.
 
-    ``owner_id`` is the member who looks after the conversation: the hand-off
-    is to them, and so is the note. ``tell`` is ``first_word_today``'s answer:
-    whether this is the turn that tells the person, and the member, today.
+    The person is the member answering the channel by hand, or else
+    ``owner_id``, the member who looks after the conversation; the note is
+    theirs. ``tell`` is ``first_word_today``'s answer: whether this is the turn
+    that tells the person, and the member, today.
     """
-    now = now or datetime.now(timezone.utc)
-    member = await conversation_handed_to(uow, conversation_id, now=now) or owner_id
+    member = await _handler(uow, conversation_id) or owner_id
     first_today = tell
     space = await pod_name(uow.session, pod_id)
     reply = person_will_reply(space) if first_today else None
-    _, month_end = this_month(now)
     await hold_outside_turn(
         uow,
         conversation_id=conversation_id,
         text=text,
         metadata=metadata,
-        hand_to=member,
-        until=month_end,
         reply=reply,
     )
     if first_today:

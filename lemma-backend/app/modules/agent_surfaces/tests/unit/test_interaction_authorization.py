@@ -27,9 +27,9 @@ from app.modules.agent_surfaces.services.interaction_helpers import (
 pytestmark = pytest.mark.unit
 
 
-def _pair(link_id, sender_id):
+def _pair(person_id, sender_id):
     return (
-        SimpleNamespace(external_user_id=link_id),
+        SimpleNamespace(person_external_id=person_id),
         SimpleNamespace(external_user_id=sender_id),
     )
 
@@ -42,7 +42,7 @@ def test_somebody_else_in_the_channel_may_not() -> None:
     assert not interaction_sender_matches(*_pair("U-alice", "U-mallory"))
 
 
-def test_a_link_that_names_nobody_does_not_admit_everybody() -> None:
+def test_a_thread_that_names_nobody_does_not_admit_everybody() -> None:
     """The fail-open half. A notification-opened thread looks exactly like this."""
     assert not interaction_sender_matches(*_pair(None, "U-mallory"))
     assert not interaction_sender_matches(*_pair("", "U-mallory"))
@@ -59,16 +59,16 @@ def test_neither_side_naming_anybody_is_still_a_refusal() -> None:
 
 
 @pytest.mark.parametrize(
-    "link_id, sender_id",
+    "person_id, sender_id",
     [("U-alice", "u-alice"), (" U-alice ", "U-alice"), ("U-ALICE", "u-alice")],
 )
-def test_one_person_spelled_two_ways_is_one_person(link_id, sender_id) -> None:
+def test_one_person_spelled_two_ways_is_one_person(person_id, sender_id) -> None:
     """Neither side was folded before, so case alone read as a different human.
 
     Harmless while the check was fail-open; with a strict match it would lock
     the owner out of their own approval.
     """
-    assert interaction_sender_matches(*_pair(link_id, sender_id))
+    assert interaction_sender_matches(*_pair(person_id, sender_id))
 
 
 def test_a_missing_attribute_is_treated_as_naming_nobody() -> None:
@@ -92,8 +92,8 @@ def test_the_refusal_is_visible_to_an_operator() -> None:
     assert spec.level == "warning"
 
 
-def _link(surface_id):
-    return SimpleNamespace(surface_id=surface_id, conversation_id=uuid4())
+def _place(surface_id):
+    return SimpleNamespace(surface_id=surface_id)
 
 
 def test_a_conversation_on_a_surface_this_request_proved_is_reachable() -> None:
@@ -102,7 +102,7 @@ def test_a_conversation_on_a_surface_this_request_proved_is_reachable() -> None:
     A check that refuses everything passes every test written about refusals.
     """
     mine = uuid4()
-    assert _within_authorized_scope(_link(mine), [mine, uuid4()])
+    assert _within_authorized_scope(_place(mine), [mine, uuid4()])
 
 
 def test_a_conversation_on_somebody_elses_surface_is_not() -> None:
@@ -120,7 +120,7 @@ def test_a_conversation_on_somebody_elses_surface_is_not() -> None:
     derived from the workspace the signature actually proved, which is the one
     boundary the payload cannot cross.
     """
-    assert not _within_authorized_scope(_link(uuid4()), [uuid4(), uuid4()])
+    assert not _within_authorized_scope(_place(uuid4()), [uuid4(), uuid4()])
 
 
 def test_no_receiver_list_means_our_own_secret_verified_it() -> None:
@@ -132,7 +132,7 @@ def test_no_receiver_list_means_our_own_secret_verified_it() -> None:
     control. Treating `None` as a refusal would silently kill every shared-bot
     button instead.
     """
-    assert _within_authorized_scope(_link(uuid4()), None)
+    assert _within_authorized_scope(_place(uuid4()), None)
 
 
 def test_an_empty_receiver_list_refuses_rather_than_admits() -> None:
@@ -142,4 +142,4 @@ def test_an_empty_receiver_list_refuses_rather_than_admits() -> None:
     opposite, and it matches how `routing_surfaces` reads an empty
     `surface_ids` -- `IN ()` matches nothing.
     """
-    assert not _within_authorized_scope(_link(uuid4()), [])
+    assert not _within_authorized_scope(_place(uuid4()), [])

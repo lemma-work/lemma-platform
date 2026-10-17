@@ -5,7 +5,8 @@
 `app/modules/agent_surfaces` connects external messaging/email platforms to
 pod-scoped agent conversations. It owns surface configuration, webhook/native
 receiver ingress, signature verification, event normalization, external-user
-identity resolution, thread-to-conversation links, attachment ingestion,
+identity resolution, placing each message in a channel and its conversation,
+attachment ingestion,
 platform tools, progress rendering, and outbound delivery.
 
 Supported adapters are Slack, Microsoft Teams, Telegram, WhatsApp, and Resend
@@ -28,25 +29,31 @@ Resend address.
 | --- | --- |
 | `agent_surfaces` | Pod/platform/name, the one agent it answers as, account binding, allowed channels, identity and send policy |
 | `agent_surface_external_users` | Stable external identity to Lemma user/contact resolution |
-| `agent_surface_conversation_links` | External channel/thread to agent conversation mapping |
 | `surface_verified_identities` | One row per hashed platform/tenant/installation/actor binding: that this person proved who they are, and the pod and installation their private chat reaches. A check constraint keeps a revoked identity from holding a destination, so a live route beside a revoked proof is unrepresentable rather than merely unlikely |
 | `surface_pending_onboarding` | Onboarding in flight for one binding — step, email challenge, offered pods, and the original inbound event held until there is a conversation to commit it to |
 | `surface_onboarding_input_tokens` | Hashed handles for a native input form — a Slack modal, a Teams card, a WhatsApp prompt — each minted against one pending row, step and challenge. A submission is accepted only while all three still match, so a form left open across a step stops working rather than answering the wrong question; the cleanup sweep deletes handles at expiry |
 | `surface_whatsapp_numbers` | The deployment's WhatsApp numbers, one row each and each independent: its own WABA, access token, verify token and Flow ids, every one falling back to settings when absent so a single-number deployment declares nothing. `role` separates the one `SHARED` line everybody rides from the `ALLOCATABLE` pool; `status` separates "stop handing this out" from "we no longer own it". Who holds a number is not stored here — it is `agent_surfaces.surface_identity_id`, so there is no second copy to disagree |
 | `notifications` | Something the pod needs a person to see: recipient, actor, origin, body, optional background instruction, and open/expiry state. It lives in this module because delivery is surface work; the agent and workflow modules reach it through ports in `app/composition` |
-| `agent_surface_groups` | A group chat a surface's bot is in, one row per (surface, chat): its title, whether the bot answers people outside the pod there, and `owner_user_id`, the member who answers for them. No owner means outsiders are not answered. A WhatsApp group the bot asked Meta to create exists here before its chat id does: `external_channel_id` is null and `request_id` set until the confirmation webhook fills in the id and `invite_link` |
 | `agent_surface_web_widgets` | A pod's chat on other people's web pages, each answering as one of its agents, and the door a form page adds rows through. `public_key` (unique, readable by anybody) names the widget; `signing_secret` (encrypted) signs host tokens on the customer's server; `allowed_origins`, `answer` (`off`/`known`/`anyone`) and `looked_after_by` as for a bot's contacts. See `services/web_chat.py`. A form is any page that adds a row to a table the pod opened to visitors (`datastore_public_rows`): `GET /public/web/{key}/table` says what to ask, `POST /public/web/{key}/rows` adds the row, and `/public/web/{key}/page?table=` is the form Lemma hosts, with the chat beside it. On a web visitor's run the agent's `fill_form` tool fills that form's fields; it never sends it. Answers reach the page live on `GET /public/web/{key}/stream`, one JSON object per line after an `open` handshake, at most two per session, translated by `agent/contracts/visitor_stream.py`: the answer's text as it is written, `typing`, the finished message and `done` -- never thinking, tool traffic or a private note's run |
 | `visitor_sessions` (contacts' table) | One visitor's hold on one widget, found by a secret stored only as its digest and traded at `POST /public/web/{key}/session` for a 15-minute `visitor-access` token sent as `Authorization: Bearer` (`api/public_dependencies.py`). `strength` is `ANONYMOUS`, `CODE` or `HOST`; anonymous sessions end 90 days after they began, a contact's 30 days after last use, and a `HOST` session never refreshes without a fresh host token. Reissuing a widget's secret revokes its host sessions; forgetting a contact revokes theirs. Cascades from its conversation. CORS for `/public/web/*` is answered from the widget's own origins, never with credentials (`api/public_cors.py`), and nothing there is served unless `PUBLIC_WEB_ENABLED` is on |
 | `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions and spent codes hourly; a visitor's conversation is a contact's, and is never swept |
-| `agent_surface_group_messages` | What the bot heard in a group and what it said there, kept only where the platform keeps no readable history (Telegram, WhatsApp). Always read newest-first and bounded |
 | `surface_inbound_messages` | One row per inbound message any webhook or receiver accepted, unique on (receiver scope, the platform's event id), so a delivery retried a minute or three days later is the same row. RECEIVED → INGESTING → ROUTED, DROPPED or FAILED; the `surface.ingest` item that turns it into a turn is written with it. ROUTED and DROPPED rows are kept 7 days, FAILED 30 |
 | `surface_message_claims` | The durable message-level claim: one row per platform message, owned by the inbound row that took it, taken in the transaction that routes it so a duplicate under another scope is answered once. Kept 7 days |
 | `surface_deliveries` | Every outbound message the platform owes: a run's answer, a held reply, a notification, a "please resend". Unique on an idempotency key; PENDING → SENDING → SENT, or UNKNOWN when a send's outcome was lost (never re-sent), or FAILED. One `surface.reply` pump per destination sends them in order |
 | `surface_receiver_state` | One cursor per polling receiver (Telegram offset, Resend cursor, the Telegram manager bot), written in the transaction that stores the messages before it, so a receiver that moves to another worker resumes without a gap or a duplicate |
 
-Conversation metadata records surface, platform, external user/channel/thread,
-and message identifiers so delivery and debugging do not depend only on the
-link table.
+Where a message was said, and where a conversation's answer goes, are the
+`channels` module's: every thread sits on a channel source, which keeps how to
+write back to it, and every line on the channel's timeline keeps what answers
+it in place (`channels.contracts.places`). A group the pod's bot is in is a
+shared source of a `GROUP` channel, and carries the group's settings: its
+title, whether the bot answers people outside the pod there, and
+`owner_user_id`, the member who answers for them -- no owner means outsiders
+are not answered. A WhatsApp group the bot asked Meta to create is a source
+before its chat id is known: `external_channel_id` is null and `request_id` set
+until the confirmation webhook fills in the id and `invite_link`. A group's id
+is its source's. Conversation metadata still records the surface, platform and
+external identifiers, for debugging.
 
 Onboarding storage is deliberately private rather than pod-scoped: a person
 being recognised and a person having somewhere to talk are different states,
@@ -87,7 +94,7 @@ sequenceDiagram
     P->>API: webhook / poll / socket event
     API->>API: verify, classify, answer deadline interactions
     API->>DB: row + surface.ingest item (one transaction), return quickly
-    DB->>In: resolve surface, identity, claim, conversation link
+    DB->>In: resolve surface, identity, claim, place and conversation
     In->>A: user message + agent.turn (one transaction)
     A-->>Out: AgentRunFinished -> surface_deliveries row
     Out-->>P: reply in original channel/thread
@@ -196,11 +203,20 @@ observer renders them on the surface and a submission resumes the run.
   `SURFACE_ALLOW_UNVERIFIED_PHONE_MATCH=true`: a number claimed by exactly one
   profile then routes to it, each such match is logged
   (`unverified_phone_match_used`). A verified owner always wins; a number claimed by several *unverified* profiles never matches.
-- **DM reset window.** A DM starts a fresh Lemma conversation after
-  `SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS` (default 24) of inactivity, measured
-  from the last *inbound* message. It is deployment-wide; the old per-surface
-  `dm_conversation_reset_after_hours` field is accepted and ignored.
-  This is the only place a surface decides which conversation a message joins.
+- **One conversation per person, agent and channel.** Every thread sits on a
+  channel source (`services/channel_places.py`): a private chat on the member's
+  `DIRECT` channel or the contact's `CONTACT` channel, keyed by the person
+  rather than the address it arrived on; a group, a shared Slack channel or an
+  email thread with others on it on a `GROUP` channel of its own. The binder
+  (`services/conversation_binder.py`) continues the person's conversation with
+  the answering agent in that channel -- across another pool number, another of
+  the pod's bots, another platform, or a quiet week -- and opens one only for a
+  different agent or person. There is no inactivity reset; the per-surface
+  `dm_conversation_reset_after_hours` field is accepted and ignored. This is
+  the only place a surface decides which conversation a message joins.
+- **Every line lands on the channel's timeline** (`services/channel_lines.py`):
+  the message a run answers, as it enters the conversation, and every answer
+  the platform took, said by the agent for the person it answered.
 - **History is not the surface's.** A surface never trims or reshapes what the
   model sees. Once a message is bound to a conversation, the agent module alone
   decides how much history the run carries (run cap, whole recent runs,
@@ -224,15 +240,16 @@ is answered *for the pod*, in a group the pod has opened to them.
   groups read as ownerless and answer no strangers until someone takes them on.
 - **The bot introduces itself.** When it is added to a Telegram group -- either
   way, and once -- it says how to ask it, that people outside the pod are
-  answered from what is Public, and that the pod keeps what is said there for
-  `GROUP_LOG_RETENTION` (90 days); a WhatsApp group it creates carries the same
-  words as its description (`services/group_hello.py`).
+  answered from what is Public, and that the pod keeps what is said there; a
+  WhatsApp group it creates carries the same words as its description
+  (`services/group_hello.py`).
 - **The pod's groups are one page** (`services/space_groups.py`, read by every
-  member). It is assembled from rows other parts already keep: the registry and
-  its log for who has spoken and what was said, the contacts' (`~contact:`)
-  thread links for which conversations are a group's outsiders', and the open
-  notifications those
-  conversations sent the reader for what is waiting on them. A member's own
+  member). It is assembled from rows other parts already keep: the registry,
+  the group's channel for who has spoken and what was said (people keyed
+  `member:<id>` or `contact:<id>`, never by platform id), the contacts'
+  conversations in that channel for which are a group's outsiders', and the
+  open notifications those conversations sent the reader for what is waiting
+  on them. A member's own
   conversation with the bot and a private note are never part of it. Each of
   the bot's lines in the log records whom it answered and whether that was from
   what is Public (`group_log.answered_in_group`), so the page can say so -- and
@@ -300,8 +317,7 @@ is answered *for the pod*, in a group the pod has opened to them.
   in a shared channel. Opened the first time they put the bot to work there.
 - **Where their turn runs**: in a conversation of their own in that group,
   looked after by the group's owner and naming the contact in its
-  `contact_id` column, linked under their `~contact:{id}` key on the group's
-  thread. The agent module runs every turn in it as that contact: a context
+  `contact_id` column, in the group's channel. The agent module runs every turn in it as that contact: a context
   pinned to the pod that reads what the pod marked Public. The column is the
   server's alone, so nothing a client writes to the conversation changes whom
   it answers.
@@ -362,14 +378,18 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **The bot's own switch.** `config.groups.answers_outsiders` on a surface,
   on by default, closes every group that bot is in to people outside the pod at
   once.
-- **The group log** records every group message the bot receives, before
-  anything decides whether it was addressed, and every answer once delivered.
-  A run in a group is handed the recent lines as background, chosen by whose
-  access it acts with (`group_log.group_background`): a stranger's run is not
-  shown answers made with a member's access; a member's run is not shown what
-  strangers wrote, nor the bot's answers to them -- on Slack, lines from another
-  workspace are left out the same way. Each line is one quoted line however many
-  it spanned. Lines older than `GROUP_LOG_RETENTION` go as new ones arrive.
+- **The group log** is the group's channel timeline. Every group message the
+  bot receives on Telegram and WhatsApp is a line of it, before anything
+  decides whether it was addressed (`services/group_log.py`), said by the
+  member the sender resolved to or by a contact made the first time they
+  speak; every answer joins it once delivered. A run in a group is handed the
+  recent lines as background, chosen by whose access it acts with
+  (`group_log.group_background`): a contact's run reads what the channel lets
+  a contact read -- never an answer made with a member's access; a member's run
+  is not shown what people outside the pod wrote, the bot's answers to them,
+  or members' notes -- on Slack, lines from another workspace are left out the
+  same way. What is left out is counted. Each line is one quoted line however
+  many it spanned. Nothing is deleted automatically.
 - **A member answering in front of outsiders is told so.** A member's run keeps
   the member's access, but when people outside the pod read the answer -- they
   have spoken in the group, the group answers them, the Slack channel is shared,
@@ -454,9 +474,14 @@ message that is only "STOP" as an unsubscribe. What it says or notes without a
 model -- a refusal, a parked-mail note, "a person will reply" -- is windowed in
 Redis by `services/contact_windows.py`, failing closed. Before a run for
 somebody outside the pod starts, `services/outside_cap.py` asks whether the
-organization's contacts cap is reached or a member has the conversation; if so
-the message is kept, no run starts, the member is told, and the person hears
-once a day that a person will reply. `SurfaceTurnStarter` calls it for chat and
+organization's contacts cap is reached or a member is answering the contact's
+channel by hand (its handler, set and cleared at `/pods/{pod_id}/channels/{id}/handler`);
+if so the message is kept -- in the conversation and on the channel's
+timeline -- no run starts, the member is told, and the person hears once a day
+that a person will reply. A web chat's answers go on the channel's timeline
+rather than to any platform thread the same conversation has
+(`events/reply_for_run_work.py`), and a member's follow-up is the member's
+line there, not the agent's. `SurfaceTurnStarter` calls it for chat and
 email surfaces, before the typing indicator and any file handling. Writing first to a
 contact takes `contact.message`.
 

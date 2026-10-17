@@ -19,12 +19,14 @@ from dataclasses import dataclass, replace
 from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from uuid import UUID
 
+from app.modules.agent.contracts.audience import Audience
+
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
 )
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
+from app.modules.channels.contracts import Source, SourceKind
 
 
 @dataclass(frozen=True)
@@ -50,13 +52,18 @@ class ResolvedSurfaceRoute:
 class SurfaceEgressTarget:
     """Resolved destination for an outbound surface message.
 
-    `surface` is the installation the reply goes out through; `pod_id` is the
-    pod the conversation belongs to. For a personal DM those differ, so anything
+    `source` is the place the reply goes to, and `event` what answers it there
+    -- the line being answered, or the place's last word. `surface` is the
+    installation the reply goes out through; `pod_id` is the pod the
+    conversation belongs to. For a personal DM those differ, so anything
     reading pod data -- a file, a table, a deep link -- must use `pod_id` and
     not `surface.pod_id`.
     """
 
-    link: AgentSurfaceConversationLink
+    source: Source
+    conversation_id: UUID
+    #: The agent the conversation is with: whose name the reply goes out under.
+    agent_id: UUID | None
     surface: AgentSurfaceEntity
     pod_id: UUID
     adapter: SurfacePlatformAdapterPort
@@ -64,6 +71,23 @@ class SurfaceEgressTarget:
     credentials: SurfaceCredentials
     #: Whose conversation this is: the member a group answer was made for.
     conversation_user_id: UUID | None = None
+    #: Whom the conversation answers: that member, or a contact they look after.
+    audience: Audience = Audience()
+
+    @property
+    def is_group(self) -> bool:
+        """Several people read what goes out here: a group, a shared channel."""
+        return self.source.kind is SourceKind.SHARED
+
+    @property
+    def person_external_id(self) -> str | None:
+        """The platform id of the person this answers: the private place's
+        person, or whoever said what is being answered in a group."""
+        if self.source.kind is SourceKind.PRIVATE and self.source.external_user_id:
+            return self.source.external_user_id
+        # As identity resolution names them: the directory id where the
+        # platform gives one (Teams' AAD object id), else its own.
+        return self.event.sender_aad_object_id or self.event.sender_external_user_id
 
     @property
     def copies_others(self) -> bool:

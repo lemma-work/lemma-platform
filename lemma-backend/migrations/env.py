@@ -54,6 +54,7 @@ from app.modules.mcp_access.infrastructure import models as mcp_access_models  #
 
 # Contacts (contacts, contact_identities)
 from app.modules.contacts.infrastructure import models as contact_models  # noqa: F401
+from app.modules.channels.infrastructure import models as channel_models  # noqa: F401
 
 # Visitors' sessions (visitor_sessions, agent_surface_web_codes)
 from app.modules.contacts.infrastructure import (  # noqa: F401

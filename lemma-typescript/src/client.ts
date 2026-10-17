@@ -24,6 +24,7 @@ import { PodRolesNamespace } from "./namespaces/pod-roles.js";
 import { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
 import { PodGroupsNamespace } from "./namespaces/pod-groups.js";
 import { PodLinksNamespace } from "./namespaces/pod-links.js";
+import { ChannelsNamespace } from "./namespaces/channels.js";
 import { ContactsNamespace } from "./namespaces/contacts.js";
 import { NotificationsNamespace } from "./namespaces/notifications.js";
 import { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
@@ -93,6 +94,7 @@ export class LemmaClient {
   readonly podGroups: PodGroupsNamespace;
   /** The other pods a pod can ask, and the pods connected to ask it. */
   readonly podLinks: PodLinksNamespace;
+  readonly channels: ChannelsNamespace;
   readonly contacts: ContactsNamespace;
   /** The caller's own surfaces across all pods (grouped by platform). */
   readonly notifications: NotificationsNamespace;
@@ -167,6 +169,7 @@ export class LemmaClient {
     this.podSurfaces = new PodSurfacesNamespace(this._generated);
     this.podGroups = new PodGroupsNamespace(this._generated);
     this.podLinks = new PodLinksNamespace(this._generated);
+    this.channels = new ChannelsNamespace(this._generated);
     this.contacts = new ContactsNamespace(this._generated);
     this.userSurfaces = new UserSurfacesNamespace(this._generated);
   }

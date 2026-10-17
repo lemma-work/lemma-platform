@@ -27,7 +27,6 @@ from app.modules.agent_surfaces.caches import (
     PENDING_DISPLAY_PATHS,
     surface_caches,
 )
-from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
 from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
 from app.modules.agent_surfaces.services import one_reply_attachments
 from app.modules.agent_surfaces.services.display_resource_content import (
@@ -40,6 +39,7 @@ from app.modules.agent_surfaces.services.pending_envelope import (
     remember_display_path,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    AnsweredAt,
     _delivering_adapter,
     _resend_surface,
     _slack_event,
@@ -187,7 +187,7 @@ class _UowFactory:
 def _email_world(conversation_id: UUID):
     surface = _resend_surface()
     parsed = _slack_event()
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="RESEND",
@@ -197,10 +197,7 @@ def _email_world(conversation_id: UUID):
         last_event=parsed.model_dump(mode="json"),
     )
     adapter = _delivering_adapter("RESEND")
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
     return egress, adapter
 
 

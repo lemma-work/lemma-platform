@@ -25,10 +25,13 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
 )
+from app.modules.agent_surfaces.services.channel_places import ChannelSeats
+from app.modules.channels.contracts import GroupHome, Place, SourceKind
 
 
 async def note_slack_channel(
     groups: SurfaceGroupRepository,
+    seats: ChannelSeats,
     surfaces: Sequence[AgentSurfaceEntity],
     parsed: ParsedInboundSurfaceEvent,
 ) -> bool:
@@ -48,15 +51,27 @@ async def note_slack_channel(
         )
         if route is None and not is_slack_group_dm(parsed):
             continue
-        group = await groups.get(surface_id=surface.id, external_channel_id=channel_id)
-        if group is None:
+        known = await seats.places_hearing(
+            platform=SurfacePlatform.SLACK.value,
+            external_channel_id=channel_id,
+            surface_ids=[surface.id],
+        )
+        if known:
+            group = known[0]
+        else:
+            title = slack_group_title(route, parsed)
             try:
-                group = await groups.ensure(
+                group = await seats.source_for(
                     pod_id=surface.pod_id,
-                    surface_id=surface.id,
-                    platform=SurfacePlatform.SLACK.value,
-                    external_channel_id=channel_id,
-                    title=slack_group_title(route, parsed),
+                    place=Place(
+                        surface_id=surface.id,
+                        platform=SurfacePlatform.SLACK.value,
+                        kind=SourceKind.SHARED,
+                        external_channel_id=channel_id,
+                        external_user_id=None,
+                        title=title,
+                    ),
+                    home=GroupHome(title=title),
                 )
             except LookupError:
                 # Removed as it was made: nothing to keep current this time.

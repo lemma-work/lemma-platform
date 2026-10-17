@@ -75,6 +75,17 @@ class ConversationModel(UUIDAuditBase):
             "conversation_metadata",
             postgresql_using="gin",
         ),
+        # A person has one live conversation per agent in a channel.
+        Index(
+            "uq_agent_conversations_channel_person",
+            "channel_id",
+            text("COALESCE(agent_id, pod_id)"),
+            text("COALESCE(contact_id, user_id)"),
+            unique=True,
+            postgresql_where=text(
+                "channel_id IS NOT NULL AND parent_id IS NULL AND NOT is_archived"
+            ),
+        ),
         Index(
             "uq_agent_conversation_origin",
             "origin_type",
@@ -107,6 +118,13 @@ class ConversationModel(UUIDAuditBase):
     #: the contact deletes what was said with them.
     contact_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("contacts.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    #: The channel this conversation's agent works in, when it lives on one.
+    #: A conversation started in Lemma, and an agent's own task, have none.
+    channel_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("channels.id", ondelete="SET NULL"),
         index=True,
         nullable=True,
     )
@@ -213,6 +231,7 @@ class ConversationModel(UUIDAuditBase):
             "user_id": conversation.user_id,
             "pod_id": conversation.pod_id,
             "contact_id": conversation.contact_id,
+            "channel_id": conversation.channel_id,
             "organization_id": conversation.organization_id,
             "agent_id": conversation.agent_id,
             "title": conversation.title,
@@ -243,6 +262,7 @@ class ConversationModel(UUIDAuditBase):
             user_id=self.user_id,
             pod_id=self.pod_id,
             contact_id=self.contact_id,
+            channel_id=self.channel_id,
             organization_id=self.organization_id,
             agent_id=self.agent_id,
             title=self.title,

@@ -52,6 +52,10 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
     SurfaceRepository,
 )
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+from app.modules.agent_surfaces.services.channel_lines import (
+    ChannelLinesFor,
+    ChannelLinesInDatabase,
+)
 from app.modules.agent_surfaces.services.credential_resolver import (
     PooledNumberReader,
     SurfaceCredentialResolver,
@@ -130,8 +134,10 @@ class SurfaceTurnStarter:
         roster_reads: RosterReads = roster_reads,
         write_scope: WriteScope | None = None,
         reply_sink: ReplySink | None = None,
+        channel_lines: ChannelLinesFor = ChannelLinesInDatabase,
     ) -> None:
         self.uow_factory = uow_factory
+        self.channel_lines = channel_lines
         self.write_scope: WriteScope = write_scope or uow_factory
         self.reply_sink = reply_sink
         self.roster_reads = roster_reads
@@ -258,7 +264,9 @@ class SurfaceTurnStarter:
         # it is no longer true: `PendingUserMessagesCapability` steers these
         # into the run already going, which answers all of them at once.
         async with self.write_scope() as uow:
-            finished = await write_inbound_message(context, message_text, metadata, uow)
+            finished = await write_inbound_message(
+                context, message_text, metadata, uow, lines=self.channel_lines(uow)
+            )
             # Their message reopened a closed reply window: what waited for it
             # is written out now, ahead of the answer this message will get,
             # and the destination pump sends them in that order.
@@ -373,7 +381,11 @@ class SurfaceTurnStarter:
         if context.pod_id is None:
             return
         tell = await first_word_today(context.conversation_id)
+        text = context.message_text.strip() or "[a message with no text]"
         async with self.uow_factory() as uow:
+            # On the channel's timeline whether or not a run answers it: the
+            # member answering by hand reads it there.
+            await self.channel_lines(uow).heard(context, text=text)
             held = await hand_to_a_person(
                 uow,
                 tell=tell,
@@ -382,7 +394,7 @@ class SurfaceTurnStarter:
                 owner_id=context.user_id,
                 # Not transcribed or saved: no run will read it, and an
                 # outsider's files are never saved (see `_ingest_files`).
-                text=context.message_text.strip() or "[a message with no text]",
+                text=text,
                 metadata=_message_metadata(context, AttachmentIngest()),
             )
         if held.reply is None:

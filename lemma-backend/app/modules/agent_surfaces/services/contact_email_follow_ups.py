@@ -4,14 +4,14 @@ A web chat visitor who proved an address with a one-time code is a contact
 with a verified email handle, but their conversation is the chat: there is no
 thread from the pod's address to reply into. Asked for explicitly
 (``channel="email"``), this opens one from the pod's own email surface -- the
-cold-open send notifications use -- and links it the way an inbound email from
-the contact would be linked (``~contact:{id}``), so their reply binds to the
-same conversation, as the same contact.
+cold-open send notifications use -- and places the thread in the contact's
+channel as an inbound email from them would be placed, so their reply
+continues the same conversation, as the same contact.
 
-Sent first, then recorded: the conversation and its link are written only for
-a thread that exists, since a link to a thread nobody sent would swallow the
-reply. A send that failed leaves nothing here; the caller records it, as not
-sent, in the contact's latest conversation.
+Sent first, then recorded: the place is made only for a thread that exists,
+since a place for a thread nobody sent would swallow the reply. A send that
+failed leaves nothing here; the caller records it, as not sent, in the
+contact's latest conversation.
 """
 
 from __future__ import annotations
@@ -28,16 +28,10 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.contact_conversations import append_follow_up
 from app.modules.agent_surfaces.composition import build_surface_egress
-from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
-    AgentSurfaceEntity,
-)
-from app.modules.agent_surfaces.domain.groups import contact_link_user
+from app.modules.agent.contracts import channel_conversations
+from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.ports import ColdEmailThread
 from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (  # noqa: E501
     SurfaceRepository,
 )
@@ -46,6 +40,15 @@ from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surf
 from app.modules.agent_surfaces.services.cold_email_thread import (
     follow_up_seed_id,
 )
+from app.modules.channels.contracts import (
+    ContactsHome,
+    Place,
+    Sender,
+    SourceKind,
+    post,
+    source_for,
+)
+from app.modules.channels.contracts.places import addressed_at
 from app.modules.pod.contracts.members import pod_member_id
 
 logger = get_logger(__name__)
@@ -139,7 +142,14 @@ async def email_contact(
         return None
     async with uow_factory() as uow:
         conversation_id = await _open_contacts_thread(
-            uow, mailbox, thread, contact_id=contact_id, title=subject
+            uow,
+            mailbox,
+            thread,
+            contact_id=contact_id,
+            recipient_email=recipient_email,
+            sent_by_user_id=sent_by_user_id,
+            text=text,
+            title=subject,
         )
         await append_follow_up(
             uow,
@@ -157,55 +167,82 @@ async def _open_contacts_thread(
     thread: ColdEmailThread,
     *,
     contact_id: UUID,
+    recipient_email: str,
+    sent_by_user_id: UUID,
+    text: str,
     title: str,
 ) -> UUID:
-    """The contact's conversation for this thread, linked as their reply finds it.
+    """The contact's conversation, with the thread placed in their channel.
 
-    Owned by the member who looks after the surface's contacts and marked as
-    the contact's, as ``ContactDoor`` opens one for an inbound email; the
-    link's key is the contact's, not the address, because that is the key the
-    reply is bound under.
+    The place is keyed as their reply arrives -- the thread and their
+    address -- and its address is the mail just sent: nobody there has said
+    anything yet. The conversation is their one with the surface's agent in
+    that channel, kept by the member who looks after the surface's contacts,
+    as ``ContactDoor`` keeps one for an inbound email.
     """
     surface = mailbox.surface
-    link_user = contact_link_user(contact_id)
-    conversation = await agent_conversations.open_surface_conversation(
+    source = await source_for(
         uow,
         pod_id=surface.pod_id,
-        agent_name=await agent_name_for_surface(uow, surface),
-        user_id=mailbox.looked_after_by,
-        title=title,
-        contact_id=contact_id,
-        metadata={
-            "source": "contact_follow_up",
-            "surface_id": str(surface.id),
-            "surface_platform": surface.surface_type.value,
-            "external_channel_id": thread.external_channel_id,
-            "external_thread_id": thread.external_thread_id,
-            "external_user_id": link_user,
-            "conversation_kind": "EMAIL",
-        },
-        # Nobody asked to run the agent: the member wrote, and the conversation
-        # is the looked-after-by member's, as an inbound one would be.
-        require_execute_grant=False,
-    )
-    await SurfaceConversationLinkRepository(uow).create(
-        AgentSurfaceConversationLink(
+        place=Place(
             surface_id=surface.id,
-            conversation_id=conversation.id,
             platform=surface.surface_type.value,
-            external_channel_id=thread.external_channel_id,
-            external_thread_id=thread.external_thread_id,
-            external_user_id=link_user,
-            routed_agent_id=surface.agent_id,
-            conversation_kind="EMAIL",
-            route_key="email",
-            last_event=thread.last_event,
-            last_message_id=thread.external_message_id,
-            # They have not written on this thread; an outbound is not inbound.
-            last_inbound_at=None,
-        )
+            kind=SourceKind.PRIVATE,
+            external_channel_id=thread.external_thread_id,
+            external_user_id=recipient_email.strip().lower(),
+        ),
+        home=ContactsHome(contact_id=contact_id),
     )
-    return conversation.id
+    await addressed_at(uow, source.id, thread.last_event)
+    await channel_conversations.lock_person_in_channel(
+        uow,
+        channel_id=source.channel_id,
+        pod_id=surface.pod_id,
+        agent_id=surface.agent_id,
+        person_id=contact_id,
+    )
+    conversation_id = await channel_conversations.conversation_in_channel(
+        uow,
+        channel_id=source.channel_id,
+        pod_id=surface.pod_id,
+        agent_id=surface.agent_id,
+        user_id=mailbox.looked_after_by,
+        contact_id=contact_id,
+    )
+    if conversation_id is None:
+        conversation = await agent_conversations.open_surface_conversation(
+            uow,
+            pod_id=surface.pod_id,
+            agent_name=await agent_name_for_surface(uow, surface),
+            user_id=mailbox.looked_after_by,
+            title=title,
+            contact_id=contact_id,
+            channel_id=source.channel_id,
+            metadata={
+                "source": "contact_follow_up",
+                "surface_id": str(surface.id),
+                "surface_platform": surface.surface_type.value,
+                "external_channel_id": thread.external_channel_id,
+                "external_thread_id": thread.external_thread_id,
+                "conversation_kind": "EMAIL",
+            },
+            # Nobody asked to run the agent: the member wrote, and the
+            # conversation is the looked-after-by member's, as an inbound one
+            # would be.
+            require_execute_grant=False,
+        )
+        conversation_id = conversation.id
+    await post(
+        uow,
+        channel_id=source.channel_id,
+        sender=Sender.member(sent_by_user_id),
+        text=text,
+        source_id=source.id,
+        conversation_id=conversation_id,
+        external_message_id=thread.external_message_id,
+        external_thread_id=thread.external_thread_id,
+    )
+    return conversation_id
 
 
 __all__ = ["ContactsMailbox", "contacts_mailbox", "email_contact"]

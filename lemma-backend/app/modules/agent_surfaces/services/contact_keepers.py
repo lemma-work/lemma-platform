@@ -147,7 +147,7 @@ async def owned_or_moved(
 ) -> bool:
     """Whether ``user_id`` owns the conversation, once a contact's has moved.
 
-    A contact's conversation is found by its ``~contact:`` link and is the
+    A contact's conversation is found in the contact's channel and is the
     contact's, whoever looks after contacts now: when that member changes, it
     moves to the new one with its history rather than being left behind for a
     fresh one. Every other conversation is only ever its owner's.

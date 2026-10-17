@@ -9,18 +9,17 @@ in Lemma, and the contents are never read for it.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
 from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     ConversationType,
 )
 from app.modules.agent_surfaces.services.channel_exposure import outsiders_would_see
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    AnsweredAt,
     _delivering_adapter,
     _slack_event,
     _slack_surface,
@@ -29,13 +28,6 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
 )
 
 pytestmark = pytest.mark.asyncio
-
-#: The group's row, read by the repository the check uses; doubled at its
-#: source, since the store is a collaborator of the unit and not part of it.
-_GROUP_LOOKUP = (
-    "app.modules.agent_surfaces.infrastructure.repositories.group_repository."
-    "SurfaceGroupRepository.get"
-)
 
 
 def _channel(*, shared: bool):
@@ -49,7 +41,7 @@ def _channel(*, shared: bool):
             "metadata": {"is_ext_shared_channel": shared},
         }
     )
-    link = AgentSurfaceConversationLink(
+    link = AnsweredAt(
         surface_id=surface.id,
         conversation_id=conversation_id,
         platform="SLACK",
@@ -70,16 +62,12 @@ def _channel(*, shared: bool):
     ],
     ids=["table", "file"],
 )
-async def test_a_shared_channel_gets_a_link_not_the_contents(monkeypatch, request_):
+async def test_a_shared_channel_gets_a_link_not_the_contents(request_):
     """Reaching the rows or the file's bytes would need the pod's storage, which
     these doubles do not have: arriving at all is what the test would catch."""
-    monkeypatch.setattr(_GROUP_LOOKUP, AsyncMock(return_value=None))
     surface, conversation_id, _event, link = _channel(shared=True)
     adapter = _delivering_adapter()
-    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
-    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
-        link
-    )
+    egress = build_egress(adapter=adapter, surfaces=[surface], answered=link)
 
     sent = await egress.send_display_resource_for_conversation(
         conversation_id=conversation_id, request=request_, tool_call_id="t-1"
@@ -92,39 +80,40 @@ async def test_a_shared_channel_gets_a_link_not_the_contents(monkeypatch, reques
     assert "outside the pod" in note
 
 
+def _target(surface, event, link, **group) -> SimpleNamespace:
+    """The target's place is the group, with the settings it keeps."""
+    source = link.source(surface).model_copy(update=group)
+    return SimpleNamespace(
+        surface=surface, source=source, event=event, is_group=link.is_group
+    )
+
+
 @pytest.mark.parametrize(
     ("group", "outsiders"),
     [
-        (SimpleNamespace(shared_externally=False, welcomes_outsiders=True), True),
-        (SimpleNamespace(shared_externally=True, welcomes_outsiders=False), True),
-        (SimpleNamespace(shared_externally=False, welcomes_outsiders=False), False),
-        (None, False),
+        ({"answers_outsiders": True, "owner_user_id": uuid4()}, True),
+        ({"shared_externally": True, "answers_outsiders": False}, True),
+        ({"answers_outsiders": False}, False),
+        ({"answers_outsiders": True, "owner_user_id": None}, False),
     ],
-    ids=["opened-to-outsiders", "shared-outside", "members-only", "no-record"],
+    ids=["opened-to-outsiders", "shared-outside", "members-only", "nobody-answers"],
 )
-async def test_what_the_pod_knows_about_the_group_decides(
-    monkeypatch, group, outsiders
-):
-    monkeypatch.setattr(_GROUP_LOOKUP, AsyncMock(return_value=group))
+def test_what_the_pod_knows_about_the_group_decides(group, outsiders):
     surface, _conversation_id, event, link = _channel(shared=False)
-    target = SimpleNamespace(surface=surface, link=link, event=event)
 
-    seen = await outsiders_would_see(
-        SimpleNamespace(session=SimpleNamespace()),  # type: ignore[arg-type]
-        target,  # type: ignore[arg-type]
+    seen = outsiders_would_see(
+        _target(surface, event, link, **group),  # type: ignore[arg-type]
         DisplayResourceRequest(type=DisplayResourceType.TABLE, name="deals"),
     )
 
     assert seen is outsiders
 
 
-async def test_a_card_is_not_member_data():
+def test_a_card_is_not_member_data():
     """Only what is read with the member's authority is held back."""
     surface, _conversation_id, event, link = _channel(shared=True)
-    target = SimpleNamespace(surface=surface, link=link, event=event)
 
-    assert not await outsiders_would_see(
-        SimpleNamespace(session=SimpleNamespace()),  # type: ignore[arg-type]
-        target,  # type: ignore[arg-type]
+    assert not outsiders_would_see(
+        _target(surface, event, link),  # type: ignore[arg-type]
         DisplayResourceRequest(type=DisplayResourceType.APP, name="crm"),
     )

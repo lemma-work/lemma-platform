@@ -29,6 +29,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.tests.e2e.group_timeline import (
+    a_stranger,
+    bot_for,
+    say,
+)
+from app.modules.channels.contracts import Principal
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
@@ -42,9 +48,6 @@ from app.modules.agent_surfaces.domain.notification import (
 )
 from app.modules.agent_surfaces.infrastructure.models import (
     NotificationModel,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
     NotificationRepository,
@@ -634,20 +637,21 @@ async def test_a_strangers_background_leaves_out_answers_made_with_a_members_acc
     _, group, owner = await _group_with_owner(
         scenario, db_session, fake_telegram, monkeypatch
     )
-    lines = SurfaceGroupRepository(db_session)
-    await lines.append_line(
-        group_id=group.id,
-        body="MEMBER-ANSWER-SECRET: payroll is 1.2M.",
-        from_agent=True,
-        answered_name="Arjun",
-        answered_user_id=owner,
+    bot = UUID(scenario.pod_id)  # the pod's own agent
+    tom = await a_stranger(
+        db_session, group, telegram_id=str(STRANGER_TELEGRAM_ID), name="Tom"
     )
-    await lines.append_line(
-        group_id=group.id,
-        body="Our brochure is on the website.",
-        from_agent=True,
-        answered_name="Tom",
-        answered_from_public=True,
+    await say(
+        db_session,
+        group,
+        "MEMBER-ANSWER-SECRET: payroll is 1.2M.",
+        sender=bot_for(Principal.member(owner), agent_id=bot),
+    )
+    await say(
+        db_session,
+        group,
+        "Our brochure is on the website.",
+        sender=bot_for(tom, agent_id=bot),
     )
     await db_session.commit()
     seen = record_model_requests(monkeypatch)

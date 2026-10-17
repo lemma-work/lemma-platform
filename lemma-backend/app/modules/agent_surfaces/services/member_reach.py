@@ -35,11 +35,9 @@ from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.domain.adapter_port import reply_window_reopener
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
+from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.held_replies import (
     hold_reply,
@@ -52,6 +50,7 @@ from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
     reply_window_open,
 )
+from app.modules.channels.contracts import Source
 
 logger = get_logger(__name__)
 
@@ -65,12 +64,12 @@ class MemberReach:
         egress: SurfaceEgress,
         pod_membership_port: SurfacePodMembershipPort,
         external_user_repository: ExternalSurfaceUserRepository,
-        conversation_link_repository: SurfaceConversationLinkRepository,
+        seats: ChannelSeats,
     ) -> None:
         self.egress = egress
         self.pod_membership_port = pod_membership_port
         self.external_user_repository = external_user_repository
-        self.conversation_link_repository = conversation_link_repository
+        self.seats = seats
 
     async def send_to_member(
         self,
@@ -108,19 +107,18 @@ class MemberReach:
             if not ext.external_user_id or not surface.matches_tenant(ext.tenant_id):
                 wrong_tenant = wrong_tenant or bool(ext.external_user_id)
                 continue
-            link = await self.conversation_link_repository.get_latest_by_surface_and_external_user(
-                surface_id=surface.id, external_user_id=ext.external_user_id
-            )
-            if link is not None:
+            place = await self._private_place(surface, ext.external_user_id)
+            if place is not None:
+                source, conversation_id = place
                 if not reply_window_open(
                     platform=surface.surface_type,
-                    last_inbound_at=link.last_inbound_at,
+                    last_inbound_at=source.last_inbound_at,
                 ):
                     return await self._reach_after_window(
-                        surface, link.conversation_id, message
+                        surface, conversation_id, message
                     )
                 sent = await self.egress.send_agent_message_for_conversation(
-                    conversation_id=link.conversation_id, message=message
+                    conversation_id=conversation_id, message=message
                 )
                 return None if sent else UndeliverableReason.SEND_FAILED
         # Held apart because the repair differs: a tenant mismatch means they
@@ -130,6 +128,24 @@ class MemberReach:
         if wrong_tenant:
             return UndeliverableReason.wrong_tenant_on(channel)
         return UndeliverableReason.never_interacted_on(channel)
+
+    async def _private_place(
+        self, surface: AgentSurfaceEntity, external_user_id: str
+    ) -> tuple[Source, UUID] | None:
+        """The person's private chat on this surface, and the conversation
+        they last wrote into there -- or None if they never wrote to it."""
+        places = await self.seats.person_places(
+            platform=surface.surface_type.value,
+            external_user_id=external_user_id,
+            surface_ids=[surface.id],
+            limit=1,
+        )
+        if not places:
+            return None
+        conversation_id = await self.seats.conversation_at(
+            places[0].id, sender_external_id=external_user_id
+        )
+        return (places[0], conversation_id) if conversation_id else None
 
     async def _reach_after_window(
         self, surface: AgentSurfaceEntity, conversation_id: UUID, message: str

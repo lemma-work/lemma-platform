@@ -195,8 +195,8 @@ export class AgentSurfacesService {
      * Group Timeline
      * What was said in the group, oldest first, as far as the pod kept it.
      *
-     * Kept for WhatsApp and Telegram groups. A Slack channel's history is
-     * Slack's; it comes back empty here. An answer the bot made with one member's
+     * The group's channel timeline, kept for WhatsApp and Telegram groups. A
+     * Slack channel's history is Slack's; it comes back empty here. An answer the bot made with one member's
      * own access comes back withheld to everybody else: they may not be able to
      * see what it was made from.
      * @param podId

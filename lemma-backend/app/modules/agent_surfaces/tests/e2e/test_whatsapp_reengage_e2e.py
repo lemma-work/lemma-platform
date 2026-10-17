@@ -53,12 +53,15 @@ SECOND = "And the invoice went out."
 
 
 async def _close_the_window(db_session: AsyncSession, conversation_id: UUID) -> None:
-    """Their last message, a day and an hour ago."""
+    """Their last message, a day and an hour ago: at every place of the
+    conversation's channel."""
     await db_session.execute(
         text(
-            "UPDATE agent_surface_conversation_links "
+            "UPDATE channel_sources "
             "SET last_inbound_at = now() - interval '25 hours' "
-            "WHERE conversation_id = :conversation_id"
+            "WHERE channel_id = ("
+            "  SELECT channel_id FROM agent_conversations WHERE id = :conversation_id"
+            ")"
         ),
         {"conversation_id": conversation_id},
     )

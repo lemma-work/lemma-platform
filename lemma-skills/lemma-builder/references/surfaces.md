@@ -121,16 +121,18 @@ the rest, reporting how each part landed. Two consequences worth designing aroun
 automation — `schedules-and-triggers.md`. A surface's inbound webhook is transport you
 never wire.)
 
-## Thread shape — what the reset window actually resets
+## Thread shape — one conversation per person and agent
 
-The DM reset window cuts a **DM** into conversations, because one permanent DM
-thread id would otherwise carry every conversation you will ever have there. It is a
-deployment-wide setting (`SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS`, default 24 hours
-since the person's last message), not a per-surface field; a surface config that still
-sends `dm_conversation_reset_after_hours` is accepted and ignored. A **channel thread or an email thread is already bounded to one topic**, so the
-window does not apply to it — a reply a day later continues the same conversation, with
-its history, which is what the person sees on the platform. Agent memory carries
-across the cut; don't reach for the window to control channel or email threading.
+Every thread sits in a **channel**: a member's private chats on every platform are
+their `DIRECT` channel, a contact's are their `CONTACT` channel, and a group, a shared
+Slack channel or an email thread with others on it is a `GROUP` channel of its own. A
+person has **one conversation per agent in a channel**, however many threads, numbers,
+platforms or quiet days they write across — a new Slack DM thread, a WhatsApp chat on
+another pool number and a Telegram message a week later all continue it. Only a
+different agent, or a different person, opens another. There is no inactivity reset;
+the agent's own history cap and compaction decide how much of a long conversation a run
+carries. A surface config that still sends `dm_conversation_reset_after_hours` is
+accepted and ignored. The SDK lists channels and reads their timelines (`pod.channels` in Python, `client.channels` in TypeScript).
 
 ## Setup flow
 
@@ -198,9 +200,8 @@ lemma surfaces delete slack --yes                             # frees the accoun
 
 ## Patterns
 
-- **DM assistant.** A `DM` surface maps one external identity to one pod
-  conversation until the deployment's DM reset window passes, so threads don't grow
-  forever.
+- **DM assistant.** A `DM` surface maps one person to one pod conversation with
+  the agent, in their direct channel, for as long as they keep writing.
 - **Channel triage (Slack/Teams).** `config.channels` is the allow-list of
   channels this surface's agent answers in; the agent replies in-thread where the
   platform supports it. A specialist agent for `#billing` needs its **own bot** —
@@ -290,7 +291,7 @@ lemma surfaces get slack          # status ACTIVE, right agent, right account
 lemma conversations list          # a conversation appeared, linked to the surface
 lemma conversations messages <id> # the exchange is recorded
 # Confirm the reply landed on-platform in the right thread/channel.
-# DM reset: confirm a new conversation starts after the reset window.
+# A second message, even from a new thread, continues the same conversation.
 ```
 
 ## See also

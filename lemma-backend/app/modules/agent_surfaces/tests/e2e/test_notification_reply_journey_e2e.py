@@ -1,17 +1,13 @@
-"""The two queries the notification journey rests on, against a real PostgreSQL.
+"""The query the notification journey's wake rests on, against a real PostgreSQL.
 
 `tests/unit/test_notification_journey.py` follows the whole path over in-memory
-stand-ins for the link and notification repositories. Those stand-ins implement
-the behaviour the real ones are supposed to have, which is exactly why the SQL
-needs its own test: a fake that agrees with the design certifies nothing about a
-`WHERE` clause that does not.
+stand-ins for the channel seats and the notification repository. Those
+stand-ins implement the behaviour the real ones are supposed to have, which is
+exactly why the SQL needs its own test: a fake that agrees with the design
+certifies nothing about a `WHERE` clause that does not.
 
-* ``conversation_holds_notification`` -- is this conversation where a
-  notification's answer is expected? It decides whether a reply after a quiet
-  day is cut into a new conversation, and whether a second notification opens
-  one.
-* ``count_open_from_origin_conversation`` -- how many asks an asking conversation
-  is still owed. It decides whether the asker is woken.
+``count_open_from_origin_conversation`` -- how many asks an asking conversation
+is still owed. It decides whether the asker is woken.
 """
 
 from __future__ import annotations
@@ -25,9 +21,6 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (
     NotificationRepository,
 )
@@ -80,101 +73,6 @@ async def _delivered(
         },
     )
     await db_session.commit()
-
-
-def _links(db_session: AsyncSession) -> SurfaceConversationLinkRepository:
-    return SurfaceConversationLinkRepository(SqlAlchemyUnitOfWork(db_session))
-
-
-async def test_an_open_question_holds_its_conversation_however_old_it_is(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-):
-    pod_id = test_pod["id"]
-    conversation_id = await _conversation(authenticated_client, pod_id, "Notification")
-    question = await _notify(
-        authenticated_client, pod_id, recipient=fixed_test_user["email"]
-    )
-    await _delivered(db_session, question["id"], conversation_id, hours_ago=70)
-
-    repository = _links(db_session)
-
-    assert await repository.conversation_holds_notification(conversation_id)
-    assert not await repository.conversation_holds_notification(
-        await _conversation(authenticated_client, pod_id, "Somewhere else")
-    )
-
-
-async def test_an_undelivered_notification_holds_nothing(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-):
-    """A row that never reached the person cannot be what they are answering."""
-    pod_id = test_pod["id"]
-    conversation_id = await _conversation(authenticated_client, pod_id, "Notification")
-    question = await _notify(
-        authenticated_client, pod_id, recipient=fixed_test_user["email"]
-    )
-    await _delivered(db_session, question["id"], conversation_id)
-    await db_session.execute(
-        sql_text("UPDATE notifications SET delivery_status = 'FAILED' WHERE id = :id"),
-        {"id": UUID(question["id"])},
-    )
-    await db_session.commit()
-
-    assert not await _links(db_session).conversation_holds_notification(
-        conversation_id, delivered_since=datetime.now(timezone.utc) - timedelta(hours=1)
-    )
-
-
-async def test_an_answered_or_informational_notification_holds_only_while_recent(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-):
-    pod_id = test_pod["id"]
-    answered_in = await _conversation(authenticated_client, pod_id, "Answered")
-    fyi_in = await _conversation(authenticated_client, pod_id, "Heads up")
-
-    answered = await _notify(
-        authenticated_client, pod_id, recipient=fixed_test_user["email"]
-    )
-    await _delivered(db_session, answered["id"], answered_in, hours_ago=20)
-    responded = await authenticated_client.post(
-        f"/pods/{pod_id}/notifications/{answered['id']}/respond",
-        json={"summary": "The 14th."},
-    )
-    assert responded.status_code == 200, responded.text
-
-    fyi = await _notify(
-        authenticated_client,
-        pod_id,
-        recipient=fixed_test_user["email"],
-        title="Heads up",
-        expects_response=False,
-    )
-    await _delivered(db_session, fyi["id"], fyi_in, hours_ago=20)
-
-    repository = _links(db_session)
-    now = datetime.now(timezone.utc)
-    inside_window = now - timedelta(hours=24)
-    outside_window = now - timedelta(hours=10)
-
-    for conversation_id in (answered_in, fyi_in):
-        # Nothing is owed, so with no window there is nothing to hold it.
-        assert not await repository.conversation_holds_notification(conversation_id)
-        # Delivered 20 hours ago: inside a 24 hour window, outside a 10 hour one.
-        assert await repository.conversation_holds_notification(
-            conversation_id, delivered_since=inside_window
-        )
-        assert not await repository.conversation_holds_notification(
-            conversation_id, delivered_since=outside_window
-        )
 
 
 async def test_only_asks_keep_the_asking_conversation_waiting(

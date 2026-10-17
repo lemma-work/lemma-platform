@@ -14,7 +14,6 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfaceConfig,
     SurfacePlatform,
@@ -30,15 +29,13 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
-from app.modules.agent_surfaces.services.conversation_binder import (
-    should_start_a_new_conversation,
-)
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
     rank_candidates,
     reply_window_open,
 )
 from app.modules.agent_surfaces.services.notification_service import attribute
+from app.modules.channels.contracts import Source, SourceKind
 
 
 def _notification(**overrides) -> NotificationEntity:
@@ -65,15 +62,17 @@ def _surface(platform: SurfacePlatform, surface_id=None) -> AgentSurfaceEntity:
     )
 
 
-def _link(last_inbound_at: datetime | None, updated_at: datetime | None = None):
-    now = datetime.now(timezone.utc)
-    return AgentSurfaceConversationLink(
+def _place(last_inbound_at: datetime | None, updated_at: datetime | None = None):
+    """A person's private chat, last written to at ``last_inbound_at``."""
+    return Source(
+        id=uuid4(),
+        channel_id=uuid4(),
+        pod_id=uuid4(),
         surface_id=uuid4(),
-        conversation_id=uuid4(),
         platform="TELEGRAM",
-        external_thread_id="t1",
+        kind=SourceKind.PRIVATE,
         external_user_id="u1",
-        updated_at=updated_at or now,
+        updated_at=updated_at or datetime.now(timezone.utc),
         last_inbound_at=last_inbound_at,
     )
 
@@ -259,7 +258,7 @@ def test_chat_outranks_email():
     chat = DeliveryChannel(
         surface=_surface(SurfacePlatform.TELEGRAM),
         external_user_id="u1",
-        link=_link(datetime.now(timezone.utc)),
+        source=_place(datetime.now(timezone.utc)),
     )
 
     ordered = rank_candidates([email, chat])
@@ -280,12 +279,12 @@ def test_the_surface_the_agent_is_running_on_wins():
         external_user_id="u1",
         # Deliberately the *staler* of the two, so freshness alone cannot explain
         # the result.
-        link=_link(now - timedelta(days=3)),
+        source=_place(now - timedelta(days=3)),
     )
     elsewhere = DeliveryChannel(
         surface=_surface(SurfacePlatform.TELEGRAM),
         external_user_id="u2",
-        link=_link(now),
+        source=_place(now),
     )
 
     ordered = rank_candidates([elsewhere, here], origin_surface_id=here_id)
@@ -330,34 +329,34 @@ def test_among_observed_channels_the_freshest_inbound_wins():
     stale = DeliveryChannel(
         surface=_surface(SurfacePlatform.SLACK),
         external_user_id="u1",
-        link=_link(now - timedelta(days=2)),
+        source=_place(now - timedelta(days=2)),
     )
     fresh = DeliveryChannel(
         surface=_surface(SurfacePlatform.TELEGRAM),
         external_user_id="u2",
-        link=_link(now - timedelta(minutes=5)),
+        source=_place(now - timedelta(minutes=5)),
     )
 
     ordered = rank_candidates([stale, fresh])
     assert ordered[0] is fresh
 
 
-def test_freshness_falls_back_to_updated_at_for_pre_migration_rows():
-    """Rows written before ``last_inbound_at`` existed must still sort."""
+def test_a_place_nobody_has_written_at_sorts_by_when_it_was_touched():
+    """A cold email's thread has no inbound yet, and must still sort."""
     now = datetime.now(timezone.utc)
-    legacy_fresh = DeliveryChannel(
+    untouched_fresh = DeliveryChannel(
         surface=_surface(SurfacePlatform.SLACK),
         external_user_id="u1",
-        link=_link(None, updated_at=now),
+        source=_place(None, updated_at=now),
     )
     stale = DeliveryChannel(
         surface=_surface(SurfacePlatform.TELEGRAM),
         external_user_id="u2",
-        link=_link(now - timedelta(days=5)),
+        source=_place(now - timedelta(days=5)),
     )
 
-    ordered = rank_candidates([stale, legacy_fresh])
-    assert ordered[0] is legacy_fresh
+    ordered = rank_candidates([stale, untouched_fresh])
+    assert ordered[0] is untouched_fresh
 
 
 # --------------------------------------------------- the DM-reset regression
@@ -372,44 +371,6 @@ def _dm_surface() -> AgentSurfaceEntity:
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
     )
-
-
-def test_an_outbound_notification_does_not_suppress_the_dm_reset():
-    """The bug this column exists to fix.
-
-    Keying the reset off ``updated_at`` meant a proactive send counted as
-    activity: the person comes back two days later and the agent is still
-    holding a conversation from before, silently.
-    """
-    now = datetime.now(timezone.utc)
-    link = _link(
-        # They last wrote two days ago...
-        last_inbound_at=now - timedelta(days=2),
-        # ...but we messaged them a minute ago, which bumps updated_at.
-        updated_at=now - timedelta(minutes=1),
-    )
-
-    assert should_start_a_new_conversation(surface=_dm_surface(), link=link)
-
-
-def test_dm_reset_falls_back_to_updated_at_for_pre_migration_rows():
-    now = datetime.now(timezone.utc)
-
-    recent_legacy = _link(last_inbound_at=None, updated_at=now - timedelta(hours=1))
-    assert not should_start_a_new_conversation(
-        surface=_dm_surface(), link=recent_legacy
-    )
-
-    old_legacy = _link(last_inbound_at=None, updated_at=now - timedelta(days=3))
-    assert should_start_a_new_conversation(surface=_dm_surface(), link=old_legacy)
-
-
-def test_a_live_thread_is_not_reset():
-    link = _link(last_inbound_at=datetime.now(timezone.utc) - timedelta(minutes=10))
-    assert not should_start_a_new_conversation(surface=_dm_surface(), link=link)
-
-
-# --------------------------------------------------------- the surface policy
 
 
 def test_surface_send_policy_does_not_gate_reaching_other_members():

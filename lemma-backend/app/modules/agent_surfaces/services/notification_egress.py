@@ -15,17 +15,14 @@ delivery returns before reaching this code at all.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from app.core.authorization.delegation import is_pod_default_agent
+from app.core.authorization.delegation import effective_agent_id, is_pod_default_agent
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
 )
 from app.modules.agent_surfaces.domain.notification import NotificationEntity
 from app.modules.agent_surfaces.domain.ports import (
@@ -34,7 +31,16 @@ from app.modules.agent_surfaces.domain.ports import (
 )
 from app.modules.agent_surfaces.services.cold_email_thread import cold_thread_seed_id
 from app.modules.agent_surfaces.services.group_names import sender_name_for
+from app.modules.agent_surfaces.services.channel_lines import ChannelLines
+from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.notification_delivery import DeliveryChannel
+from app.modules.channels.contracts import (
+    MembersHome,
+    Place,
+    Principal,
+    Sender,
+    SourceKind,
+)
 
 logger = get_logger(__name__)
 
@@ -42,24 +48,18 @@ logger = get_logger(__name__)
 class NotificationEgress:
     """Resolves the conversation a notification lands in, and sends it."""
 
-    # A conversation touched more recently than this is still "the thread we are
-    # in"; anything colder starts a new one. Much tighter than the surface's 24h
-    # DM reset on purpose — that setting exists to stop threads living forever,
-    # not to decide whether a new subject belongs in an old one. A standup ping
-    # arriving the morning after yesterday's support chat is a new subject, and
-    # appending it there reads as a non-sequitur.
-    CONTINUE_CONVERSATION_WITHIN = timedelta(minutes=30)
-
     def __init__(
         self,
         *,
         egress: SurfaceNotificationEgressPort,
-        uow,
-        conversation_link_repository,
+        uow: SqlAlchemyUnitOfWork,
+        seats: ChannelSeats,
+        lines: ChannelLines,
     ) -> None:
         self.egress = egress
         self.uow = uow
-        self.links = conversation_link_repository
+        self.seats = seats
+        self.lines = lines
 
     async def send(
         self,
@@ -77,7 +77,7 @@ class NotificationEgress:
         it addresses the mailbox directly. That is only possible on platforms
         whose ``can_cold_open`` says so, which is why a chat channel never
         reaches the second branch — it would have had no candidate without a
-        link in the first place.
+        place in the first place.
 
         The agent's name travels in the metadata because email puts it in the
         ``From`` display name, where an inbox list will actually show it, and a
@@ -92,11 +92,12 @@ class NotificationEgress:
         # bot would lose the name and icon it replies under.
         if agent_name:
             metadata["agent_display_name"] = agent_name
-        if channel.link is not None:
+        if channel.source is not None:
             return await self.egress.send_agent_message_for_conversation(
                 conversation_id=conversation_id,
                 message=message,
                 metadata=metadata,
+                at=channel.source,
             )
         if not channel.email_address:
             return False
@@ -137,9 +138,9 @@ class NotificationEgress:
     ) -> bool:
         """First contact by email, then remember the thread it opened.
 
-        The link is written *after* the send, not before, because some providers
-        only reveal the thread id once the mail is away — and a link pointing at
-        a thread that does not exist would swallow the person's reply into a
+        The place is made *after* the send, not before, because some providers
+        only reveal the thread id once the mail is away — and a place for a
+        thread that does not exist would swallow the person's reply into a
         conversation nothing ever delivered to.
         """
         assert channel.email_address is not None  # guarded by the caller
@@ -163,7 +164,11 @@ class NotificationEgress:
             )
             return False
         await self._remember_thread(
-            thread, channel=channel, conversation_id=conversation_id
+            thread,
+            channel=channel,
+            conversation_id=conversation_id,
+            notification=notification,
+            message=message,
         )
         return True
 
@@ -173,45 +178,41 @@ class NotificationEgress:
         *,
         channel: DeliveryChannel,
         conversation_id: UUID,
+        notification: NotificationEntity,
+        message: str,
     ) -> None:
-        """Record the thread so the reply resolves to this conversation.
+        """The thread as a place in the recipient's channel, and the mail as
+        its first line, so their reply continues this conversation.
 
-        Get-then-create rather than a blind insert: the seed is derived from the
-        notification id, so a re-delivered notification arrives here with a link
-        already written and must reuse it instead of tripping the unique index.
+        The place is keyed as their reply will arrive -- the thread and their
+        address -- and made only if new, since a re-delivered notification
+        reuses the seed and so the thread. Its address is the thread's opening
+        mail: nothing has been heard there yet.
         """
         surface = channel.surface
-        existing = await self.links.get_by_external_thread(
-            surface_id=surface.id,
-            platform=surface.surface_type.value,
-            external_channel_id=thread.external_channel_id,
-            external_thread_id=thread.external_thread_id,
-            external_user_id=(channel.email_address or "").strip().lower() or None,
-        )
-        if existing is not None:
-            return
-        await self.links.create(
-            AgentSurfaceConversationLink(
+        address = (channel.email_address or "").strip().lower() or None
+        source = await self.seats.source_for(
+            pod_id=notification.pod_id,
+            place=Place(
                 surface_id=surface.id,
-                conversation_id=conversation_id,
                 platform=surface.surface_type.value,
-                external_channel_id=thread.external_channel_id,
-                external_thread_id=thread.external_thread_id,
-                external_user_id=(channel.email_address or "").strip().lower() or None,
-                # The agent the conversation was opened under. Inbound compares
-                # it to the agent the reply routes to, and a link that names
-                # nobody reads as the pod's own assistant -- so for any other
-                # agent's mailbox the person's first reply would be cut into a
-                # new conversation, away from the notification it answers.
-                routed_agent_id=surface.agent_id,
-                conversation_kind="EMAIL",
-                route_key="email",
-                last_event=thread.last_event,
-                last_message_id=thread.external_message_id,
-                # They have not written to us. Claiming otherwise would let an
-                # outbound masquerade as inbound activity in channel ranking.
-                last_inbound_at=None,
-            )
+                kind=SourceKind.PRIVATE,
+                external_channel_id=thread.external_thread_id,
+                external_user_id=address,
+            ),
+            home=MembersHome(user_id=notification.recipient_user_id),
+        )
+        await self.seats.addressed_at(source.id, thread.last_event)
+        await self.lines.opened(
+            source=source,
+            sender=Sender.agent(
+                effective_agent_id(surface.agent_id, pod_id=notification.pod_id),
+                on_behalf_of=Principal.member(notification.recipient_user_id),
+            ),
+            text=message,
+            conversation_id=conversation_id,
+            external_message_id=thread.external_message_id,
+            external_thread_id=thread.external_thread_id,
         )
 
     async def conversation_for(
@@ -219,69 +220,42 @@ class NotificationEgress:
     ) -> UUID | None:
         """The recipient's conversation this notification lands in.
 
-        A live thread is continued; anything colder opens a new conversation and
-        repoints the link with a compare-and-set, so an inbound arriving in the
-        same instant cannot leave one platform thread split across two
-        conversations.
+        Their one conversation with the sending agent in the channel the
+        message goes to -- the chat's, or for a cold email their DIRECT
+        channel -- opened if they have none. However cold, it is the same
+        conversation: the agent sees the question beside everything else
+        between them, and a reply, a tap on its buttons or a typed answer
+        reaches it.
 
-        A thread is also continued, however cold, while its conversation still
-        holds a question nobody has answered. The recipient's agent is told what
-        a reply answers through the conversation the question was delivered into
-        and nowhere else, and the link only ever points at one conversation: a
-        second message opening a new one would move the person's next reply
-        away from the first question, which could then never be closed. A run
-        paused on the person -- an approval card, an ``ask_user`` -- holds it
-        for the same reason: its buttons and a typed answer reach only the
-        conversation that paused, so repointing left both doing nothing.
-
-        A message you cannot reply to is an alert, not a conversation — which is
-        why this always resolves to a conversation the *recipient* owns, never
-        the asker's. Their reply runs under their own permissions.
+        Always a conversation the *recipient* owns, never the asker's, so their
+        reply runs under their own permissions.
         """
-        if channel.link is None:
-            # Cold-open email: no prior thread exists by definition.
-            return await self.open_conversation(channel, notification=notification)
-
-        conversation = await agent_conversations.surface_conversation(
-            self.uow, channel.link.conversation_id
+        pod_id = notification.pod_id
+        recipient = notification.recipient_user_id
+        channel_id = (
+            channel.source.channel_id
+            if channel.source is not None
+            else await self.seats.direct_channel(pod_id=pod_id, user_id=recipient)
         )
-        if conversation is not None:
-            touched = conversation.updated_at
-            if touched.tzinfo is None:
-                touched = touched.replace(tzinfo=timezone.utc)
-            if (
-                datetime.now(timezone.utc) - touched
-                <= self.CONTINUE_CONVERSATION_WITHIN
-            ):
-                return conversation.id
-            if await self.links.conversation_holds_notification(conversation.id):
-                return conversation.id
-            pause = await agent_conversations.pending_interaction(
-                self.uow, conversation.id
-            )
-            if pause is not None:
-                return conversation.id
-
-        opened = await self.open_conversation(channel, notification=notification)
-        if opened is None:
-            return channel.link.conversation_id
-        repointed = await self.links.repoint_conversation_for_outbound(
-            link_id=channel.link.id,
-            conversation_id=opened,
-            expected_conversation_id=channel.link.conversation_id,
-            routed_agent_id=channel.surface.agent_id,
+        agent_id = channel.surface.agent_id
+        await self.seats.lock_person(
+            channel_id=channel_id,
+            pod_id=pod_id,
+            agent_id=agent_id,
+            person_id=recipient,
         )
-        if repointed is None:
-            # An inbound won the race and already repointed the link. Deliver
-            # into the conversation it created rather than stealing the thread.
-            current = await self.links.get_by_conversation_id(opened)
-            logger.info(
-                "agent_surfaces.notification_egress.link_repoint_lost_race.observed",
-                notification_id=str(notification.id),
-                link_id=str(channel.link.id),
-            )
-            return current.conversation_id if current else opened
-        return opened
+        found = await self.seats.conversation_in_channel(
+            channel_id=channel_id,
+            pod_id=pod_id,
+            agent_id=agent_id,
+            user_id=recipient,
+            contact_id=None,
+        )
+        if found is not None:
+            return found
+        return await self.open_conversation(
+            channel, notification=notification, channel_id=channel_id
+        )
 
     async def persist_outbound(
         self,
@@ -305,7 +279,11 @@ class NotificationEgress:
         )
 
     async def open_conversation(
-        self, channel: DeliveryChannel, *, notification: NotificationEntity
+        self,
+        channel: DeliveryChannel,
+        *,
+        notification: NotificationEntity,
+        channel_id: UUID,
     ) -> UUID | None:
         surface = channel.surface
         conversation = await agent_conversations.open_surface_conversation(
@@ -313,6 +291,7 @@ class NotificationEgress:
             pod_id=notification.pod_id,
             agent_name=await self.egress.agent_name_for_surface(surface),
             user_id=notification.recipient_user_id,
+            channel_id=channel_id,
             title=notification.title,
             metadata={
                 "source": "notification",

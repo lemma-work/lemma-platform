@@ -36,6 +36,7 @@ from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
+from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.email_surface_provisioning import (
     email_is_configured,
 )
@@ -74,15 +75,15 @@ class NotificationChannelResolver:
     def __init__(
         self,
         *,
+        seats: ChannelSeats,
         surface_repository,
         external_user_repository,
-        conversation_link_repository,
         pod_membership_port,
         surface_provisioner: SurfaceProvisioner | None = None,
     ):
+        self.seats = seats
         self.surfaces = surface_repository
         self.external_users = external_user_repository
-        self.links = conversation_link_repository
         self.membership = pod_membership_port
         # Injected rather than built here: creating a surface is the surface
         # service's job, and it already owns address allocation, credential
@@ -150,7 +151,7 @@ class NotificationChannelResolver:
             surfaces = [provisioned]
 
         candidates, saw_chat_surface, window_closed = await self._channels_from(
-            surfaces, recipient_user_id
+            surfaces, recipient_user_id, pod_id=pod_id
         )
 
         if not candidates and saw_chat_surface:
@@ -210,7 +211,7 @@ class NotificationChannelResolver:
             wanted = [provisioned] if provisioned is not None else []
 
         candidates, _, window_closed = await self._channels_from(
-            wanted, recipient_user_id
+            wanted, recipient_user_id, pod_id=pod_id
         )
         if candidates:
             return rank_candidates(candidates, origin_surface_id=origin_surface_id), ""
@@ -220,7 +221,10 @@ class NotificationChannelResolver:
             cause=cause
             or self._refusal_cause(channel, wanted=wanted, window_closed=window_closed),
             alternatives=await self._reachable_elsewhere(
-                surfaces, channel=channel, recipient_user_id=recipient_user_id
+                surfaces,
+                channel=channel,
+                recipient_user_id=recipient_user_id,
+                pod_id=pod_id,
             ),
         )
 
@@ -243,6 +247,7 @@ class NotificationChannelResolver:
         *,
         channel: str,
         recipient_user_id: UUID,
+        pod_id: UUID,
     ) -> list[str]:
         """The channels that would have worked, for the refusal to name.
 
@@ -255,7 +260,9 @@ class NotificationChannelResolver:
             for surface in surfaces
             if channel_for_platform(surface.surface_type) != channel
         ]
-        candidates, _, _ = await self._channels_from(others, recipient_user_id)
+        candidates, _, _ = await self._channels_from(
+            others, recipient_user_id, pod_id=pod_id
+        )
         alternatives = channels_of(candidates)
         # A mailbox this agent does not have yet still counts, because dropping
         # the channel argument would mint one and the message would go. Saying
@@ -337,6 +344,8 @@ class NotificationChannelResolver:
         self,
         surfaces: list[AgentSurfaceEntity],
         recipient_user_id: UUID,
+        *,
+        pod_id: UUID,
     ) -> tuple[list[DeliveryChannel], bool, bool]:
         """``(candidates, saw_chat_surface, window_closed)`` for these surfaces."""
         candidates: list[DeliveryChannel] = []
@@ -352,7 +361,9 @@ class NotificationChannelResolver:
                 continue
 
             saw_chat_surface = True
-            channel, closed = await self._chat_channel(surface, recipient_user_id)
+            channel, closed = await self._chat_channel(
+                surface, recipient_user_id, pod_id=pod_id
+            )
             window_closed = window_closed or closed
             if channel is not None:
                 candidates.append(channel)
@@ -385,7 +396,7 @@ class NotificationChannelResolver:
         return [channel] if channel is not None else []
 
     async def _chat_channel(
-        self, surface: AgentSurfaceEntity, recipient_user_id: UUID
+        self, surface: AgentSurfaceEntity, recipient_user_id: UUID, *, pod_id: UUID
     ) -> tuple[DeliveryChannel | None, bool]:
         """``(channel, window_closed)`` for a chat surface.
 
@@ -413,15 +424,18 @@ class NotificationChannelResolver:
                 continue
             if not surface.matches_tenant(external.tenant_id):
                 continue
-            link = await self.links.get_latest_by_surface_and_external_user(
-                surface_id=surface.id,
+            places = await self.seats.person_places(
+                platform=surface.surface_type.value,
                 external_user_id=external.external_user_id,
+                surface_ids=[surface.id],
+                pod_id=pod_id,
+                limit=1,
             )
-            if link is None:
+            if not places:
                 continue
             if not reply_window_open(
                 platform=surface.surface_type,
-                last_inbound_at=link.inbound_activity_at,
+                last_inbound_at=places[0].last_inbound_at,
             ):
                 window_closed = True
                 continue
@@ -429,7 +443,7 @@ class NotificationChannelResolver:
                 DeliveryChannel(
                     surface=surface,
                     external_user_id=external.external_user_id,
-                    link=link,
+                    source=places[0],
                 ),
                 False,
             )
@@ -481,7 +495,9 @@ class NotificationChannelResolver:
 
         for surface in surfaces:
             if not can_cold_open(surface):
-                await self._add_chat_reach(surface, recipients, reachable)
+                await self._add_chat_reach(
+                    surface, recipients, reachable, pod_id=pod_id
+                )
 
         return {user_id: sorted(names) for user_id, names in reachable.items()}
 
@@ -490,6 +506,8 @@ class NotificationChannelResolver:
         surface: AgentSurfaceEntity,
         recipients: dict[UUID, str | None],
         reachable: dict[UUID, set[str]],
+        *,
+        pod_id: UUID,
     ) -> None:
         """Add one chat surface's reach for everyone at once.
 
@@ -511,14 +529,17 @@ class NotificationChannelResolver:
         if not owners:
             return
 
-        links = await self.links.list_latest_by_surface_and_external_users(
-            surface_id=surface.id, external_user_ids=list(owners)
+        places = await self.seats.people_places(
+            platform=surface.surface_type.value,
+            external_user_ids=list(owners),
+            surface_id=surface.id,
+            pod_id=pod_id,
         )
         channel = channel_for_platform(surface.surface_type)
-        for external_user_id, link in links.items():
+        for external_user_id, place in places.items():
             if reply_window_open(
                 platform=surface.surface_type,
-                last_inbound_at=link.inbound_activity_at,
+                last_inbound_at=place.last_inbound_at,
             ):
                 reachable[owners[external_user_id]].add(channel)
 

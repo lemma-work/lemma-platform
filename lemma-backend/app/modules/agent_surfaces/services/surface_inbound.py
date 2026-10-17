@@ -25,9 +25,6 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.services.surface_candidates import (
     admitted_surfaces,
     fan_in_candidates,
@@ -108,7 +105,6 @@ class SurfaceInboundMixin:
     #: bare annotation binds no value -- and turns the baseline into something
     #: that would notice an actual mistake.
     surface_repository: SurfaceInstallationRepositoryPort
-    conversation_link_repository: SurfaceConversationLinkRepository
     credential_resolver: SurfaceCredentialResolver
     adapter_registry: SurfacePlatformAdapterRegistry
     event_dedup_store: SurfaceEventDedupStorePort
@@ -158,8 +154,6 @@ class SurfaceInboundMixin:
                 adapter=adapter,
                 router=self.router,
                 surfaces=self.surface_repository,
-                uow=self.uow,
-                links=self.conversation_link_repository,
             )
         created = await created_group_surfaces(
             self.uow,
@@ -181,13 +175,12 @@ class SurfaceInboundMixin:
             self.uow,
             adapter=adapter,
             credential_resolver=self.credential_resolver,
+            seats=self.router.seats,
             surfaces=surfaces,
             parsed=parsed,
         )
 
-        candidates = await admitted_surfaces(
-            surfaces, parsed, links=self.conversation_link_repository
-        )
+        candidates = await admitted_surfaces(surfaces, parsed, seats=self.router.seats)
         if not candidates:
             return await self._prepare_unrouted_platform_context(
                 platform=platform,
@@ -295,7 +288,7 @@ class SurfaceInboundMixin:
                 adapter=adapter,
                 credential_resolver=self.credential_resolver,
                 surface_repository=self.surface_repository,
-                links=self.conversation_link_repository,
+                seats=self.router.seats,
                 surface=surface,
                 parsed=parsed,
             )
@@ -486,7 +479,7 @@ class SurfaceInboundMixin:
                 agent_display_name=fallback_agent_display_name,
             )
 
-        link, created_conversation_title = await self.binder.bind_conversation(
+        bound = await self.binder.bind_conversation(
             surface=surface,
             parsed=parsed,
             resolved_user=resolved_user,
@@ -498,8 +491,9 @@ class SurfaceInboundMixin:
             resolved_user=resolved_user,
             user_id=user_id,
             route=route,
-            conversation_id=link.conversation_id,
-            created_conversation_title=created_conversation_title,
+            conversation_id=bound.conversation_id,
+            source_id=bound.source_id,
+            created_conversation_title=bound.created_title,
         )
 
     def _outsiders(self) -> OutsiderDoor:

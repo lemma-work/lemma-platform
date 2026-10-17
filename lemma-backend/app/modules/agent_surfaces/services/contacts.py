@@ -41,7 +41,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ResolvedSurfaceUser,
     SurfaceCredentialMode,
 )
-from app.modules.agent_surfaces.domain.groups import contact_link_user
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
     SurfaceReplyContext,
@@ -320,12 +319,12 @@ class ContactDoor:
         # Only the contact. On an email thread a reply would otherwise copy
         # everybody else on it, and a contact's conversation is theirs.
         parsed = to_sender_alone(parsed)
-        link, created_title = await binder.bind_conversation(
+        bound = await binder.bind_conversation(
             surface=surface,
             parsed=parsed,
             resolved_user=ResolvedSurfaceUser(
                 internal_user_id=owner,
-                external_user_id=contact_link_user(contact.id),
+                external_user_id=sender.external_user_id,
                 display_name=contact.display_name or sender.display_name,
             ),
             route=route,
@@ -337,8 +336,9 @@ class ContactDoor:
             resolved_user=sender,
             user_id=owner,
             route=route,
-            conversation_id=link.conversation_id,
-            created_conversation_title=created_title,
+            conversation_id=bound.conversation_id,
+            source_id=bound.source_id,
+            created_conversation_title=bound.created_title,
             audience=Audience.contact(contact.id),
         )
 

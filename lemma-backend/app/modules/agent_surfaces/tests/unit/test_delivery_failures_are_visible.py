@@ -17,28 +17,34 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.channels.contracts import Source, SourceKind
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
+
 pytestmark = pytest.mark.asyncio
 
-
-class _Links:
-    def __init__(self, link=None):
-        self._link = link
-
-    async def get_by_conversation_id(self, conversation_id):
-        return self._link
+_CONVERSATION = uuid4()
 
 
-def _link(surface_id, *, last_event=None):
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        surface_id=surface_id,
-        platform="WHATSAPP",
-        last_event=last_event,
+def _answered_at(surface_id, *, last_event=None) -> InMemoryChannelSeats:
+    """A conversation answered at a WhatsApp place on this surface."""
+    seats = InMemoryChannelSeats()
+    seats.answer(
+        _CONVERSATION,
+        Source(
+            id=uuid4(),
+            channel_id=uuid4(),
+            pod_id=uuid4(),
+            surface_id=surface_id,
+            platform="WHATSAPP",
+            kind=SourceKind.PRIVATE,
+            external_user_id="14155550000",
+        ),
+        last_event,
     )
+    return seats
 
 
-def _delivery(links, surfaces):
+def _delivery(seats, surfaces):
     from types import SimpleNamespace
 
     from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
@@ -46,7 +52,7 @@ def _delivery(links, surfaces):
     return SurfaceDelivery(
         uow=SimpleNamespace(session=object()),
         surface_repository=surfaces,
-        conversation_link_repository=links,
+        seats=seats,
         adapter_registry=SimpleNamespace(get=lambda _platform: None),
         credential_resolver=AsyncMock(),
     )
@@ -76,9 +82,9 @@ async def test_a_conversation_with_no_surface_stays_quiet(caplog, monkeypatch):
     """
     _opened_from(monkeypatch, None)
     with caplog.at_level("DEBUG"):
-        target = await _delivery(_Links(None), AsyncMock()).resolve_egress_target(
-            uuid4()
-        )
+        target = await _delivery(
+            InMemoryChannelSeats(), AsyncMock()
+        ).resolve_egress_target(uuid4())
 
     assert target is None
     # Asserted as "not a warning" rather than "exactly DEBUG", and the reason is
@@ -89,8 +95,8 @@ async def test_a_conversation_with_no_surface_stays_quiet(caplog, monkeypatch):
     #
     # What matters is testable and is the actual design decision: the ordinary
     # case must stay quiet. Its opposite is pinned by the test below, and the
-    # pair is the distinction -- a link means somebody is waiting, no link means
-    # somebody typed in the web app.
+    # pair is the distinction -- a place means somebody is waiting, no place
+    # means somebody typed in the web app.
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING], [
         r.message for r in caplog.records
     ]
@@ -99,15 +105,17 @@ async def test_a_conversation_with_no_surface_stays_quiet(caplog, monkeypatch):
 async def test_a_platform_conversation_that_lost_its_thread_is_a_warning(
     caplog, monkeypatch
 ):
-    """Opened from a platform, then its thread was repointed at a newer one.
+    """Opened from a platform, then its place went -- a deleted group.
 
-    No link reads exactly like the web app, but somebody on that platform is
+    No place reads exactly like the web app, but somebody on that platform is
     waiting on this conversation's answer, and it is now going nowhere.
     """
     caplog.set_level(logging.DEBUG)
     _opened_from(monkeypatch, str(uuid4()))
 
-    target = await _delivery(_Links(None), AsyncMock()).resolve_egress_target(uuid4())
+    target = await _delivery(InMemoryChannelSeats(), AsyncMock()).resolve_egress_target(
+        uuid4()
+    )
 
     assert target is None
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
@@ -115,13 +123,13 @@ async def test_a_platform_conversation_that_lost_its_thread_is_a_warning(
 
 
 async def test_a_surface_that_cannot_answer_is_a_warning(caplog):
-    """A link exists, so somebody on a platform is waiting for this answer."""
+    """A place exists, so somebody on a platform is waiting for this answer."""
     caplog.set_level(logging.DEBUG)
     surfaces = AsyncMock()
     surfaces.get.return_value = None
 
-    target = await _delivery(_Links(_link(uuid4())), surfaces).resolve_egress_target(
-        uuid4()
+    target = await _delivery(_answered_at(uuid4()), surfaces).resolve_egress_target(
+        _CONVERSATION
     )
 
     assert target is None

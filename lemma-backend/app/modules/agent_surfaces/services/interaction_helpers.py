@@ -3,13 +3,13 @@ from __future__ import annotations
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from collections.abc import Collection
+from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedSurfaceInteraction,
 )
@@ -17,22 +17,34 @@ from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositor
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
+from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     parse_callback_id,
 )
+from app.modules.channels.contracts import Source, SourceKind
 
 logger = get_logger(__name__)
 
-#: Where a submission was matched to: the thread's link, the surface that owns it,
+
+@dataclass(frozen=True, slots=True)
+class InteractionThread:
+    """The conversation a tap answers, and the place its card was shown in."""
+
+    conversation_id: UUID
+    source: Source
+    #: The platform id of the person the conversation answers: the one who
+    #: may tap. A private place's person, or who said the line being answered
+    #: in a group.
+    person_external_id: str | None
+
+
+#: Where a submission was matched to: the thread, the surface that owns it,
 #: the adapter to answer through, and the credentials to answer with.
 InteractionDelivery = tuple[
-    AgentSurfaceConversationLink,
+    InteractionThread,
     AgentSurfaceEntity,
     SurfacePlatformAdapterPort,
     SurfaceCredentials,
@@ -40,7 +52,7 @@ InteractionDelivery = tuple[
 
 
 class InteractionIngress(Protocol):
-    """The four collaborators these lookups read from the ingress service.
+    """The collaborators these lookups read from the ingress service.
 
     They were handed the whole service -- every mixin, untyped -- when what they
     touch is this. Naming it is what lets the type checker follow a call like
@@ -48,7 +60,7 @@ class InteractionIngress(Protocol):
     possibly-anything.
     """
 
-    conversation_link_repository: SurfaceConversationLinkRepository
+    seats: ChannelSeats
     surface_repository: SurfaceInstallationRepositoryPort
     adapter_registry: SurfacePlatformAdapterRegistry
     credential_resolver: SurfaceCredentialResolver
@@ -86,7 +98,7 @@ def _external_id(value) -> str:
 
 
 def interaction_sender_matches(
-    link: AgentSurfaceConversationLink, parsed: ParsedSurfaceInteraction
+    thread: InteractionThread, parsed: ParsedSurfaceInteraction
 ) -> bool:
     """May this person resolve the interaction shown in this conversation?
 
@@ -103,13 +115,13 @@ def interaction_sender_matches(
     typing the decision resolves the same pause through
     `maybe_resume_pending_interaction`, which does not consult this.
     """
-    link_id = _external_id(getattr(link, "external_user_id", None))
+    person_id = _external_id(getattr(thread, "person_external_id", None))
     sender_id = _external_id(getattr(parsed, "external_user_id", None))
-    return bool(link_id) and bool(sender_id) and link_id == sender_id
+    return bool(person_id) and bool(sender_id) and person_id == sender_id
 
 
 def _within_authorized_scope(
-    link: AgentSurfaceConversationLink,
+    source: Source,
     authorized_surface_ids: Collection[UUID] | None,
 ) -> bool:
     """Was this request allowed to act on the surface holding that conversation?
@@ -131,7 +143,7 @@ def _within_authorized_scope(
     """
     if authorized_surface_ids is None:
         return True
-    return link.surface_id in set(authorized_surface_ids)
+    return source.surface_id in set(authorized_surface_ids)
 
 
 async def resolve_interaction_delivery(
@@ -141,64 +153,40 @@ async def resolve_interaction_delivery(
     *,
     authorized_surface_ids: Collection[UUID] | None = None,
 ) -> InteractionDelivery | None:
-    link = await ingress.conversation_link_repository.get_by_conversation_id(
-        conversation_id
-    )
-    if link is None or link.platform != parsed.platform.value:
+    """The thread of the conversation a card names: where its answer goes."""
+    address = await ingress.seats.reply_address(conversation_id)
+    source = address.source if address else None
+    if source is None or source.platform != parsed.platform.value:
         logger.debug(
             "agent_surfaces.ingress_service."
             "surface_interaction_dropped_no_matching.diagnostic",
             conversation_id=conversation_id,
         )
         return None
-    if not _within_authorized_scope(link, authorized_surface_ids):
+    if not _within_authorized_scope(source, authorized_surface_ids):
         logger.warning(
             "agent_surfaces.ingress_service.surface_interaction_out_of_scope.degraded",
             conversation_id=conversation_id,
-            surface_id=link.surface_id,
+            surface_id=source.surface_id,
         )
         return None
-    return await _resolve_link_delivery(ingress, parsed, link)
-
-
-async def resolve_moved_interaction_delivery(
-    ingress: InteractionIngress,
-    parsed: ParsedSurfaceInteraction,
-    conversation_id: UUID,
-    *,
-    authorized_surface_ids: Collection[UUID] | None = None,
-) -> InteractionDelivery | None:
-    """The thread a tap came from, when its conversation no longer holds one.
-
-    A card outlives the link it was sent under: the thread can be repointed at
-    a newer conversation while the old card is still on screen. Its tap then
-    names a conversation with no link, which used to be dropped at debug -- a
-    button that did nothing. The thread it was tapped in is still known, so the
-    person can at least be told.
-
-    Only for that answer, never to resolve anything: the tap's conversation id
-    is unsigned, and the thread proves who is in it now, not that the old
-    conversation was ever theirs. ``None`` while the conversation still has a
-    link -- then the tap was refused for a reason that must stay silent.
-    """
-    if (
-        await ingress.conversation_link_repository.get_by_conversation_id(
-            conversation_id
-        )
-        is not None
-    ):
-        return None
-    current = await resolve_current_interaction_delivery(
-        ingress, parsed, authorized_surface_ids=authorized_surface_ids
+    heard = (address.ref or {}) if address else {}
+    # As identity resolution names a person: the directory id where the
+    # platform gives one (Teams' AAD object id), else its own.
+    heard_from = heard.get("sender_aad_object_id") or heard.get(
+        "sender_external_user_id"
     )
-    if current is None or not interaction_sender_matches(current[0], parsed):
-        return None
-    logger.info(
-        "agent_surfaces.ingress_service.surface_interaction_moved.observed",
-        conversation_id=str(conversation_id),
-        current_conversation_id=str(current[0].conversation_id),
+    person = (
+        source.external_user_id
+        if source.kind is SourceKind.PRIVATE
+        else (heard_from if isinstance(heard_from, str) else None)
     )
-    return current
+    return await _resolve_thread_delivery(
+        ingress,
+        InteractionThread(
+            conversation_id=conversation_id, source=source, person_external_id=person
+        ),
+    )
 
 
 async def resolve_current_interaction_delivery(
@@ -207,59 +195,69 @@ async def resolve_current_interaction_delivery(
     *,
     authorized_surface_ids: Collection[UUID] | None = None,
 ) -> InteractionDelivery | None:
-    external_thread_id = str(parsed.external_thread_id or "").strip()
-    if not external_thread_id:
+    """The tapper's own conversation where the tap was made: a button that
+    names no conversation, like Retry.
+
+    The place is the chat when the bot hears it as a group, else the
+    tapper's private chat; the conversation is the one that last took up
+    something they said there. Both reads are narrowed to the surfaces the
+    request proved, so an answer can never name another tenant's thread.
+    """
+    person = str(parsed.external_user_id or "").strip()
+    if not person:
         return None
-    # Narrowed at the read, not only checked after it: the continuity lookup is
-    # the one link read not scoped to a surface, so an unnarrowed answer here
-    # could name a thread in another tenant and be discarded a step later --
-    # correct, but it makes the scope check look optional when it is the point.
-    surface_id = (
-        await ingress.conversation_link_repository.find_surface_id_for_external_thread(
-            platform=parsed.platform.value,
+    platform = parsed.platform.value
+    surface_ids = (
+        None if authorized_surface_ids is None else list(authorized_surface_ids)
+    )
+    thread: str | None = None
+    places: list[Source] = []
+    if parsed.external_channel_id:
+        places = await ingress.seats.places_hearing(
+            platform=platform,
             external_channel_id=parsed.external_channel_id,
-            external_thread_id=external_thread_id,
-            external_user_id=parsed.external_user_id,
-            surface_ids=authorized_surface_ids,
+            surface_ids=surface_ids,
         )
-    )
-    if surface_id is None:
-        return None
-    link = await ingress.conversation_link_repository.get_by_external_thread(
-        surface_id=surface_id,
-        platform=parsed.platform.value,
-        external_channel_id=parsed.external_channel_id,
-        external_thread_id=external_thread_id,
-        external_user_id=parsed.external_user_id,
-    )
-    if link is None:
-        return None
-    if not _within_authorized_scope(link, authorized_surface_ids):
-        logger.warning(
-            "agent_surfaces.ingress_service.surface_interaction_out_of_scope.degraded",
-            conversation_id=link.conversation_id,
-            surface_id=link.surface_id,
+        thread = str(parsed.external_thread_id or "").strip() or None
+    if not places:
+        thread = None
+        places = await ingress.seats.person_places(
+            platform=platform,
+            external_user_id=person,
+            surface_ids=surface_ids,
+            limit=1,
         )
-        return None
-    return await _resolve_link_delivery(ingress, parsed, link)
+    for source in places:
+        conversation_id = await ingress.seats.conversation_at(
+            source.id, sender_external_id=person, external_thread_id=thread
+        )
+        if conversation_id is not None:
+            return await _resolve_thread_delivery(
+                ingress,
+                InteractionThread(
+                    conversation_id=conversation_id,
+                    source=source,
+                    person_external_id=person,
+                ),
+            )
+    return None
 
 
-async def _resolve_link_delivery(
-    ingress: InteractionIngress,
-    parsed: ParsedSurfaceInteraction,
-    link: AgentSurfaceConversationLink,
+async def _resolve_thread_delivery(
+    ingress: InteractionIngress, thread: InteractionThread
 ) -> InteractionDelivery | None:
-    surface = await ingress.surface_repository.get(link.surface_id)
+    surface_id = thread.source.surface_id
+    surface = await ingress.surface_repository.get(surface_id) if surface_id else None
     if surface is None or not surface.is_active:
         logger.debug(
             "agent_surfaces.ingress_service."
             "surface_interaction_dropped_surface_missing.diagnostic",
-            conversation_id=link.conversation_id,
-            surface_id=link.surface_id,
+            conversation_id=thread.conversation_id,
+            surface_id=surface_id,
         )
         return None
     adapter = ingress.adapter_registry.get(surface.surface_type)
     if adapter is None:
         return None
     credentials = await ingress.credential_resolver.for_surface(surface)
-    return link, surface, adapter, credentials
+    return thread, surface, adapter, credentials

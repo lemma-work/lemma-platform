@@ -21,6 +21,8 @@ is spelled.
 
 from __future__ import annotations
 
+from app.modules.channels.contracts import Source, SourceKind
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -31,7 +33,6 @@ from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.infrastructure.models.agent import AgentModel
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -118,18 +119,22 @@ def _email_target(
         surface_identity_email="agent.pod@ops.test",
     )
     return SurfaceEgressTarget(
-        link=AgentSurfaceConversationLink(
+        source=Source(
             id=uuid4(),
+            channel_id=uuid4(),
+            pod_id=pod_id,
             surface_id=surface.id,
-            conversation_id=uuid4(),
             platform=surface.surface_type.value,
-            external_thread_id="thread-1",
-            routed_agent_id=routed_agent_id,
+            kind=SourceKind.PRIVATE,
+            external_channel_id="thread-1",
+            external_user_id="person@client.test",
         ),
+        conversation_id=uuid4(),
+        agent_id=routed_agent_id,
         surface=surface,
         pod_id=pod_id,
         # `egress_metadata` reads neither the adapter nor the credentials: the
-        # name comes from the link, the surface and the connection.
+        # name comes from the conversation, the surface and the connection.
         adapter=SimpleNamespace(),
         event=ParsedInboundSurfaceEvent(
             platform=surface.surface_type,
@@ -146,7 +151,6 @@ def _delivery(session: _Session) -> SurfaceDelivery:
     return SurfaceDelivery(
         uow=_uow(session),
         surface_repository=AsyncMock(),
-        conversation_link_repository=AsyncMock(),
         adapter_registry=SimpleNamespace(get=lambda _platform: None),
         credential_resolver=AsyncMock(),
     )
@@ -245,7 +249,7 @@ async def test_a_reply_from_a_named_agent_carries_its_own_name():
 async def test_the_agent_that_answered_the_thread_is_the_one_named():
     """A surface can be moved to another agent; an older thread keeps its name.
 
-    The link records who actually answered, so a thread the pod's assistant
+    The conversation records who actually answered, so a thread the pod's assistant
     opened goes on being signed by the pod even after the surface is pointed at
     a named agent.
     """

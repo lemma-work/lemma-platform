@@ -17,6 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent_surfaces.tests.e2e.group_timeline import (
+    a_stranger,
+    bot_for,
+    group_by_id,
+    say,
+)
+from app.modules.channels.contracts import Principal, Sender
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -114,22 +121,23 @@ async def test_what_the_bot_told_one_member_is_withheld_from_the_others(
 ):
     _wire_whatsapp(monkeypatch, fake_whatsapp)
     _surface, group, editor = await _pod_with_a_group(scenario, message_store)
-    owner = UUID(scenario.owner_user["id"])
-    lines = SurfaceGroupRepository(db_session)
-    await lines.append_line(
-        group_id=UUID(group["id"]),
-        body="Salaries total 1.2M this quarter.",
-        from_agent=True,
-        answered_name="Deepak",
-        answered_user_id=owner,
-    )
-    await lines.append_line(
-        group_id=UUID(group["id"]),
-        body="Lead times are two weeks.",
-        from_agent=True,
-        answered_name="Tiago",
-        answered_from_public=True,
-    )
+    owner = Principal.member(UUID(scenario.owner_user["id"]))
+    the_group = await group_by_id(db_session, group["id"])
+    tiago = await a_stranger(db_session, the_group, telegram_id="555", name="Tiago")
+    bot = UUID(scenario.pod_id)  # the pod's own agent
+    for text, sender in (
+        (
+            "What do salaries total?",
+            Sender.member(owner.user_id, display_name="Deepak"),
+        ),
+        ("Salaries total 1.2M this quarter.", bot_for(owner, agent_id=bot)),
+        (
+            "How long are lead times?",
+            Sender.contact(tiago.contact_id, display_name="Tiago"),
+        ),
+        ("Lead times are two weeks.", bot_for(tiago, agent_id=bot)),
+    ):
+        await say(db_session, the_group, text, sender=sender)
     await db_session.commit()
     path = f"/pods/{scenario.pod_id}/groups/{group['id']}/timeline"
 
@@ -140,15 +148,16 @@ async def test_what_the_bot_told_one_member_is_withheld_from_the_others(
     assert as_editor_response.status_code == 200, as_editor_response.text
     as_editor = as_editor_response.json()["items"]
 
-    assert [line["text"] for line in as_owner] == [
+    assert [line["text"] for line in as_owner if line["from_bot"]] == [
         "Salaries total 1.2M this quarter.",
         "Lead times are two weeks.",
     ]
-    private, public = as_editor
+    private, public = [line for line in as_editor if line["from_bot"]]
     assert private["withheld"] is True
     assert private["text"] is None
     assert private["answered_name"] == "Deepak"
     assert public["text"] == "Lead times are two weeks."
+    assert public["answered_from_public"] is True
 
 
 async def test_only_the_owner_or_an_admin_changes_a_group_and_the_owner_is_told(

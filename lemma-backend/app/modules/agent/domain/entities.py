@@ -173,6 +173,8 @@ class Conversation(Entity):
     #: The contact this conversation answers. Written by the server when it
     #: opens the conversation, and by a merge; never by anything a client sends.
     contact_id: UUID | None = None
+    #: The channel it works in, when it lives on one.
+    channel_id: UUID | None = None
     organization_id: UUID | None = None
     agent_id: UUID | None = None
     title: str | None = None

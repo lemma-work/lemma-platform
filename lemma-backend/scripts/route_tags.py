@@ -22,6 +22,7 @@ TAG_MODULES = {
     "Apps": "apps",
     "Auth": "identity",
     "Connectors": "connectors",
+    "Channels": "channels",
     "Contacts": "contacts",
     "Decisions": "decisions",
     "Functions": "function",

@@ -41,9 +41,7 @@ from app.modules.agent_surfaces.domain.deliveries import (
     DeliveryTarget,
 )
 from app.modules.agent_surfaces.events.work_kinds import SURFACE_REPLY
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
+from app.modules.channels.contracts.places import reply_address
 from app.modules.agent_surfaces.infrastructure.repositories.delivery_repository import (
     DeliveryRepository,
     queued_pump_run_at,
@@ -69,16 +67,13 @@ async def conversation_destination(
 ) -> tuple[str, UUID | None]:
     """Where a conversation's messages go, as a pump key, and its surface.
 
-    The surface thread, not the conversation: a Telegram group holds one
-    conversation per member, and every one of them shares the group's limit.
+    The place, not the conversation: a Telegram group holds one conversation
+    per member, and every one of them shares the group's limit.
     """
-    link = await SurfaceConversationLinkRepository(uow).get_by_conversation_id(
-        conversation_id
-    )
-    if link is None:
+    address = await reply_address(uow, conversation_id)
+    if address is None or address.source.surface_id is None:
         return f"conversation:{conversation_id}", None
-    place = link.external_channel_id or link.external_thread_id
-    return f"{link.surface_id}:{place}", link.surface_id
+    return f"place:{address.source.id}", address.source.surface_id
 
 
 async def ensure_pump(

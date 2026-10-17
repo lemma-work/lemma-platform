@@ -46,13 +46,13 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
+from app.modules.channels.contracts import Source
 
 
 # The name an agent uses for "reach them by mail", whichever provider carries it.
@@ -216,16 +216,16 @@ class UndeliverableReason:
 
 @dataclass(frozen=True)
 class DeliveryChannel:
-    """A resolved way to reach one person: which surface, and on which thread.
+    """A resolved way to reach one person: which surface, and at which place.
 
-    ``link`` is None for a cold-open email — there is no prior thread by
-    definition, which is exactly what makes email the last resort that still
-    works.
+    ``source`` is the person's private chat on the surface, and None for a
+    cold-open email -- there is no place yet by definition, which is exactly
+    what makes email the last resort that still works.
     """
 
     surface: AgentSurfaceEntity
     external_user_id: str | None = None
-    link: AgentSurfaceConversationLink | None = None
+    source: Source | None = None
     email_address: str | None = None
 
     @property
@@ -282,8 +282,12 @@ def surfaces_for_agent(
     return [surface for surface in surfaces if surface.agent_id == actor_agent_id]
 
 
-def sort_key_for_link(link: AgentSurfaceConversationLink) -> datetime:
-    activity = link.inbound_activity_at
+def heard_last(source: Source) -> datetime:
+    """When the person last wrote at this place -- or, never having, when it
+    was last touched."""
+    activity = source.last_inbound_at or source.updated_at
+    if activity is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
     return activity if activity.tzinfo else activity.replace(tzinfo=timezone.utc)
 
 
@@ -304,7 +308,7 @@ def rank_candidates(
         capabilities = get_platform_capabilities(channel.platform.value)
         is_email = bool(capabilities and capabilities.is_email)
         here = origin_surface_id is not None and channel.surface.id == origin_surface_id
-        freshness = sort_key_for_link(channel.link).timestamp() if channel.link else 0.0
+        freshness = heard_last(channel.source).timestamp() if channel.source else 0.0
         # Tuple is compared ascending, so negate what should come first.
         return (int(is_email), 0 if here else 1, -freshness)
 

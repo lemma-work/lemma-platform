@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         PodLinks,
         PodSurfaces,
         PodGroups,
+        PodChannels,
         PodContacts,
         PodWebWidgets,
         PodTables,
@@ -179,6 +180,12 @@ class Pod:
         from .resources import PodGroups
 
         return self._resource(PodGroups)
+
+    @cached_property
+    def channels(self) -> "PodChannels":
+        from .resources import PodChannels
+
+        return self._resource(PodChannels)
 
     @cached_property
     def contacts(self) -> "PodContacts":

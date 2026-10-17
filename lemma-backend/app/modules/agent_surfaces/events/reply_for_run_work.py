@@ -11,6 +11,10 @@ The text is not copied here. The row names the run, and the sender renders it
 from the run's stored output (or its failure) when it sends, so a run's reply
 is one row however late it goes.
 
+An answer to something asked in the web chat is not a platform's to send: the
+widget shows it, and it goes on the channel's timeline here instead -- never
+to a platform thread the same conversation also has.
+
 FAST: one run row, one link row, one insert. No network in this module.
 """
 
@@ -30,6 +34,7 @@ from app.core.infrastructure.work import (
 )
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.contracts.run_replies import run_reply_material
+from app.modules.channels.contracts.places import reply_address
 from app.modules.agent_surfaces.domain.deliveries import (
     ConversationTarget,
     DeliveryContent,
@@ -38,6 +43,7 @@ from app.modules.agent_surfaces.events.work_kinds import (
     SURFACE_REPLY_FOR_RUN,
     run_reply_key,
 )
+from app.modules.agent_surfaces.services.channel_lines import note_answered_on
 from app.modules.agent_surfaces.services.surface_deliveries import (
     conversation_destination,
     run_reply_idempotency_key,
@@ -72,6 +78,20 @@ async def stage_run_reply(ctx: FastContext, payload: RunReplyPayload) -> None:
         return
     failed = payload.status == "FAILED"
     if not failed and not material.answer:
+        return
+    address = await reply_address(ctx.uow, payload.conversation_id)
+    answering = address.source if address is not None else None
+    if answering is not None and answering.surface_id is None:
+        # Asked in the web chat, which shows the answer itself: it goes on the
+        # channel's timeline there, and to no platform thread the
+        # conversation also has.
+        if material.answer:
+            await note_answered_on(
+                ctx.uow,
+                source=answering,
+                conversation_id=payload.conversation_id,
+                text=material.answer,
+            )
         return
     destination, surface_id = await conversation_destination(
         ctx.uow, payload.conversation_id

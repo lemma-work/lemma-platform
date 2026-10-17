@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -12,6 +12,9 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.identity.contracts import UserPreferences
+
+if TYPE_CHECKING:
+    from app.modules.channels.contracts import Source
 
 
 class SurfaceAccountInfo(BaseModel):
@@ -254,6 +257,7 @@ class SurfaceNotificationEgressPort(Protocol):
         conversation_id: UUID,
         message: str,
         metadata: dict[str, Any] | None = None,
+        at: Source | None = None,
     ) -> bool: ...
 
     async def open_cold_email_thread(

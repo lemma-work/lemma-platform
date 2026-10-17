@@ -2,8 +2,9 @@
 
 A visitor proves an email address in the shop's chat and leaves. A member asks
 for the follow-up to go by email: it is sent from the pod's own address with
-the unsubscribe line, in a new conversation that is the contact's, and the
-visitor's reply comes back to that conversation as the same contact. Refused
+the unsubscribe line, as a new thread of the contact's one conversation with
+the agent -- the chat's -- and the visitor's reply comes back to it as the
+same contact. Refused
 when the address was unsubscribed, or when the pod has no email address
 answering contacts; a contact with no verified address is refused email and
 still has the message wait in their chat.
@@ -20,14 +21,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
-from app.modules.agent_surfaces.domain.groups import contact_link_user
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.infrastructure.models import (
-    AgentSurfaceConversationLinkModel,
-)
+from app.modules.channels.infrastructure.models import ChannelSourceModel
 from app.modules.agent_surfaces.services.contact_follow_ups import unsubscribe_token
 from app.modules.agent_surfaces.tests.e2e.helpers import _resend_payload
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
@@ -147,7 +145,9 @@ async def test_a_web_chat_contact_is_followed_up_by_email_and_their_reply_return
     body = sent.json()
     assert body["platform"] == "RESEND" and body["delivered"] is True
     thread = UUID(body["conversation_id"])
-    assert thread != chat
+    # The contact's one conversation with the agent: the chat's, which now has
+    # an email thread as well.
+    assert thread == chat
 
     # Emailed from the pod's address, with the line and the link that stop it.
     [mail] = message_store.get_all("RESEND")
@@ -159,27 +159,25 @@ async def test_a_web_chat_contact_is_followed_up_by_email_and_their_reply_return
     link = re.search(r"/public/contacts/unsubscribe\?token=(\S+)", mail["text"])
     assert link is not None
 
-    # A conversation of the contact's, looked after by the member, holding the
-    # follow-up as sent; the chat on the shop's page is left as it was.
+    # The contact's, looked after by the member, holding the follow-up as sent.
     assert await _contact_of(db_session, thread) == contact
     assert (await db_session.get(ConversationModel, thread)).user_id == owner
-    [written] = (
-        await db_session.scalars(
-            select(MessageModel).where(MessageModel.conversation_id == thread)
-        )
-    ).all()
-    assert written.message_metadata["follow_up"] is True
+    [written] = [
+        message
+        for message in (
+            await db_session.scalars(
+                select(MessageModel).where(MessageModel.conversation_id == thread)
+            )
+        ).all()
+        if (message.message_metadata or {}).get("follow_up")
+    ]
     assert written.message_metadata["delivered"] is True
-    assert not any(
-        "is back in stock." in text
-        for text in await _chat_texts(authenticated_client, key, visitor)
-    )
+    # The thread is a place of the contact's, keyed as their reply arrives.
     seed = (
         await db_session.execute(
-            select(AgentSurfaceConversationLinkModel.external_thread_id).where(
-                AgentSurfaceConversationLinkModel.conversation_id == thread,
-                AgentSurfaceConversationLinkModel.external_user_id
-                == contact_link_user(contact),
+            select(ChannelSourceModel.external_channel_id).where(
+                ChannelSourceModel.platform == "RESEND",
+                ChannelSourceModel.external_user_id == email.lower(),
             )
         )
     ).scalar_one()

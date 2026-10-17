@@ -1,9 +1,10 @@
-"""A run paused on the person keeps the thread it paused in.
+"""A run paused on the person is never left behind by what comes next.
 
 The approval card and the typed answer both reach only the conversation that
-paused. A notification sent half an hour later, or the DM reset a day later,
-used to move the thread to a fresh conversation anyway -- the card's buttons
-then did nothing, and "approve" went to an agent with nothing to approve.
+paused. A notification sent later, or a reply a day later, used to be able to
+start a fresh conversation -- the card's buttons then did nothing, and
+"approve" went to an agent with nothing to approve. A person now has one
+conversation with an agent, so both land where the pause is.
 
 Driven through the same journey harness as the notification tests, over the
 real `NotificationService`, `NotificationEgress` and `ConversationBinder`.
@@ -21,7 +22,6 @@ from app.modules.agent_surfaces.tests.unit.test_notification_journey import (
     AgentSide,
     World,
     _now,
-    _reset_window,  # noqa: F401  (autouse fixture)
     _telegram_surface,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
@@ -60,44 +60,25 @@ def _paused(monkeypatch, conversation_id: UUID) -> None:
     )
 
 
-async def test_a_notification_does_not_move_a_thread_waiting_on_an_approval(
+async def test_a_notification_lands_in_the_conversation_waiting_on_an_approval(
     world, monkeypatch
 ):
-    """Thirty-one minutes is past "the thread we are in", but the card is still live."""
     chat = world.had_chatted(hours_ago=1)
-    world.agent_side.conversations[chat.conversation_id].updated_at = (
-        _now() - timedelta(minutes=31)
-    )
-    _paused(monkeypatch, chat.conversation_id)
+    world.agent_side.conversations[chat.id].updated_at = _now() - timedelta(minutes=31)
+    _paused(monkeypatch, chat.id)
 
     notification = await world.ask(title="Standup")
 
-    assert notification.delivery_conversation_id == chat.conversation_id
-    assert world.links.only().conversation_id == chat.conversation_id, (
-        "the link was repointed away from the conversation holding the approval"
-    )
-
-
-async def test_without_a_pause_the_same_notification_opens_its_own(world):
-    """The control: nothing is waiting, so the cold thread is not held."""
-    chat = world.had_chatted(hours_ago=1)
-    world.agent_side.conversations[chat.conversation_id].updated_at = (
-        _now() - timedelta(minutes=31)
-    )
-
-    notification = await world.ask(title="Standup")
-
-    assert notification.delivery_conversation_id != chat.conversation_id
+    assert notification.delivery_conversation_id == chat.id
 
 
 async def test_a_reply_a_day_later_still_reaches_the_paused_conversation(
     world, monkeypatch
 ):
-    """The DM reset is for yesterday's context, not for a question still open."""
     chat = world.had_chatted(hours_ago=30)
-    _paused(monkeypatch, chat.conversation_id)
+    _paused(monkeypatch, chat.id)
 
     bound, created_title = await world.reply("approve")
 
-    assert bound.conversation_id == chat.conversation_id
+    assert bound.conversation_id == chat.id
     assert created_title is None

@@ -253,6 +253,25 @@ async def test_an_anonymous_visitor_is_answered_from_what_is_public(
         ("assistant", "Here is our price list."),
     ]
 
+    # Both sides are lines of the visitor's contact channel, on its web chat,
+    # the answer said for them -- the timeline the pod's members read.
+    listed = await authenticated_client.get(
+        f"/pods/{pod_id}/channels", params={"kind": "CONTACT"}
+    )
+    [channel] = [
+        c for c in listed.json()["items"] if c["contact_id"] == str(visitor_contact)
+    ]
+    timeline = await authenticated_client.get(
+        f"/pods/{pod_id}/channels/{channel['id']}/messages"
+    )
+    lines = timeline.json()["items"]
+    assert [(line["sender_kind"], line["text"]) for line in lines] == [
+        ("CONTACT", "What do you sell?"),
+        ("AGENT", "Here is our price list."),
+    ]
+    assert lines[1]["on_behalf_contact_id"] == str(visitor_contact)
+    assert len({line["source_id"] for line in lines}) == 1
+
     messages = await _messages_for_conversation(
         authenticated_client, pod_id=pod_id, conversation_id=str(conversation_id)
     )
