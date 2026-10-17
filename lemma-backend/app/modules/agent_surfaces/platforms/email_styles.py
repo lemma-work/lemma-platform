@@ -135,17 +135,28 @@ class EmailStylesExtension(Extension):
         md.treeprocessors.register(_InlineEmailStyles(md), "lemma_email_styles", 5)
 
 
-def email_body_wrapper(inner_html: str) -> str:
+def email_body_wrapper(inner_html: str, *, full_width: bool = False) -> str:
     """Wrap rendered content in the container the tag styles assume.
 
     `max-width` is what stops a paragraph running the full width of a desktop
     window, which is most of why unstyled mail looks wrong; the rest is the
     font. Both have to live here because no client can be trusted to have a
     stylesheet.
+
+    `margin:0 auto` is what centres that measure. Without it the wrapper sat
+    against the left edge of the window, so a message on a desktop read as a
+    broken layout rather than as a deliberate column.
+
+    ``full_width=True`` lifts the cap, for a caller whose content wants the
+    window -- a table wider than the column, or a message whose whole point is
+    the layout. The centring margin stays either way: it does nothing at full
+    width, and keeping one wrapper shape means there is no second branch to
+    style later.
     """
+    width = "max-width:none;" if full_width else "max-width:640px;"
     return (
         f'<div style="color:{_INK};font-family:{_FONT};font-size:15px;'
-        'line-height:1.6;max-width:640px;">'
+        f'line-height:1.6;{width}margin:0 auto;">'
         f"{inner_html}"
         "</div>"
     )

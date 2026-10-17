@@ -13,6 +13,8 @@ from app.modules.agent_surfaces.platforms.resend.inbound import (
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
+    ConversationType,
+    ParsedInboundSurfaceEvent,
     SurfaceConfig,
     SurfaceCredentialMode,
     SurfacePlatform,
@@ -94,6 +96,51 @@ async def test_resend_send_email_builds_resend_api_payload():
     assert "<strong style=" in body["html"] and ">hi</strong>" in body["html"]
     assert body["headers"]["In-Reply-To"] == "<m1@example.com>"
     assert body["attachments"][0]["filename"] == "note.txt"
+    # The default body is a readable column, not the full window.
+    assert "max-width:640px" in body["html"]
+    assert "margin:0 auto" in body["html"]
+
+
+@pytest.mark.asyncio
+async def test_a_full_width_reply_reaches_the_send_uncapped():
+    """The renderer could always lift the width cap; nothing could ask it to.
+
+    The request rides the same metadata seam as the sender name and the
+    attachments, so a caller that knows this message wants the window can say
+    so without a new argument on every signature between here and there.
+    """
+    service = ResendPlatformService(
+        {"api_key": "re_test", "from_address": "pod-1@ops.lemma.work"}
+    )
+    captured = {}
+
+    async def _fake_post(self, url, json, headers):  # noqa: ANN001
+        captured["json"] = json
+
+        class _Resp:
+            content = b"{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "email-1"}
+
+        return _Resp()
+
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.RESEND,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="<root@example.com>",
+        message_text="the question",
+        reply_target={"recipient_email": "bob@example.com", "subject": "Standup"},
+    )
+
+    with patch("httpx.AsyncClient.post", new=_fake_post):
+        await service.send_message(event, "hello", {"full_width": True})
+
+    assert "max-width:none" in captured["json"]["html"]
+    assert "max-width:640px" not in captured["json"]["html"]
 
 
 async def test_a_resend_surface_without_an_address_is_refused(monkeypatch):
