@@ -124,6 +124,7 @@ class FileTransactionWriter:
         directory_path: str = "/",
         search_enabled: bool = True,
         visibility: str | None = None,
+        rename_on_conflict: bool = False,
     ) -> CreateFilePlan:
         directory_path = self.paths._resolve_api_path(
             directory_path, requester_user_id=requester_user_id
@@ -143,7 +144,17 @@ class FileTransactionWriter:
         file_name = self.paths._normalize_name(name)
         path = self.paths._join_child_path(directory_path, file_name)
         self.system_skill_files.ensure_writable(path)
-        await self.lookup.ensure_path_available(pod_id=pod_id, path=path)
+        if rename_on_conflict:
+            # An upload names its own file, and a name it cannot have is not a
+            # reason to refuse the upload: take the next free one. Ordinary
+            # rather than exotic -- every clipboard image is `image.png`. The
+            # renamed path is in the same directory, so the writability checked
+            # above still covers it.
+            file_name, path = await self.lookup.available_path(
+                pod_id, directory_path=directory_path, name=file_name
+            )
+        else:
+            await self.lookup.ensure_path_available(pod_id=pod_id, path=path)
         resolved_visibility = self.paths._resolve_visibility_for_path(
             path, requester_user_id, visibility
         )

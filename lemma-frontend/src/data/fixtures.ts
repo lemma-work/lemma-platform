@@ -2215,6 +2215,11 @@ let AGENTS: Record<string, unknown>[] = [
 
 /** What each sample pod has been told to run on. Most have been told
  *  nothing, which is the common case and the one worth drawing. */
+/* A conversation's own pin, when one was made in this sample session. The pod's
+   is above; this is the narrower one, and it starts empty — a conversation runs
+   on what the teammate runs on until somebody says otherwise. */
+const CONVERSATION_RUNTIME: Record<string, { profile_id: string; model_name?: string | null }> = {};
+
 const POD_RUNTIME: Record<string, { profile_id: string; model_name?: string | null; config_selections?: Record<string, string> }> = {
     marketing: { profile_id: "me:claude-code", model_name: "opus", config_selections: { effort: "high" } },
 };
@@ -3307,6 +3312,20 @@ export const fixtureSource: PodSource = {
         await wait(300);
         RUNTIMES = RUNTIMES.map((raw) =>
             (raw as { id?: string }).id === runtimeId ? { ...(raw as object), status: "ACTIVE" } : raw);
+    },
+    async getConversationRuntime(_podId: string, conversationId: string) {
+        await wait(60);
+        return readChoice(CONVERSATION_RUNTIME[conversationId]);
+    },
+    async setConversationRuntime(_podId: string, conversationId: string, choice) {
+        await wait(200);
+        if (choice) {
+            CONVERSATION_RUNTIME[conversationId] = {
+                profile_id: choice.runtimeId,
+                model_name: choice.model,
+            };
+        }
+        else delete CONVERSATION_RUNTIME[conversationId];
     },
     async getPodRuntime(podId: string) {
         await wait(80);

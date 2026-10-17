@@ -982,6 +982,31 @@ export const liveSource: PodSource = {
         forgetPod(podId);
     },
 
+    async getConversationRuntime(podId: string, conversationId: string): Promise<Choice | null> {
+        /* Read off the conversation rather than remembered: it is the field a
+           run copies, and a choice made on another device has to be here. */
+        const conversation = await lemma(podId).conversations.get(conversationId, { pod_id: podId });
+        return readChoice((conversation as { agent_runtime?: unknown }).agent_runtime);
+    },
+
+    async setConversationRuntime(
+        podId: string,
+        conversationId: string,
+        choice: Choice | null,
+    ): Promise<void> {
+        /* Sent whole, null included: `agent_runtime` is replaced rather than
+           merged, and leaving it out would leave the old pin in place. */
+        await lemma(podId).conversations.update(
+            conversationId,
+            {
+                agent_runtime: choice
+                    ? { profile_id: choice.runtimeId, model_name: choice.model || null }
+                    : null,
+            },
+            { pod_id: podId },
+        );
+    },
+
     async getPodJoin(podId: string): Promise<JoinPolicy> {
         const pod = await podRow(podId);
         return readJoin((pod.config as { join_policy?: unknown } | undefined)?.join_policy);

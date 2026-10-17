@@ -22,6 +22,9 @@ from app.modules.datastore.domain.file_entities import (
     FileStatus,
 )
 from app.modules.datastore.services.file_service import DatastoreFileService
+from app.modules.datastore.services.files.lookup import FileLookup
+from app.modules.datastore.services.files.path_resolver import PathResolver
+from app.modules.datastore.services.files.paths import numbered_name
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
 
 
@@ -1341,3 +1344,62 @@ async def test_the_skills_overlay_asks_for_the_subtree_not_the_pod(
     assert file_repository_mock.get_direct_children.await_args.args[1] == "/skills"
     file_repository_mock.get_descendants.assert_not_awaited()
     file_repository_mock.get_tree_items.assert_not_awaited()
+
+
+def _lookup_over(taken: set[str]) -> FileLookup:
+    """A lookup whose repository holds exactly ``taken``, and nothing else."""
+    repository = AsyncMock()
+
+    async def get_by_path(*, pod_id, path, **_kwargs):
+        return object() if path in taken else None
+
+    repository.get_by_path.side_effect = get_by_path
+    return FileLookup(
+        file_repository=repository,
+        system_skill_files=SystemSkillFileProvider(),
+        authorizer=AsyncMock(),
+        path_resolver=PathResolver(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_upload_name_already_in_the_folder_takes_the_next_number():
+    """A name is not a reason to refuse an upload.
+
+    Every image pasted from a clipboard is `image.png`, and a file picked from
+    disk is often one the folder already has. The upload takes the next free
+    name instead, which is what every file manager does and what keeps the
+    second copy reachable by a name a person recognises.
+    """
+    pod_id = uuid4()
+    lookup = _lookup_over({"/me/uploads/report.pdf", "/me/uploads/report (1).pdf"})
+
+    name, path = await lookup.available_path(
+        pod_id, directory_path="/me/uploads", name="report.pdf"
+    )
+
+    assert name == "report (2).pdf"
+    assert path == "/me/uploads/report (2).pdf"
+
+
+@pytest.mark.asyncio
+async def test_a_free_name_is_left_exactly_as_it_arrived():
+    """The ordinary case: nothing is renamed, and nothing is numbered."""
+    pod_id = uuid4()
+    lookup = _lookup_over({"/me/uploads/other.pdf"})
+
+    name, path = await lookup.available_path(
+        pod_id, directory_path="/me/uploads", name="report.pdf"
+    )
+
+    assert name == "report.pdf"
+    assert path == "/me/uploads/report.pdf"
+
+
+def test_a_copy_number_goes_before_the_extension():
+    # `report.pdf (1)` is a name no program that reads the extension can open,
+    # and a leading dot is a hidden file's whole name rather than an extension.
+    assert numbered_name("report.pdf", 1) == "report (1).pdf"
+    assert numbered_name("report.tar.gz", 2) == "report.tar (2).gz"
+    assert numbered_name("notes", 1) == "notes (1)"
+    assert numbered_name(".env", 1) == ".env (1)"

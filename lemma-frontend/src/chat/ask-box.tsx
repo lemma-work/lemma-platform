@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { AttachIcon, CloseIcon, FileIcon, SendIcon } from "@/ui/icons";
-import { canSend, describeSize, offered, toAttachments, type Attachment } from "@/thread/attachments";
+import { canSend, describeSize, namePasted, offered, toAttachments, type Attachment } from "@/thread/attachments";
 
 /** A box to start a conversation from somewhere that is not one — Home, a
  *  bot's page. It holds no conversation of its own: the words and the files
@@ -165,7 +165,11 @@ export function AskBox({ placeholder, fill, onFilled, onAsk }: {
                         const files = Array.from(event.clipboardData.files);
                         if (files.length === 0) return;
                         event.preventDefault();
-                        offer(files);
+                        /* Named here: every clipboard image is called
+                           `image.png`, so two of them in one message would be
+                           one name, and a folder already holding one would
+                           have nowhere to put either. */
+                        offer(namePasted(files));
                     }}
                     onKeyDown={(event) => {
                         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {

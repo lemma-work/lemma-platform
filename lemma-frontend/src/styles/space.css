@@ -4618,10 +4618,18 @@ samp,
 .askbox--over {
     background: var(--accent-soft);
 }
+/* The same layout the conversation's composer uses, because it is the same
+   box: the row aligns to its bottom edge, so a growing draft pushes upward,
+   and every control centres on the textarea's last line — the line the
+   placeholder is on when the box is empty and the line being typed on when it
+   is not. The attach used to hang off the textarea's own bottom margin
+   instead, which put it a few pixels above the send button beside it: the one
+   control in the row that did not line up with the others. */
 .askbox__row {
     display: flex;
     align-items: flex-end;
     gap: 8px;
+    --askbox-line: 24px;
 }
 .askbox__files {
     display: flex;
@@ -4631,15 +4639,15 @@ samp,
 .askbox__picker {
     display: none;
 }
-/* Sat against the first line of the text rather than the bottom of a box
-   that grows: 7px is the textarea's own bottom margin. */
+/* Centred on that line: 7px is the textarea's own bottom margin, and the rest
+   is the difference between a 34px control and the line it sits on. */
 .askbox__attach {
     display: grid;
     place-items: center;
     flex: none;
     width: 34px;
     height: 34px;
-    margin-bottom: 7px;
+    margin-block-end: calc(7px + (var(--askbox-line) - 34px) / 2);
     border: 0;
     border-radius: var(--r-sm);
     background: none;
@@ -4681,6 +4689,7 @@ samp,
     place-items: center;
     width: 36px;
     height: 36px;
+    margin-block-end: calc(7px + (var(--askbox-line) - 36px) / 2);
     border: 0;
     border-radius: 50%;
     background: var(--accent);

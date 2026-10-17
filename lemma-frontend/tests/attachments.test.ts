@@ -12,6 +12,7 @@ import {
     tooLarge,
     withReferences,
     isAlreadyUploaded,
+    namePasted,
     MAX_BYTES,
     type Attachment,
 } from "../src/thread/attachments.ts";
@@ -130,4 +131,57 @@ test("a file already in the pod is not put there a second time", () => {
     assert.equal(isAlreadyUploaded({ ...one, status: "uploaded" }), false);
     assert.equal(isAlreadyUploaded({ ...one, status: "uploaded", path: "" }), false);
     assert.equal(isAlreadyUploaded({ ...one, status: "failed", path: "/me/x.pdf" }), false);
+});
+
+test("two pasted images are two names, not one", () => {
+    // Every clipboard image is called `image.png`. Two pastes in one message
+    // were therefore one name, and a folder that already held an `image.png`
+    // had nowhere to put either.
+    const at = new Date(2026, 9, 17, 6, 41, 58);
+    const [first, second] = namePasted([file("image.png"), file("image.png")], at);
+
+    assert.equal(first.name, "pasted-20261017-064158.png");
+    assert.equal(second.name, "pasted-20261017-064158-2.png");
+});
+
+test("a second paste in the same second is still a different name", () => {
+    // The two arrive as two paste events, so the count has to outlive one call.
+    const at = new Date(2026, 9, 17, 6, 41, 59);
+    const [one] = namePasted([file("image.png")], at);
+    const [two] = namePasted([file("image.png")], at);
+
+    assert.equal(one.name, "pasted-20261017-064159.png");
+    assert.equal(two.name, "pasted-20261017-064159-2.png");
+});
+
+test("a paste of two then a paste of one in the same second gives three names", () => {
+    // The count is of files named, not of pastes: counting pastes would hand
+    // the third file the second one's name.
+    const at = new Date(2026, 9, 17, 6, 41, 57);
+    const firstPaste = namePasted([file("image.png"), file("image.png")], at);
+    const [third] = namePasted([file("image.png")], at);
+
+    assert.deepEqual(
+        [...firstPaste.map((one) => one.name), third.name],
+        ["pasted-20261017-064157.png", "pasted-20261017-064157-2.png", "pasted-20261017-064157-3.png"],
+    );
+});
+
+test("a pasted file keeps a readable extension, from its name or its type", () => {
+    const at = (second: number) => new Date(2026, 9, 17, 6, 42, second);
+
+    assert.equal(
+        namePasted([file("Screenshot 2026-10-17.PNG")], at(0))[0].name,
+        "pasted-20261017-064200.png",
+    );
+    // A clipboard image often arrives with no extension at all; without one it
+    // cannot be read back as an image by anything.
+    assert.equal(
+        namePasted([new File([new Uint8Array(4)], "image", { type: "image/jpeg" })], at(1))[0].name,
+        "pasted-20261017-064201.jpg",
+    );
+    assert.equal(
+        namePasted([new File([new Uint8Array(4)], "blob", { type: "application/pdf" })], at(2))[0].name,
+        "pasted-20261017-064202.pdf",
+    );
 });

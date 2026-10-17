@@ -96,9 +96,14 @@ class FileUseCases:
         directory_path: str = "/",
         search_enabled: bool = True,
         visibility: str | None = None,
+        rename_on_conflict: bool = False,
     ) -> DatastoreFileEntity:
         """Persist draft -> upload bytes -> finalize, with no DB connection
-        held while object storage receives the file."""
+        held while object storage receives the file.
+
+        ``rename_on_conflict`` is for uploads, whose name is chosen by whoever
+        is uploading rather than by the caller: a name already in the folder
+        becomes ``name (1).ext`` instead of a refusal."""
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
@@ -112,6 +117,7 @@ class FileUseCases:
                 directory_path=directory_path,
                 search_enabled=search_enabled,
                 visibility=visibility,
+                rename_on_conflict=rename_on_conflict,
             )
 
         storage_written = False

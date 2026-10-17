@@ -765,6 +765,13 @@ export interface PodSource {
      *  `null` means it has never been told, and inherits. */
     getPodRuntime(podId: string): Promise<Choice | null>;
     setPodRuntime(podId: string, choice: Choice | null): Promise<void>;
+    /** The model one conversation was pinned to, or `null` when it runs on
+     *  whatever the teammate and the organization resolve. Stored on the
+     *  conversation's own `agent_runtime`, which is the runtime a run copies. */
+    getConversationRuntime(podId: string, conversationId: string): Promise<Choice | null>;
+    /** Pin this conversation to one model; `null` hands it back to the
+     *  default. Nothing else about the conversation changes. */
+    setConversationRuntime(podId: string, conversationId: string, choice: Choice | null): Promise<void>;
     /** Who may add themselves to this teammate without anybody letting them.
      *  A pod that has never been told answers `"invited"`, which is what the
      *  platform does with an unset policy. */

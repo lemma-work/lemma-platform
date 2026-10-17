@@ -131,6 +131,10 @@ async def upload_file(
             directory_path=form.text("directory_path", "/") or "/",
             search_enabled=bool(form.boolean("search_enabled", True)),
             visibility=form.text("visibility"),
+            # An upload is the one create whose name comes from the file itself,
+            # so a name the folder already has is answered with the next free
+            # one rather than a conflict the person can do nothing about.
+            rename_on_conflict=True,
         )
     return await _file_detail_response(file_entity, user.id)
 

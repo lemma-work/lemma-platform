@@ -71,6 +71,25 @@ def normalize_datastore_name(name: str) -> str:
     return cleaned
 
 
+def numbered_name(name: str, index: int) -> str:
+    """The next name for a file whose own is taken: ``report.pdf`` ->
+    ``report (1).pdf``.
+
+    The number goes before the extension, which is the convention every desktop
+    file manager uses and the one people read as "the second copy of this". A
+    suffix after the extension (``report.pdf (1)``) is a name no program that
+    reads the extension can open.
+    """
+    if index < 1:
+        raise DatastoreValidationError("A copy number starts at 1")
+    stem, dot, extension = name.rpartition(".")
+    # A leading dot is a hidden file's whole name, not an extension: `.env`
+    # numbered must stay `.env (1)`, never ` (1).env`.
+    if not dot or not stem:
+        return f"{name} ({index})"
+    return f"{stem} ({index}).{extension}"
+
+
 def normalize_datastore_path(path: str | None) -> str:
     """Normalize an absolute datastore path; reject relative segments."""
     if path is None:

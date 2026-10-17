@@ -6,9 +6,11 @@ import { isLandingPreview } from "@/marketing/preview-mode";
 import type { Message, Pod } from "@/data";
 import type { ApprovalDecision } from "./approval";
 import { NEW_CONVERSATION } from "@/data";
+import type { Choice } from "@/data/runtimes";
 import { buildTurns, openInteraction, openSignIn } from "./turns";
 import { Transcript } from "./transcript";
 import { Composer } from "./composer";
+import { ModelPicker, useSavingModel } from "./model-picker";
 import { InteractionDock } from "./interaction-dock";
 import { toAttachments, type Attachment } from "./attachments";
 import { useChannelReply } from "./use-channel-reply";
@@ -119,6 +121,10 @@ export function ConversationPane({
     const waitingOn = useMemo(() => openInteraction(turns), [turns]);
     const signingIn = useMemo(() => openSignIn(turns), [turns]);
     const [crowded, setCrowded] = useState(false);
+    /* The same pick the live pane holds: this pane is the one that opens
+       without a session, and a control that exists only where a session does
+       is a control nobody looks at until a run is already going. */
+    const [pickedModel, setPickedModel] = useState<Choice | null>(null);
 
     const open = conversationId && conversationId !== NEW_CONVERSATION ? conversationId : conversation.data?.id ?? null;
 
@@ -133,6 +139,22 @@ export function ConversationPane({
         [bot, pod.teammate],
     );
     const reply = useChannelReply(conversation.data?.metadata, teammate.name, open);
+
+    /* Memoised for the same reason the live pane's is: the box around it is. */
+    const savingModel = useSavingModel();
+    const modelPicker = useMemo(
+        () => (bot?.pinnedRuntime ? null : (
+            <ModelPicker
+                podId={pod.id}
+                orgId={pod.orgId}
+                conversationId={open}
+                locked={all.length > 0}
+                picked={pickedModel}
+                onPicked={setPickedModel}
+            />
+        )),
+        [bot?.pinnedRuntime, pod.id, pod.orgId, open, all.length, pickedModel],
+    );
 
     return (
         <>
@@ -188,7 +210,7 @@ export function ConversationPane({
                     ? "sending a message skips this request"
                     : waitingOn || signingIn || isLandingPreview() ? undefined : pod.waiting || undefined}
                 onTall={setCrowded}
-                busy={false}
+                busy={savingModel}
                 canStop={false}
                 fill={fill}
                 onFilled={onFilled}
@@ -196,6 +218,7 @@ export function ConversationPane({
                 onAttach={(files) => setAttachments(was => [...was, ...toAttachments(files)])}
                 onRemoveAttachment={(key) => setAttachments(was => was.filter(one => one.key !== key))}
                 onSend={() => setError("This is the sample source — connect a session to send anything.")}
+                model={modelPicker}
             />
         </>
     );

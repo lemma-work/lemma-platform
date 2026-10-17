@@ -112,7 +112,11 @@ test("a screenshot pasted into the box is attached like a dropped one", async ()
 
     await box.hand("paste", [file("shot.png", 2048)]);
 
-    assert.deepEqual(box.chips(), ["shot.png"]);
+    /* Attached, and named for when it was pasted: a clipboard image is called
+       `image.png` by every browser, so two of them would be one name and a
+       folder already holding one would have nowhere to put either. The name it
+       arrived with is the browser's, not the person's. */
+    assert.match(box.chips()[0], /^pasted-\d{8}-\d{6}\.png$/);
 });
 
 test("a file with nothing typed still goes, and a file too large never does", async () => {
