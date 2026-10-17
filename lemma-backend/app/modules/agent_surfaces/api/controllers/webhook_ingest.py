@@ -43,6 +43,7 @@ from app.modules.identity.contracts.whatsapp_verification import (
     is_whatsapp_verification_configured,
     parse_reserved_verification_message,
 )
+from app.modules.agent_surfaces.platforms.slack.uninstall import is_uninstall_delivery
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound as _normalize_resend_inbound,
 )
@@ -176,7 +177,9 @@ async def _slack_candidates(uow_factory: UnitOfWorkFactory, payload: dict):
     """
     async with uow_scope(uow_factory) as uow:
         return await slack_candidates_for_workspace(
-            service=get_surface_service(uow), team_id=slack_team_id(payload)
+            service=get_surface_service(uow),
+            team_id=slack_team_id(payload),
+            also_paused=is_uninstall_delivery(payload),
         )
 
 

@@ -57,6 +57,7 @@ def build_surface_setup_actions(
     slack_signing_secret_missing: bool = False,
     slack_app_id_missing: bool = False,
     slack_repair_url: str | None = None,
+    slack_uninstalled: bool = False,
     whatsapp_verify_token: str | None = None,
 ) -> list[SurfaceSetupAction]:
     """The manual steps a user must complete for this surface — usually none.
@@ -68,7 +69,12 @@ def build_surface_setup_actions(
     (auto-registers its webhook) and email never need manual webhook setup.
     Teams admin consent is handled separately because it applies to both system
     and custom apps.
+
+    ``slack_uninstalled`` is the exception to "system apps need nothing": Slack
+    removing the app takes Lemma's own with it, and only a person can put it back.
     """
+    if platform is SurfacePlatform.SLACK and slack_uninstalled:
+        return [_slack_reinstall_action(slack_repair_url)]
     if not is_custom_app:
         return []
 
@@ -85,6 +91,25 @@ def build_surface_setup_actions(
     if platform is SurfacePlatform.WHATSAPP:
         return _whatsapp_actions(webhook_url, whatsapp_verify_token)
     return []
+
+
+def _slack_reinstall_action(repair_url: str | None) -> SurfaceSetupAction:
+    return SurfaceSetupAction(
+        key="slack_reinstall",
+        title="Install it in Slack again",
+        description=(
+            "Slack says this app was removed from the workspace, or its "
+            "token was revoked, so nothing said there reaches Lemma and "
+            "nothing is answered. Reconnecting installs it again; its "
+            "channels and settings are kept."
+        ),
+        link=repair_url,
+        link_label="Reconnect Slack",
+        steps=[
+            "Open Connectors and find this Slack connection.",
+            "Reconnect it, and allow the app when Slack asks.",
+        ],
+    )
 
 
 def _slack_actions(

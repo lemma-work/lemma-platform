@@ -34,9 +34,15 @@ def routing_surfaces_double(surfaces: Sequence):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        also_paused: bool = False,
         limit: int | None = None,
     ) -> list:
-        chosen = list(surfaces)
+        # A paused surface is the repository's to drop unless asked for.
+        chosen = [
+            surface
+            for surface in surfaces
+            if also_paused or str(getattr(surface, "status", "ACTIVE")) != "INACTIVE"
+        ]
         if surface_ids is not None:
             # An empty collection means "none of them", as `IN ()` does.
             allowed = set(surface_ids)

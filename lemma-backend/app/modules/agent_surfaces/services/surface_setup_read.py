@@ -8,14 +8,18 @@ from uuid import UUID
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceEntity,
     AgentSurfaceStatus,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.ports import SurfaceAccountPort
 from app.modules.agent_surfaces.domain.setup_actions import build_surface_setup_actions
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 
 
 class SurfaceSetupReadMixin:
+    _account_port: SurfaceAccountPort | None
+
     async def get_surface_setup_by_name(
         self, *, pod_id: UUID, name: str, reveal_secrets: bool
     ) -> dict[str, Any]:
@@ -48,6 +52,7 @@ class SurfaceSetupReadMixin:
             slack_socket_mode=surface_settings.enable_slack_socket_mode,
             slack_signing_secret_missing=signing_secret_missing,
             slack_app_id_missing=app_id_missing,
+            slack_uninstalled=await self._slack_account_retired(surface),
             # Connectors have no route of their own in the workspace: Settings
             # opens at a section named in `?settings=`. The space in the path
             # is what picks the organization whose connectors those are.
@@ -100,3 +105,23 @@ class SurfaceSetupReadMixin:
             return False, False
         credentials = await self._credential_resolver.slack_webhook_credentials(surface)
         return not bool(credentials.signing_secret), not bool(credentials.app_id)
+
+    async def _slack_account_retired(self, surface: AgentSurfaceEntity) -> bool:
+        """Whether Slack took this surface's app away (``app_uninstall``).
+
+        Read off the account, because that is where the uninstall is recorded:
+        the surface keeps its channels and settings for when it comes back.
+        """
+        if (
+            surface.surface_type is not SurfacePlatform.SLACK
+            or surface.account_id is None
+            or self._account_port is None
+        ):
+            return False
+        # The summary, not the account: one status field needs no credentials
+        # decrypted, and a setup read should hold none.
+        summaries = await self._account_port.list_account_summaries(
+            [surface.account_id]
+        )
+        account = summaries.get(surface.account_id)
+        return account is not None and account.needs_reauthorization

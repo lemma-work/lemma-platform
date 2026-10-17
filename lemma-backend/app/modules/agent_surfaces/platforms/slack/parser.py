@@ -19,6 +19,7 @@ from app.modules.agent_surfaces.platforms.common import (
 from app.modules.agent_surfaces.platforms.slack.config_parser import (
     SlackConfigurationParserMixin,
 )
+from app.modules.agent_surfaces.platforms.slack.uninstall import parse_uninstall
 from app.modules.agent_surfaces.platforms.slack.models import (
     SLACK_APPROVAL_DECISION_BY_ACTION_ID as _APPROVAL_DECISION_BY_ACTION_ID,
     SLACK_FORM_SUBMIT_ACTION_ID as _FORM_SUBMIT_ACTION_ID,
@@ -308,6 +309,9 @@ class SlackMessageParser(SlackConfigurationParserMixin):
             event = payload.get("event") or {}
             event_type = payload_text(event, "type")
             tenant_id = payload_text(payload, "team_id").strip() or None
+            uninstalled = parse_uninstall(event, tenant_id=tenant_id, raw=payload)
+            if uninstalled is not None:
+                return uninstalled
 
             if event_type == "member_joined_channel":
                 # ``authorizations`` names the bot user for this delivery; if the

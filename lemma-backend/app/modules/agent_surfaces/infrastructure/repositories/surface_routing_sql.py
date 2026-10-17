@@ -39,18 +39,25 @@ def in_a_live_pod():
     return (Pod.id == AgentSurface.pod_id) & (Pod.is_deleted.is_(False))
 
 
-def active_surfaces_of_type(surface_type: str) -> Select:
+def active_surfaces_of_type(surface_type: str, *, also_paused: bool = False) -> Select:
     """Every live surface of one platform, in the order selection depends on.
 
     ``created_at, id`` is not cosmetic: it is the documented tiebreak when a
     sender resolves to several candidate surfaces on a shared bot or number, and
     it is what picks the identity surface. Every narrowing below inherits it.
+
+    ``also_paused`` adds INACTIVE surfaces, for the one event a paused surface
+    must still hear: its app being removed. Nothing that answers a message
+    passes it.
     """
+    statuses = [AgentSurfaceStatus.ACTIVE.value]
+    if also_paused:
+        statuses.append(AgentSurfaceStatus.INACTIVE.value)
     return (
         select(AgentSurface)
         .where(
             AgentSurface.surface_type == surface_type,
-            AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
+            AgentSurface.status.in_(statuses),
         )
         .join(Pod, in_a_live_pod())
         .order_by(AgentSurface.created_at, AgentSurface.id)
@@ -65,6 +72,7 @@ def routing_surfaces(
     external_workspace_id: str | None = None,
     system_credentials_only: bool = False,
     surface_identity_id: str | None = None,
+    also_paused: bool = False,
 ) -> Select:
     """The live surfaces of one platform, narrowed by whatever the event carries.
 
@@ -123,7 +131,7 @@ def routing_surfaces(
     because it holds only for the platforms that have a shared bot at all; the
     caller owns that list, where it already lived.
     """
-    statement = active_surfaces_of_type(surface_type)
+    statement = active_surfaces_of_type(surface_type, also_paused=also_paused)
     if surface_ids is not None:
         statement = statement.where(AgentSurface.id.in_(list(surface_ids)))
     if pod_ids is not None:

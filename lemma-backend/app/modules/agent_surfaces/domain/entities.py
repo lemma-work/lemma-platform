@@ -196,6 +196,9 @@ class SurfaceLifecycleKind(StrEnum):
     JOINED_CHANNEL = "JOINED_CHANNEL"
     # Someone opened the app's own surface (Slack's App Home / agent DM tab).
     HOME_OPENED = "HOME_OPENED"
+    # The app lost its tokens here: uninstalled, or its bot token revoked. Names
+    # no person and is answered by no one -- the token to answer with is gone.
+    UNINSTALLED = "UNINSTALLED"
 
 
 class ParsedSurfaceLifecycleEvent(BaseModel):
@@ -219,6 +222,9 @@ class ParsedSurfaceLifecycleEvent(BaseModel):
     actor_external_user_id: str | None = None
     # The group's own name, where the event carries it (Telegram's does).
     channel_title: str | None = None
+    # UNINSTALLED only: the bot users whose tokens went. None means all of the
+    # app's -- an uninstall takes every one, a revocation names the ones it took.
+    revoked_identity_ids: list[str] | None = None
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 

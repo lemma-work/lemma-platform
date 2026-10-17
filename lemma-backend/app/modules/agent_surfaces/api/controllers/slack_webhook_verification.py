@@ -25,7 +25,7 @@ def slack_api_app_id(payload: dict) -> str | None:
 
 
 async def slack_candidates_for_workspace(
-    *, service: AgentSurfaceService, team_id: str | None
+    *, service: AgentSurfaceService, team_id: str | None, also_paused: bool = False
 ) -> list[SlackWebhookVerificationCandidate]:
     # No resolver, no credentials to verify a signature against -- the same
     # reading `list_channels` gives it, and the reason this is `| None` at all.
@@ -39,8 +39,12 @@ async def slack_candidates_for_workspace(
     # "verify every inbound message before acting on it". The credential resolve
     # below was in the same loop, so it ran per surface that happened to match
     # rather than per surface that could.
+    # `also_paused` only for an app's removal: a paused surface hears nothing
+    # else, but must hear that, or turning it back on reads a dead app as fine.
     surfaces = await service.surface_repository.list_active_for_routing(
-        SurfacePlatform.SLACK.value, external_workspace_id=team_id
+        SurfacePlatform.SLACK.value,
+        external_workspace_id=team_id,
+        also_paused=also_paused,
     )
     grouped: dict[tuple[str, str], list[UUID]] = {}
     for surface in surfaces:

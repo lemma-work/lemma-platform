@@ -40,6 +40,12 @@ class SurfaceAccountSummary(BaseModel):
     email: str | None = None
     status: str | None = None
 
+    @property
+    def needs_reauthorization(self) -> bool:
+        """The connector's ``AccountStatus.REAUTH_REQUIRED``, read across the
+        module boundary as the string the contract carries."""
+        return self.status == "REAUTH_REQUIRED"
+
 
 class SurfaceAccountPort(Protocol):
     async def get_account(self, account_id: UUID) -> SurfaceAccountInfo | None: ...
@@ -149,6 +155,7 @@ class SurfaceInstallationRepositoryPort(Protocol):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        also_paused: bool = False,
         limit: int | None = None,
     ) -> list[AgentSurfaceEntity]: ...
 
