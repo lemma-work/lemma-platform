@@ -149,12 +149,35 @@ function reconnectDelayMs(attempt: number): number {
     return Math.random() * ceiling;
 }
 
+/** A relative `apiUrl` with no page to resolve it against. No retry fixes it. */
+class UnresolvableApiUrl extends Error {}
+
+/**
+ * `apiUrl` as an absolute URL. A relative one ("/api", which `lemma apps init
+ * --proxy` writes for the same-origin Vite dev proxy) works for `fetch`, which
+ * resolves against the page, but a WebSocket URL has to be built whole, so it
+ * is resolved against the page origin here.
+ */
+function absoluteApiUrl(apiUrl: string): string {
+    if (/^[a-z][a-z\d+.-]*:/i.test(apiUrl)) return apiUrl;
+    const origin = globalThis.location?.origin;
+    // An opaque origin (about:blank, file://) serialises as the string "null".
+    if (!origin || origin === "null") {
+        throw new UnresolvableApiUrl(
+            `Datastore change stream: apiUrl "${apiUrl}" is relative and there is no page origin to resolve it against; pass an absolute URL`,
+        );
+    }
+    return new URL(apiUrl, origin).toString();
+}
+
 function liveWsUrl(
     apiUrl: string,
     podId: string,
     token: string | null,
 ): string {
-    const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
+    const root = absoluteApiUrl(apiUrl)
+        .replace(/\/$/, "")
+        .replace(/^http(s?):\/\//, "ws$1://");
     const url = new URL(`${root}/pods/${podId}/live`);
     if (token) url.searchParams.set("access_token", token);
     return url.toString();
@@ -297,9 +320,20 @@ export class LiveConnection {
         this.connecting = false;
         if (this.closed || this.subscriptions.size === 0) return;
 
+        let url: string;
+        try {
+            url = liveWsUrl(this.apiUrl, this.podId, token);
+        } catch (error) {
+            if (error instanceof UnresolvableApiUrl) {
+                // Said once and stopped: retrying could only fail the same way.
+                this.failAll(error);
+                return;
+            }
+            throw error;
+        }
         let ws: WebSocket;
         try {
-            ws = new WebSocket(liveWsUrl(this.apiUrl, this.podId, token));
+            ws = new WebSocket(url);
         } catch (error) {
             for (const sub of this.subscriptions.values()) {
                 sub.options.onError?.(

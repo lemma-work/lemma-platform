@@ -19504,8 +19504,21 @@ var LemmaClient = (() => {
     );
     return Math.random() * ceiling;
   }
+  var UnresolvableApiUrl = class extends Error {
+  };
+  function absoluteApiUrl(apiUrl) {
+    var _a;
+    if (/^[a-z][a-z\d+.-]*:/i.test(apiUrl)) return apiUrl;
+    const origin = (_a = globalThis.location) == null ? void 0 : _a.origin;
+    if (!origin || origin === "null") {
+      throw new UnresolvableApiUrl(
+        `Datastore change stream: apiUrl "${apiUrl}" is relative and there is no page origin to resolve it against; pass an absolute URL`
+      );
+    }
+    return new URL(apiUrl, origin).toString();
+  }
   function liveWsUrl(apiUrl, podId, token) {
-    const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
+    const root = absoluteApiUrl(apiUrl).replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
     const url = new URL(`${root}/pods/${podId}/live`);
     if (token) url.searchParams.set("access_token", token);
     return url.toString();
@@ -19619,9 +19632,19 @@ var LemmaClient = (() => {
       }
       this.connecting = false;
       if (this.closed || this.subscriptions.size === 0) return;
+      let url;
+      try {
+        url = liveWsUrl(this.apiUrl, this.podId, token);
+      } catch (error) {
+        if (error instanceof UnresolvableApiUrl) {
+          this.failAll(error);
+          return;
+        }
+        throw error;
+      }
       let ws;
       try {
-        ws = new WebSocket(liveWsUrl(this.apiUrl, this.podId, token));
+        ws = new WebSocket(url);
       } catch (error) {
         for (const sub of this.subscriptions.values()) {
           (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(
