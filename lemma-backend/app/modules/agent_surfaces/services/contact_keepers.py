@@ -34,6 +34,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 from app.modules.agent_surfaces.infrastructure.repositories.web_widget_repository import (  # noqa: E501
     WebWidgetRepository,
 )
+from app.modules.contacts.contracts import contact_by_id
 from app.modules.pod.contracts.members import pod_administrators, pod_member_id
 
 logger = get_logger(__name__)
@@ -120,6 +121,23 @@ async def tell_admins_a_keeper_left(
     return len(admins)
 
 
+async def answers(
+    uow: SqlAlchemyUnitOfWork,
+    conversation: SurfaceConversation,
+    contact_id: UUID | None,
+) -> bool:
+    """Whether the conversation answers this person: for a contact, the one
+    it names -- or the one that contact was merged into, before the merge's
+    work has moved the conversation over -- and for a member, nobody."""
+    stored = conversation.audience.contact_id
+    if stored == contact_id:
+        return True
+    if stored is None or contact_id is None:
+        return False
+    became = await contact_by_id(uow, pod_id=conversation.pod_id, contact_id=stored)
+    return became is not None and became.id == contact_id
+
+
 async def owned_or_moved(
     uow: SqlAlchemyUnitOfWork,
     conversation: SurfaceConversation,
@@ -133,15 +151,23 @@ async def owned_or_moved(
     contact's, whoever looks after contacts now: when that member changes, it
     moves to the new one with its history rather than being left behind for a
     fresh one. Every other conversation is only ever its owner's.
+
+    Whom it answers comes first: a contact's turn continues only a
+    conversation naming that contact, and a member's only one naming nobody.
+    Found by a key alone, a conversation answering someone else would hand
+    this turn their authority.
     """
+    if not await answers(uow, conversation, contact_id):
+        return False
     if conversation.user_id == user_id:
         return True
-    if contact_id is None or conversation.audience.contact_id != contact_id:
+    stored = conversation.audience.contact_id
+    if stored is None:
         return False
     moved = await move_contact_conversation(
         uow,
         conversation_id=conversation.id,
-        contact_id=contact_id,
+        contact_id=stored,
         to_user_id=user_id,
     )
     if moved:

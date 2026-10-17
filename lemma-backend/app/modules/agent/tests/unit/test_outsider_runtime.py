@@ -153,7 +153,7 @@ class _NoTokens:
 
 async def test_agent_host_is_never_handed_a_token_for_a_strangers_run():
     stranger_run = SimpleNamespace(
-        audience=Audience.outsiders(),
+        audience=Audience.contact(uuid4()),
         user_id=uuid4(),
         pod_id=uuid4(),
         org_id=uuid4(),

@@ -19,7 +19,6 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, CONTACT, CONTACT_KEY
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
 from app.modules.agent_surfaces.domain.groups import contact_link_user
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
@@ -40,7 +39,7 @@ from app.modules.agent_surfaces.tests.e2e.test_web_widgets_e2e import (
     _as,
     _host_token,
     _latest_code,
-    _metadata,
+    _contact_of,
     _say,
     _session,
     _widget,
@@ -85,7 +84,7 @@ async def _web_contact_with_email(
         headers=_as(visitor),
     )
     assert verified.status_code == 200, verified.text
-    contact = UUID((await _metadata(db_session, chat))[CONTACT_KEY])
+    contact = await _contact_of(db_session, chat)
     return key, verified.json(), chat, contact
 
 
@@ -162,9 +161,7 @@ async def test_a_web_chat_contact_is_followed_up_by_email_and_their_reply_return
 
     # A conversation of the contact's, looked after by the member, holding the
     # follow-up as sent; the chat on the shop's page is left as it was.
-    metadata = await _metadata(db_session, thread)
-    assert metadata[AUDIENCE_KEY] == CONTACT
-    assert metadata[CONTACT_KEY] == str(contact)
+    assert await _contact_of(db_session, thread) == contact
     assert (await db_session.get(ConversationModel, thread)).user_id == owner
     [written] = (
         await db_session.scalars(
@@ -300,7 +297,7 @@ async def test_a_contact_with_no_verified_email_still_waits_in_the_web_chat(
         pod_id=pod_id,
         script=[script_text("I'll check.")],
     )
-    contact = UUID((await _metadata(db_session, chat))[CONTACT_KEY])
+    contact = await _contact_of(db_session, chat)
 
     message_store.clear()
     refused = await _follow_up(

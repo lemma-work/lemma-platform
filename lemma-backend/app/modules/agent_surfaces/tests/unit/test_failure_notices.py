@@ -224,6 +224,7 @@ def test_a_notice_too_long_for_a_whatsapp_button_goes_as_text():
 
 def _chat_context(text: str, *, outsider: bool = False):
     from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+    from app.modules.agent.contracts.audience import Audience
     from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 
     return SurfaceChatContext(
@@ -234,7 +235,7 @@ def _chat_context(text: str, *, outsider: bool = False):
         message_text=text,
         message_metadata=SurfaceMessageMetadata(surface_platform="RESEND"),
         message_user_id=uuid4(),
-        answers_outsider=outsider,
+        audience=Audience.contact(uuid4()) if outsider else Audience.member(),
         event=ParsedInboundSurfaceEvent(
             platform="RESEND",
             conversation_type=ConversationType.EXTERNAL_DM,

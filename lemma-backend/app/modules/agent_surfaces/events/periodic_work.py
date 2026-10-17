@@ -69,12 +69,11 @@ async def web_visitors(ctx: JobContext, payload: NoPayload) -> None:
     )
 
     del ctx, payload
-    codes, sessions, conversations = await sweep_web_visitors(_sessions())
+    codes, sessions = await sweep_web_visitors(_sessions())
     logger.info(
         "agent_surfaces.tasks.sweep_web_visitors.observed",
         codes=codes,
         sessions=sessions,
-        conversations=conversations,
     )
 
 

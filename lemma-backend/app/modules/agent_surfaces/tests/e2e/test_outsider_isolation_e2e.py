@@ -21,7 +21,7 @@ What a stranger's run must never reach:
 from __future__ import annotations
 
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -29,7 +29,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
@@ -42,7 +41,6 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationStatus,
 )
 from app.modules.agent_surfaces.infrastructure.models import (
-    AgentSurfaceConversationLinkModel,
     NotificationModel,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
@@ -557,22 +555,27 @@ async def test_what_the_member_types_in_lemma_is_answered_as_theirs(
     assert "reply_parameters" not in answer
 
 
-async def test_a_client_cannot_open_a_conversation_as_the_strangers_thread(
-    scenario,
+async def test_a_client_cannot_open_a_conversation_as_a_contacts(
+    scenario, db_session: AsyncSession
 ):
+    """Whom a conversation answers is a column no request reaches."""
     await scenario.create_org_with_pod(name_prefix="Audience claim")
     created = await scenario.owner_client.post(
         f"/pods/{scenario.pod_id}/conversations",
-        json={"title": "Mine", "metadata": {AUDIENCE_KEY: OUTSIDERS, "x": 1}},
+        json={
+            "title": "Mine",
+            "metadata": {"audience": "contact", "contact_id": str(uuid4()), "x": 1},
+        },
     )
 
     assert created.status_code == 201, created.text
-    metadata = created.json().get("metadata") or {}
-    assert AUDIENCE_KEY not in metadata
-    assert metadata.get("x") == 1
+    row = await db_session.get(ConversationModel, UUID(created.json()["id"]))
+    assert row is not None
+    assert row.contact_id is None
+    assert (row.conversation_metadata or {}).get("x") == 1
 
 
-async def test_a_strangers_thread_that_lost_its_mark_still_runs_as_nobody(
+async def test_a_contacts_conversation_with_its_metadata_wiped_still_runs_as_them(
     scenario, db_session: AsyncSession, fake_telegram, monkeypatch
 ):
     _, _, owner = await _group_with_owner(
@@ -585,18 +588,15 @@ async def test_a_strangers_thread_that_lost_its_mark_still_runs_as_nobody(
         db_session, text="hi", message_id=108, script=[script_text("Hello.")]
     )
 
-    # However it happened, the conversation no longer says whom it answers.
+    # However it happened, the conversation's metadata says nothing any more.
     row = await db_session.get(ConversationModel, first.conversation_id)
-    assert row is not None
-    row.conversation_metadata = {
-        key: value
-        for key, value in (row.conversation_metadata or {}).items()
-        if key != AUDIENCE_KEY
-    }
+    assert row is not None and row.contact_id is not None
+    contact_id = row.contact_id
+    row.conversation_metadata = {}
     await db_session.commit()
 
-    # A turn in it -- here the owner's own, from Lemma -- still runs as nobody,
-    # because routing's link still names it the strangers' thread.
+    # A turn in it -- here the owner's own, from Lemma -- still runs as the
+    # contact, because the column says whom it answers.
     with suppress_agent_run_enqueue():
         posted = await client.post(
             f"/pods/{pod_id}/conversations/{first.conversation_id}/messages/append",
@@ -620,26 +620,12 @@ async def test_a_strangers_thread_that_lost_its_mark_still_runs_as_nobody(
     assert "price_list" in results["tables-unflagged"]
     assert "customers" not in results["tables-unflagged"]
 
-    # And the next stranger is moved to a thread that is marked again.
+    # And the same stranger's next question is theirs again, in the same place.
     second = await _stranger_asks(
         db_session, text="hello again", message_id=109, script=[script_text("Hi.")]
     )
-    assert second.conversation_id != first.conversation_id
-    fresh = await db_session.get(ConversationModel, second.conversation_id)
-    assert (fresh.conversation_metadata or {}).get(AUDIENCE_KEY) == OUTSIDERS
-    link = (
-        (
-            await db_session.execute(
-                select(AgentSurfaceConversationLinkModel).where(
-                    AgentSurfaceConversationLinkModel.external_channel_id
-                    == str(GROUP_CHAT)
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert {item.conversation_id for item in link} >= {second.conversation_id}
+    assert second.conversation_id == first.conversation_id
+    assert second.audience.contact_id == contact_id
 
 
 async def test_a_strangers_background_leaves_out_answers_made_with_a_members_access(

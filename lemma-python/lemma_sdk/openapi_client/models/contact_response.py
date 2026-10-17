@@ -24,20 +24,34 @@ class ContactResponse:
     Attributes:
         created_at (datetime.datetime):
         id (UUID):
+        answered_at (datetime.datetime | None | Unset): When an agent first answered them; what the contact limit
+            counts.
         display_name (None | str | Unset):
         identities (list[ContactIdentityResponse] | Unset):
+        is_anonymous (bool | Unset): Known only by the browser they wrote from: a web visitor nobody has vouched for
+            yet. Default: False.
     """
 
     created_at: datetime.datetime
     id: UUID
+    answered_at: datetime.datetime | None | Unset = UNSET
     display_name: None | str | Unset = UNSET
     identities: list[ContactIdentityResponse] | Unset = UNSET
+    is_anonymous: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         created_at = self.created_at.isoformat()
 
         id = str(self.id)
+
+        answered_at: None | str | Unset
+        if isinstance(self.answered_at, Unset):
+            answered_at = UNSET
+        elif isinstance(self.answered_at, datetime.datetime):
+            answered_at = self.answered_at.isoformat()
+        else:
+            answered_at = self.answered_at
 
         display_name: None | str | Unset
         if isinstance(self.display_name, Unset):
@@ -52,6 +66,8 @@ class ContactResponse:
                 identities_item = identities_item_data.to_dict()
                 identities.append(identities_item)
 
+        is_anonymous = self.is_anonymous
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -60,10 +76,14 @@ class ContactResponse:
                 "id": id,
             }
         )
+        if answered_at is not UNSET:
+            field_dict["answered_at"] = answered_at
         if display_name is not UNSET:
             field_dict["display_name"] = display_name
         if identities is not UNSET:
             field_dict["identities"] = identities
+        if is_anonymous is not UNSET:
+            field_dict["is_anonymous"] = is_anonymous
 
         return field_dict
 
@@ -75,6 +95,23 @@ class ContactResponse:
         created_at = isoparse(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
+
+        def _parse_answered_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                answered_at_type_0 = isoparse(data)
+
+                return answered_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        answered_at = _parse_answered_at(d.pop("answered_at", UNSET))
 
         def _parse_display_name(data: object) -> None | str | Unset:
             if data is None:
@@ -96,11 +133,15 @@ class ContactResponse:
 
                 identities.append(identities_item)
 
+        is_anonymous = d.pop("is_anonymous", UNSET)
+
         contact_response = cls(
             created_at=created_at,
             id=id,
+            answered_at=answered_at,
             display_name=display_name,
             identities=identities,
+            is_anonymous=is_anonymous,
         )
 
         contact_response.additional_properties = d

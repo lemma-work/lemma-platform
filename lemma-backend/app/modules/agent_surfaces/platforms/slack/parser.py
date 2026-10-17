@@ -81,10 +81,13 @@ def _sharing(
     shared = bool(payload.get("is_ext_shared_channel"))
     home = payload_text(payload, "team_id").strip()
     theirs = (payload_text(event, "user_team") or payload_text(event, "team")).strip()
+    external = shared and bool(home and theirs and home != theirs)
     return {
         "is_ext_shared_channel": shared or None,
-        "sender_is_external": (shared and bool(home and theirs and home != theirs))
-        or None,
+        "sender_is_external": external or None,
+        # Their own workspace, which with their user id is the handle the pod
+        # knows them by as a contact.
+        "sender_team_id": theirs if external else None,
     }
 
 

@@ -60,7 +60,7 @@ async def adopt_earlier_dm_link(
     parsed: ParsedInboundSurfaceEvent,
     resolved_user: ResolvedSurfaceUser,
     route: ResolvedSurfaceRoute,
-    for_contact: UUID | None = None,
+    contact_id: UUID | None = None,
 ) -> AgentSurfaceConversationLink | None:
     """The link this person's private chat already has, under an older address.
 
@@ -113,7 +113,7 @@ async def adopt_earlier_dm_link(
         conversation is None
         or conversation.pod_id != route.pod_id
         or not same_agent(conversation.agent_id, route.agent_id, pod_id=route.pod_id)
-        or not await owned_or_moved(uow, conversation, user_id, contact_id=for_contact)
+        or not await owned_or_moved(uow, conversation, user_id, contact_id=contact_id)
     ):
         return None
     return await links.rebind_thread_address(

@@ -253,11 +253,16 @@ class RunToolAssembler:
         self, conversation: Conversation | None, audience: Audience
     ) -> list[AbstractToolset[ConversationContext]]:
         """What a run answering somebody outside the pod adds: a contact's own
-        rows and functions, and filling the form on a web visitor's page."""
+        rows and functions, and filling the form on a web visitor's page.
+
+        A contact's own rows only where they alone read the answer -- their
+        private chat, email thread or web page. In a group everybody in it
+        would read what the agent quoted from them.
+        """
         if not callable(self.uow_factory):
             return []
         toolsets: list[AbstractToolset[ConversationContext]] = []
-        if audience.is_contact:
+        if audience.is_contact and not _in_a_group(conversation):
             toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
         if audience.answers_outsiders and _on_a_web_page(conversation):
             toolsets.append(build_form_toolset(uow_factory=self.uow_factory))
@@ -303,6 +308,12 @@ def _add_view_image(
 
     if view_image_toolset not in toolsets:
         toolsets.append(view_image_toolset)
+
+
+def _in_a_group(conversation: Conversation | None) -> bool:
+    """Whether the conversation lives in a chat several people read."""
+    metadata = (conversation.metadata if conversation is not None else None) or {}
+    return metadata.get("conversation_kind") == "CHANNEL"
 
 
 def _on_a_web_page(conversation: Conversation | None) -> bool:

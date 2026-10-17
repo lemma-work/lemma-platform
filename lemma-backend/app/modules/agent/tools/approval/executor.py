@@ -16,14 +16,11 @@ decision from anyone else is refused before it is recorded
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.context import ApprovedExecution
-from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.outsiders import Audience, OutsiderRunRefused
-from app.modules.agent.services.outsider_audience import with_effective_audience
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
@@ -45,22 +42,10 @@ _NOTHING_RUNS_AS_THE_MEMBER = (
 )
 
 
-#: How the executor learns whether a conversation answers people outside the
-#: pod -- the link as well as the mark (``outsider_audience``). A seam, so a
-#: test can hand in a conversation as stored.
-EffectiveAudience = Callable[[object, Conversation], Awaitable[Conversation]]
-
-
 class ApprovalExecutor:
-    def __init__(
-        self,
-        uow_factory: UnitOfWorkFactory,
-        *,
-        effective_audience: EffectiveAudience = with_effective_audience,
-    ):
+    def __init__(self, uow_factory: UnitOfWorkFactory):
         self.uow_factory = uow_factory
         self.dispatcher = AgentToolDispatcher(uow_factory)
-        self.effective_audience = effective_audience
 
     async def execute_as_user(
         self,
@@ -83,8 +68,6 @@ class ApprovalExecutor:
                 deps.conversation_id,
                 include_runs=False,
             )
-            if conversation is not None:
-                conversation = await self.effective_audience(uow, conversation)
             agent = None
             if conversation is not None and conversation.agent_id is not None:
                 agent = await AgentRepository(uow).get(conversation.agent_id)

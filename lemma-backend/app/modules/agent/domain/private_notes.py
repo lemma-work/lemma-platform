@@ -30,6 +30,7 @@ import re
 from collections.abc import Mapping
 from typing import Literal
 
+from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.value_objects import JsonObject
 
@@ -99,9 +100,7 @@ def is_private_note(message_metadata: Mapping[str, object] | None) -> bool:
     return bool(message_metadata and message_metadata.get(PRIVATE_NOTE_KEY) is True)
 
 
-def written_in_lemma_into(
-    conversation_metadata: Mapping[str, object] | None,
-) -> WrittenIn | None:
+def written_in_lemma_into(conversation: Conversation) -> WrittenIn | None:
     """What a message typed in Lemma into this conversation is to be marked as.
 
     Any conversation answering people outside the pod is the keeper's thread,
@@ -111,8 +110,8 @@ def written_in_lemma_into(
     direct chat the person typing in Lemma is the person the bot is talking
     to, and a plain Lemma conversation has no chat to have missed the message.
     """
-    metadata = conversation_metadata or {}
-    if Audience.from_conversation_metadata(metadata).answers_outsiders:
+    metadata = conversation.metadata or {}
+    if Audience.of(conversation).answers_outsiders:
         return IN_OUTSIDERS_THREAD
     if metadata.get("surface_platform") and metadata.get("conversation_kind") == (
         "CHANNEL"
@@ -121,20 +120,16 @@ def written_in_lemma_into(
     return None
 
 
-def note_in_member_dm(
-    conversation_metadata: Mapping[str, object] | None,
-) -> bool:
+def note_in_member_dm(conversation: Conversation) -> bool:
     """Whether a note typed into this conversation is one in a member's own DM.
 
     The only conversation whose note is labelled as written "by the person in
     this chat". A contact's chat is a DM on the platform too, but the person
     in it is the contact: a note there is the keeper's, and is labelled so.
     """
-    metadata = conversation_metadata or {}
-    return (
-        metadata.get("conversation_kind") == "DM"
-        and not Audience.from_conversation_metadata(metadata).answers_outsiders
-    )
+    return (conversation.metadata or {}).get(
+        "conversation_kind"
+    ) == "DM" and not Audience.of(conversation).answers_outsiders
 
 
 def _written_in(metadata: Mapping[str, object] | None) -> WrittenIn | None:

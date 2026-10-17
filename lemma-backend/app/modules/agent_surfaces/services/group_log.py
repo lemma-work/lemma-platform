@@ -35,7 +35,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.groups import (
-    OUTSIDERS_LINK_USER,
+    is_contact_link_user,
     GroupLine,
     SurfaceGroup,
     answer_withheld_from,
@@ -82,15 +82,14 @@ def answered_in_group(
 ) -> Answered:
     """Who a delivery into a group answered, read off the thread it answered in.
 
-    The link is keyed by the person asking, and a conversation answering people
-    outside the pod shares one key for all of them -- so its last inbound event
-    is what names the particular stranger this answer was for. Any other
-    conversation in a group is one member's, run with their access: the group's
-    page shows what it said to that member alone.
+    The link is keyed by the person asking: a contact's link means the answer
+    was for them, from what the pod made Public, and its last inbound event
+    names them. Any other conversation in a group is one member's, run with
+    their access: the group's page shows what it said to that member alone.
     """
     last_event = link.last_event or {}
     name = last_event.get("sender_display_name")
-    from_public = link.external_user_id == OUTSIDERS_LINK_USER
+    from_public = is_contact_link_user(link.external_user_id)
     return Answered(
         name=name if isinstance(name, str) and name.strip() else None,
         from_public=from_public,

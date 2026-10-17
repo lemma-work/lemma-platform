@@ -155,21 +155,16 @@ class ConversationBinder:
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
         current_conversation_agent_id: UUID | None = None,
-        for_outsiders: bool = False,
-        for_contact: UUID | None = None,
+        contact_id: UUID | None = None,
     ) -> tuple[AgentSurfaceConversationLink, str | None]:
         """Return the link, plus the new conversation's title when one was created.
 
-        ``for_outsiders`` binds a group's people from outside the pod: the
-        caller passes the member who answers for them as the user and the shared
-        outsiders key as the external id, so the conversation is that member's
-        and one thread per group. A conversation that is no longer theirs --
-        somebody else took the group on -- is left behind for a fresh one.
-
-        ``for_contact`` binds one contact's private chat the same way: the
-        member who looks after the bot's contacts is the user, and a
-        conversation that is no longer theirs, or no longer that contact's, is
-        left behind.
+        ``contact_id`` binds one contact's conversation -- their private chat,
+        or their questions in a group: the caller passes the member who looks
+        after them as the user and the contact's link key as the external id,
+        so each contact has a conversation of their own. A conversation that is
+        no longer that contact's is left behind for a fresh one; one whose
+        keeper changed moves to the new keeper with its history.
 
         The title is how a caller learns a *fresh* conversation started on this
         turn — which is the only moment worth naming the thread on the platform.
@@ -209,14 +204,14 @@ class ConversationBinder:
                 parsed=parsed,
                 resolved_user=resolved_user,
                 route=route,
-                for_contact=for_contact,
+                contact_id=contact_id,
             )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
             if (
-                (for_outsiders or for_contact is not None)
-                and not await self._still_the_outsiders_thread(
-                    link, resolved_user.internal_user_id, contact_id=for_contact
+                contact_id is not None
+                and not await self._still_their_thread(
+                    link, resolved_user.internal_user_id, contact_id=contact_id
                 )
             ) or await self._starts_new_conversation(
                 surface=surface,
@@ -231,8 +226,7 @@ class ConversationBinder:
                     resolved_user=resolved_user,
                     external_user_id=external_user_id,
                     route=route,
-                    for_outsiders=for_outsiders,
-                    for_contact=for_contact,
+                    contact_id=contact_id,
                 )
                 updated = await self.conversation_link_repository.update_conversation(
                     link_id=link.id,
@@ -279,8 +273,7 @@ class ConversationBinder:
             user_id=resolved_user.internal_user_id,
             external_user_id=external_user_id,
             route=route,
-            for_outsiders=for_outsiders,
-            for_contact=for_contact,
+            contact_id=contact_id,
         )
         created_link = await self.conversation_link_repository.create(
             AgentSurfaceConversationLink(
@@ -322,31 +315,19 @@ class ConversationBinder:
             external_user_id=external_user_id,
         )
 
-    async def _still_the_outsiders_thread(
-        self,
-        link: AgentSurfaceConversationLink,
-        user_id: UUID,
-        *,
-        contact_id: UUID | None = None,
+    async def _still_their_thread(
+        self, link: AgentSurfaceConversationLink, user_id: UUID, *, contact_id: UUID
     ) -> bool:
-        """Whether the linked conversation is still ``user_id``'s strangers' thread.
+        """Whether the linked conversation is still this contact's, kept by ``user_id``.
 
-        Owned by the member who answers for the group, *and* still marked as
-        answering outsiders. A conversation that lost the mark is never handed a
-        stranger again: the run would read it, and a stranger's turn must never
-        be one that thinks it is the owner's. A contact's thread must also still
-        be that contact's: one person's history is never another's.
+        One person's history is never another's: a conversation that answers a
+        different contact, or nobody, is never handed this one's turn.
         """
         conversation = await agent_conversations.surface_conversation(
             self.uow, link.conversation_id
         )
-        return (
-            conversation is not None
-            and conversation.audience.answers_outsiders
-            and conversation.audience.contact_id == contact_id
-            and await owned_or_moved(
-                self.uow, conversation, user_id, contact_id=contact_id
-            )
+        return conversation is not None and await owned_or_moved(
+            self.uow, conversation, user_id, contact_id=contact_id
         )
 
     async def _starts_new_conversation(
@@ -439,8 +420,7 @@ class ConversationBinder:
         user_id: UUID,
         external_user_id: str | None,
         route: ResolvedSurfaceRoute,
-        for_outsiders: bool = False,
-        for_contact: UUID | None = None,
+        contact_id: UUID | None = None,
     ):
         surface_event_metadata = build_surface_event_metadata(
             surface.surface_type.value,
@@ -457,8 +437,7 @@ class ConversationBinder:
                 pod_id=route.pod_id,
                 agent_name=route.agent_name,
                 user_id=user_id,
-                for_outsiders=for_outsiders,
-                for_contact=for_contact,
+                contact_id=contact_id,
                 title=self._surface_conversation_title(
                     parsed,
                     fallback=f"{surface.surface_type.value} Conversation",

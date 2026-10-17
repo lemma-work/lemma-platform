@@ -85,7 +85,9 @@ def surface_platform_guidance(
     if facts.is_channel_capable:
         lines.append(_channel_context_section(facts))
 
-    if audience.is_contact:
+    # A contact asking in a group is read by the whole group, like any of its
+    # people from outside the pod; only in their own chat is it private.
+    if audience.is_contact and not in_group:
         lines.append(_CONTACT_SECTION)
     elif audience.answers_outsiders:
         lines.append(_OUTSIDER_SECTION)

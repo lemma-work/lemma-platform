@@ -41,6 +41,25 @@ test("a host id is never shown; a phone number is", () => {
     assert.equal(vouchedBy({ kind: "EMAIL", value: "x", strength: "CODE" }), "Confirmed with a code");
 });
 
+test("a website visitor nobody vouched for reads as one, never as a session id", () => {
+    const visitor = readContact({
+        id: "c2",
+        display_name: null,
+        created_at: "2026-10-02T10:00:00Z",
+        is_anonymous: true,
+        identities: [{ kind: "WEB", value: "5f0c1e2a-0000-4000-8000-000000000001", strength: "SESSION", verified_at: "2026-10-02T10:00:00Z" }],
+    } as unknown as ContactResponse);
+    assert.equal(visitor.anonymous, true);
+    assert.equal(contactName(visitor), "A visitor to your website");
+    assert.equal(contactSubline(visitor), "Not confirmed yet");
+    assert.equal(handleText(visitor.handles[0]), "Chat on your website");
+    assert.equal(vouchedBy(visitor.handles[0]), "Not confirmed yet");
+});
+
+test("someone from another company in a shared Slack channel says so", () => {
+    assert.equal(handleText({ kind: "SLACK", value: "T9:U7", strength: "CHANNEL" }), "Slack, from another company");
+});
+
 test("a widget reads as the app shows it, unknown answers as off", () => {
     const widget = readWidget({
         id: "w1", name: "Shop chat", agent_id: "a", kind: "chat", public_key: "pk_1", allowed_origins: [],

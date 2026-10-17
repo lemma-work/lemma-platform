@@ -52,6 +52,19 @@ class ContactResponse(BaseModel):
     display_name: str | None = None
     created_at: datetime
     identities: list[ContactIdentityResponse] = Field(default_factory=list)
+    is_anonymous: bool = Field(
+        default=False,
+        description=(
+            "Known only by the browser they wrote from: a web visitor nobody "
+            "has vouched for yet."
+        ),
+    )
+    answered_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When an agent first answered them; what the contact limit counts."
+        ),
+    )
 
 
 class ContactListResponse(BaseModel):
@@ -96,13 +109,18 @@ def _response(contact: Contact) -> ContactResponse:
             )
             for identity in contact.identities
         ],
+        is_anonymous=contact.is_anonymous,
+        answered_at=contact.answered_at,
     )
 
 
 async def _found(uow: UoWDep, *, pod_id: UUID, contact_id: UUID) -> Contact:
-    contact = await ContactRepository(uow.session).get(
-        pod_id=pod_id, contact_id=contact_id
-    )
+    """The contact, or the one it was merged into: a link kept from before a
+    merge still leads to the person."""
+    contacts = ContactRepository(uow.session)
+    contact = await contacts.get(pod_id=pod_id, contact_id=contact_id)
+    if contact is not None and contact.merged_into_id is not None:
+        contact = await contacts.get(pod_id=pod_id, contact_id=contact.merged_into_id)
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
     return contact
@@ -165,13 +183,16 @@ async def get_contact(pod_id: UUID, contact_id: UUID, uow: UoWDep) -> ContactRes
 async def update_contact(
     pod_id: UUID, contact_id: UUID, request: ContactUpdateRequest, uow: UoWDep
 ) -> ContactResponse:
+    # The person a merged contact's id now leads to is the one renamed: the
+    # absorbed row is never shown again.
+    contact = await _found(uow, pod_id=pod_id, contact_id=contact_id)
     repository = ContactRepository(uow.session)
     if not await repository.rename(
-        pod_id=pod_id, contact_id=contact_id, display_name=request.display_name
+        pod_id=pod_id, contact_id=contact.id, display_name=request.display_name
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact not found")
     await uow.commit()
-    return _response(await _found(uow, pod_id=pod_id, contact_id=contact_id))
+    return _response(await _found(uow, pod_id=pod_id, contact_id=contact.id))
 
 
 @router.get(

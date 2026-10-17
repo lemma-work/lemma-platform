@@ -278,7 +278,8 @@ it is asked, not skipped.
 
 A group chat holds people who are not in the pod: a vendor, a client, a
 colleague from another team. Members of the pod are answered there as
-themselves, exactly as in private. Everybody else is answered *for the pod*.
+themselves, exactly as in private. Everybody else is a contact of the pod, and
+is answered *for the pod*.
 
 - When a member of the pod who may configure the bot adds it to a group, the
   system shall make them the person who answers for that group's people from
@@ -286,14 +287,20 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
 - Where a group has somebody answering for it and has not been closed to
   outsiders, when somebody outside the pod addresses the bot there, the system
   shall answer them in the group.
+- The system shall make each of them a contact of the pod, known by the handle
+  the platform vouched for -- their Telegram account, their WhatsApp number,
+  their Slack account in the other company -- and shall make the same person
+  the same contact every time.
 - The system shall answer them from the conversation and from what the pod has
   marked Public, and from nothing else — not the pod's other data, not the
-  answering member's own access, files, memory or connected accounts.
+  answering member's own access, files, memory or connected accounts, and not
+  the rows the pod keeps about them, which the whole group would read.
 - The system shall show, on the group's page, the files and tables the pod has
   marked Public — including files shared with anyone with a Lemma account,
   which carry the same mark — read as the run answering an outsider reads them.
-- The system shall keep their questions in one conversation per group that
-  belongs to the member answering for it, and shall show who asked each one.
+- The system shall keep each person's questions in a conversation of their
+  own, looked after by the member answering for the group, so one person's
+  history never shapes the answer to another.
 - The system shall never take anything somebody outside the pod types as that
   member deciding something: no approval, no answer to a question the bot asked
   the member.
@@ -699,17 +706,17 @@ Public, the way a group's people from outside it are.
   the pod's existing contacts and nobody else.
 - Where the bot is set to answer nobody outside the pod, which is how a bot
   starts, the system shall answer only members, as before.
-- The system shall never take somebody writing to Lemma's shared bot for a
-  contact of any pod.
+- The system shall never take somebody writing privately to Lemma's shared bot
+  for a contact of any pod: they may be a person signing up for Lemma.
 - The system shall answer a contact in a conversation of their own, which
   belongs to the member who looks after the bot's contacts -- whoever turned
   contacts on, unless somebody else was named -- and shall pass on what it
   cannot answer to that member.
 - The system shall answer a contact's email to them alone, copying nobody else
   on the thread.
-- The system shall treat a contact who writes in a group as one of the group's
-  people from outside the pod, never as a contact: everyone in a group reads the
-  answer.
+- The system shall treat a contact who writes in a group as the same contact,
+  answered there as one of the group's people from outside the pod: everyone in
+  a group reads the answer, so nothing the pod keeps about them is used there.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.surface.update`,
 `contact.list`, `contact.get`
@@ -750,18 +757,31 @@ Public, the way a group's people from outside it are.
 `contact.export`
 
 ### PS-SURF-049 — A web widget answers visitors on the pod's behalf
-**Status:** planned
+**Status:** gap
 
 > Proven at module level by `agent_surfaces/tests/e2e/test_web_widgets_e2e.py`
 > and at unit level by `agent_surfaces/tests/unit/test_web_widgets.py`.
+>
+> **Gap:** a row sent from a page that never opened a chat is kept, but its
+> visitor does not become a contact. A message, and a row from a page with a
+> chat open, do make them one. See DEV-SURF-004.
 
 - The system shall let a pod's editors put its chat on a web page with a
   public key, or share it as a page Lemma hosts, and shall show its signing
   secret once, when it is made or rotated.
-- The system shall answer an anonymous visitor from what the pod made Public,
-  and shall answer a visitor named by a token the page's server signed with the
-  widget's secret, or who entered a code sent to their email, as a contact --
-  keeping a conversation they had already started.
+- The system shall make an anonymous visitor a contact of the pod the first
+  time they write something -- a message, a row -- and never for reading a
+  page: one known only by their browser, and answered from what the pod made
+  Public.
+- The system shall answer a visitor named by a token the page's server signed
+  with the widget's secret, or who entered a code sent to their email, as a
+  confirmed contact -- keeping the conversation they had already started, and
+  the contact they already were.
+- Where the email or the token names a contact the pod already had, the system
+  shall make the visitor that contact, with their earlier conversations, rather
+  than keep two contacts for one person.
+- The system shall keep a visitor's conversation until a member deletes it,
+  whether or not anybody ever vouched for them.
 - The system shall refuse a token signed with anything else, meant for another
   widget, or living longer than ten minutes, and shall stop accepting tokens
   signed with a secret once it is rotated.
@@ -809,8 +829,9 @@ Public, the way a group's people from outside it are.
   columns, and shall refuse to open a per-member table or to leave closed a
   column the table cannot do without.
 - The system shall let any page holding a widget's public key learn the open
-  columns and add one row, as the member who opened the table, and shall
-  ignore every column that is not open and read nothing back.
+  columns and add one row, under the grant of the member who opened the table
+  and named for the contact who wrote it, and shall ignore every column that is
+  not open and read nothing back.
 - The system shall ask a stranger to confirm their email before they add a row
   to a table open to contacts only, and shall name a confirmed sender on a
   contact-owned table itself, whatever the page sent.
@@ -834,6 +855,10 @@ Public, the way a group's people from outside it are.
 - The system shall let an organization's owners and editors set, read and clear
   a monthly cap on that cost, and shall stop answering contacts for the rest of
   the month once it is reached.
+- The system shall let an organization's owners set how many contacts its bots
+  may answer, counting the people an agent has answered rather than everybody
+  the pod has seen, and shall hand anybody past it to a member rather than
+  answer them.
 - The system shall let a pod's admins forget a contact, with every handle they
   are known by.
 

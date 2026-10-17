@@ -69,6 +69,17 @@ class UsageSettings(BaseSettings):
             "is not overridden by this."
         ),
     )
+    usage_contacts_max_default: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "How many contacts an organization's bots may answer, until an "
+            "owner sets a number of their own. Counts people an agent has "
+            "answered, not everybody the pod has seen -- a crowded group "
+            "where nobody spoke to the bot costs nothing. None means no "
+            "default ceiling; the spend cap above still applies."
+        ),
+    )
     usage_unpriced_limit_policy: Literal["allow", "refuse"] = Field(
         default="allow",
         description=(

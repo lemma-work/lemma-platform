@@ -29,7 +29,6 @@ nothing, rather than counting as the contact writing again (which opts back in).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.config import settings
@@ -41,7 +40,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfaceCredentialMode,
-    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.groups import contact_link_user
 from app.modules.agent_surfaces.domain.ingress_context import (
@@ -58,9 +56,6 @@ from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
 from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
     NotificationRepository,
 )
-from app.modules.agent_surfaces.platforms.email_authentication import (
-    EmailAuthenticationVerdict,
-)
 from app.modules.agent.contracts.audience import Audience
 from app.modules.agent_surfaces.services.chat_context_builder import build_chat_context
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
@@ -70,16 +65,18 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
     to_sender_alone,
 )
 from app.modules.agent_surfaces.services.outsider_limits import ContactTurnLimiter
+from app.modules.agent_surfaces.services.sender_handles import (
+    SenderHandle,
+    private_handle,
+)
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
 from app.modules.contacts.contracts import (
     ContactRef,
-    IdentityKind,
     IdentityStrength,
     find_contact,
     is_stop_request,
-    normalize_handle,
     note_inbound,
     open_contact,
     unsubscribe_by_handle,
@@ -92,57 +89,6 @@ _PARKED_BODY_CHARS = 500
 
 #: What the contact path does with a message, when it starts no run.
 ContactOutcome = SurfaceChatContext | SurfaceReplyContext | None
-
-
-@dataclass(frozen=True, slots=True)
-class SenderHandle:
-    """A sender's handle, normalised, and whether anything vouched for it."""
-
-    kind: IdentityKind
-    value: str
-    vouched_for: bool
-
-
-def contact_handle(parsed: ParsedInboundSurfaceEvent) -> SenderHandle | None:
-    """The handle this private message names its sender by, if it has one.
-
-    Slack and Teams are not here: a person writing to a workspace bot is in
-    that workspace, which is the pod's own people, not its customers. A handle
-    with nothing left once normalised -- a "number" of punctuation -- names
-    nobody, and is dropped rather than opened as a contact.
-    """
-    found = _raw_handle(parsed)
-    if found is None:
-        return None
-    kind, raw, vouched = found
-    value = normalize_handle(kind, raw)
-    if not value:
-        logger.info(
-            "agent_surfaces.contacts.handle_unusable.observed",
-            platform=parsed.platform.value,
-            kind=kind.value,
-        )
-        return None
-    return SenderHandle(kind, value, vouched)
-
-
-def _raw_handle(
-    parsed: ParsedInboundSurfaceEvent,
-) -> tuple[IdentityKind, str, bool] | None:
-    platform = parsed.platform
-    if platform is SurfacePlatform.WHATSAPP:
-        value = parsed.sender_phone or parsed.sender_external_user_id
-        return (IdentityKind.PHONE, value, True) if value else None
-    if platform is SurfacePlatform.TELEGRAM:
-        value = parsed.sender_external_user_id
-        return (IdentityKind.TELEGRAM, value, True) if value else None
-    if platform.is_email:
-        value = parsed.sender_email or parsed.sender_external_user_id
-        if not value:
-            return None
-        vouched = parsed.sender_authentication == EmailAuthenticationVerdict.PASS
-        return IdentityKind.EMAIL, value, vouched
-    return None
 
 
 def is_pods_own_bot(surface: AgentSurfaceEntity) -> bool:
@@ -293,7 +239,7 @@ class ContactDoor:
             not parsed.is_dm
             or policy.answer is ContactAnswer.OFF
             or not is_pods_own_bot(surface)
-            or contact_handle(parsed) is None
+            or private_handle(parsed) is None
         ):
             return False
         if sender.internal_user_id is None:
@@ -316,7 +262,7 @@ class ContactDoor:
         reached. Each is either somebody we cannot be sure is there, something
         that must not be answered, or somebody we already decided not to.
         """
-        handle = contact_handle(parsed)
+        handle = private_handle(parsed)
         owner = surface.config.contacts.looked_after_by
         if (
             handle is None
@@ -383,7 +329,7 @@ class ContactDoor:
                 display_name=contact.display_name or sender.display_name,
             ),
             route=route,
-            for_contact=contact.id,
+            contact_id=contact.id,
         )
         return build_chat_context(
             surface=surface,

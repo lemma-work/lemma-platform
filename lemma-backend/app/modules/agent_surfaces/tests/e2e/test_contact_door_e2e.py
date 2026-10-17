@@ -11,8 +11,9 @@ fail open if they are wrong:
 * unauthenticated email is never answered but parked, a few notes an hour;
 * mail a machine sent is neither answered nor parked;
 * "STOP" unsubscribes, and is not the contact opting back in;
-* where the turn runs -- the contact's own conversation, owned by the member
-  who looks after contacts, marked so the run authorizes as nobody.
+* where the turn runs -- the contact's own conversation, looked after by the
+  member who looks after contacts, naming the contact so the run authorizes
+  as them.
 """
 
 from __future__ import annotations
@@ -268,7 +269,7 @@ async def test_a_known_contact_is_answered_by_a_bot_for_known_contacts(pod):
     context = await pod.prepare(pod.surface(answer="known"), _event(), binder=binder)
 
     assert context is not None
-    assert binder.seen["for_contact"] == known.id
+    assert binder.seen["contact_id"] == known.id
 
 
 async def test_past_the_days_new_contacts_a_stranger_is_not_met(pod):
@@ -412,12 +413,12 @@ async def test_a_sentence_with_stop_in_it_is_a_question_not_an_unsubscribe(pod):
 # ------------------------------------------------------------ where it runs
 
 
-async def test_a_contacts_turn_runs_in_their_own_conversation_as_nobody(pod):
+async def test_a_contacts_turn_runs_in_their_own_conversation_as_them(pod):
     binder = _Binder()
 
     context = await pod.prepare(pod.surface(), _event(), binder=binder)
 
-    contact_id = binder.seen["for_contact"]
+    contact_id = binder.seen["contact_id"]
     assert binder.seen["resolved_user"].internal_user_id == pod.owner
     assert binder.seen["resolved_user"].external_user_id == contact_link_user(
         contact_id

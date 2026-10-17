@@ -103,6 +103,13 @@ class ConversationModel(UUIDAuditBase):
         index=True,
         nullable=False,
     )
+    #: The contact this conversation answers, when it answers one. Forgetting
+    #: the contact deletes what was said with them.
+    contact_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("contacts.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
     organization_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"),
         index=True,
@@ -205,6 +212,7 @@ class ConversationModel(UUIDAuditBase):
             "updated_at": conversation.updated_at,
             "user_id": conversation.user_id,
             "pod_id": conversation.pod_id,
+            "contact_id": conversation.contact_id,
             "organization_id": conversation.organization_id,
             "agent_id": conversation.agent_id,
             "title": conversation.title,
@@ -234,6 +242,7 @@ class ConversationModel(UUIDAuditBase):
             updated_at=self.updated_at,
             user_id=self.user_id,
             pod_id=self.pod_id,
+            contact_id=self.contact_id,
             organization_id=self.organization_id,
             agent_id=self.agent_id,
             title=self.title,

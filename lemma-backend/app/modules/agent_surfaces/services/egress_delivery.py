@@ -42,7 +42,7 @@ from app.modules.agent_surfaces.domain.envelope import (
     SurfaceEnvelope,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
-from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER
+from app.modules.agent_surfaces.domain.groups import is_contact_link_user
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
@@ -268,7 +268,7 @@ class SurfaceDelivery:
         platform identity at all, so there is nothing to look up for it.
         """
         external_user_id = target.link.external_user_id
-        if not external_user_id or external_user_id == OUTSIDERS_LINK_USER:
+        if not external_user_id or is_contact_link_user(external_user_id):
             return None
         candidates = await self.conversation_link_repository.latest_dm_links_for_person(
             platform=target.surface.surface_type.value,

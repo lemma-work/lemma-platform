@@ -160,10 +160,19 @@ class Message(CreatedEntity):
 
 
 class Conversation(Entity):
-    """Primary storage aggregate for pod assistant and pod agent chats."""
+    """Primary storage aggregate for pod assistant and pod agent chats.
+
+    A conversation is one agent working for one principal. That is the member
+    ``user_id`` names -- unless ``contact_id`` is set, when it works for that
+    contact, and ``user_id`` is the member who looks after the conversation:
+    whom it may pass a question to, never whose access it has.
+    """
 
     user_id: UUID
     pod_id: UUID
+    #: The contact this conversation answers. Written by the server when it
+    #: opens the conversation, and by a merge; never by anything a client sends.
+    contact_id: UUID | None = None
     organization_id: UUID | None = None
     agent_id: UUID | None = None
     title: str | None = None

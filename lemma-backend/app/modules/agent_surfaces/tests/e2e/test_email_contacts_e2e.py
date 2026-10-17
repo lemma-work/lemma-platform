@@ -23,7 +23,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, CONTACT, CONTACT_KEY
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
@@ -152,9 +151,8 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
             )
         )
     ).scalar_one()
-    metadata = conversation.conversation_metadata or {}
     assert conversation.user_id == owner
-    assert metadata.get(AUDIENCE_KEY) == CONTACT
+    assert conversation.contact_id == context.audience.contact_id
 
     # The sender is now one of the pod's contacts, by the address that was
     # vouched for.
@@ -167,7 +165,7 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
         )
     ).scalar_one()
     contact_id = str(identity.contact_id)
-    assert contact_id == metadata.get(CONTACT_KEY)
+    assert identity.contact_id == conversation.contact_id
     assert identity.strength == "CHANNEL"
 
     listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
@@ -394,6 +392,192 @@ async def test_an_organization_owner_sets_and_clears_the_contacts_cap(
         json={"monthly_limit_usd": -1},
     )
     assert refused.status_code == 422
+
+
+async def test_each_half_of_the_contacts_cap_is_kept_when_the_other_changes(
+    authenticated_client: AsyncClient, fixed_test_org, monkeypatch
+):
+    """An owner setting only a count keeps the spend cap they had; one who set
+    only a spend still gets the deployment's count until they choose one."""
+    from app.modules.usage.config import usage_settings
+
+    monkeypatch.setattr(usage_settings, "usage_contacts_max_default", 200)
+    org_id = fixed_test_org["id"]
+    cap = f"/usage/organizations/{org_id}/contacts-cap"
+
+    spend_only = await authenticated_client.put(cap, json={"monthly_limit_usd": 25})
+    assert spend_only.status_code == 200, spend_only.text
+    assert spend_only.json()["max_contacts"] == 200
+
+    count_too = await authenticated_client.put(cap, json={"max_contacts": 10})
+    assert count_too.status_code == 200, count_too.text
+    assert count_too.json()["monthly_limit_usd"] == 25
+    assert count_too.json()["max_contacts"] == 10
+
+    no_count = await authenticated_client.put(cap, json={"max_contacts": None})
+    assert no_count.status_code == 200, no_count.text
+    assert no_count.json()["max_contacts"] is None
+    assert no_count.json()["monthly_limit_usd"] == 25
+
+
+async def test_two_new_contacts_at_once_cannot_both_take_the_last_place(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """Admission counts and marks under one lock on the organization: the
+    second waits, counts the first, and is held for a person."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    limited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": 1}
+    )
+    assert limited.status_code == 200, limited.text
+
+    async def a_new_contacts_conversation(email: str) -> UUID:
+        async with get_uow_factory()() as uow:
+            contact = await open_contact(
+                uow,
+                pod_id=pod_id,
+                kind=IdentityKind.EMAIL,
+                value=email,
+                strength=IdentityStrength.CHANNEL,
+                display_name=None,
+            )
+            conversation = ConversationModel(
+                user_id=UUID(fixed_test_user["id"]),
+                pod_id=pod_id,
+                contact_id=contact.id,
+            )
+            uow.session.add(conversation)
+            await uow.commit()
+            return conversation.id
+
+    conversations = [
+        await a_new_contacts_conversation(f"racer-{n}@client.example") for n in range(2)
+    ]
+
+    async def admit(conversation_id: UUID) -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation_id
+            )
+            await uow.commit()
+            return held
+
+    held = await asyncio.gather(*(admit(c) for c in conversations))
+
+    assert sorted(held) == [False, True], held
+
+
+async def test_with_no_count_kept_new_contacts_are_marked_without_waiting(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """No number of contacts to keep: nothing to queue behind, and each is
+    still marked answered, so a count set later starts from the truth."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        contact_by_id,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    unlimited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": None}
+    )
+    assert unlimited.status_code == 200, unlimited.text
+    contacts, conversations = [], []
+    for n in range(2):
+        async with get_uow_factory()() as uow:
+            contact = await open_contact(
+                uow,
+                pod_id=pod_id,
+                kind=IdentityKind.EMAIL,
+                value=f"open-{n}@client.example",
+                strength=IdentityStrength.CHANNEL,
+                display_name=None,
+            )
+            conversation = ConversationModel(
+                user_id=UUID(fixed_test_user["id"]),
+                pod_id=pod_id,
+                contact_id=contact.id,
+            )
+            uow.session.add(conversation)
+            await uow.commit()
+            contacts.append(contact.id)
+            conversations.append(conversation.id)
+
+    async def admit(conversation_id: UUID) -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation_id
+            )
+            await uow.commit()
+            return held
+
+    assert await asyncio.gather(*(admit(c) for c in conversations)) == [False, False]
+    async with get_uow_factory()() as uow:
+        for contact_id in contacts:
+            found = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
+            assert found is not None and found.answered
+
+
+async def test_two_turns_of_one_new_contact_at_once_both_run(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """The second turn waits on the count, then finds its contact already took
+    the place -- and runs, rather than being held as one too many."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    limited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": 1}
+    )
+    assert limited.status_code == 200, limited.text
+    async with get_uow_factory()() as uow:
+        contact = await open_contact(
+            uow,
+            pod_id=pod_id,
+            kind=IdentityKind.EMAIL,
+            value="twice@client.example",
+            strength=IdentityStrength.CHANNEL,
+            display_name=None,
+        )
+        conversation = ConversationModel(
+            user_id=UUID(fixed_test_user["id"]), pod_id=pod_id, contact_id=contact.id
+        )
+        uow.session.add(conversation)
+        await uow.commit()
+
+    async def admit() -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation.id
+            )
+            await uow.commit()
+            return held
+
+    assert await asyncio.gather(admit(), admit()) == [False, False]
 
 
 async def _orders_for(

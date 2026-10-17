@@ -8,6 +8,12 @@ their conversations, their handles, the web chat sessions that named them, the
 platform profiles stored for their handles -- so the contact is never half
 forgotten there. The questions of theirs a bot passed on to a member are blanked
 in that same transaction, before the conversations they point at are deleted.
+
+A contact others were merged into is forgotten with them. Their rows and
+conversations move to it in queued work after the merge, so a forget that comes
+first finds them still under the merged ids -- and deleting the contact cascades
+to those ids, which would leave the rows naming nobody, out of any later
+forget's reach.
 """
 
 from __future__ import annotations
@@ -30,7 +36,10 @@ from app.modules.contacts.contracts.visitor_sessions import (
     forget_contact_visitor_sessions,
     forget_session_liveness,
 )
-from app.modules.contacts.infrastructure.repository import ContactRepository
+from app.modules.contacts.infrastructure.repository import (
+    ABSORBED_PAGE,
+    ContactRepository,
+)
 from app.modules.datastore.contracts.contact_rows import delete_contact_rows
 
 logger = get_logger(__name__)
@@ -53,6 +62,25 @@ async def _redact_their_questions(
         if len(page) < _REDACT_PAGE:
             return redacted
         after = page[-1]
+
+
+async def _absorbed_by(
+    uow_factory: UnitOfWorkFactory, pod_id: UUID, contact_id: UUID
+) -> list[UUID]:
+    """Every contact merged into this one, a page at a time: each must be
+    forgotten before the cascade takes its row."""
+    absorbed: list[UUID] = []
+    async with uow_factory() as uow:
+        contacts = ContactRepository(uow.session)
+        while True:
+            page = await contacts.absorbed_by(
+                pod_id=pod_id,
+                contact_id=contact_id,
+                after=absorbed[-1] if absorbed else None,
+            )
+            absorbed += page
+            if len(page) < ABSORBED_PAGE:
+                return absorbed
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,13 +106,19 @@ async def forget_contact(
         )
     if contact is None:
         return None
-    rows = await delete_contact_rows(uow_factory, pod_id=pod_id, contact_id=contact_id)
+    everyone = [contact_id, *await _absorbed_by(uow_factory, pod_id, contact_id)]
+    rows = 0
+    for one in everyone:
+        rows += await delete_contact_rows(uow_factory, pod_id=pod_id, contact_id=one)
     async with uow_factory() as uow:
-        notifications = await _redact_their_questions(uow, pod_id, contact_id)
-        conversations = await forget_contact_conversations(
-            uow, pod_id=pod_id, contact_id=contact_id
-        )
-        ended = await forget_contact_visitor_sessions(uow, contact_id=contact_id)
+        notifications = conversations = 0
+        ended: list[UUID] = []
+        for one in everyone:
+            notifications += await _redact_their_questions(uow, pod_id, one)
+            conversations += await forget_contact_conversations(
+                uow, pod_id=pod_id, contact_id=one
+            )
+            ended += await forget_contact_visitor_sessions(uow, contact_id=one)
         senders = await forget_contact_senders(
             uow,
             pod_id=pod_id,

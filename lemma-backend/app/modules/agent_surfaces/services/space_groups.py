@@ -31,7 +31,6 @@ from pydantic import BaseModel
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.groups import (
-    OUTSIDERS_LINK_USER,
     GroupLine,
     SurfaceGroup,
     answer_withheld_from,
@@ -266,7 +265,7 @@ class SpaceGroups:
         ).conversation_ids_in_channel(
             surface_id=group.surface_id,
             external_channel_id=group.external_channel_id,
-            external_user_id=OUTSIDERS_LINK_USER,
+            contacts_only=True,
         )
         asks = await NotificationRepository(self.uow).list_open_asks_from(
             recipient_user_id=viewer_id, origin_conversation_ids=conversations

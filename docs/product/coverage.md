@@ -12,9 +12,9 @@ only a promise marked `covered` with no test is.
 | Status | Scenarios |
 | --- | ---: |
 | `covered` | 175 |
-| `gap` | 3 |
+| `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 23 |
+| `planned` | 22 |
 | `withdrawn` | 0 |
 | **total** | **225** |
 
@@ -308,7 +308,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-045` A stranger writing to the pod's own bot is answered as a contact | `planned` | — |
 | `PS-SURF-046` Email nobody vouched for is never answered | `planned` | — |
 | `PS-SURF-048` A contact sees what is theirs, and only that | `planned` | — |
-| `PS-SURF-049` A web widget answers visitors on the pod's behalf | `planned` | — |
+| `PS-SURF-049` A web widget answers visitors on the pod's behalf | `gap` | — |
 | `PS-SURF-050` A member writes first to a contact only where the contact wants it | `planned` | — |
 | `PS-SURF-051` People outside the pod add rows to a table it opened to them | `planned` | — |
 | `PS-SURF-047` Contacts cost the organization, never a member | `planned` | — |

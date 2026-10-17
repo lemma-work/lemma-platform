@@ -130,9 +130,6 @@ async def test_approval_executor_returns_error_on_tool_failure(monkeypatch):
         async def get_conversation(self, _cid, include_runs=False):
             return SimpleNamespace(agent_id=None, metadata={})
 
-    async def as_stored(_uow, conversation):
-        return conversation
-
     monkeypatch.setattr(
         "app.modules.agent.tools.approval.executor.ConversationRepository",
         _FakeConvRepo,
@@ -143,7 +140,7 @@ async def test_approval_executor_returns_error_on_tool_failure(monkeypatch):
 
     monkeypatch.setattr(AgentToolDispatcher, "call_tool", raising_call_tool)
 
-    executor = ApprovalExecutor(lambda: _FakeUoW(), effective_audience=as_stored)
+    executor = ApprovalExecutor(lambda: _FakeUoW())
     deps = _ctx(conversation_id, pod_id, user_id)
     result = await executor.execute_as_user(
         deps=deps, tool_name="exec_command", args={"cmd": "ls"}
@@ -178,7 +175,7 @@ async def test_approval_executor_runs_nothing_for_a_strangers_run():
         raise AssertionError("nothing should be read for a stranger's run")
 
     deps = _ctx(uuid4(), uuid4(), uuid4()).model_copy(
-        update={"audience": Audience.outsiders()}
+        update={"audience": Audience.contact(uuid4())}
     )
     with pytest.raises(OutsiderRunRefused):
         await ApprovalExecutor(no_database).execute_as_user(

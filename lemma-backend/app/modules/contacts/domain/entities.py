@@ -32,6 +32,14 @@ class IdentityKind(StrEnum):
     #: widget, so the same customer reached through another of the pod's
     #: widgets -- or a widget made again -- is still the same contact.
     HOST = "HOST"
+    #: Somebody from another company in a Slack channel shared with it:
+    #: ``{their team id}:{their user id}``, as Slack names them in a signed event.
+    SLACK = "SLACK"
+    #: Somebody from another tenant in a Teams chat: ``{tenant id}:{aad id}``.
+    TEAMS = "TEAMS"
+    #: A browser, by the web chat session it holds: the session's id. Proves
+    #: only that the same browser came back -- see ``IdentityStrength.SESSION``.
+    WEB = "WEB"
 
 
 class IdentityStrength(StrEnum):
@@ -51,6 +59,17 @@ class IdentityStrength(StrEnum):
     HOST = "HOST"
     #: The person entered a one-time code sent to the handle.
     CODE = "CODE"
+    #: A browser holds the web chat session's secret. Says the same browser came
+    #: back and nothing about who uses it, so it never proves another handle.
+    SESSION = "SESSION"
+
+
+#: The strengths that prove a person holds a handle, and so may join it to the
+#: contact they already are -- or merge two contacts into one. A member typing
+#: a handle in, or a browser holding a session, proves nothing of the kind.
+PROVING_STRENGTHS = frozenset(
+    {IdentityStrength.CHANNEL, IdentityStrength.HOST, IdentityStrength.CODE}
+)
 
 
 _NOT_DIGITS = re.compile(r"\D")
@@ -110,6 +129,17 @@ class ContactHandle(BaseModel):
 
 
 class Contact(BaseModel):
+    """Somebody the pod talks to who is not a member.
+
+    *Anonymous* while the only thing known about them is a browser
+    (``IdentityKind.WEB``); every other handle was vouched for by something.
+    Derived from the handles rather than stored, so it cannot disagree with them.
+
+    ``merged_into_id`` is set once this contact turned out to be another, older
+    one: the row stays, holding nothing, so anything that still names it can be
+    led to the contact it became.
+    """
+
     model_config = ConfigDict(frozen=True)
 
     id: UUID
@@ -117,3 +147,9 @@ class Contact(BaseModel):
     display_name: str | None
     created_at: datetime
     identities: tuple[ContactHandle, ...] = ()
+    merged_into_id: UUID | None = None
+    answered_at: datetime | None = None
+
+    @property
+    def is_anonymous(self) -> bool:
+        return all(handle.kind is IdentityKind.WEB for handle in self.identities)

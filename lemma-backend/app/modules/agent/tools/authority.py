@@ -2,12 +2,12 @@
 
 There are exactly three:
 
-* **Nobody's**, on a run answering somebody outside the pod (see
-  ``domain/outsiders``). The context is anonymous and pinned to the pod: Public
-  reads, and nothing else. It comes first and nothing overrides it, not even an
-  approval -- such a run never pauses to ask one, and ``user_id`` on it is the
-  member who looks after the conversation, whose authority the stranger must
-  never reach through it.
+* **The contact's**, on a run answering somebody outside the pod (see
+  ``domain/outsiders``). The context names the contact and is pinned to the
+  pod: Public reads and the contact's own rows, nothing else. It comes first
+  and nothing overrides it, not even an approval -- such a run never pauses to
+  ask one, and ``user_id`` on it is the member who looks after the
+  conversation, whose authority the contact must never reach through it.
 * **The agent's own.** A delegated workload context: the agent's resource
   grants, intersected with what the person it works for may do. Anything
   beyond that -- a missing grant, a destructive action, an auth-required step
@@ -57,17 +57,13 @@ async def tool_authorization_context(
             organization_id=deps.org_id,
             asking_pod_id=audience.asking_pod_id,
         )
-    if audience.answers_outsiders:
-        # A contact is named in the audit trail and narrows contact-owned
-        # tables to their rows; a group's outsiders are one conversation.
+    if audience.contact_id is not None:
+        # Named in the audit trail, and narrows contact-owned tables to their rows.
         return build_outsider_context(
             session=uow.session,
             pod_id=deps.pod_id,
             organization_id=deps.org_id,
             contact_id=audience.contact_id,
-            actor_id=(
-                None if audience.is_contact else f"outsider:{deps.conversation_id}"
-            ),
         )
     authorization = create_authorization_data_service(uow)
     approved = deps.approved_execution

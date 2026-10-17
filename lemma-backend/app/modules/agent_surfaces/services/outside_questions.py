@@ -8,10 +8,11 @@ member's access, reads them -- and the answer travels back the other way.
 
 So both directions are framed here, by the server rather than by either run:
 
-* **Where it came from** is read off the asking conversation's routing link
-  (the ``~outsiders`` key only routing writes) and the group it belongs to --
-  never off anything the stranger's run said. It names the group, so a member
-  who looks after several is never left guessing which one a question is from.
+* **Where it came from** is read off the asking conversation -- whether it is a
+  contact's, which only the server writes -- and its routing link and the group
+  that link is in, never off anything the contact's run said. It names the
+  group, so a member who looks after several is never left guessing which one a
+  question is from.
 * **What the stranger said** is shown quoted, every line, under words that say
   it is theirs. A quoted line cannot start a heading or a list item of its own,
   so it cannot pose as anything the member or Lemma wrote.
@@ -27,13 +28,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
 from app.modules.agent_surfaces.domain.notification import NotificationEntity
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
     SurfaceConversationLinkRepository,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.outside_links import (
-    links_to_people_outside,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
     SurfaceGroupRepository,
@@ -63,22 +63,22 @@ OutsideOriginReader = Callable[[UUID | None], Awaitable["OutsideOrigin | None"]]
 async def outside_origin(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID | None
 ) -> OutsideOrigin | None:
-    """The group a conversation answers strangers in, or None if it answers members.
+    """Where a contact's conversation asked a question, or None if it answers a member.
 
-    Read off the routing link, which only routing writes: whatever the asking
-    run put in its message, a notification it sends is from outside the pod
-    exactly when its conversation is the strangers' thread.
+    Whatever the asking run put in its message, a notification it sends is
+    from outside the pod exactly when its conversation is a contact's.
     """
     if conversation_id is None:
         return None
-    if not await links_to_people_outside(uow.session, conversation_id):
+    conversation = await agent_conversations.surface_conversation(uow, conversation_id)
+    if conversation is None or conversation.audience.contact_id is None:
         return None
     links = SurfaceConversationLinkRepository(uow)
     link = await links.get_by_conversation_id(conversation_id)
-    if link is None or link.external_user_id != OUTSIDERS_LINK_USER:
-        # Not a group's strangers' thread, so a private one: a contact's chat
-        # (``~contact:`` link) or a web visitor's (no link at all). Said so,
-        # rather than "in a group" the member would look for and not find.
+    if link is None or link.conversation_kind != "CHANNEL":
+        # A private conversation: a contact's chat or email thread, or a web
+        # visitor's (no link at all). Said so, rather than "in a group" the
+        # member would look for and not find.
         asked_by = (link.last_event or {}).get("sender_display_name") if link else None
         return OutsideOrigin(
             group_title=None,

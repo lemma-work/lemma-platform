@@ -208,8 +208,7 @@ async def open_surface_conversation(
     title: str | None,
     metadata: dict[str, object] | None = None,
     require_execute_grant: bool = True,
-    for_outsiders: bool = False,
-    for_contact: UUID | None = None,
+    contact_id: UUID | None = None,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
@@ -218,23 +217,14 @@ async def open_surface_conversation(
     permission to run the agent that is writing to them. Every inbound path
     leaves it on.
 
-    ``for_outsiders`` opens the conversation a group's people from outside the
-    pod talk in. ``user_id`` is then the member who looks after that group, and
-    every run in it authorizes as nobody (see ``domain/outsiders``). Marked here,
-    by this module, so the key that decides it is written in one place.
+    ``contact_id`` opens a contact's conversation -- in a private chat, a group
+    or a web page. ``user_id`` is then the member who looks after it, and every
+    run in it authorizes as that contact (see ``domain/outsiders``).
 
     The caller sets the authorization context, because it is the caller that
     knows whose it is -- an inbound message runs as the sender, a notification
     as nobody in particular.
-
-    ``for_contact`` opens a contact's private chat: the same rules, for one
-    person the pod knows, named on the conversation so the run can address
-    them.
     """
-    if for_contact is not None:
-        metadata = {**(metadata or {}), **Audience.contact(for_contact).to_metadata()}
-    elif for_outsiders:
-        metadata = {**(metadata or {}), **Audience.outsiders().to_metadata()}
     conversation = await _service(uow).create_conversation(
         pod_id=pod_id,
         agent_name=agent_name,
@@ -242,6 +232,7 @@ async def open_surface_conversation(
         title=title,
         metadata=metadata,
         require_execute_grant=require_execute_grant,
+        contact_id=contact_id,
     )
     return _conversation(conversation)
 

@@ -277,12 +277,16 @@ async def add_visitor_row(
     table_name: str,
     answers: dict[str, object],
     contact_id: UUID | None,
+    vouched: bool,
     actor: str | None = None,
 ) -> None:
-    """Add one row from outside, as the member who opened the table.
+    """Add one row from outside, for the contact writing it.
 
-    ``actor`` names the outsider for the row's insert event --
-    ``visitor:{session}`` or ``contact:{id}``; a contact is named by default.
+    Written under the grant of the member who opened the table, so a member
+    who can no longer write it stops its rows; named, on a contact-owned
+    table and in the row's insert event, for the contact who wrote it.
+    ``vouched`` says whether anything proved who that contact is -- a table
+    open to contacts only takes rows from no one else.
 
     Raises :class:`PublicRowRefused` for answers that do not fit -- before
     anything is written -- and for any row the database refuses, in one
@@ -296,7 +300,7 @@ async def add_visitor_row(
         opened = _visitor_view(pod_id, *found) if found else None
         if found is None or opened is None:
             raise PublicRowsClosed(table_name)
-        if opened.audience is PublicAudience.CONTACTS and contact_id is None:
+        if opened.audience is PublicAudience.CONTACTS and not vouched:
             raise PublicRowsClosed(table_name)
         row = public_values(opened.columns, answers)
         if opened.contact_owned and contact_id is not None:

@@ -174,7 +174,7 @@ async def _open_contacts_thread(
         agent_name=await agent_name_for_surface(uow, surface),
         user_id=mailbox.looked_after_by,
         title=title,
-        for_contact=contact_id,
+        contact_id=contact_id,
         metadata={
             "source": "contact_follow_up",
             "surface_id": str(surface.id),

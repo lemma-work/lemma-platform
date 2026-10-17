@@ -7,11 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.outsiders import (
-    HANDED_TO_KEY,
-    handed_to,
-    with_audience_kept,
-)
+from app.modules.agent.domain.outsiders import HANDED_TO_KEY, handed_to
+from app.modules.agent.domain.server_metadata import with_server_keys_kept
 
 pytestmark = pytest.mark.unit
 
@@ -46,11 +43,9 @@ def test_anything_else_is_nobody(metadata):
 
 
 def test_a_member_hands_it_back_by_dropping_the_key():
-    """Not a protected key: replacing the metadata without it hands back."""
-    existing = {"audience": "contact", **_metadata(uuid4(), NOW + timedelta(days=1))}
+    """Not a server key: replacing the metadata without it hands back."""
+    existing = {"title_hint": "old", **_metadata(uuid4(), NOW + timedelta(days=1))}
 
-    kept = with_audience_kept(existing, {"title_hint": "x"})
+    kept = with_server_keys_kept(existing, {"title_hint": "x"})
 
-    assert kept is not None
-    assert HANDED_TO_KEY not in kept
-    assert kept["audience"] == "contact"
+    assert kept == {"title_hint": "x"}

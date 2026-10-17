@@ -27,6 +27,7 @@ from app.modules.datastore.infrastructure.contact_rows import (
     MAX_CONTACT_ROWS,
     delete_rows_of_contact,
     read_contact_rows,
+    reassign_rows_of_contact,
     read_rows_of_contact_after,
 )
 from app.modules.datastore.infrastructure.models.datastore_models import (
@@ -44,6 +45,7 @@ __all__ = [
     "contact_owned_tables",
     "delete_contact_rows",
     "export_contact_rows",
+    "reassign_contact_rows",
     "rows_for_contact",
 ]
 
@@ -200,6 +202,28 @@ async def delete_contact_rows(
     for table_name, _key in await _owned_tables(uow_factory, pod_id):
         deleted += await delete_rows_of_contact(schema, pod_id, table_name, contact_id)
     return deleted
+
+
+async def reassign_contact_rows(
+    uow_factory: UnitOfWorkFactory,
+    *,
+    pod_id: UUID,
+    merged_id: UUID,
+    survivor_id: UUID,
+) -> int:
+    """Two contacts turned out to be one: the merged one's rows become the
+    survivor's, in every contact-owned table of the pod.
+
+    Table by table, like ``delete_contact_rows``, and safe to run again: a
+    table already moved has nothing left naming the merged contact.
+    """
+    schema = get_schema_manager()
+    moved = 0
+    for table_name, _key in await _owned_tables(uow_factory, pod_id):
+        moved += await reassign_rows_of_contact(
+            schema, pod_id, table_name, merged_id=merged_id, survivor_id=survivor_id
+        )
+    return moved
 
 
 async def export_contact_rows(

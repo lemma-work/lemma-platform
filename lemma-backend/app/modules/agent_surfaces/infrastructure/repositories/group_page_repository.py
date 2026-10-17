@@ -17,7 +17,10 @@ from uuid import UUID
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER, SurfaceGroup
+from app.modules.agent_surfaces.domain.groups import (
+    CONTACT_LINK_USER_PREFIX,
+    SurfaceGroup,
+)
 from app.modules.agent_surfaces.domain.notification import NotificationStatus
 from app.modules.agent_surfaces.infrastructure.group_models import (
     AgentSurfaceGroupMessageModel,
@@ -152,7 +155,9 @@ class GroupPageRepository:
                 select(link.surface_id, link.external_channel_id, link.conversation_id)
                 .where(
                     tuple_(link.surface_id, link.external_channel_id).in_(list(keyed)),
-                    link.external_user_id == OUTSIDERS_LINK_USER,
+                    link.external_user_id.startswith(
+                        CONTACT_LINK_USER_PREFIX, autoescape=True
+                    ),
                 )
                 .limit(_MAX_CONVERSATIONS)
             )

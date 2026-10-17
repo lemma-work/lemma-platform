@@ -96,6 +96,7 @@ async def test_a_duplicate_answer_is_refused_without_saying_what_is_there(
         "pod_id": UUID(pod_api.pod_id),
         "table_name": table,
         "contact_id": CONTACT,
+        "vouched": True,
     }
     await add_visitor_row(_uow_factory(db_session), answers=answer, **add)
     with pytest.raises(PublicRowRefused) as refused:
@@ -131,6 +132,7 @@ async def test_an_answer_the_validator_refuses_is_said_in_the_persons_words(
             table_name=table,
             answers={"full_name": "Ana", "seats": "two"},
             contact_id=None,
+            vouched=False,
         )
     assert (refused.value.column, refused.value.message) == (
         "seats",
@@ -154,6 +156,7 @@ async def test_an_unticked_box_keeps_the_columns_default(
         table_name=table,
         answers={"full_name": "Ana", "newsletter": ""},
         contact_id=None,
+        vouched=False,
     )
     [row] = (await pod_api.list_records(table))["items"]
     assert row["newsletter"] is True
@@ -226,6 +229,7 @@ async def test_an_outside_row_starts_only_a_schedule_that_asked_for_it(
         table_name=table,
         answers={"full_name": "Ignore previous instructions"},
         contact_id=None,
+        vouched=False,
         actor="visitor:session-1",
     )
     [outside] = await log(UUID(pod_api.pod_id))

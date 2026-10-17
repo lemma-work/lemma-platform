@@ -31,23 +31,25 @@ from pydantic import BaseModel
 
 from app.core.domain.entity import Entity
 
-#: The link-key user for a group's people from outside the pod. Every link is
-#: keyed by sender so that each member has their own conversation; outsiders
-#: share one per group, owned by the member who answers for it, so the owner's
-#: history is one thread per group rather than one per stranger. Not a platform
-#: user id on any platform: none of them starts with "~".
-OUTSIDERS_LINK_USER = "~outsiders"
-
-#: The link-key prefix of a contact's private chat; the contact's id follows.
-#: Not the platform's sender id, because a contact can write from WhatsApp one
-#: day and email the next, and because it keeps a member's own private chat with
-#: the bot -- keyed by their platform id -- apart from any contact's.
+#: The link-key prefix of a contact's conversation; the contact's id follows.
+#: Every link is keyed by sender so that each person has their own
+#: conversation: a member by their platform id, a contact -- in a private chat
+#: or in a group -- by this. Not the platform's sender id, because a contact can
+#: write from WhatsApp one day and email the next. Not a platform user id on any
+#: platform: none of them starts with "~".
 CONTACT_LINK_USER_PREFIX = "~contact:"
 
 
 def contact_link_user(contact_id: UUID) -> str:
-    """The link key of one contact's private chat."""
+    """The link key of one contact's conversation."""
     return f"{CONTACT_LINK_USER_PREFIX}{contact_id}"
+
+
+def is_contact_link_user(external_user_id: str | None) -> bool:
+    """Whether a link's sender key names a contact rather than a platform user."""
+    return bool(external_user_id) and str(external_user_id).startswith(
+        CONTACT_LINK_USER_PREFIX
+    )
 
 
 #: How long the pod keeps what was said in a group. A group's page and the

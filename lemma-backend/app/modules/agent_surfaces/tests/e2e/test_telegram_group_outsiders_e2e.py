@@ -3,9 +3,10 @@
 The whole path, with only the model's next move scripted: a member adds the bot
 to a group (Telegram's `my_chat_member`), which makes the pod adopt the group
 and makes them the one who answers for it. Then somebody who is in no pod at
-all @mentions the bot. They are answered, in the group, by a run that belongs
-to the member's conversation for that group's outsiders -- and that run, asked
-to list the pod's tables, sees only the one the pod marked Public.
+all @mentions the bot. They become a contact of the pod, and are answered, in
+the group, by a run in a conversation of their own that the member looks after
+-- and that run, asked to list the pod's tables, sees only the one the pod
+marked Public.
 
 The negative half of the promise already lives beside the other Telegram tests:
 a stranger in a group *nobody* brought the bot into is still ignored.
@@ -22,8 +23,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS
 from app.modules.agent.infrastructure.models import ConversationModel
+from app.modules.contacts.infrastructure.models import ContactIdentityModel
 from app.modules.agent_surfaces.composition import build_app_event_handler
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
@@ -195,10 +196,10 @@ async def test_a_stranger_is_answered_for_the_pod_from_what_is_public(
         ],
     )
 
-    # Answered, and answered as the pod: the member's conversation for this
-    # group's outsiders, never the stranger's own.
+    # Answered, and answered as the pod: as the stranger's own contact, in a
+    # conversation of theirs that the member looks after.
     assert isinstance(context, SurfaceChatContext)
-    assert context.audience.answers_outsiders is True
+    assert context.audience.is_contact
     assert context.user_id == owner
     conversation = (
         await db_session.execute(
@@ -208,7 +209,19 @@ async def test_a_stranger_is_answered_for_the_pod_from_what_is_public(
         )
     ).scalar_one()
     assert conversation.user_id == owner
-    assert (conversation.conversation_metadata or {}).get(AUDIENCE_KEY) == OUTSIDERS
+    assert conversation.contact_id == context.audience.contact_id
+    handle = (
+        await db_session.execute(
+            select(ContactIdentityModel).where(
+                ContactIdentityModel.contact_id == conversation.contact_id
+            )
+        )
+    ).scalar_one()
+    assert (handle.kind, handle.value, handle.strength) == (
+        "TELEGRAM",
+        str(STRANGER_TELEGRAM_ID),
+        "CHANNEL",
+    )
 
     # In the group, where the question was asked.
     sent = await wait_for_messages(message_store, "TELEGRAM", min_count=1)

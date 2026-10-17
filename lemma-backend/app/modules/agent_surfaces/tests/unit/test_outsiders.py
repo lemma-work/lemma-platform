@@ -4,8 +4,9 @@ Three decisions are pinned here, each of which fails open if it is wrong:
 
 * who counts as an outsider -- never a member, and only in a group the pod
   knows, has opened to outsiders, and has somebody answering for;
-* where their turn runs -- one conversation per group, the member's, marked as
-  answering outsiders so the agent authorizes as nobody;
+* who they are and where their turn runs -- a contact of the pod, by the handle
+  the platform vouched for, in a conversation of their own that the group's
+  owner looks after, so the agent authorizes as that contact;
 * that nothing a stranger types is taken as the member deciding something.
 """
 
@@ -26,7 +27,10 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceLifecycleKind,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import OUTSIDERS_LINK_USER, SurfaceGroup
+from app.modules.agent_surfaces.domain.groups import (
+    SurfaceGroup,
+    contact_link_user,
+)
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.platforms.telegram.membership import (
@@ -43,6 +47,7 @@ from app.modules.agent_surfaces.services.outsiders import OutsiderDoor
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
+from app.modules.contacts.contracts import ContactRef, IdentityKind, IdentityStrength
 
 pytestmark = pytest.mark.unit
 
@@ -176,9 +181,27 @@ def _door(
         uow=SimpleNamespace(session=None),
         membership=SimpleNamespace(get_user_pod_ids=_pod_ids),
         limiter=SimpleNamespace(allow=_allow),
+        contacts=_Contacts(),
     )
     door.groups = SimpleNamespace(get=_get)
     return door
+
+
+class _Contacts:
+    """``open_contact`` over a dict: one contact per handle, as the table keeps."""
+
+    def __init__(self) -> None:
+        self.by_handle: dict[tuple[IdentityKind, str], ContactRef] = {}
+        self.strengths: list[IdentityStrength] = []
+
+    async def __call__(
+        self, _uow, /, *, pod_id, kind, value, strength, display_name
+    ) -> ContactRef:
+        self.strengths.append(strength)
+        return self.by_handle.setdefault(
+            (kind, value),
+            ContactRef(id=uuid4(), pod_id=pod_id, display_name=display_name),
+        )
 
 
 def _welcoming_group() -> SurfaceGroup:
@@ -304,27 +327,65 @@ def _surface_entity():
     )
 
 
-async def test_a_strangers_turn_runs_in_the_members_conversation_for_outsiders():
+async def _prepare(door, *, sender_id: str = "777", name: str = "Tom"):
     group = _welcoming_group()
     binder = _Binder()
-
-    context = await _door(group=group).prepare(
+    event = _event().model_copy(
+        update={"sender_external_user_id": sender_id, "sender_display_name": name}
+    )
+    context = await door.prepare(
         surface=_surface_entity(),
-        parsed=_event(),
-        sender=_stranger(),
+        parsed=event,
+        sender=_stranger().model_copy(
+            update={"external_user_id": sender_id, "display_name": name}
+        ),
         group=group,
         route=_route(),
         binder=binder,
     )
+    return context, binder
+
+
+async def test_a_strangers_turn_runs_as_their_contact_in_a_conversation_of_their_own():
+    door = _door(group=_welcoming_group())
+
+    context, binder = await _prepare(door)
 
     assert context is not None
-    assert binder.seen["for_outsiders"] is True
+    contact = door.open_contact.by_handle[(IdentityKind.TELEGRAM, "777")]
+    assert binder.seen["contact_id"] == contact.id
     assert binder.seen["resolved_user"].internal_user_id == OWNER
-    assert binder.seen["resolved_user"].external_user_id == OUTSIDERS_LINK_USER
-    assert context.audience.answers_outsiders is True
+    assert binder.seen["resolved_user"].external_user_id == contact_link_user(
+        contact.id
+    )
+    assert context.audience == Audience.contact(contact.id)
     assert context.user_id == OWNER
     # Who actually asked goes on the message, for whoever reads the thread.
     assert context.message_metadata.sender_display_name == "Tom"
+    # The platform vouched for the handle: Telegram signed the update.
+    assert door.open_contact.strengths == [IdentityStrength.CHANNEL]
+
+
+async def test_two_strangers_in_one_group_are_two_contacts_with_two_conversations():
+    door = _door(group=_welcoming_group())
+
+    tom, tom_binder = await _prepare(door, sender_id="777", name="Tom")
+    ana, ana_binder = await _prepare(door, sender_id="778", name="Ana")
+
+    assert tom.audience.contact_id != ana.audience.contact_id
+    assert (
+        tom_binder.seen["resolved_user"].external_user_id
+        != ana_binder.seen["resolved_user"].external_user_id
+    )
+
+
+async def test_the_same_stranger_asking_again_is_the_same_contact():
+    door = _door(group=_welcoming_group())
+
+    first, _ = await _prepare(door)
+    second, _ = await _prepare(door)
+
+    assert first.audience == second.audience
 
 
 async def test_over_the_limit_the_stranger_is_not_answered():
@@ -357,7 +418,7 @@ def _outsider_context() -> SurfaceChatContext:
         message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
         message_user_id=OWNER,
         event=_event(),
-        audience=Audience.outsiders(),
+        audience=Audience.contact(uuid4()),
     )
 
 
@@ -369,17 +430,6 @@ def test_a_stranger_typing_approve_resolves_nothing():
     assert may_answer_a_pause(
         _outsider_context().model_copy(update={"audience": Audience.member()})
     )
-
-
-def test_a_strangers_turn_queued_before_the_audience_existed_stays_theirs():
-    payload = _outsider_context().model_dump(mode="json")
-    del payload["audience"]
-
-    queued = SurfaceChatContext.model_validate({**payload, "answers_outsider": True})
-
-    assert queued.audience == Audience.outsiders()
-    assert may_answer_a_pause(queued) is False
-    assert SurfaceChatContext.model_validate(payload).audience == Audience.member()
 
 
 # ---------------------------------------------------------- whom it answered
@@ -400,7 +450,7 @@ def _thread(external_user_id: str, *, last_sender: str | None):
 
 def test_an_answer_to_a_stranger_says_it_came_from_what_is_public():
     """The group's page shows it; the owner reads what their pod said, and why."""
-    answered = answered_in_group(_thread(OUTSIDERS_LINK_USER, last_sender="Tom"))
+    answered = answered_in_group(_thread(contact_link_user(uuid4()), last_sender="Tom"))
 
     assert (answered.name, answered.from_public) == ("Tom", True)
 
@@ -412,7 +462,7 @@ def test_an_answer_to_a_member_was_on_their_own_access():
 
 
 def test_an_answer_whose_asker_went_unnamed_names_nobody():
-    answered = answered_in_group(_thread(OUTSIDERS_LINK_USER, last_sender=None))
+    answered = answered_in_group(_thread(contact_link_user(uuid4()), last_sender=None))
 
     assert answered.name is None
 

@@ -11,6 +11,8 @@ conversation belongs to the person, the pod and the agent.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.outsiders import Audience
+
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -160,6 +162,7 @@ def _owned_by(
         agent_id=agent_id,
         title=None,
         updated_at=datetime.now(timezone.utc),
+        audience=Audience.member(),
     )
 
 

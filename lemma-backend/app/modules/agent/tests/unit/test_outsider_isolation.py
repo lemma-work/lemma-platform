@@ -4,8 +4,8 @@ The companion to ``test_outsider_runs`` (authority, toolsets, messaging) and
 ``test_outsider_tool_allowlist`` (tools by name). Each test pins one of the
 remaining ways a registered user's data could reach somebody outside the pod:
 
-* identity -- a conversation is a stranger's if its metadata *or* its routing
-  link says so, and a client can neither claim nor strip that;
+* identity -- a conversation is a contact's exactly when its ``contact_id``
+  column says so, and nothing a client writes to its metadata changes that;
 * history -- a private note the owner wrote, and its run's answer, never reach
   a later stranger's turn;
 * the brief -- no owner email, no ids;
@@ -29,13 +29,8 @@ from app.modules.agent.capabilities.open_notifications import (
 )
 from app.modules.agent.domain.context import ApprovedExecution
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
-from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
-    OUTSIDE_ANSWER_TOOL,
-    OUTSIDERS,
-    Audience,
-    without_audience,
-)
+from app.modules.agent.domain.outsiders import OUTSIDE_ANSWER_TOOL, Audience
+from app.modules.agent.domain.server_metadata import client_metadata
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
 from app.modules.agent.domain.surface_prompts import audience_notice
 from app.modules.agent.domain.value_objects import MessageKind
@@ -48,11 +43,9 @@ from app.modules.agent.infrastructure.harnesses.channel_context import (
 from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
-from app.modules.agent.services import outsider_audience
 from app.modules.agent.services.runtime_history import without_private_runs
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.messaging.respond import confirmed_by_approval
-from app.modules.agent_surfaces.contracts.conversations import OutsideLink
 
 pytestmark = pytest.mark.unit
 
@@ -60,66 +53,31 @@ pytestmark = pytest.mark.unit
 # --------------------------------------------------------------------- identity
 
 
-def _conversation(metadata: dict | None = None) -> Conversation:
-    return Conversation(user_id=uuid4(), pod_id=uuid4(), metadata=metadata or {})
-
-
-async def _linked(_uow, _conversation_id) -> OutsideLink | None:
-    return OutsideLink()
-
-
-async def _not_linked(_uow, _conversation_id) -> OutsideLink | None:
-    return None
-
-
-@pytest.mark.anyio
-async def test_a_strangers_link_makes_the_run_theirs_whatever_the_metadata_says():
-    """The metadata is the half a client can reach; the link is routing's."""
-    stripped = _conversation({"title_hint": "Launch crew"})
-
-    effective = await outsider_audience.with_effective_audience(
-        object(), stripped, linked_audience=_linked
+def _conversation(metadata: dict | None = None, *, contact_id=None) -> Conversation:
+    return Conversation(
+        user_id=uuid4(), pod_id=uuid4(), contact_id=contact_id, metadata=metadata or {}
     )
 
-    assert Audience.of(effective) == Audience.outsiders()
-    assert effective.metadata["title_hint"] == "Launch crew"
-    # In memory only: the row is repaired by rebinding, not on a read path.
-    assert not Audience.of(stripped).answers_outsiders
 
-
-@pytest.mark.anyio
-async def test_a_contacts_link_repairs_the_audience_to_that_contact():
-    """Not to a group's strangers: the run keeps the contact's own rows, and
-    authorizes as that contact rather than as nobody in particular."""
+def test_a_contacts_conversation_is_theirs_whatever_its_metadata_says():
     contact_id = uuid4()
 
-    async def _contacts_chat(_uow, _conversation_id) -> OutsideLink | None:
-        return OutsideLink(contact_id=contact_id)
+    wiped = _conversation({"title_hint": "Launch crew"}, contact_id=contact_id)
 
-    effective = await outsider_audience.with_effective_audience(
-        object(), _conversation({"title_hint": "Dana"}), linked_audience=_contacts_chat
-    )
-
-    assert Audience.of(effective) == Audience.contact(contact_id)
-    assert effective.metadata["title_hint"] == "Dana"
+    assert Audience.of(wiped) == Audience.contact(contact_id)
 
 
-@pytest.mark.anyio
-async def test_a_members_conversation_stays_theirs():
-    conversation = _conversation()
+def test_a_members_conversation_stays_theirs_whatever_its_metadata_claims():
+    claimed = _conversation({"audience": "outsiders", "contact_id": str(uuid4())})
 
-    effective = await outsider_audience.with_effective_audience(
-        object(), conversation, linked_audience=_not_linked
-    )
-
-    assert effective is conversation
-    assert not Audience.of(effective).answers_outsiders
+    assert Audience.of(claimed) == Audience.member()
 
 
-def test_a_client_cannot_create_a_conversation_that_claims_an_audience():
-    assert without_audience({AUDIENCE_KEY: OUTSIDERS, "x": 1}) == {"x": 1}
-    assert without_audience({"x": 1}) == {"x": 1}
-    assert without_audience(None) is None
+def test_a_client_cannot_create_a_contacts_conversation():
+    """No key a client sends names a contact: the column is the server's."""
+    sent = client_metadata({"audience": "contact", "contact_id": str(uuid4())})
+
+    assert Audience.of(_conversation(sent)) == Audience.member()
 
 
 # ---------------------------------------------------------------------- history

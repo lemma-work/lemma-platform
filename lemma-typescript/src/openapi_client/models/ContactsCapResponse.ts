@@ -7,9 +7,17 @@
  */
 export type ContactsCapResponse = {
     /**
+     * How many contacts its bots have answered so far.
+     */
+    answered_contacts?: number;
+    /**
      * Nobody in the organization set a cap, so the deployment's default applies.
      */
     is_default?: boolean;
+    /**
+     * How many contacts the organization's bots may answer at all. Absent for no limit.
+     */
+    max_contacts?: (number | null);
     /**
      * The cap that applies this month. Absent when an owner removed it: no limit.
      */

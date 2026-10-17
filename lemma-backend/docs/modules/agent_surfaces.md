@@ -37,7 +37,7 @@ Resend address.
 | `agent_surface_groups` | A group chat a surface's bot is in, one row per (surface, chat): its title, whether the bot answers people outside the pod there, and `owner_user_id`, the member who answers for them. No owner means outsiders are not answered. A WhatsApp group the bot asked Meta to create exists here before its chat id does: `external_channel_id` is null and `request_id` set until the confirmation webhook fills in the id and `invite_link` |
 | `agent_surface_web_widgets` | A pod's chat on other people's web pages, each answering as one of its agents, and the door a form page adds rows through. `public_key` (unique, readable by anybody) names the widget; `signing_secret` (encrypted) signs host tokens on the customer's server; `allowed_origins`, `answer` (`off`/`known`/`anyone`) and `looked_after_by` as for a bot's contacts. See `services/web_chat.py`. A form is any page that adds a row to a table the pod opened to visitors (`datastore_public_rows`): `GET /public/web/{key}/table` says what to ask, `POST /public/web/{key}/rows` adds the row, and `/public/web/{key}/page?table=` is the form Lemma hosts, with the chat beside it. On a web visitor's run the agent's `fill_form` tool fills that form's fields; it never sends it. Answers reach the page live on `GET /public/web/{key}/stream`, one JSON object per line after an `open` handshake, at most two per session, translated by `agent/contracts/visitor_stream.py`: the answer's text as it is written, `typing`, the finished message and `done` -- never thinking, tool traffic or a private note's run |
 | `visitor_sessions` (contacts' table) | One visitor's hold on one widget, found by a secret stored only as its digest and traded at `POST /public/web/{key}/session` for a 15-minute `visitor-access` token sent as `Authorization: Bearer` (`api/public_dependencies.py`). `strength` is `ANONYMOUS`, `CODE` or `HOST`; anonymous sessions end 90 days after they began, a contact's 30 days after last use, and a `HOST` session never refreshes without a fresh host token. Reissuing a widget's secret revokes its host sessions; forgetting a contact revokes theirs. Cascades from its conversation. CORS for `/public/web/*` is answered from the widget's own origins, never with credentials (`api/public_cors.py`), and nothing there is served unless `PUBLIC_WEB_ENABLED` is on |
-| `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions, spent codes and anonymous web conversations idle for 90 days, hourly |
+| `agent_surface_web_codes` | One-time codes sent to email addresses web visitors typed, stored salted with their session, expiring in ten minutes after five guesses at most, each counted before it is compared. `events/visitor_retention.py` sweeps ended sessions and spent codes hourly; a visitor's conversation is a contact's, and is never swept |
 | `agent_surface_group_messages` | What the bot heard in a group and what it said there, kept only where the platform keeps no readable history (Telegram, WhatsApp). Always read newest-first and bounded |
 | `surface_inbound_messages` | One row per inbound message any webhook or receiver accepted, unique on (receiver scope, the platform's event id), so a delivery retried a minute or three days later is the same row. RECEIVED → INGESTING → ROUTED, DROPPED or FAILED; the `surface.ingest` item that turns it into a turn is written with it. ROUTED and DROPPED rows are kept 7 days, FAILED 30 |
 | `surface_message_claims` | The durable message-level claim: one row per platform message, owned by the inbound row that took it, taken in the transaction that routes it so a duplicate under another scope is answered once. Kept 7 days |
@@ -229,8 +229,9 @@ is answered *for the pod*, in a group the pod has opened to them.
   words as its description (`services/group_hello.py`).
 - **The pod's groups are one page** (`services/space_groups.py`, read by every
   member). It is assembled from rows other parts already keep: the registry and
-  its log for who has spoken and what was said, the `~outsiders` thread links
-  for which conversations are a group's, and the open notifications those
+  its log for who has spoken and what was said, the contacts' (`~contact:`)
+  thread links for which conversations are a group's outsiders', and the open
+  notifications those
   conversations sent the reader for what is waiting on them. A member's own
   conversation with the bot and a private note are never part of it. Each of
   the bot's lines in the log records whom it answered and whether that was from
@@ -293,15 +294,18 @@ is answered *for the pod*, in a group the pod has opened to them.
 - **Who counts as an outsider** is anyone not in the surface's pod, asked the
   way routing asks it. Membership is checked first, so members never pay for the
   group lookup.
-- **Where their turn runs**: one conversation per group, owned by the owner,
-  opened with `for_outsiders=True` and linked under the shared `~outsiders` key.
-  The agent module then runs every turn in it as nobody: an anonymous
-  authorization context pinned to the pod, which reads only what the pod marked
-  Public. A run is a stranger's when the conversation's metadata *or* that link
-  says so (the agent module's `services/outsider_audience`), asked on every
-  run, so a conversation that lost its mark still never runs as its owner; a
-  client can neither set nor clear the mark, and the binder moves the next
-  stranger to a freshly marked conversation. What such a run may do:
+- **Who they are**: a contact of the pod, by the handle the platform vouched
+  for (`services/sender_handles.group_handle`): their Telegram id, their
+  WhatsApp number, or `{team}:{user}` for a Slack sender from the other company
+  in a shared channel. Opened the first time they put the bot to work there.
+- **Where their turn runs**: in a conversation of their own in that group,
+  looked after by the group's owner and naming the contact in its
+  `contact_id` column, linked under their `~contact:{id}` key on the group's
+  thread. The agent module runs every turn in it as that contact: a context
+  pinned to the pod that reads what the pod marked Public. The column is the
+  server's alone, so nothing a client writes to the conversation changes whom
+  it answers.
+  What such a run may do:
   - **Tools, by name.** Toolsets are cut to pod reads, web search and
     messaging, and then each tool is allow-listed one by one
     (`tools/outsider_tools`): the pod's read tools, `web_search`,
@@ -317,9 +321,11 @@ is answered *for the pod*, in a group the pod has opened to them.
     sandbox described. The agent's and conversation's own instructions are
     pod configuration and stay.
   - **What it remembers.** Nothing a private note started: the owner's note in
-    the strangers' thread, and its run's answer, are left out of every later
-    stranger's history. From the group's log, nothing the bot answered with a
-    member's own access (`answer_withheld_from`).
+    a contact's conversation, and its run's answer, are left out of every later
+    turn of theirs. From the group's log, nothing the bot answered with a
+    member's own access (`answer_withheld_from`). Nothing the pod keeps about
+    the contact either: their own rows are offered only where they alone read
+    the answer -- their private chat, email thread or web page.
   - **Who it reaches.** `message_user` goes to the owner whatever `to` says,
     with nothing looked up first, so it says nothing about who is in the pod;
     `check_messages` reads only notifications this conversation sent, for every
@@ -329,15 +335,15 @@ is answered *for the pod*, in a group the pod has opened to them.
     the owner, and never the owner's personal model (the agent module's
     `services/outsider_runtime`).
 - **A question passed on is answered only with the owner's say-so.** A
-  notification from the strangers' thread is marked `from_outside` by the
-  service, from the routing link, with the group it came from
-  (`services/outside_questions.py`). The owner reads it framed and quoted by the
+  notification from a contact's conversation is marked `from_outside` by the
+  service, from the conversation's contact, with the group it came from read
+  off its routing link (`services/outside_questions.py`). The owner reads it framed and quoted by the
   server -- which group, who asked, their words as a block quote -- and their
   agent sees it the same way in its open requests. Their answer is recorded only
   as words they confirmed: typed in the app, or approved exactly as their agent
   drafted them -- `respond_to_notification` returns `needs_approval`, the agent
   calls `request_approval`, and the card is the server's
-  (`services/outside_answer_card.py`): the group, every word, approve once,
+  (`services/approval_cards.py`): the group, every word, approve once,
   never for the session. A stranger's tap decides nothing, and an agent holding
   the owner's delegated token cannot answer over the API. Never structured
   data, and at most `MAX_OUTSIDE_ANSWER_CHARS`.
@@ -430,8 +436,8 @@ is answered *for the pod*, in a group the pod has opened to them.
   is under way is not steered into it, a message for the platform is not
   steered into a note's run, and the follow-up, resume or retry that answers
   either keeps its kind. `surface_send_message` from a note's run is refused.
-  In the strangers' thread a note is the owner's alone: no later stranger's
-  run reads it.
+  In a contact's conversation a note is the keeper's alone: no later turn of
+  the contact's reads it.
 
 ## Authorization and security
 

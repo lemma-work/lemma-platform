@@ -29,9 +29,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.email_authentication import (
     EmailAuthenticationVerdict,
 )
+from app.modules.agent_surfaces.services.sender_handles import private_handle
 from app.modules.agent_surfaces.services.contacts import (
     ContactDoor,
-    contact_handle,
     is_pods_own_bot,
     parked_mail_notice,
 )
@@ -179,7 +179,7 @@ def test_only_an_authenticated_email_address_is_vouched_for():
         (EmailAuthenticationVerdict.UNKNOWN, False),
         (None, False),
     ):
-        handle = contact_handle(
+        handle = private_handle(
             _event(platform=SurfacePlatform.RESEND, authentication=verdict)
         )
         assert handle is not None
@@ -216,7 +216,7 @@ async def test_a_handle_with_nothing_left_once_normalised_names_nobody():
         update={"sender_phone": "+ -", "sender_external_user_id": "+ -"}
     )
 
-    assert contact_handle(event) is None
+    assert private_handle(event) is None
     assert not await _door().applies(
         surface=_surface(), parsed=event, sender=_stranger()
     )

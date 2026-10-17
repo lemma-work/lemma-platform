@@ -657,7 +657,7 @@ async def test_a_title_for_a_contacts_conversation_is_the_contacts_spend(
     _enable_llm_titling(monkeypatch)
     contact_id = uuid4()
     conv = _conversation()
-    conv.metadata = Audience.contact(contact_id).to_metadata()
+    conv.contact_id = contact_id
     generator = _FakeGenerator()
 
     await _service(_FakeUow(conv, []), generator=generator).generate_title_if_absent(

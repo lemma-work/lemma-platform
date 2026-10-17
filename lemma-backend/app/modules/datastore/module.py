@@ -227,6 +227,7 @@ def _routers():
 def _register_work() -> None:
     # In every process: the pod-create transaction (API) writes this kind
     # through the `PodCreated` fact this module subscribes it to.
+    import app.modules.datastore.events.contact_merged_work  # noqa: F401
     import app.modules.datastore.events.pod_provision_work  # noqa: F401
 
     # Every process: a schedule or MCP subscription change (API) writes

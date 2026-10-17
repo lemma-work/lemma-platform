@@ -1,7 +1,7 @@
 """A contact's conversations, for the module that forgets and exports contacts.
 
-A contact's conversation is marked on its metadata (``domain/outsiders``), and
-that mark is how these find them. Deleting cascades to its runs, messages,
+A contact's conversation names them in its ``contact_id`` column
+(``domain/outsiders``), and that column is how these find them. Deleting cascades to its runs, messages,
 waits, approvals and routing links; notifications that pointed at it lose the
 pointer, which is why the caller redacts them first.
 """
@@ -26,14 +26,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import aliased
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
-    CONTACT,
-    CONTACT_KEY,
-    HANDED_TO_KEY,
-    OUTSIDERS,
-    handed_to,
-)
+from app.modules.agent.domain.outsiders import HANDED_TO_KEY, handed_to
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.value_objects import (
     MessageDraft,
@@ -106,12 +99,9 @@ class ConversationsPage:
 
 
 def _theirs(pod_id: UUID, contact_id: UUID) -> tuple[ColumnElement[bool], ...]:
-    # Containment, so the metadata's GIN index answers it.
     return (
         ConversationModel.pod_id == pod_id,
-        ConversationModel.conversation_metadata.contains(
-            {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(contact_id)}
-        ),
+        ConversationModel.contact_id == contact_id,
     )
 
 
@@ -307,25 +297,38 @@ def _was_said_to_them(message: MessageModel) -> bool:
     return bool(metadata.get("follow_up")) and metadata.get("delivered") is not False
 
 
-async def mark_conversation_contact(
+async def name_contact_on_conversation(
     uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, contact_id: UUID
 ) -> bool:
-    """Make an anonymous outsiders' conversation this contact's, in place.
+    """Make a conversation that answers nobody yet this contact's, in place.
 
-    Only a conversation already answering people outside the pod: a member's
-    conversation never becomes anybody else's. Returns whether it changed.
+    For a web visitor's chat opened before anything named them. A member's
+    conversation never becomes a contact's: only a conversation with no
+    contact, opened by a surface for somebody outside the pod, is changed --
+    which the caller vouches for by holding that conversation's visitor
+    session. Returns whether it changed.
     """
-    conversation = await uow.session.get(ConversationModel, conversation_id)
-    metadata = dict(conversation.conversation_metadata or {}) if conversation else {}
-    if conversation is None or metadata.get(AUDIENCE_KEY) != OUTSIDERS:
-        return False
-    metadata.update({AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(contact_id)})
-    await uow.session.execute(
+    result = await uow.session.execute(
         update(ConversationModel)
-        .where(ConversationModel.id == conversation_id)
-        .values(conversation_metadata=metadata)
+        .where(
+            ConversationModel.id == conversation_id,
+            ConversationModel.contact_id.is_(None),
+        )
+        .values(contact_id=contact_id)
     )
-    return True
+    return bool(result.rowcount)
+
+
+async def repoint_merged_contact(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, merged_id: UUID, survivor_id: UUID
+) -> int:
+    """Conversations with a contact since merged are the survivor's now."""
+    result = await uow.session.execute(
+        update(ConversationModel)
+        .where(*_theirs(pod_id, merged_id))
+        .values(contact_id=survivor_id)
+    )
+    return result.rowcount or 0
 
 
 async def move_contact_conversation(
@@ -346,9 +349,7 @@ async def move_contact_conversation(
         update(ConversationModel)
         .where(
             ConversationModel.id == conversation_id,
-            ConversationModel.conversation_metadata.contains(
-                {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(contact_id)}
-            ),
+            ConversationModel.contact_id == contact_id,
         )
         .values(user_id=to_user_id)
     )

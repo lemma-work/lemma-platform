@@ -114,7 +114,14 @@ class ConversationService(ConversationPauses):
         type: ConversationType = ConversationType.CHAT,
         metadata: dict[str, object] | None = None,
         require_execute_grant: bool = True,
+        contact_id: UUID | None = None,
     ) -> Conversation:
+        """A new conversation in the pod.
+
+        ``contact_id`` makes it a contact's (``domain/outsiders``): only the
+        server's own openers pass it -- the surface that met the contact -- and
+        no request a client sends reaches it.
+        """
         organization_id = await self._get_pod_organization_id(pod_id)
         # A parent is the caller's own conversation in this pod, or it does not
         # exist: the child inherits its working directory and repository, and
@@ -169,6 +176,7 @@ class ConversationService(ConversationPauses):
         conversation = Conversation(
             user_id=user_id,
             pod_id=pod_id,
+            contact_id=contact_id,
             organization_id=organization_id,
             agent_id=agent.id if agent else None,
             title=title,

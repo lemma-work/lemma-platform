@@ -17,7 +17,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import Text, cast, column, delete, literal_column, select, table, text
+from sqlalchemy import (
+    Text,
+    cast,
+    column,
+    delete,
+    literal_column,
+    select,
+    table,
+    text,
+    update,
+)
 from sqlalchemy.sql.expression import TableClause
 from sqlalchemy.exc import DBAPIError
 
@@ -185,6 +195,35 @@ async def delete_rows_of_contact(
             await schema.set_rls_context(session, RowPrincipal.contact(contact_id))
             result = await session.execute(
                 delete(rows).where(rows.c[CONTACT_COLUMN] == contact_id)
+            )
+            return int(getattr(result, "rowcount", 0) or 0)
+
+
+async def reassign_rows_of_contact(
+    schema: DatastoreSchemaPort,
+    pod_id: UUID,
+    table_name: str,
+    *,
+    merged_id: UUID,
+    survivor_id: UUID,
+) -> int:
+    """Move one contact-owned table's rows from a merged contact to the one it
+    became. How many moved.
+
+    As the pod's admin side: the contact policy lets a member session see
+    every contact's rows, and the per-user policy lets an admin through, so the
+    update reaches the merged contact's rows and may write the survivor's id.
+    """
+    rows = _contact_table(schema.get_schema_name(pod_id), table_name)
+    async with schema.session_factory() as session:
+        async with session.begin():
+            await schema.set_rls_context(
+                session, RowPrincipal(audience=RowAudience.MEMBER, is_pod_admin=True)
+            )
+            result = await session.execute(
+                update(rows)
+                .where(rows.c[CONTACT_COLUMN] == merged_id)
+                .values({CONTACT_COLUMN: survivor_id})
             )
             return int(getattr(result, "rowcount", 0) or 0)
 

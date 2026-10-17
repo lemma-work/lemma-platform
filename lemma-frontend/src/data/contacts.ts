@@ -10,7 +10,7 @@ import type {
     WebWidgetResponse,
 } from "lemma-sdk";
 
-export type HandleKind = "PHONE" | "EMAIL" | "TELEGRAM" | "HOST";
+export type HandleKind = "PHONE" | "EMAIL" | "TELEGRAM" | "HOST" | "SLACK" | "TEAMS" | "WEB";
 
 export interface ContactHandle {
     kind: HandleKind;
@@ -23,6 +23,8 @@ export interface Contact {
     name: string | null;
     createdAt: string;
     handles: ContactHandle[];
+    /** Known only by the browser they wrote from: nobody has vouched for them yet. */
+    anonymous: boolean;
 }
 
 export type WidgetAnswer = "off" | "known" | "anyone";
@@ -65,7 +67,7 @@ export interface WidgetDraft {
 
 export const EMPTY_WIDGET_DRAFT: WidgetDraft = { name: "", origins: "", answer: "anyone" };
 
-const KINDS: HandleKind[] = ["PHONE", "EMAIL", "TELEGRAM", "HOST"];
+const KINDS: HandleKind[] = ["PHONE", "EMAIL", "TELEGRAM", "HOST", "SLACK", "TEAMS", "WEB"];
 
 export function readContact(wire: ContactResponse): Contact {
     return {
@@ -79,6 +81,7 @@ export function readContact(wire: ContactResponse): Contact {
                 value: identity.value,
                 strength: identity.strength,
             })),
+        anonymous: wire.is_anonymous ?? false,
     };
 }
 
@@ -127,7 +130,9 @@ export function readCap(wire: ContactsCapResponse): ContactsCap {
 
 /** How a contact is named in a list: their name, else their first handle. */
 export function contactName(contact: Contact): string {
-    return contact.name || (contact.handles[0] ? handleText(contact.handles[0]) : "A contact");
+    if (contact.name) return contact.name;
+    if (contact.anonymous) return "A visitor to your website";
+    return contact.handles[0] ? handleText(contact.handles[0]) : "A contact";
 }
 
 /** One handle as a person reads it. A host id is the customer's own user id,
@@ -136,6 +141,9 @@ export function handleText(handle: ContactHandle): string {
     if (handle.kind === "PHONE") return "+" + handle.value.replace(/^\+/, "");
     if (handle.kind === "TELEGRAM") return "Telegram " + handle.value;
     if (handle.kind === "HOST") return "Signed in on your site";
+    if (handle.kind === "SLACK") return "Slack, from another company";
+    if (handle.kind === "TEAMS") return "Teams, from another company";
+    if (handle.kind === "WEB") return "Chat on your website";
     return handle.value;
 }
 
@@ -146,12 +154,14 @@ export function vouchedBy(handle: ContactHandle): string {
         case "HOST": return "Named by your site";
         case "CODE": return "Confirmed with a code";
         case "MEMBER": return "Added by a member";
+        case "SESSION": return "Not confirmed yet";
         default: return "";
     }
 }
 
 /** The second line of a contact's row. */
 export function contactSubline(contact: Contact): string {
+    if (contact.anonymous) return "Not confirmed yet";
     const handles = contact.handles.map(handleText);
     if (contact.name && handles.length) return handles.join(" · ");
     return handles.slice(1).join(" · ") || "No handle on record";

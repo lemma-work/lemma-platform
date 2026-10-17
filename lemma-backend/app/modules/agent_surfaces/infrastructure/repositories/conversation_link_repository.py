@@ -22,13 +22,14 @@ from typing import Any
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.domain.uow import IUnitOfWork
 from app.core.infrastructure.db.transaction_locks import mark_transaction_scoped_lock
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceConversationLink
+from app.modules.agent_surfaces.domain.groups import CONTACT_LINK_USER_PREFIX
 from app.modules.agent_surfaces.domain.notification import (
     NotificationDeliveryStatus,
     NotificationStatus,
@@ -252,21 +253,26 @@ class SurfaceConversationLinkRepository(DmLinkQueries):
         *,
         surface_id: UUID,
         external_channel_id: str,
-        external_user_id: str,
+        contacts_only: bool,
         limit: int = 20,
     ) -> list[UUID]:
-        """The conversations one sender key holds in one channel, newest first.
+        """The conversations people hold in one channel, newest first.
 
-        For a group's people outside the pod the key is shared, and a platform
-        with threads (Slack) gives them one conversation per thread.
+        ``contacts_only`` keeps the contacts' -- the group's people from
+        outside the pod -- and leaves the members' own. A platform with threads
+        (Slack) gives each of them one conversation per thread.
         """
+        link = AgentSurfaceConversationLinkModel
         stmt = (
-            select(AgentSurfaceConversationLinkModel.conversation_id)
+            select(link.conversation_id)
             .where(
-                AgentSurfaceConversationLinkModel.surface_id == surface_id,
-                AgentSurfaceConversationLinkModel.external_channel_id
-                == external_channel_id,
-                AgentSurfaceConversationLinkModel.external_user_id == external_user_id,
+                link.surface_id == surface_id,
+                link.external_channel_id == external_channel_id,
+                link.external_user_id.startswith(
+                    CONTACT_LINK_USER_PREFIX, autoescape=True
+                )
+                if contacts_only
+                else true(),
             )
             .order_by(AgentSurfaceConversationLinkModel.updated_at.desc())
             .limit(limit)
