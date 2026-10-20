@@ -27,10 +27,9 @@ export function MarketingNav({ over = false }: { over?: boolean }) {
                             ))}
                         </div>
                     </div>
-                    <Link href="/docs">Docs</Link>
                     <Link href="/templates">Templates</Link>
+                    <Link href="/docs">Docs</Link>
                     <a href={githubUrl} target="_blank" rel="noreferrer">GitHub</a>
-                    <a href={discordUrl} target="_blank" rel="noreferrer">Discord</a>
                     <Link href="/t">Sign in</Link>
                     <Link href="/t" className={s.navStart}>Get started</Link>
                 </nav>

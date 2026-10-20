@@ -6,7 +6,8 @@ import { pageMetadata } from "@/site/metadata";
 import { FACES, PRODUCT_PAGES, productPage, type Picture as Capture, type Section, type Visual, type Who } from "@/marketing/product-pages";
 import { MarketingNav } from "../../nav";
 import { Lively } from "../../lively";
-import { AppWindow, Note, Shot } from "../../pictures";
+import { AppWindow, Shot } from "../../pictures";
+import { Daylight } from "../../daylight";
 import { VIGNETTES } from "../../vignettes";
 import s from "../../landing.module.css";
 import p from "../../product.module.css";
@@ -33,17 +34,20 @@ export default async function ProductPage({ params }: Props) {
     return (
         <div className={s.page}>
             <a className={s.skip} href="#main">Skip to content</a>
+            <Daylight />
             <MarketingNav />
             <main id="main">
                 <section className={`${s.wrap} ${p.hero}`}>
-                    <p className={s.label}><Link href="/">Lemma</Link> · {hero.eyebrow}</p>
-                    <h1 className={p.headline}>{hero.headline}</h1>
-                    <Paragraphs text={hero.intro} className={p.intro} />
-                    <div className={`${s.ctas} ${p.centred}`}>
-                        <Link className={s.primary} href="/t">Get started free</Link>
-                        <Link className={s.textLink} href="/#try">Look around a sample space →</Link>
+                    <div data-quiet="">
+                        <p className={s.label}><Link href="/">Lemma</Link> · {hero.eyebrow}</p>
+                        <h1 className={p.headline}>{hero.headline}</h1>
+                        <Paragraphs text={hero.intro} className={p.intro} />
+                        <div className={`${s.ctas} ${p.centred}`}>
+                            <Link className={s.primary} href="/t">Get started free</Link>
+                            <Link className={s.secondary} href="/">See the whole teammate</Link>
+                        </div>
                     </div>
-                    <div className={p.stage}>
+                    <div className={p.stage} data-lamp="soft">
                         <Picture visual={hero.visual} big />
                     </div>
                 </section>
@@ -60,7 +64,7 @@ export default async function ProductPage({ params }: Props) {
                     </nav>
                 </section>
 
-                <section className={p.close} data-rise="" aria-labelledby="close-title">
+                <section className={p.close} data-rise="" data-quiet="" aria-labelledby="close-title">
                     <h2 id="close-title">{page.close.headline}</h2>
                     {page.close.sub && <p className={p.closeSub}>{page.close.sub}</p>}
                     <div className={`${s.ctas} ${p.centred}`}>
@@ -99,12 +103,14 @@ function SectionRow({ section, flip }: { section: Section; flip: boolean }) {
     if (section.visual.type === "none") {
         return (
             <section className={`${s.wrap} ${s.section} ${p.saying}`} aria-labelledby={section.id}>
-                <div data-rise="">
+                <div data-rise="" data-quiet="">
                     <p className={s.label}>{section.label}</p>
-                    <h2 id={section.id} className={s.title}>{section.title}</h2>
-                    <Paragraphs text={section.body} className={p.proofBody} />
+                    <h2 id={section.id} className={p.sayingTitle}>{section.title}</h2>
                 </div>
-                {points}
+                <div data-rise="" data-quiet="">
+                    <Paragraphs text={section.body} className={p.proofBody} />
+                    {points}
+                </div>
             </section>
         );
     }
@@ -113,30 +119,28 @@ function SectionRow({ section, flip }: { section: Section; flip: boolean }) {
        on a phone the picture comes straight after the words it shows. */
     return (
         <section className={`${s.wrap} ${s.section} ${p.proof} ${flip ? p.flip : ""}`} aria-labelledby={section.id}>
-            <div className={p.words} data-rise="">
+            <div className={p.words} data-rise="" data-quiet="">
                 <p className={s.label}>{section.label}</p>
                 <h2 id={section.id} className={p.proofTitle}>{section.title}</h2>
                 <Paragraphs text={section.body} className={p.proofBody} />
             </div>
-            <div className={p.picture}><Picture visual={section.visual} tone={section.tone} /></div>
+            <div className={p.picture} data-lamp="soft"><Picture visual={section.visual} tone={section.tone} /></div>
             {points && <div className={p.pointsArea}>{points}</div>}
         </section>
     );
 }
 
-/** A section's picture: a real screen or recording on a panel, or a
- *  vignette, a small moment of the product in motion. A short caption is
- *  written in the margin by hand; a longer one sits quietly underneath. */
+/** A section's picture: a real screen or recording, lit from behind, with
+ *  its caption underneath. */
 function Picture({ visual, tone, big = false }: { visual: Visual; tone?: "sand" | "violet"; big?: boolean }) {
     if (visual.type === "none") return null;
     const panel = `${p.panel} ${tone === "sand" ? p.sand : ""} ${big ? p.heroPanel : ""}`;
-    const short = visual.caption && visual.caption.length <= 56 ? visual.caption : null;
-    const long = visual.caption && !short ? <figcaption className={p.caption}>{visual.caption}</figcaption> : null;
+    const long = visual.caption ? <figcaption className={p.caption}>{visual.caption}</figcaption> : null;
     if (visual.type === "gallery") {
         return (
             <div className={p.gallery}>
                 {GALLERY.map(app => <AppWindow key={app.title} picture={app.picture} title={app.title} who={app.who} sizes="(max-width: 860px) 100vw, 560px" />)}
-                {long ?? (short && <p className={p.caption}>{short}</p>)}
+                {long}
             </div>
         );
     }
@@ -145,7 +149,6 @@ function Picture({ visual, tone, big = false }: { visual: Visual; tone?: "sand" 
         if (!Moment) return null;
         return (
             <figure className={panel} data-rise="">
-                {short && <Note>{short}</Note>}
                 <div className={big ? p.bigMoment : p.moment}><Moment /></div>
                 {long}
             </figure>
@@ -161,7 +164,6 @@ function Picture({ visual, tone, big = false }: { visual: Visual; tone?: "sand" 
     }
     return (
         <figure className={panel} data-rise="">
-            {short && <Note>{short}</Note>}
             <div className={p.card} style={visual.maxWidth ? { maxWidth: visual.maxWidth, marginInline: "auto" } : undefined}>
                 <Shot picture={visual.picture} sizes={big ? "(max-width: 1240px) 100vw, 1100px" : "(max-width: 1080px) 100vw, 680px"} />
             </div>

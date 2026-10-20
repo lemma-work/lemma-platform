@@ -1,5 +1,5 @@
 import Script from 'next/script';
-import { DM_Mono, Inter, Newsreader } from "next/font/google";
+import { DM_Mono, Geist, Inter, Newsreader } from "next/font/google";
 import "@/styles/site.css";
 import { Analytics } from "@/site/analytics";
 import { publicSiteUrl } from "@/site/seo/site-url";
@@ -46,9 +46,11 @@ const themeScript = `(function(){try{var d=document.documentElement,s=localStora
 const ui = Inter({ subsets: ["latin"], style: ["normal", "italic"], weight: "variable", variable: "--font-ui", display: "swap" });
 const serif = Newsreader({ subsets: ["latin"], style: ["normal", "italic"], weight: "variable", axes: ["opsz"], variable: "--font-serif", display: "swap" });
 const mono = DM_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono", display: "swap" });
+/* The marketing and site pages' face. Not preloaded: the app never uses it, so only the pages that do fetch it. */
+const geist = Geist({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-geist", display: "swap", preload: false });
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-    return <html lang="en" className={`${ui.variable} ${serif.variable} ${mono.variable}`} suppressHydrationWarning>
+    return <html lang="en" className={`${ui.variable} ${serif.variable} ${mono.variable} ${geist.variable}`} suppressHydrationWarning>
         <head><Script src="/site-config.js" strategy="beforeInteractive" />
             {/* Two tags, not one string. Concatenating two IIFEs is how the
                 appearance script stopped running once already: it parses, and
